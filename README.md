@@ -51,3 +51,5 @@ Load the generated file into your convolution engine.
 
 
 Feedback is welcome!
+
+EXE file available https://drive.google.com/drive/folders/1AkESLDo-UhPqxDCdaZuXE6u8-H4EDuOI?usp=sharing
