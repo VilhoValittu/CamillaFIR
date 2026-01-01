@@ -53,3 +53,21 @@ Load the generated file into your convolution engine.
 Feedback is welcome!
 
 EXE file available https://drive.google.com/drive/folders/1AkESLDo-UhPqxDCdaZuXE6u8-H4EDuOI?usp=sharing
+
+CamillaFIR v1.0 - The GUI & Analysis Update
+
+This major release transitions CamillaFIR from a CLI utility to a full-featured graphical application with built-in analysis tools.
+
+Key Changes:
+
+Web-Based GUI: Now uses a browser-based interface for easy configuration of all parameters (Crossovers, House Curves, Taps, etc.).
+
+Prediction Plots: Generates visual feedback after processing, showing both Magnitude and Phase responses (Original vs. Predicted).
+
+Smart Phase Analysis: The phase plot automatically calculates and removes IR delay (centers the peak), allowing for a readable, unwrapped view of phase linearization.
+
+Performance Optimization: Switched plotting calculations to FFT-based methods for instant rendering even at high tap counts (e.g., 131k).
+
+Enhanced UX: Dedicated input fields for up to 5 crossovers, toggleable magnitude correction, and built-in default house curves.
+
+Dependencies added: pywebio, matplotlib
