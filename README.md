@@ -70,19 +70,74 @@ Performance Optimization: Switched plotting calculations to FFT-based methods fo
 
 Enhanced UX: Dedicated input fields for up to 5 crossovers, toggleable magnitude correction, and built-in default house curves.
 
-## Installation & Running
 
-### Prerequisites
-* Python 3.8 or newer
 
-### 1. Install Dependencies
-Run the following command to install the required libraries:
+```markdown
+# Installation & Running
+
+## 1. Install Python
+CamillaFIR requires **Python 3.8** or newer. If you don't have Python installed, follow the instructions for your operating system:
+
+### <img src="https://upload.wikimedia.org/wikipedia/commons/0/05/Windows_10_Logo.svg" width="20"/> Windows
+1. Download the latest Python installer from [python.org](https://www.python.org/downloads/).
+2. Run the installer.
+3. **Important:** Ensure you check the box **"Add Python to PATH"** at the bottom of the installer window before clicking "Install Now".
+
+### <img src="https://upload.wikimedia.org/wikipedia/commons/2/21/MacOS_wordmark_%282017%29.svg" width="35"/> macOS
+The easiest way is using Homebrew. Open your Terminal and run:
+```bash
+brew install python
+
+```
+
+Alternatively, download the macOS installer from [python.org](https://www.python.org/downloads/macos/).
+
+### <img src="https://www.google.com/search?q=https://upload.wikimedia.org/wikipedia/commons/3/35/Tux.svg" width="20"/> Linux
+
+Python 3 is usually pre-installed on most Linux distributions. You can ensure you have Python and `pip` (package manager) installed by running:
+
+* **Debian/Ubuntu:**
+```bash
+sudo apt update
+sudo apt install python3 python3-pip
+
+```
+
+
+* **Fedora:**
+```bash
+sudo dnf install python3
+
+```
+
+
+
+---
+
+## 2. Install Dependencies
+
+Open your terminal or command prompt (CMD/PowerShell) in the project folder and run:
+
 ```bash
 pip install -r requirements.txt
 
-2. Run the Application
-Start the program with Python. This will launch a local web server and open the interface in your browser.
+```
 
-Bash
+*(Note: On Linux/macOS, you might need to use `pip3` instead of `pip`).*
 
+---
+
+## 3. Run the Application
+
+Start the program by running the script. This will launch a local web server and automatically open the interface in your default browser.
+
+```bash
 python CamillaFIR.py
+
+```
+
+*(Note: On Linux/macOS, you might need to use `python3 CamillaFIR.py`).*
+
+```
+
+```
