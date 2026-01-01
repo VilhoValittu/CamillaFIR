@@ -70,8 +70,6 @@ Performance Optimization: Switched plotting calculations to FFT-based methods fo
 
 Enhanced UX: Dedicated input fields for up to 5 crossovers, toggleable magnitude correction, and built-in default house curves.
 
-Markdown
-
 ## Installation & Running
 
 ### Prerequisites
@@ -81,8 +79,10 @@ Markdown
 Run the following command to install the required libraries:
 ```bash
 pip install -r requirements.txt
+
 2. Run the Application
 Start the program with Python. This will launch a local web server and open the interface in your browser.
 
-### 2. Run program
+Bash
+
 python CamillaFIR.py
