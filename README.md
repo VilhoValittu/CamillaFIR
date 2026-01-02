@@ -82,6 +82,21 @@ The program now automatically saves all user settings (crossovers, house curve s
 
 ​Performance: Includes the FFT-based plotting optimization for instant graph generation with high tap counts.
 
+v1.2.1 - UI Polish & Status Bar Fixes
+
+Description
+This release improves the visual feedback of the application and fixes a cosmetic issue with status text updates during processing.
+
+Changelog:
+
+FIX: Resolved an issue where progress bar status messages (e.g., "Reading files...") would stack vertically instead of updating.
+
+UI: Status messages now update dynamically in-place for a cleaner look.
+
+UI: Added a clear "Done!" confirmation message upon completion.
+
+Code: Refactored status message management into a dedicated update_status() helper function.
+
 ```markdown
 # CamillaFIR
 
