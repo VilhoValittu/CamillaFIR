@@ -105,5 +105,8 @@ python -m PyInstaller --noconfirm --onefile --console --name "CamillaFIR_1.3.0" 
 ---
 
 ## License
-Exe-file : https://drive.google.com/drive/folders/1AkESLDo-UhPqxDCdaZuXE6u8-H4EDuOI
+
 MIT License. Feel free to fork, modify, and contribute!
+
+## EXE
+Exe-file : https://drive.google.com/drive/folders/1AkESLDo-UhPqxDCdaZuXE6u8-H4EDuOI
