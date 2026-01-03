@@ -1,7 +1,3 @@
-Tässä on kattava ja ammattimainen **README.md** -pohja GitHub-repositoriollesi. Se korostaa ohjelman uusia "Pro-tason" ominaisuuksia (v1.3.0), kuten FDW:tä ja psykoakustista silotusta.
-
-Voit kopioida tämän tekstin suoraan GitHubiin.
-
 ---
 
 # 🎛️ CamillaFIR
