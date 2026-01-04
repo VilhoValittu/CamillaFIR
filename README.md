@@ -56,7 +56,7 @@ pip install numpy scipy matplotlib plotly pywebio
 
 ### Running the Application
 
-1. Clone the repository or download `CamillaFIR.py` and `config.json`.
+1. Clone the repository or download `CamillaFIR.py`.
 2. Run the script:
 ```bash
 python CamillaFIR.py
