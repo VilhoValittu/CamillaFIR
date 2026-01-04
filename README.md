@@ -6,7 +6,7 @@
 
 Unlike complex manual tools (like rePhase), CamillaFIR automates the heavy DSP math, offering a modern, browser-based GUI to generate phase-accurate FIR filters in seconds.
 
-*(Add a screenshot of your interface here)*
+
 
 ## 🚀 Key Features (v1.5.0)
 
