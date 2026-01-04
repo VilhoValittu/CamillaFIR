@@ -32,7 +32,7 @@ You need **Python 3.x** installed on your system.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YourUsername/CamillaFIR.git
+git clone https://github.com/VilhoValittu/CamillaFIR.git
 cd CamillaFIR
 
 ```
