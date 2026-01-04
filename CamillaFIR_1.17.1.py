@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 # --- GUI LIBRARY ---
 from pywebio.input import *
 from pywebio.output import *
+from pywebio.session import download # KÄYTETÄÄN TÄTÄ NYT
 from pywebio import start_server, config
 
 # --- CONSTANTS ---
@@ -150,7 +151,7 @@ TRANSLATIONS = {
         'err_inv_custom': "Invalid HC file.",
         'stat_calc': "Calculating...",
         'saved': "Saved:",
-        'saved_zip': "Download All:", 
+        'saved_zip': "Download All (ZIP):", 
         'saved_plot': "Saved Plot:",
         'stat_plot': "Plotting...",
         'err_plot': "Plot error.",
@@ -566,6 +567,7 @@ def generate_filter(freqs, raw_mags, raw_phases, crossovers,
     nyquist = fs / 2.0
     freq_axis = np.linspace(0, nyquist, n_fft // 2 + 1)
     
+    # 1. Magnitude Processing
     if smoothing_type == t('smooth_psy'):
         smoothed_mags = psychoacoustic_smoothing(freqs, raw_mags)
     else:
@@ -573,6 +575,7 @@ def generate_filter(freqs, raw_mags, raw_phases, crossovers,
     
     meas_mags = interpolate_response(freqs, smoothed_mags, freq_axis)
     
+    # --- LEVEL MATCH LOGIC v1.11.0 ---
     target_mags = np.zeros_like(freq_axis)
     use_house_curve = (house_freqs is not None and house_mags is not None)
     calc_offset_db = 0.0 
@@ -581,6 +584,7 @@ def generate_filter(freqs, raw_mags, raw_phases, crossovers,
         hc_interp = interpolate_response(house_freqs, house_mags, freq_axis)
         
         if lvl_mode == t('lvl_man') or lvl_mode == 'Manual dB':
+            # Manual Mode
             a_start = max(l_match_min, 10.0)
             a_end = l_match_max
             mask_align = (freq_axis >= a_start) & (freq_axis <= a_end)
@@ -628,6 +632,7 @@ def generate_filter(freqs, raw_mags, raw_phases, crossovers,
             g_db += global_gain_db
             gain_linear[i] = 10.0 ** (g_db / 20.0)
 
+    # --- STATS ---
     stats = {
         'offset_db': calc_offset_db,
         'correction_enabled': enable_mag_correction,
@@ -642,11 +647,17 @@ def generate_filter(freqs, raw_mags, raw_phases, crossovers,
 
     if is_min_phase:
         total_mag_response = gain_linear * np.abs(hpf_complex)
+        
+        # New Hilbert-based calculation v1.14.1
         filt_min_phase_rad = calculate_minimum_phase(total_mag_response)
+        
         final_complex = total_mag_response * np.exp(1j * filt_min_phase_rad)
         impulse = scipy.fft.irfft(final_complex, n=n_fft)
+        
+        # Min phase typically doesn't need windowing if calculated via Hilbert from 0 phase,
+        # but to be safe against ringing at end:
         window = np.ones(n_fft)
-        fade_len = int(n_fft * 0.01) 
+        fade_len = int(n_fft * 0.01) # Short fade out
         if fade_len > 0:
             window[-fade_len:] = scipy.signal.windows.hann(2*fade_len)[fade_len:]
         impulse = impulse * window
@@ -686,7 +697,7 @@ def generate_filter(freqs, raw_mags, raw_phases, crossovers,
     
     return impulse, 0.0, 0.0, stats
 
-# --- CRITICAL FIX v1.17.1: DEFINED AT MODULE SCOPE ---
+# --- MODULE SCOPE HELPERS ---
 def save_summary(filename, settings, l_stats, r_stats):
     with open(filename, 'w') as f:
         f.write(f"=== {PROGRAM_NAME} - Filter Generation Summary ===\n")
@@ -700,6 +711,21 @@ def save_summary(filename, settings, l_stats, r_stats):
         f.write(f"Right Channel GD: {r_stats['gd_min']:.2f} ms to {r_stats['gd_max']:.2f} ms\n")
         f.write(f"Left: Peak={l_stats['peak_before_norm']:.2f}dB, Norm={l_stats['normalized']}\n")
         f.write(f"Right: Peak={r_stats['peak_before_norm']:.2f}dB, Norm={r_stats['normalized']}\n")
+
+def format_summary_content(settings, l_stats, r_stats):
+    lines = []
+    lines.append(f"=== {PROGRAM_NAME} - Filter Generation Summary ===")
+    lines.append(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    lines.append("--- Settings ---")
+    for key, val in settings.items():
+        if 'file' not in key:
+            lines.append(f"{key}: {val}")
+    lines.append("\n--- Analysis (20Hz - 20kHz) ---")
+    lines.append(f"Left Channel GD: {l_stats['gd_min']:.2f} ms to {l_stats['gd_max']:.2f} ms")
+    lines.append(f"Right Channel GD: {r_stats['gd_min']:.2f} ms to {r_stats['gd_max']:.2f} ms")
+    lines.append(f"Left: Peak={l_stats['peak_before_norm']:.2f}dB, Norm={l_stats['normalized']}")
+    lines.append(f"Right: Peak={r_stats['peak_before_norm']:.2f}dB, Norm={r_stats['normalized']}")
+    return "\n".join(lines)
 
 def generate_filter_plot(filt_ir, fs, title, save_filename=None):
     try:
@@ -733,7 +759,6 @@ def generate_filter_plot(filt_ir, fs, title, save_filename=None):
         ax2.set_xticklabels(ticks_lab)
         
         plt.tight_layout(pad=0.5) 
-        if save_filename: fig.savefig(save_filename, format='png')
         buf = io.BytesIO()
         fig.savefig(buf, format='png')
         buf.seek(0)
@@ -817,7 +842,6 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
         ax2.legend()
         
         plt.tight_layout()
-        if save_filename: fig.savefig(save_filename, format='png')
         buf = io.BytesIO()
         fig.savefig(buf, format='png')
         buf.seek(0)
@@ -844,7 +868,7 @@ def main():
     # --- PREPARE & SANITIZE VALUES BEFORE LIST CREATION ---
     val_corr = defaults.get('mag_correct')
     if saved_val_corr := defaults.get('mag_correct'): 
-        val_corr = [t('enable_corr')]
+        val_corr = [t('enable_corr')] # Force active text if key exists
     else:
         val_corr = []
     
@@ -1049,101 +1073,111 @@ def main():
         fn_filt_plot_l = f"L_filter_{hc_tag}_{phase_tag}_{data['fs']}Hz_{ts}.png"
         fn_filt_plot_r = f"R_filter_{hc_tag}_{phase_tag}_{data['fs']}Hz_{ts}.png"
         
-        files_to_zip = []
-
-        if data['fmt'] == 'WAV':
-            if is_stereo:
-                scipy.io.wavfile.write(fn_s, data['fs'], np.column_stack((l_imp, r_imp)).astype(np.float32))
-                files_to_zip.append(fn_s)
-                put_success(f"{t('saved')} {fn_s}")
-            else:
-                scipy.io.wavfile.write(fn_l, data['fs'], l_imp.astype(np.float32))
-                scipy.io.wavfile.write(fn_r, data['fs'], r_imp.astype(np.float32))
-                files_to_zip.extend([fn_l, fn_r])
-                put_success(f"{t('saved')} {fn_l}, {fn_r}")
-        else:
-            if is_stereo:
-                np.savetxt(fn_s, np.column_stack((l_imp, r_imp)), fmt='%.18f', delimiter=' ')
-                files_to_zip.append(fn_s)
-                put_success(f"{t('saved')} {fn_s}")
-            else:
-                np.savetxt(fn_l, l_imp, fmt='%.18f')
-                np.savetxt(fn_r, r_imp, fmt='%.18f')
-                files_to_zip.extend([fn_l, fn_r])
-                put_success(f"{t('saved')} {fn_l}, {fn_r}")
-
-        settings_dict['Magnitude Correction'] = "Enabled" if do_mag_correct else "Disabled"
-        settings_dict['Crossovers'] = str(crossovers)
-        settings_dict['Phase Range'] = f"{c_min:.0f}-{c_max:.0f} Hz"
+        # --- ZIP MEMORY BUFFER ---
+        zip_buffer = io.BytesIO()
         
-        save_summary(fn_sum, settings_dict, l_stats, r_stats)
-        files_to_zip.append(fn_sum)
-        put_info(f"Summary saved to {fn_sum}")
-        
-        set_processbar('bar', 0.9)
-        update_status(t('stat_plot'))
-        
-        try:
-            img_l = generate_prediction_plot(freqs_l, mags_l, phases_l, l_imp, data['fs'], t('tab_l'), fn_plot_l, target_stats=l_stats)
-            img_r = generate_prediction_plot(freqs_r, mags_r, phases_r, r_imp, data['fs'], t('tab_r'), fn_plot_r, target_stats=r_stats)
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             
-            img_filt_l = generate_filter_plot(l_imp, data['fs'], t('tab_l'), fn_filt_plot_l)
-            img_filt_r = generate_filter_plot(r_imp, data['fs'], t('tab_r'), fn_filt_plot_r)
-            
-            files_to_zip.extend([fn_plot_l, fn_plot_r, fn_filt_plot_l, fn_filt_plot_r])
-            
-            put_success(f"{t('saved_plot')} {fn_plot_l}, {fn_plot_r}")
-            
-            # --- DEBUG REPORT UI (Fixed Text) ---
-            put_markdown(f"### {t('rep_header')}")
-            
-            status_txt = t('rep_yes') if l_stats['correction_enabled'] else f"{t('rep_no')} {t('rep_disabled')}"
-            style = 'color: green; font-weight: bold;' if l_stats['correction_enabled'] else 'color: red; font-weight: bold;'
-            put_row([put_text(t('rep_corr_status')), put_text(status_txt).style(style)])
-            
-            put_row([put_text(t('rep_corr_range')), put_text(f"{data['hc_min']} Hz - {data['hc_max']} Hz")])
-            
-            if lvl_mode == t('lvl_auto'):
-                put_row([put_text(t('rep_lvl_range')), put_text(f"{match_min} Hz - {match_max} Hz (Auto)")])
-            else:
-                put_row([put_text(t('rep_lvl_mode')), put_text(f"Manual ({match_man_db} dB)")])
-            
-            put_text(f"{t('rep_offset')} L={l_stats['offset_db']:.2f} dB, R={r_stats['offset_db']:.2f} dB")
-            
-            if do_normalize:
-                if l_stats['normalized']:
-                    norm_txt = f"{t('rep_norm_done')} (Peak was {l_stats['peak_before_norm']:.1f} dB)"
+            # 1. WAV/CSV FILES
+            if data['fmt'] == 'WAV':
+                if is_stereo:
+                    wav_buf = io.BytesIO()
+                    scipy.io.wavfile.write(wav_buf, data['fs'], np.column_stack((l_imp, r_imp)).astype(np.float32))
+                    zip_file.writestr(fn_s, wav_buf.getvalue())
                 else:
-                    norm_txt = f"{t('rep_norm_skip')} (Peak {l_stats['peak_before_norm']:.1f} dB)"
+                    wav_buf_l = io.BytesIO()
+                    scipy.io.wavfile.write(wav_buf_l, data['fs'], l_imp.astype(np.float32))
+                    zip_file.writestr(fn_l, wav_buf_l.getvalue())
+                    
+                    wav_buf_r = io.BytesIO()
+                    scipy.io.wavfile.write(wav_buf_r, data['fs'], r_imp.astype(np.float32))
+                    zip_file.writestr(fn_r, wav_buf_r.getvalue())
             else:
-                norm_txt = t('rep_disabled')
-                
-            put_row([put_text(t('rep_norm')), put_text(norm_txt)])
-            
-            put_row([put_text(t('rep_fdw')), put_text(str(fdw))])
-            # -----------------------
+                if is_stereo:
+                    csv_buf = io.BytesIO()
+                    np.savetxt(csv_buf, np.column_stack((l_imp, r_imp)), fmt='%.18f', delimiter=' ')
+                    zip_file.writestr(fn_s, csv_buf.getvalue())
+                else:
+                    csv_buf_l = io.BytesIO()
+                    np.savetxt(csv_buf_l, l_imp, fmt='%.18f')
+                    zip_file.writestr(fn_l, csv_buf_l.getvalue())
+                    
+                    csv_buf_r = io.BytesIO()
+                    np.savetxt(csv_buf_r, r_imp, fmt='%.18f')
+                    zip_file.writestr(fn_r, csv_buf_r.getvalue())
 
-            zip_filename = f"CamillaFIR_{hc_tag}_{phase_tag}_Result_{ts}.zip"
-            with zipfile.ZipFile(zip_filename, 'w') as zipf:
-                for f in files_to_zip:
-                    if os.path.exists(f):
-                        zipf.write(f)
+            settings_dict['Magnitude Correction'] = "Enabled" if do_mag_correct else "Disabled"
+            settings_dict['Crossovers'] = str(crossovers)
+            settings_dict['Phase Range'] = f"{c_min:.0f}-{c_max:.0f} Hz"
             
-            with open(zip_filename, 'rb') as zf:
-                zip_content = zf.read()
+            # 2. SUMMARY
+            summary_content = format_summary_content(settings_dict, l_stats, r_stats)
+            zip_file.writestr(fn_sum, summary_content)
+            
+            set_processbar('bar', 0.9)
+            update_status(t('stat_plot'))
+            
+            try:
+                # 3. PLOTS
+                img_l_bytes = generate_prediction_plot(freqs_l, mags_l, phases_l, l_imp, data['fs'], t('tab_l'), None, target_stats=l_stats)
+                if img_l_bytes: zip_file.writestr(fn_plot_l, img_l_bytes)
                 
-            put_file(zip_filename, zip_content, t('saved_zip'))
+                img_r_bytes = generate_prediction_plot(freqs_r, mags_r, phases_r, r_imp, data['fs'], t('tab_r'), None, target_stats=r_stats)
+                if img_r_bytes: zip_file.writestr(fn_plot_r, img_r_bytes)
+                
+                img_filt_l_bytes = generate_filter_plot(l_imp, data['fs'], t('tab_l'), None)
+                if img_filt_l_bytes: zip_file.writestr(fn_filt_plot_l, img_filt_l_bytes)
+                
+                img_filt_r_bytes = generate_filter_plot(r_imp, data['fs'], t('tab_r'), None)
+                if img_filt_r_bytes: zip_file.writestr(fn_filt_plot_r, img_filt_r_bytes)
+                
+                # --- DEBUG REPORT UI (Fixed Text) ---
+                put_markdown(f"### {t('rep_header')}")
+                
+                status_txt = t('rep_yes') if l_stats['correction_enabled'] else f"{t('rep_no')} {t('rep_disabled')}"
+                style = 'color: green; font-weight: bold;' if l_stats['correction_enabled'] else 'color: red; font-weight: bold;'
+                put_row([put_text(t('rep_corr_status')), put_text(status_txt).style(style)])
+                
+                put_row([put_text(t('rep_corr_range')), put_text(f"{data['hc_min']} Hz - {data['hc_max']} Hz")])
+                
+                if lvl_mode == t('lvl_auto'):
+                    put_row([put_text(t('rep_lvl_range')), put_text(f"{match_min} Hz - {match_max} Hz (Auto)")])
+                else:
+                    put_row([put_text(t('rep_lvl_mode')), put_text(f"Manual ({match_man_db} dB)")])
+                
+                put_text(f"{t('rep_offset')} L={l_stats['offset_db']:.2f} dB, R={r_stats['offset_db']:.2f} dB")
+                
+                if do_normalize:
+                    if l_stats['normalized']:
+                        norm_txt = f"{t('rep_norm_done')} (Peak was {l_stats['peak_before_norm']:.1f} dB)"
+                    else:
+                        norm_txt = f"{t('rep_norm_skip')} (Peak {l_stats['peak_before_norm']:.1f} dB)"
+                else:
+                    norm_txt = t('rep_disabled')
+                    
+                put_row([put_text(t('rep_norm')), put_text(norm_txt)])
+                
+                put_row([put_text(t('rep_fdw')), put_text(str(fdw))])
+                # -----------------------
 
-            # --- COMPACT UI ---
-            if img_l and img_r and img_filt_l and img_filt_r:
-                put_tabs([
-                    {'title': t('tab_l'), 'content': put_column([put_image(img_l), put_image(img_filt_l)])},
-                    {'title': t('tab_r'), 'content': put_column([put_image(img_r), put_image(img_filt_r)])}
-                ])
-            else:
-                put_error(t('err_plot'))
-        except Exception as e:
-            put_error(f"{t('err_plot_fail')} {e}")
+                # --- COMPACT UI ---
+                if img_l_bytes and img_r_bytes and img_filt_l_bytes and img_filt_r_bytes:
+                    put_tabs([
+                        {'title': t('tab_l'), 'content': put_column([put_image(img_l_bytes), put_image(img_filt_l_bytes)])},
+                        {'title': t('tab_r'), 'content': put_column([put_image(img_r_bytes), put_image(img_filt_r_bytes)])}
+                    ])
+                else:
+                    put_error(t('err_plot'))
+            except Exception as e:
+                put_error(f"{t('err_plot_fail')} {e}")
+                
+        # CLOSE ZIP AND OFFER DOWNLOAD
+        zip_filename = f"CamillaFIR_{hc_tag}_{phase_tag}_Result_{ts}.zip"
+        
+        # --- NEW v1.20.1: Server-Side Download Push ---
+        put_file(zip_filename, zip_buffer.getvalue(), t('saved_zip'))
+        download(zip_filename, zip_buffer.getvalue())
+        # ----------------------------------------------
             
         set_processbar('bar', 1.0)
         update_status(t('stat_done'))
@@ -1151,6 +1185,8 @@ def main():
         
     except Exception as e:
         put_error(f"Unexpected Error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         pass
 
