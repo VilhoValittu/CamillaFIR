@@ -6,7 +6,7 @@
 
 Unlike complex manual tools (such as rePhase) that require manual amplitude and phase adjustments, CamillaFIR **automates the heavy DSP math**. It analyzes your room measurements and generates phase-accurate FIR filters in seconds using a modern, browser-based interface.
 
-
+Inspired by OCA https://www.youtube.com/@ocaudiophile
 
 ## 🚀 Key Features
 
