@@ -354,7 +354,7 @@ def load_config():
         'mag_correct': [t('enable_corr')],
         'smoothing_type': t('smooth_psy'),
         'fdw_cycles': 15,
-        'hc_min': 10, 'hc_max': 20000, 'max_boost': 5.0,
+        'hc_min': 10, 'hc_max': 200, 'max_boost': 5.0,
         
         # v1.11.0 DEFAULTS
         'lvl_mode': t('lvl_auto'),
