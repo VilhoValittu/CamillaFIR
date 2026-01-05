@@ -29,7 +29,7 @@ from plotly.subplots import make_subplots
 CONFIG_FILE = 'config.json'
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
-VERSION = "v1.28.0 (PNG in ZIP)"
+VERSION = "v1.28.0"
 PROGRAM_NAME = "CamillaFIR"
 
 # --- LANGUAGE DETECTION & TRANSLATIONS ---
