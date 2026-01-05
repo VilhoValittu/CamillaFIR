@@ -390,7 +390,7 @@ TRANSLATIONS = {
         'guide_rec': "Suositus:",
         'guide_note': "Huom: Suurempi Taps = enemmän viivettä.",
         'guide_fdw_desc': "Kuinka paljon huonetta korjataan.",
-        'guide_fdw_auto': "⚠️ "HUOM: Minimum Phase -tilassa on suositeltavaa käyttää FDW-arvoa 15.",
+        'guide_fdw_auto': "⚠️ HUOM: Minimum Phase -tilassa on suositeltavaa käyttää FDW-arvoa 15.",
         'guide_fdw_low': "• 3-6: Aggressiivinen (Kuiva, Lähikenttä).",
         'guide_fdw_mid': "• 15: Vakio (Vain Linear/Mixed Phase).",
         'guide_fdw_high': "• 30-100: Hellävarainen (Huonekorjaus).",
