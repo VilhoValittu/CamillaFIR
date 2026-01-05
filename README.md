@@ -62,7 +62,7 @@ CamillaFIR v2.1.0 implements state-of-the-art Digital Signal Processing (DSP) te
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/yourusername/CamillaFIR.git
+git clone https://github.com/VilhoValittu/CamillaFIR.git
 cd CamillaFIR
 
 ```
