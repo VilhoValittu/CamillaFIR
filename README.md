@@ -1,112 +1,100 @@
-# CamillaFIR
 
-**CamillaFIR** is a powerful, Python-based GUI tool designed to generate FIR (Finite Impulse Response) correction filters specifically for **CamillaDSP**. It streamlines the process of converting Room EQ Wizard (REW) measurements into convolution files, handling complex DSP tasks like minimum phase calculation, frequency-dependent windowing, and multi-rate resampling automatically.
 
 ---
-Inspired by OCA https://www.youtube.com/@ocaudiophile
----
+
+# 🎛️ CamillaFIR
+
+**Advanced FIR Filter Generator for CamillaDSP**
+
+CamillaFIR is a Python-based tool designed to generate studio-grade Finite Impulse Response (FIR) correction filters from acoustic measurements (e.g., REW exports). It provides a user-friendly Web GUI to analyze impulse responses, apply psychoacoustic smoothing, and generate correction filters with precise phase handling.
+
+> Inspired by OCA [https://www.youtube.com/@ocaudiophile](https://www.youtube.com/@ocaudiophile)
 
 ## 🚀 Key Features
 
-* **Browser-Based GUI:** Built with `PyWebIO` for a responsive, modern interface that runs locally.
-* **Multi-Rate Generation:** Automatically generates FIR filters for all standard sample rates (44.1kHz to 192kHz) from a single measurement, scaling tap count to maintain frequency resolution.
-* **Advanced Phase Handling:**
-* **Linear Phase:** Corrects magnitude while maintaining phase linearity (at the cost of latency).
-* **Minimum Phase:** Calculates a causal minimum phase response using the **Hilbert Transform** method, eliminating pre-ringing and providing zero-latency filtering (ideal for gaming/video).
+* **Browser-Based GUI:** Built with `PyWebIO`, offering an interactive interface for file uploads and parameter tuning.
+* **Multi-Rate Export:** Automatically generates FIR filters for all standard sample rates (44.1kHz to 192kHz) from a single measurement.
+* **Target Curve Integration:** Built-in support for Harman, B&K, and Toole curves, plus custom text file support.
+* **Advanced Smoothing:** Supports standard fractional octave and variable **Psychoacoustic Smoothing**.
+* **Protection Mechanisms:**
+* **Excursion Protection:** Prevents boosting frequencies below the port tuning/roll-off point.
+* **Soft-Knee Limiting:** Smoothly limits max gain to prevent digital clipping.
+* **Regularization:** Frequency-dependent regularization to prevent over-correcting deep room nulls (anti-ringing).
 
 
-* **Psychoacoustic Smoothing:** Applies variable smoothing that mimics human hearing perception (less smoothing at low frequencies, more at high frequencies).
-* **Regularization (Dip Limiting):** Intelligent algorithm to prevent over-correction of sharp spectral dips (room nulls), reducing ringing artifacts and amplifier strain.
-* **Frequency Dependent Windowing (FDW):** Reduces the influence of room reflections in the measurement by narrowing the time window as frequency increases.
-* **Interactive Visualization:** Fully interactive **Plotly** charts for analyzing Magnitude, Phase, and Filter responses directly in the browser.
+* **CamillaDSP Ready:** Exports a ready-to-use `.yml` configuration snippet and `.wav` impulse files.
 
-## 🛠 Technical Details
+## 🧠 Technical Deep Dive: Phase Handling Strategies
 
-### Minimum Phase Calculation via Hilbert Transform
+CamillaFIR v2.1.0 implements state-of-the-art Digital Signal Processing (DSP) techniques to handle phase response, offering three distinct modes:
 
-Unlike simple magnitude inversion, CamillaFIR derives a mathematically correct minimum phase response to ensure causality and zero latency.
+### 1. 📉 Linear Phase (The Purist)
 
-1. Compute the natural logarithm of the magnitude spectrum: .
-2. Construct the full symmetric spectrum.
-3. Apply the **Hilbert Transform** to the log-magnitude.
-4. The minimum phase (in radians) is extracted from the negative imaginary part of the analytic signal: .
+* **Algorithm:** Corrects both Magnitude and Phase response across the entire spectrum.
+* **Technique:** Calculates the **Excess Phase** of the room (measured phase minus minimum phase) and inverts it. This aligns the Group Delay perfectly, resulting in extremely tight bass response.
+* **Fade-Out Logic:** Applies a frequency-dependent fade-out to the phase correction vector to prevent high-frequency "ringing" artifacts often associated with aggressive phase correction.
+* **Trade-off:** High latency (typically >100ms) and potential pre-ringing on sharp transients (snare drums, claps).
 
-### Regularization Algorithm
+### 2. ⚡ Minimum Phase (The Gamer / Cinema)
 
-To avoid "over-cooking" the filter by trying to boost deep nulls (which are often physical cancellations that cannot be EQ'd), CamillaFIR uses a comparative smoothing approach:
+* **Algorithm:** REW-style reconstruction. The tool calculates the ideal magnitude response (Target - Measurement) and then mathematically generates the corresponding Minimum Phase response using the **Hilbert Transform**.
+* **Impulse Centering:** Features an intelligent "Impulse Centering" algorithm that detects the true peak of the measurement—regardless of time-of-flight delays—ensuring the analysis window never clips the signal data.
+* **Result:** **Zero Latency** and **Zero Pre-ringing**. Perfect for gaming, lip-sync video, and monitoring.
 
-1. Calculates the raw required gain (Target - Measured).
-2. Calculates a heavily smoothed version of the gain curve (Gaussian filter).
-3. If the raw gain exceeds the smoothed gain significantly (indicating a sharp, narrow dip), the boost is attenuated based on the user-defined `Regularization Strength %`.
+### 3. 🧬 Mixed Phase (The Audiophile Choice)
 
-### Multi-Rate Scaling
+* **Algorithm:** A hybrid convolution approach that combines the best of both worlds.
+* **Low Frequencies (< 300Hz):** Uses **Linear Phase with Excess Phase Correction**. This corrects the time-domain errors caused by crossovers and port resonances, resulting in "fast" and impactful bass.
+* **High Frequencies (> 300Hz):** Switches to **Minimum Phase**. This ensures that high-frequency transients remain pristine and free from pre-ringing artifacts.
+* **Implementation:** The software generates two separate filters internally and stitches them together in the frequency domain, creating a single coherent impulse response file.
 
-When generating filters for higher sample rates (e.g., 192kHz) based on a 48kHz measurement:
+## 🛠️ Signal Processing Chain
 
-* The tap count is automatically scaled (e.g., 65k taps @ 48kHz  262k taps @ 192kHz).
-* This ensures that the frequency resolution (bin width) remains constant across all sample rates, preserving bass correction accuracy.
+1. **Ingestion:** Parses raw `.txt` measurement data (Frequency, Magnitude, Phase).
+2. **Preprocessing:** Applies impulse centering to handle acoustic delay.
+3. **Smoothing:** Applies Frequency Dependent Windowing (FDW) or Psychoacoustic smoothing to separate direct sound from room reflections.
+4. **Target Matching:** Aligns the measurement to the target curve using Median or Mean energy analysis.
+5. **Gain Calculation:** Calculates `Target - Measured`. Applies soft-clipping and regularization.
+6. **Phase Generation:** Computes the complex conjugate based on the selected mode (Linear/Min/Mixed).
+7. **IFFT & Windowing:** Performs Inverse Fast Fourier Transform to convert data back to the time domain and applies a Tuckey or Hann window to ensure the filter decays to absolute zero.
 
 ## 📦 Installation & Usage
 
-### Prerequisites
+1. **Clone the repository:**
+```bash
+git clone https://github.com/yourusername/CamillaFIR.git
+cd CamillaFIR
 
-* Python 3.8+
-* The following Python packages:
+```
 
+
+2. **Install dependencies:**
 ```bash
 pip install numpy scipy matplotlib plotly pywebio
 
 ```
 
-### Running the Application
 
-1. Clone the repository or download `CamillaFIR.py`.
-2. Run the script:
+3. **Run the tool:**
 ```bash
 python CamillaFIR.py
 
 ```
 
 
-3. The GUI will automatically open in your default web browser (usually at `http://localhost:8080`).
+The GUI will automatically open in your default web browser (usually http://localhost:8080).
 
-## ⚙️ Configuration Guide
+## 📊 Visualizations
 
-### Input Files
+The tool generates detailed reports including:
 
-* **Measurements:** Accepts exported text files (`.txt`) from REW (Room EQ Wizard). Format: `Frequency, SPL, Phase`.
-* **House Curve:** Built-in targets (Harman, B&K, Flat, Cinema) or upload a custom `.txt` target curve.
+* **Magnitude & Phase Plots:** Comparing Original, Predicted, and Target responses.
+* **Filter Response:** Visualizing exactly what the FIR filter is doing.
+* **Step Response / Group Delay:** (In summary logs).
 
-### DSP Settings
+## License
 
-* **Taps:** The length of the FIR filter. Standard is **65536** (for 44.1/48kHz). Higher taps = better bass resolution but higher latency (in Linear Phase).
-* **Filter Type:**
-* *Linear:* Best for music playback.
-* *Minimum:* Best for real-time monitoring, gaming, or lip-sync critical video.
-
-
-* **FDW Cycles:** Controls the window width.
-* *15:* Standard for room correction.
-* *5:* Forced automatically for Minimum Phase to ensure stable low-end.
-
-
-* **Regularization:** **30-50%** is recommended to keep the sound natural and avoid ringing in the bass region.
-
-## 📂 Output
-
-The program generates a ZIP archive in the script's directory containing:
-
-1. **Convolution Files (.wav):** Stereo or Mono impulse response files named by sample rate (e.g., `Stereo_corr_Harman_Linear_96000Hz.wav`).
-2. **HTML Plots:** Interactive Plotly visualizations for detailed analysis.
-3. **Summary.txt:** A report of the applied gain, delays, and peak levels.
-
-## 📄 License
-
-[MIT License](https://www.google.com/search?q=LICENSE) (or your preferred license).
-
----
-
-*Created by VilhoValittu & GeminiPro.*
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ---
 EXE file : https://drive.google.com/drive/folders/1AkESLDo-UhPqxDCdaZuXE6u8-H4EDuOI
