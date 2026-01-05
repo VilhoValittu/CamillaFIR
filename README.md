@@ -2,6 +2,10 @@
 
 **CamillaFIR** is a powerful, Python-based GUI tool designed to generate FIR (Finite Impulse Response) correction filters specifically for **CamillaDSP**. It streamlines the process of converting Room EQ Wizard (REW) measurements into convolution files, handling complex DSP tasks like minimum phase calculation, frequency-dependent windowing, and multi-rate resampling automatically.
 
+---
+Inspired by OCA https://www.youtube.com/@ocaudiophile
+---
+
 ## 🚀 Key Features
 
 * **Browser-Based GUI:** Built with `PyWebIO` for a responsive, modern interface that runs locally.
