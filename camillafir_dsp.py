@@ -131,17 +131,32 @@ def interpolate_response(input_freqs, input_values, target_freqs):
     return np.interp(target_freqs, input_freqs, input_values)
 
 def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=300):
-    # Combine Linear (Low) and Minimum (High) Phase IRs
-    sos_lp = scipy.signal.butter(4, split_freq, fs=fs, btype='low', output='sos')
-    sos_hp = scipy.signal.butter(4, split_freq, fs=fs, btype='high', output='sos')
+    # UPDATED: Linear Phase FIR Split (Transparent Crossover)
+    # Using a complementary window method to ensure summing to unity
+    ntaps = 2047 # Sufficient length for mid-bass split, odd for Type I
     
-    # Align peaks
+    # 1. Create Linear Phase Lowpass Kernel
+    fir_lp = scipy.signal.firwin(ntaps, split_freq, fs=fs, pass_zero=True, window='blackman')
+    
+    # 2. Create Complementary Highpass (Dirac - LP)
+    # This guarantees LP + HP = 1 (Perfect reconstruction)
+    fir_hp = -fir_lp
+    fir_hp[(ntaps-1)//2] += 1.0
+    
+    # 3. Align peaks of inputs (Center them)
     idx_lin = np.argmax(np.abs(ir_lin))
     idx_min = np.argmax(np.abs(ir_min))
-    ir_min_shifted = np.roll(ir_min, idx_lin - idx_min)
     
-    # Filter and sum
-    return scipy.signal.sosfilt(sos_lp, ir_lin) + scipy.signal.sosfilt(sos_hp, ir_min_shifted)
+    # Shift IRs to match
+    shift = idx_lin - idx_min
+    ir_min_aligned = np.roll(ir_min, shift)
+    
+    # 4. Convolve (Filter)
+    # mode='same' keeps the output length equal to input length, preserving the delay center
+    filt_bass = scipy.signal.fftconvolve(ir_lin, fir_lp, mode='same')
+    filt_treble = scipy.signal.fftconvolve(ir_min_aligned, fir_hp, mode='same')
+    
+    return filt_bass + filt_treble
 
 def calculate_group_delay(freqs, phases_deg):
     phase_rad = np.unwrap(np.deg2rad(phases_deg))
@@ -269,17 +284,24 @@ def generate_filter(freqs, raw_mags, raw_phases, crossovers,
     meas_phase_rad_raw = np.deg2rad(interpolate_response(freqs, raw_phases, freq_axis))
     meas_phase_rad_unwrapped = np.unwrap(meas_phase_rad_raw)
     
-    # 2. REMOVE TIME OF FLIGHT (Delay) from Measurement
-    # This aligns the measurement mathematically to t=0 before calculating excess phase
+    # 2. REMOVE TIME OF FLIGHT (Delay)
     meas_phase_no_tof, _ = remove_time_of_flight(freq_axis, meas_phase_rad_unwrapped)
     
     # 3. Calculate Minimum Phase of Measurement
     meas_min_phase_rad = calculate_minimum_phase(10**(meas_mags/20.0))
     
-    # 4. Excess Phase (Distortion) = Cleaned Measurement - Minimum Phase
-    # This now contains ONLY group delay distortions, not distance delay
+    # 4. Excess Phase (Distortion)
     excess_phase_deg = np.rad2deg(meas_phase_no_tof - meas_min_phase_rad)
     excess_phase_fdw_rad = apply_fdw_smoothing(freq_axis, excess_phase_deg, fdw_cycles)
+    
+    # UPDATED: PHASE SAFETY MASK (Improvement 3)
+    # Forces phase correction to zero at extreme frequencies regardless of settings
+    phase_safety_curve = np.interp(
+        freq_axis, 
+        [0, 15, 30, 19000, 21000],  # Frequencies
+        [0, 0, 1, 1, 0]             # Mask (0=Off, 1=On)
+    )
+    excess_phase_fdw_rad *= phase_safety_curve
     
     theoretical_xo_phase = calculate_theoretical_phase(freq_axis, crossovers)
     
@@ -315,6 +337,7 @@ def generate_filter(freqs, raw_mags, raw_phases, crossovers,
         ir_lin = scipy.fft.irfft(complex_lin, n=n_fft)
         ir_lin = np.roll(ir_lin, n_fft // 2)
         
+        # Uses the new FIR split method
         impulse_out = combine_mixed_phase(ir_lin, ir_min, fs, split_freq=mixed_split_freq)
         impulse_out *= scipy.signal.windows.tukey(n_fft, alpha=0.05)
         
