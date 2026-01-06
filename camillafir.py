@@ -87,7 +87,7 @@ def put_guide_section():
             c = [put_text(t('guide_fdw_desc')), put_markdown(f"**{t('guide_fdw_auto')}**"), put_text(t('guide_fdw_low')), put_text(t('guide_fdw_high'))]
             content.append(put_collapse(g_title, c))
 
-    put_collapse("❓ Ohjeet ja Oppaat (Klikkaa auki)", content)
+    put_collapse("❓ Guides (Click open)", content)
 
 def update_status(msg):
     with use_scope('status_area', clear=True):
@@ -486,3 +486,4 @@ def main():
 
 if __name__ == '__main__':
     start_server(main, port=8080, debug=True, auto_open_webbrowser=True)
+
