@@ -15,21 +15,32 @@ While originally architected for **CamillaDSP** (including automated `.yml` conf
 
 ---
 
-## 🚀 Technical Capabilities (DSP Engine v2.5.3)
-
-The core processing engine performs complex domain signal processing to derive correction impulses, utilizing advanced strategies to separate excess phase from propagation delay.
-
-### 1. Signal Processing Pipeline
-
-* **Time-of-Flight (TOF) Correction:** The engine implements an algorithm to automatically detect and remove acoustic propagation delay. It performs linear regression analysis on the unwrapped phase response within the stable passband (1kHz–10kHz) to determine the slope (group delay). This linear phase component is mathematically subtracted before Minimum Phase calculation, ensuring that "Excess Phase" extraction targets only group delay distortions derived from the transducer and crossover, not distance.
-* **Frequency-Dependent Regularization:** To prevent high-Q correction of non-minimum phase nulls (room modes), the engine applies variable regularization strength:
-* **< 200 Hz:** Low regularization (50% of base) allows for aggressive modal linearization.
-* **200 Hz - 2 kHz:** Linear ramp interpolation.
-* **> 2 kHz:** High regularization is applied to preserve the transducer's natural power response and prevent "phasiness" or pre-ringing artifacts in the stochastic region.
 
 
-* **Psychoacoustic Smoothing:** Implements a hybrid smoothing algorithm simulating human auditory integration windows (variable fractional octave smoothing with peak-hold logic).
-* **Excursion Protection:** Applies a hard-knee high-pass constraint to the target curve below user-defined frequencies (e.g., < 40Hz) to prevent mechanical over-excursion of woofers.
+## 🚀 DSP Engine Architecture (v2.5.5)
+
+The core processing engine has been significantly upgraded in version 2.5.5 to ensure mathematical transparency and safety. It performs complex domain signal processing to derive correction impulses, utilizing advanced strategies to separate excess phase from propagation delay.
+
+### 1. Advanced Phase Reconstruction
+* **Transparent Mixed Phase Split (New in v2.5.5):**
+  The transition between Linear Phase (Bass) and Minimum Phase (Treble) is now handled by a **Linear Phase FIR Crossover** instead of analog IIR emulation.
+  * **Benefit:** This ensures perfect magnitude reconstruction and zero phase distortion at the crossover point (typically 300Hz). The Linear and Minimum phase components sum to unity without "dips" or phase rotation.
+* **Excess Phase Safety Masks (New in v2.5.5):**
+  The engine now applies hard constraints to phase correction at extreme frequencies (<15 Hz and >19 kHz).
+  * **Benefit:** Prevents the algorithm from trying to correct measurement noise or infrasonic anomalies, eliminating potential pre-ringing artifacts and protecting transducers.
+
+### 2. Signal Processing Pipeline
+* **Time-of-Flight (TOF) Correction:**
+  The engine implements an algorithm to automatically detect and remove acoustic propagation delay. It performs linear regression analysis on the unwrapped phase response within the stable passband (1kHz–10kHz) to determine the slope (group delay). This linear phase component is mathematically subtracted before Minimum Phase calculation, ensuring that "Excess Phase" extraction targets only group delay distortions derived from the transducer and crossover, not distance.
+* **Frequency-Dependent Regularization:**
+  To prevent high-Q correction of non-minimum phase nulls (room modes), the engine applies variable regularization strength:
+    * **< 200 Hz:** Low regularization (50% of base) allows for aggressive modal linearization.
+    * **200 Hz - 2 kHz:** Linear ramp interpolation.
+    * **> 2 kHz:** High regularization is applied to preserve the transducer's natural power response and prevent "phasiness" in the stochastic region.
+* **Excursion Protection:**
+  Applies a hard-knee high-pass constraint to the target curve below user-defined frequencies (e.g., < 40Hz) to prevent mechanical over-excursion of woofers.
+
+---
 
 ### 2. Phase Reconstruction Strategies
 
