@@ -1,13 +1,14 @@
 import io
 import scipy.signal
 import scipy.fft
+import scipy.ndimage
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg') # Estää ikkunoiden aukeamisen palvelimella
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime  # <--- TÄMÄ PUUTTUI
+from datetime import datetime
 
 # IMPORT DSP HELPER FOR SMOOTHING
 from camillafir_dsp import apply_smoothing_std, psychoacoustic_smoothing, calculate_group_delay
@@ -22,14 +23,14 @@ def format_summary_content(settings, l_stats, r_stats):
             lines.append(f"{key}: {val}")
     lines.append("\n--- Analysis (20Hz - 20kHz) ---")
     
-    lines.append(f"Left Channel GD: {l_stats['gd_min']:.2f} ms to {l_stats['gd_max']:.2f} ms")
-    lines.append(f"Right Channel GD: {r_stats['gd_min']:.2f} ms to {r_stats['gd_max']:.2f} ms")
+    lines.append(f"Left Channel GD: {l_stats.get('gd_min',0):.2f} ms to {l_stats.get('gd_max',0):.2f} ms")
+    lines.append(f"Right Channel GD: {r_stats.get('gd_min',0):.2f} ms to {r_stats.get('gd_max',0):.2f} ms")
     
-    lines.append(f"Left Target Level: {l_stats['eff_target_db']:.2f} dB")
-    lines.append(f"Right Target Level: {r_stats['eff_target_db']:.2f} dB")
+    lines.append(f"Left Target Level: {l_stats.get('eff_target_db',0):.2f} dB")
+    lines.append(f"Right Target Level: {r_stats.get('eff_target_db',0):.2f} dB")
     
-    lines.append(f"Left: Peak={l_stats['peak_before_norm']:.2f}dB, Norm={l_stats['normalized']}")
-    lines.append(f"Right: Peak={r_stats['peak_before_norm']:.2f}dB, Norm={r_stats['normalized']}")
+    lines.append(f"Left: Peak={l_stats.get('peak_before_norm',0):.2f}dB, Norm={l_stats.get('normalized', False)}")
+    lines.append(f"Right: Peak={r_stats.get('peak_before_norm',0):.2f}dB, Norm={r_stats.get('normalized', False)}")
     return "\n".join(lines)
 
 def generate_filter_plot_plotly(filt_ir, fs, title, zoom_hint=""):
@@ -92,7 +93,7 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
         plot_phase_orig = (plot_phase_orig + 180) % 360 - 180
         plot_phase_pred = (plot_phase_pred + 180) % 360 - 180
         
-        # Local helper for GD calc inside plot function to ensure availability
+        # Local helper for GD calc
         def calc_gd(freqs, phases_deg):
              phase_rad = np.unwrap(np.deg2rad(phases_deg))
              d_phi_d_f = np.gradient(phase_rad, freqs)
@@ -108,7 +109,7 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
         filt_freqs = w
         filt_mags_db = 20 * np.log10(np.abs(h) + 1e-12)
         
-        # 3. CREATE PLOTLY FIGURE (4 ROWS)
+        # 3. CREATE PLOTLY FIGURE
         fig = make_subplots(rows=4, cols=1, 
                             shared_xaxes=True, 
                             vertical_spacing=0.10, 
@@ -118,12 +119,16 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
         fig.add_trace(go.Scatter(x=orig_freqs, y=plot_orig_var, mode='lines', name='Original', line=dict(color='blue', width=1)), row=1, col=1)
         fig.add_trace(go.Scatter(x=orig_freqs, y=plot_pred_var, mode='lines', name='Predicted', line=dict(color='orange', width=2)), row=1, col=1)
         
-        if target_stats and target_stats.get('has_target'):
-            t_freqs = target_stats['freq_axis']
-            t_mags = target_stats['target_mags']
-            mask = t_freqs > 10
-            fig.add_trace(go.Scatter(x=t_freqs[mask], y=t_mags[mask], mode='lines', name='Target', line=dict(color='green', dash='dash')), row=1, col=1)
+        # --- TARGET CURVE LOGIC (PLOTLY) ---
+        if target_stats and 'target_mags' in target_stats:
+            # Check dimensions match freq_axis
+            if len(target_stats['target_mags']) == len(target_stats['freq_axis']):
+                t_freqs = target_stats['freq_axis']
+                t_mags = target_stats['target_mags']
+                mask = t_freqs > 10
+                fig.add_trace(go.Scatter(x=t_freqs[mask], y=t_mags[mask], mode='lines', name='Target', line=dict(color='green', dash='dash', width=1.5)), row=1, col=1)
         
+        # --- CALC AREA SHADING (PLOTLY) ---
         if target_stats and 'l_match_min' in target_stats:
             fig.add_vrect(
                 x0=target_stats['l_match_min'], 
@@ -214,37 +219,47 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
 
         fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(10, 16), sharex=True)
         
+        # PLOT A: MAGNITUDE
         ax1.semilogx(orig_freqs, plot_orig_var, label='Original', color='blue', alpha=0.6)
         ax1.semilogx(orig_freqs, plot_pred_var, label='Predicted', color='orange')
-        if target_stats and target_stats.get('has_target'):
-            t_freqs = target_stats['freq_axis']
-            t_mags = target_stats['target_mags']
-            ax1.semilogx(t_freqs, t_mags, label='Target', color='green', linestyle='--')
         
+        # --- TARGET CURVE LOGIC (MPL) ---
+        if target_stats and 'target_mags' in target_stats:
+            # Check dimensions match freq_axis
+            if len(target_stats['target_mags']) == len(target_stats['freq_axis']):
+                t_freqs = target_stats['freq_axis']
+                t_mags = target_stats['target_mags']
+                mask = t_freqs > 10
+                ax1.semilogx(t_freqs[mask], t_mags[mask], label='Target', color='green', linestyle='--', alpha=0.8)
+        
+        # --- CALC AREA SHADING (MPL) ---
         if target_stats and 'l_match_min' in target_stats:
             ax1.axvspan(target_stats['l_match_min'], target_stats['l_match_max'], color='gray', alpha=0.15, label='Calc Area')
             
         ax1.set_title(f"{title} - Magnitude")
         ax1.set_ylabel("Amplitude (dB)")
         ax1.grid(True, which="both", alpha=0.3)
-        ax1.legend()
+        ax1.legend(loc='upper right', fontsize='small')
         
+        # PLOT B: PHASE
         ax2.semilogx(orig_freqs, plot_phase_orig, label='Orig Phase', color='blue', alpha=0.6, linestyle=':')
         ax2.semilogx(orig_freqs, plot_phase_pred, label='Pred Phase', color='orange')
         ax2.set_title("Phase")
         ax2.set_ylabel("Phase (deg)")
         ax2.set_ylim(-180, 180)
         ax2.grid(True, which="both", alpha=0.3)
-        ax2.legend()
+        ax2.legend(loc='upper right', fontsize='small')
 
+        # PLOT C: GROUP DELAY
         ax3.semilogx(orig_freqs, gd_orig, label='Orig GD', color='blue', alpha=0.6, linestyle=':')
         ax3.semilogx(orig_freqs, gd_pred, label='Pred GD', color='orange')
         ax3.set_title("Group Delay")
         ax3.set_ylabel("Time (ms)")
         ax3.set_ylim(-20, 100)
         ax3.grid(True, which="both", alpha=0.3)
-        ax3.legend()
+        ax3.legend(loc='upper right', fontsize='small')
 
+        # PLOT D: FILTER
         ax4.semilogx(filt_freqs, filt_mags_db, label='Filter', color='red')
         ax4.set_title("Filter Response")
         ax4.set_xlabel("Frequency (Hz)")
