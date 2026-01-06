@@ -24,11 +24,12 @@ CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
 # --- VERSION HISTORY ---
+# v2.5.4: Restored Level Match Range settings (Min/Max Hz) to UI
 # v2.5.3: Moved SigmaStudio guide to translations.json
 # v2.5.2: Added SigmaStudio/ADAU1701 Guide
-# v2.5.1: Added SigmaStudio support (TXT export + Low tap counts)
-# v2.5.0: Major DSP overhaul (TOF Correction, Freq-Dependent Reg)
-VERSION = "v2.5.3" 
+# v2.5.1: Added SigmaStudio support
+# v2.5.0: Major DSP overhaul
+VERSION = "v2.5.4" 
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
@@ -49,7 +50,7 @@ def put_guide_section():
     guides = [
         ('guide_taps', t('guide_title')),
         ('guide_ft', t('guide_ft_title')),
-        ('guide_sigma', t('guide_sigma_title')), # Fetches title from JSON
+        ('guide_sigma', t('guide_sigma_title')), 
         ('guide_mix', t('guide_mix_title')),
         ('guide_fdw', t('guide_fdw_title')),
         ('guide_reg', t('guide_reg_title')),
@@ -61,7 +62,6 @@ def put_guide_section():
     content = []
     for g_key, g_title in guides:
         if g_key == 'guide_sigma':
-             # Fetches body text from JSON
              c = [put_markdown(t('guide_sigma_body'))]
              content.append(put_collapse(g_title, c))
         elif g_key == 'guide_reg':
@@ -210,6 +210,13 @@ def main():
         ]),
         put_input('gain', label=t('gain'), type=FLOAT, value=get_val('gain', 0.0), help_text=t('gain_help')),
         put_select('lvl_mode', label=t('lvl_mode'), options=[t('lvl_auto'), t('lvl_man')], value=get_val('lvl_mode', t('lvl_auto')), help_text=t('lvl_mode_help')),
+        
+        # RESTORED: Level Match Range Inputs
+        put_row([
+            put_input('lvl_min', label=t('lvl_min'), type=FLOAT, value=get_val('lvl_min', 500.0), help_text=t('lvl_help')),
+            put_input('lvl_max', label=t('lvl_max'), type=FLOAT, value=get_val('lvl_max', 2000.0), help_text=t('lvl_help')),
+        ]),
+        
         put_input('lvl_manual_db', label=t('lvl_target_db'), type=FLOAT, value=get_val('lvl_manual_db', 75.0), help_text=t('lvl_manual_help'))
     ]
 
@@ -285,16 +292,16 @@ def main():
             'multi_rate_opt': bool(pin.multi_rate_opt), 'ir_window': pin.ir_window,
             'local_path_l': pin.local_path_l, 'local_path_r': pin.local_path_r,
             'fmt': pin.fmt, 'layout': pin.layout,
-            'lvl_manual_db': pin.lvl_manual_db
+            'lvl_manual_db': pin.lvl_manual_db,
+            'lvl_min': pin.lvl_min, # Reading from pin now
+            'lvl_max': pin.lvl_max  # Reading from pin now
         }
         for i in range(1, 6):
             data[f'xo{i}_f'] = pin[f'xo{i}_f']
             data[f'xo{i}_s'] = pin[f'xo{i}_s']
 
         data['lvl_algo'] = 'Median' 
-        data['lvl_min'] = 500.0
-        data['lvl_max'] = 2000.0
-
+        
         save_config(data)
         
         f_l, m_l, p_l = None, None, None
