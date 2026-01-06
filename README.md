@@ -61,6 +61,11 @@ Version 2.5.x introduces specific optimizations for resource-constrained fixed-p
 * **Raw Coefficient Export:** Direct export of impulse response coefficients to `.txt` format for import into SigmaStudio **FIR Filter** or **Table** blocks.
 * **Resolution Logic:** The engine automatically advises on phase strategy validity based on tap count (e.g., forcing Minimum Phase for low-resolution kernels where low-frequency wave lengths exceed filter length).
 
+
+### 4. New Filename Convention: 
+
+Exported filters are now named using a highly descriptive format for better organization: L/R_[Type]_[Samplerate]_[Time]_[Date].wav (e.g., L_Mixed_48000Hz_1730_060126.wav).
+
 ---
 
 ## 🛠️ Installation
