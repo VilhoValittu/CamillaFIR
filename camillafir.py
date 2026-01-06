@@ -24,13 +24,10 @@ CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
 # --- VERSION HISTORY ---
-# v2.5.6: Changed filename format to L_Type_Rate_Time_Date.wav (e.g. L_Linear_48000Hz_1730_060126.wav)
+# v2.5.7: Added Level Match Algorithm selection (Average/Median) to UI
+# v2.5.6: Changed filename format to L_Type_Rate_Time_Date.wav
 # v2.5.4: Restored Level Match Range settings (Min/Max Hz) to UI
-# v2.5.3: Moved SigmaStudio guide to translations.json
-# v2.5.2: Added SigmaStudio/ADAU1701 Guide
-# v2.5.1: Added SigmaStudio support
-# v2.5.0: Major DSP overhaul
-VERSION = "v2.5.6" 
+VERSION = "v2.5.7" 
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
@@ -210,7 +207,12 @@ def main():
             put_input('mixed_freq', label=t('mixed_freq'), type=FLOAT, value=get_val('mixed_freq', 300.0), help_text=t('mixed_freq_help')),
         ]),
         put_input('gain', label=t('gain'), type=FLOAT, value=get_val('gain', 0.0), help_text=t('gain_help')),
-        put_select('lvl_mode', label=t('lvl_mode'), options=[t('lvl_auto'), t('lvl_man')], value=get_val('lvl_mode', t('lvl_auto')), help_text=t('lvl_mode_help')),
+        
+        # UI UPDATED: Added lvl_algo selection
+        put_row([
+            put_select('lvl_mode', label=t('lvl_mode'), options=[t('lvl_auto'), t('lvl_man')], value=get_val('lvl_mode', t('lvl_auto')), help_text=t('lvl_mode_help')),
+            put_select('lvl_algo', label=t('lvl_algo'), options=[t('algo_mean'), t('algo_median')], value=get_val('lvl_algo', t('algo_median')), help_text=t('lvl_algo_help'))
+        ]),
         
         put_row([
             put_input('lvl_min', label=t('lvl_min'), type=FLOAT, value=get_val('lvl_min', 500.0), help_text=t('lvl_help')),
@@ -294,14 +296,13 @@ def main():
             'fmt': pin.fmt, 'layout': pin.layout,
             'lvl_manual_db': pin.lvl_manual_db,
             'lvl_min': pin.lvl_min,
-            'lvl_max': pin.lvl_max
+            'lvl_max': pin.lvl_max,
+            'lvl_algo': pin.lvl_algo # UI DATA NOW CONNECTED
         }
         for i in range(1, 6):
             data[f'xo{i}_f'] = pin[f'xo{i}_f']
             data[f'xo{i}_s'] = pin[f'xo{i}_s']
 
-        data['lvl_algo'] = 'Median' 
-        
         save_config(data)
         
         f_l, m_l, p_l = None, None, None
@@ -362,9 +363,7 @@ def main():
         if 'Min' in data['filter_type']: ft_short = "Minimum"
         elif 'Mixed' in data['filter_type']: ft_short = "Mixed"
         
-        # CHANGED: Create HHMM_DDMMYY timestamp for files
         file_ts = datetime.now().strftime('%H%M_%d%m%y')
-        # Use existing timestamp format for the zip file to avoid breaking expectations
         ts = datetime.now().strftime('%d%m%y_%H%M')
         
         l_st_sum, r_st_sum = None, None
@@ -393,15 +392,11 @@ def main():
                     scale = 0.891 / max(np.max(np.abs(l_imp)), np.max(np.abs(r_imp)))
                     l_imp *= scale; r_imp *= scale
                 
-                # --- EXPORT LOGIC (WAV or TXT) ---
                 ext = "wav" if "WAV" in data['fmt'] else "txt"
-                
-                # CHANGED: New filename format
                 fn_l = f"L_{ft_short}_{fs_val}Hz_{file_ts}.{ext}"
                 fn_r = f"R_{ft_short}_{fs_val}Hz_{file_ts}.{ext}"
                 
                 if "TXT" in data['fmt']:
-                    # SigmaStudio compatible raw coefficients (one per line)
                     txt_l = io.BytesIO()
                     txt_r = io.BytesIO()
                     np.savetxt(txt_l, l_imp, fmt='%.10f')
@@ -409,7 +404,6 @@ def main():
                     zf.writestr(fn_l, txt_l.getvalue())
                     zf.writestr(fn_r, txt_r.getvalue())
                 else:
-                    # Standard WAV
                     wav_l, wav_r = io.BytesIO(), io.BytesIO()
                     scipy.io.wavfile.write(wav_l, fs_val, l_imp.astype(np.float32))
                     scipy.io.wavfile.write(wav_r, fs_val, r_imp.astype(np.float32))
@@ -433,8 +427,6 @@ def main():
             is_stereo = 'Stereo' in data['layout']
             yaml_content = "filters:\n"
             
-            # CHANGED: Update YAML to match new filename format
-            # Using the last extension set in the loop
             ext = "wav" if "WAV" in data['fmt'] else "txt"
             fn_l_tpl = f"/home/camilladsp/coeffs/L_{ft_short}_$samplerate$Hz_{file_ts}.{ext}"
             fn_r_tpl = f"/home/camilladsp/coeffs/R_{ft_short}_$samplerate$Hz_{file_ts}.{ext}"
@@ -475,6 +467,7 @@ def main():
                 - **FDW:** {data['fdw_cycles']}
                 - **Tavoite:** {data['hc_mode']} ({data['hc_min']}-{data['hc_max']} Hz)
                 - **Tyyppi:** {data['filter_type']}
+                - **Taso-algo:** {data['lvl_algo']}
                 """)
             
             put_markdown("---")
