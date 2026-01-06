@@ -127,7 +127,6 @@
         "ir_window_help": "Window length for Minimum Phase calculation.",
         "phase_limit": "Phase Corr Limit (Hz)",
         "phase_limit_help": "Max frequency for phase correction.",
-        "mixed_freq": "Mixed Phase Split (Hz)",
         "zoom_hint": "(Double-click graph to reset zoom)",
         "guide_title": "❓ Guide: Sample Rate & Taps",
         "guide_ft_title": "❓ Guide: Deep Dive - Filter Types",
@@ -180,7 +179,10 @@
         "sec_prot": "Protection",
         "txt_paths": "Enter local file paths below OR leave empty to upload files after clicking 'Run Analysis'.",
         "btn_run": "Run Analysis",
-        "msg_calc": "Calculating"
+        "msg_calc": "Calculating",
+        "tab_l": "Left (L)",
+        "tab_r": "Right (R)",
+        "lvl_algo_help": "Median is robust against narrow peaks."
     },
     "fi": {
         "title": "CamillaFIR",
@@ -321,8 +323,8 @@
         "txt_paths": "Syötä polut alle TAI jätä tyhjäksi ladataksesi tiedostot 'Aloita Laskenta' -painikkeesta.",
         "btn_run": "Aloita Laskenta",
         "msg_calc": "Lasketaan",
-        "tab_l": "Vasen",
-        "tab_r": "Oikea",
+        "tab_l": "Vasen (L)",
+        "tab_r": "Oikea (R)",
         "guide_title": "❓ Opas: Sample Rate & Taps",
         "guide_ft_title": "❓ Opas: Syventävä tieto - Suotimen Tyypit",
         "guide_fdw_title": "❓ Opas: FDW Cycles",
@@ -364,6 +366,7 @@
         "guide_ft_min_h": "2. Minimum Phase (Nollaviive)",
         "guide_ft_min_body": "\n        • **Mitä:** Korjaa vain taajuusvasteen. Vaihe käyttäytyy luonnollisesti.\n        • **Edut:** Nollaviive (Peli/TV), ei pre-ringingiä, iskevä ääni.\n        • **Haitat:** Basso saapuu hieman myöhemmin kuin diskantti.\n        • **Paras:** Pelaaminen, TV, Monitorointi.\n        ",
         "guide_ft_mix_h": "3. Mixed Phase (Hybridi)",
-        "guide_ft_mix_body": "\n        • **Mitä:** Linear Phase bassoilla (<300Hz) + Minimum Phase diskanteilla.\n        • **Edut:** Tiukka basso (Linear) ja puhdas diskantti (Minimum).\n        • **Haitat:** Keskisuuri viive.\n        • **Paras:** Ultimaattinen audiofiili-kokemus.\n        "
+        "guide_ft_mix_body": "\n        • **Mitä:** Linear Phase bassoilla (<300Hz) + Minimum Phase diskanteilla.\n        • **Edut:** Tiukka basso (Linear) ja puhdas diskantti (Minimum).\n        • **Haitat:** Keskisuuri viive.\n        • **Paras:** Ultimaattinen audiofiili-kokemus.\n        ",
+        "lvl_algo_help": "Mediaani on suositeltu (hylkää piikit/kuopat)."
     }
 }
