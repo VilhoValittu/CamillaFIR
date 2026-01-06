@@ -24,10 +24,11 @@ CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
 # --- VERSION HISTORY ---
-# v2.5.0: Major DSP overhaul (TOF Correction, Freq-Dependent Reg), UI File Uploads
-# v2.3.x: TOF Correction implementation in DSP
-# v2.2.x: UI Tooltips, Translations, File Upload logic
-VERSION = "v2.5.0" 
+# v2.5.3: Moved SigmaStudio guide to translations.json
+# v2.5.2: Added SigmaStudio/ADAU1701 Guide
+# v2.5.1: Added SigmaStudio support (TXT export + Low tap counts)
+# v2.5.0: Major DSP overhaul (TOF Correction, Freq-Dependent Reg)
+VERSION = "v2.5.3" 
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
@@ -48,6 +49,7 @@ def put_guide_section():
     guides = [
         ('guide_taps', t('guide_title')),
         ('guide_ft', t('guide_ft_title')),
+        ('guide_sigma', t('guide_sigma_title')), # Fetches title from JSON
         ('guide_mix', t('guide_mix_title')),
         ('guide_fdw', t('guide_fdw_title')),
         ('guide_reg', t('guide_reg_title')),
@@ -58,7 +60,11 @@ def put_guide_section():
     
     content = []
     for g_key, g_title in guides:
-        if g_key == 'guide_reg':
+        if g_key == 'guide_sigma':
+             # Fetches body text from JSON
+             c = [put_markdown(t('guide_sigma_body'))]
+             content.append(put_collapse(g_title, c))
+        elif g_key == 'guide_reg':
             c = [put_text(t('guide_reg_desc')), put_markdown(f"**{t('guide_reg_why')}**"), put_text(t('guide_reg_how')), put_markdown(f"_{t('guide_reg_rec')}_").style('font-weight: bold;')]
             content.append(put_collapse(g_title, c))
         elif g_key == 'guide_lvl':
@@ -172,7 +178,7 @@ def main():
 
     hc_options = [t('hc_harman'), t('hc_harman8'), t('hc_toole'), t('hc_bk'), t('hc_flat'), t('hc_cinema'), t('hc_mode_upload')]
     fs_options = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]
-    taps_options = [2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288]
+    taps_options = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288]
     slope_opts = [6, 12, 18, 24, 36, 48]
 
     # --- TABS UI ---
@@ -187,7 +193,7 @@ def main():
         put_file_upload('file_r', label=t('upload_r'), accept='.txt', placeholder=t('ph_r')),
         put_input('local_path_r', label=t('path_r'), value=get_val('local_path_r', ''), help_text=t('path_help')),
         
-        put_select('fmt', label=t('fmt'), options=['WAV'], value='WAV', help_text="Valitse WAV useimmille DSP-laitteille."),
+        put_select('fmt', label=t('fmt'), options=['WAV', 'TXT (SigmaStudio)'], value=get_val('fmt', 'WAV'), help_text="WAV: PC/CamillaDSP. TXT: Raw coefficients for Hardware DSPs."),
         put_radio('layout', label=t('layout'), options=[t('layout_mono'), t('layout_stereo')], value=get_val('layout', t('layout_stereo')), inline=True),
         put_checkbox('multi_rate_opt', options=[{'label': t('multi_rate'), 'value': True}], value=[True] if get_val('multi_rate_opt', False) else [], help_text=t('multi_rate_help'))
     ]
@@ -377,15 +383,26 @@ def main():
                     scale = 0.891 / max(np.max(np.abs(l_imp)), np.max(np.abs(r_imp)))
                     l_imp *= scale; r_imp *= scale
                 
-                wav_l, wav_r = io.BytesIO(), io.BytesIO()
-                scipy.io.wavfile.write(wav_l, fs_val, l_imp.astype(np.float32))
-                scipy.io.wavfile.write(wav_r, fs_val, r_imp.astype(np.float32))
+                # --- EXPORT LOGIC (WAV or TXT) ---
+                ext = "wav" if "WAV" in data['fmt'] else "txt"
+                fn_l = f"L_corr_{ft_short}_{fs_val}Hz.{ext}"
+                fn_r = f"R_corr_{ft_short}_{fs_val}Hz.{ext}"
                 
-                fn_l = f"L_corr_{ft_short}_{fs_val}Hz.wav"
-                fn_r = f"R_corr_{ft_short}_{fs_val}Hz.wav"
-                
-                zf.writestr(fn_l, wav_l.getvalue())
-                zf.writestr(fn_r, wav_r.getvalue())
+                if "TXT" in data['fmt']:
+                    # SigmaStudio compatible raw coefficients (one per line)
+                    txt_l = io.BytesIO()
+                    txt_r = io.BytesIO()
+                    np.savetxt(txt_l, l_imp, fmt='%.10f')
+                    np.savetxt(txt_r, r_imp, fmt='%.10f')
+                    zf.writestr(fn_l, txt_l.getvalue())
+                    zf.writestr(fn_r, txt_r.getvalue())
+                else:
+                    # Standard WAV
+                    wav_l, wav_r = io.BytesIO(), io.BytesIO()
+                    scipy.io.wavfile.write(wav_l, fs_val, l_imp.astype(np.float32))
+                    scipy.io.wavfile.write(wav_r, fs_val, r_imp.astype(np.float32))
+                    zf.writestr(fn_l, wav_l.getvalue())
+                    zf.writestr(fn_r, wav_r.getvalue())
                 
                 if fs_val == data['fs']:
                     l_st['gd_min'] = l_min; l_st['gd_max'] = l_max
@@ -404,14 +421,14 @@ def main():
             is_stereo = 'Stereo' in data['layout']
             yaml_content = "filters:\n"
             if is_stereo:
-                fn_l = f"/home/camilladsp/coeffs/L_corr_{ft_short}_$samplerate$Hz.wav"
-                fn_r = f"/home/camilladsp/coeffs/R_corr_{ft_short}_$samplerate$Hz.wav"
+                fn_l = f"/home/camilladsp/coeffs/L_corr_{ft_short}_$samplerate$Hz.{ext}"
+                fn_r = f"/home/camilladsp/coeffs/R_corr_{ft_short}_$samplerate$Hz.{ext}"
                 yaml_content += f"  ir_l:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_l}\n"
                 yaml_content += f"  ir_r:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_r}\n"
                 yaml_content += "\npipeline:\n  - type: Filter\n    channel: 0\n    names:\n      - ir_l\n  - type: Filter\n    channel: 1\n    names:\n      - ir_r\n"
             else:
-                fn_l = f"/home/camilladsp/coeffs/L_corr_{ft_short}_$samplerate$Hz.wav"
-                fn_r = f"/home/camilladsp/coeffs/R_corr_{ft_short}_$samplerate$Hz.wav"
+                fn_l = f"/home/camilladsp/coeffs/L_corr_{ft_short}_$samplerate$Hz.{ext}"
+                fn_r = f"/home/camilladsp/coeffs/R_corr_{ft_short}_$samplerate$Hz.{ext}"
                 yaml_content += f"  ir_l:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_l}\n"
                 yaml_content += f"  ir_r:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_r}\n"
                 yaml_content += "\npipeline:\n  - type: Filter\n    channel: 0\n    names:\n      - ir_l\n  - type: Filter\n    channel: 1\n    names:\n      - ir_r\n"
