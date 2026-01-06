@@ -24,12 +24,13 @@ CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
 # --- VERSION HISTORY ---
+# v2.5.6: Changed filename format to L_Type_Rate_Time_Date.wav (e.g. L_Linear_48000Hz_1730_060126.wav)
 # v2.5.4: Restored Level Match Range settings (Min/Max Hz) to UI
 # v2.5.3: Moved SigmaStudio guide to translations.json
 # v2.5.2: Added SigmaStudio/ADAU1701 Guide
 # v2.5.1: Added SigmaStudio support
 # v2.5.0: Major DSP overhaul
-VERSION = "v2.5.4" 
+VERSION = "v2.5.6" 
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
@@ -211,7 +212,6 @@ def main():
         put_input('gain', label=t('gain'), type=FLOAT, value=get_val('gain', 0.0), help_text=t('gain_help')),
         put_select('lvl_mode', label=t('lvl_mode'), options=[t('lvl_auto'), t('lvl_man')], value=get_val('lvl_mode', t('lvl_auto')), help_text=t('lvl_mode_help')),
         
-        # RESTORED: Level Match Range Inputs
         put_row([
             put_input('lvl_min', label=t('lvl_min'), type=FLOAT, value=get_val('lvl_min', 500.0), help_text=t('lvl_help')),
             put_input('lvl_max', label=t('lvl_max'), type=FLOAT, value=get_val('lvl_max', 2000.0), help_text=t('lvl_help')),
@@ -293,8 +293,8 @@ def main():
             'local_path_l': pin.local_path_l, 'local_path_r': pin.local_path_r,
             'fmt': pin.fmt, 'layout': pin.layout,
             'lvl_manual_db': pin.lvl_manual_db,
-            'lvl_min': pin.lvl_min, # Reading from pin now
-            'lvl_max': pin.lvl_max  # Reading from pin now
+            'lvl_min': pin.lvl_min,
+            'lvl_max': pin.lvl_max
         }
         for i in range(1, 6):
             data[f'xo{i}_f'] = pin[f'xo{i}_f']
@@ -362,6 +362,9 @@ def main():
         if 'Min' in data['filter_type']: ft_short = "Minimum"
         elif 'Mixed' in data['filter_type']: ft_short = "Mixed"
         
+        # CHANGED: Create HHMM_DDMMYY timestamp for files
+        file_ts = datetime.now().strftime('%H%M_%d%m%y')
+        # Use existing timestamp format for the zip file to avoid breaking expectations
         ts = datetime.now().strftime('%d%m%y_%H%M')
         
         l_st_sum, r_st_sum = None, None
@@ -392,8 +395,10 @@ def main():
                 
                 # --- EXPORT LOGIC (WAV or TXT) ---
                 ext = "wav" if "WAV" in data['fmt'] else "txt"
-                fn_l = f"L_corr_{ft_short}_{fs_val}Hz.{ext}"
-                fn_r = f"R_corr_{ft_short}_{fs_val}Hz.{ext}"
+                
+                # CHANGED: New filename format
+                fn_l = f"L_{ft_short}_{fs_val}Hz_{file_ts}.{ext}"
+                fn_r = f"R_{ft_short}_{fs_val}Hz_{file_ts}.{ext}"
                 
                 if "TXT" in data['fmt']:
                     # SigmaStudio compatible raw coefficients (one per line)
@@ -427,17 +432,20 @@ def main():
 
             is_stereo = 'Stereo' in data['layout']
             yaml_content = "filters:\n"
+            
+            # CHANGED: Update YAML to match new filename format
+            # Using the last extension set in the loop
+            ext = "wav" if "WAV" in data['fmt'] else "txt"
+            fn_l_tpl = f"/home/camilladsp/coeffs/L_{ft_short}_$samplerate$Hz_{file_ts}.{ext}"
+            fn_r_tpl = f"/home/camilladsp/coeffs/R_{ft_short}_$samplerate$Hz_{file_ts}.{ext}"
+            
             if is_stereo:
-                fn_l = f"/home/camilladsp/coeffs/L_corr_{ft_short}_$samplerate$Hz.{ext}"
-                fn_r = f"/home/camilladsp/coeffs/R_corr_{ft_short}_$samplerate$Hz.{ext}"
-                yaml_content += f"  ir_l:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_l}\n"
-                yaml_content += f"  ir_r:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_r}\n"
+                yaml_content += f"  ir_l:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_l_tpl}\n"
+                yaml_content += f"  ir_r:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_r_tpl}\n"
                 yaml_content += "\npipeline:\n  - type: Filter\n    channel: 0\n    names:\n      - ir_l\n  - type: Filter\n    channel: 1\n    names:\n      - ir_r\n"
             else:
-                fn_l = f"/home/camilladsp/coeffs/L_corr_{ft_short}_$samplerate$Hz.{ext}"
-                fn_r = f"/home/camilladsp/coeffs/R_corr_{ft_short}_$samplerate$Hz.{ext}"
-                yaml_content += f"  ir_l:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_l}\n"
-                yaml_content += f"  ir_r:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_r}\n"
+                yaml_content += f"  ir_l:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_l_tpl}\n"
+                yaml_content += f"  ir_r:\n    type: Convolution\n    parameters:\n      type: Wav\n      filename: {fn_r_tpl}\n"
                 yaml_content += "\npipeline:\n  - type: Filter\n    channel: 0\n    names:\n      - ir_l\n  - type: Filter\n    channel: 1\n    names:\n      - ir_r\n"
             zf.writestr("camilladsp.yml", yaml_content)
 
