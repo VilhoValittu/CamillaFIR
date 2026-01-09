@@ -1,3 +1,26 @@
+=== CamillaFIR Features List (v2.6.2 Stable) ===
+
+--- CORE DSP & FILTER GENERATION ---
+
+Advanced FIR Engine: Generates high-precision 32-bit float FIR filters for room and speaker correction.
+
+Quad-Phase Strategy:
+
+Linear Phase: Full timing and frequency correction for audiophile performance.
+
+Asymmetric Linear Phase: Low-latency linear phase mode using a 100ms/500ms windowing strategy to minimize pre-ringing.
+
+Minimum Phase: Zero-latency correction, ideal for gaming and live TV.
+
+Mixed Phase: Hybrid approach using Linear Phase for bass (<300Hz) and Minimum Phase for treble.
+
+Temporal Decay Control (TDC): Active resonance damping that identifies ringing frequencies and reduces their decay time (ms) in the time domain.
+
+Adaptive FDW (A-FDW): Intelligent windowing that dynamically adjusts cycle counts based on acoustic confidence masking to prevent artifacts in chaotic regions.
+
+Transparent FIR Split: Uses a complementary linear-phase crossover for seamless sub-band merging in Mixed Phase mode.
+
+Dynamic Kaiser Windowing: Automatically calculates optimal beta parameters to ensure perfect impulse response truncation and minimal ripples.
 === CamillaFIR Features List (v2.5.7) ===
 
 --- CORE DSP & FILTER GENERATION ---
