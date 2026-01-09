@@ -10,11 +10,36 @@ CamillaFIR is a Python-based DSP utility designed to automate the generation of 
 
 While originally architected for **CamillaDSP** (including automated `.yml` configuration generation), the tool generates standard IEEE 32-bit float impulse response files (`.wav` and `.txt`). These kernels are **universally compatible** with any convolution engine or hardware DSP that supports FIR filtering, including:
 
-* **Hardware DSPs:** Analog Devices SigmaDSP (ADAU1701 via SigmaStudio), MiniDSP (OpenDRC, Flex, SHD).
-* **Software DSPs:** Roon (Convolution), Equalizer APO, Volumio, Moode, FusionDSP, JRiver Media Center.
+* **Hardware DSPs:** Analog Devices SigmaDSP (ADAU1701 via SigmaStudio), MiniDSP (OpenDRC, Flex, SHD etc.) etc.
+* **Software DSPs:** Roon (Convolution), Equalizer APO, Volumio, Moode, FusionDSP, JRiver Media Center etc.
+
+## 💡 Project Philosophy
+CamillaFIR was originally developed as a personal project to perfect my own listening environment. The workflow is primarily optimized for **2-channel stereo systems** (2.0, 2.1, or 2.2 setups), focusing on absolute phase linearity and transient accuracy.
+
+While the interface is streamlined for stereo use, the underlying DSP engine is channel-agnostic. With a bit of imagination and creative routing, it can absolutely be adapted for multi-channel home theater applications.
 
 ---
+### ✨ New in v2.6.2 Stable
 
+#### ⏳ Temporal Decay Control (TDC)
+* **Function:** Actively reduces the ringing time ($T_{60}$) of room resonances.
+* **Mechanism:** Identifies high-Q modes and injects inverse-phase decay kernels to "stop" the bass note faster, rather than just lowering its volume.
+* **Benefit:** Significantly tighter bass response and improved transient clarity in resonant rooms.
+
+#### 🧠 Adaptive Frequency Dependent Windowing (A-FDW)
+* **Function:** Dynamically adjusts the windowing length based on signal quality.
+* **Logic:** $N_{cycles}(f) = N_{min} + C(f) \cdot (N_{base} - N_{min})$
+* **Benefit:** Uses long windows for high-confidence data (high resolution) and short windows for chaotic reflections (smoothing), preventing over-correction of acoustic noise.
+
+#### 🚀 Asymmetric Linear Phase
+* **Topology:** A specialized low-latency Linear Phase mode.
+* **Strategy:** Decoupled adjustdable windowing (basic settings : 100ms pre-peak / 500ms post-peak) maintains perfect phase linearity while eliminating audible pre-ringing artifacts common in standard linear phase filters.
+
+#### 🔍 Acoustic Intelligence Engine
+* **Reflection Tracking:** Automatically detects boundary reflections and calculates their physical distance (meters).
+* **Confidence Masking:** Assigns a reliability score (%) to the measurement data, guiding the DSP engine on how aggressively to correct specific frequency bands.
+
+---
 
 
 ## 🚀 DSP Engine Architecture (v2.5.5)
@@ -154,45 +179,3 @@ Development inspired by the methodologies of **OCA** (Obsessive Compulsive Audio
 
 ---
 
-```markdown
-
-=== CamillaFIR Features List (v2.5.7) ===
-
---- CORE DSP & FILTER GENERATION ---
-* Advanced FIR Engine: Generates high-precision 32-bit float FIR filters for room and speaker correction.
-* Triple Phase Strategy:
-    - Linear Phase: Full timing and frequency correction for audiophile performance.
-    - Minimum Phase: Zero-latency correction, ideal for gaming and live TV.
-    - Mixed Phase: Hybrid approach using Linear Phase for bass (<300Hz) and Minimum Phase for treble.
-* Transparent FIR Split: Uses a complementary linear-phase crossover for seamless sub-band merging in Mixed Phase mode.
-* Time-of-Flight (TOF) Detection: Automatically calculates and removes propagation delay via linear regression (1kHz-10kHz) to isolate true excess phase.
-* Frequency-Dependent Regularization: Smart algorithm that varies correction strength by frequency to avoid artifacts when filling room nulls.
-* Excess Phase Safety Masks: Hard-coded protection that tapers phase correction at extreme frequencies (<15Hz and >19kHz) to ensure stability.
-
---- MAGNITUDE & TARGETING ---
-* Level Matching Engine:
-    - Automatic and Manual modes.
-    - Configurable frequency window (e.g., 500Hz - 2000Hz) for sensitivity calculation.
-    - Selectable algorithms: 'Median' (robust against narrow spikes) or 'Average'.
-* Integrated Target Curves: Includes Harman (+6dB/+8dB), Dr. Toole, B&K 1974, Flat, and Cinema X-Curve.
-* Custom Target Support: Upload personal target curve files in .txt format.
-* Psychoacoustic Smoothing: Optional smoothing logic that simulates human hearing integration.
-
---- SYSTEM INTEGRATION ---
-* CamillaDSP Support: Automatically generates 'camilladsp.yml' configuration snippets.
-* Universal Compatibility: Exports filters as standard .wav or raw .txt coefficients for Hardware DSPs.
-* Hardware Optimization: Specialized logic for short filters (512-1024 taps) suitable for ADAU1701/SigmaDSP.
-* Multi-Rate Export: One-click generation for all common sample rates (44.1k to 192k).
-
---- UTILITIES & PROTECTION ---
-* Crossover Linearization: Built-in tool to correct the phase shift of existing analog or digital crossovers (1st to 8th order).
-* Subsonic HPF: Integrated high-pass filter with selectable slopes (6dB to 48dB/oct) to protect woofers.
-* Excursion Protection: Prevents bass boost below a user-defined frequency (e.g., port tuning).
-* Automatic Normalization: Safeguards against digital clipping by normalizing filter peaks to -1.0 dB.
-* Stereo Link: Maintains the original volume balance between Left and Right channels during correction.
-* Impulse Alignment: Automatically aligns the peaks of the L/R channels to fix hardware or placement delays.
-
---- VISUALIZATION ---
-* High-Resolution Plots: Generates magnitude, phase, and group delay plots using Matplotlib (PNG) and interactive Plotly (HTML).
-* Prediction Analysis: Shows the estimated system response after applying the generated filter.
-* Calculation Reports: Provides a detailed 'Summary.txt' with all DSP statistics and settings.
