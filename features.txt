@@ -1,26 +1,45 @@
 === CamillaFIR Features List (v2.6.2 Stable) ===
 
 --- CORE DSP & FILTER GENERATION ---
+* Advanced FIR Engine: Generates high-precision 32-bit float FIR filters for room and speaker correction.
+* Quad-Phase Strategy:
+    - Linear Phase: Full timing and frequency correction for audiophile performance.
+    - Asymmetric Linear Phase: Low-latency linear phase mode using a 100ms/500ms windowing strategy to minimize pre-ringing.
+    - Minimum Phase: Zero-latency correction, ideal for gaming and live TV.
+    - Mixed Phase: Hybrid approach using Linear Phase for bass (<300Hz) and Minimum Phase for treble.
+* Temporal Decay Control (TDC): Active resonance damping that identifies ringing frequencies and reduces their decay time (ms) in the time domain.
+* Adaptive FDW (A-FDW): Intelligent windowing that dynamically adjusts cycle counts based on acoustic confidence masking to prevent artifacts in chaotic regions.
+* Transparent FIR Split: Uses a complementary linear-phase crossover for seamless sub-band merging in Mixed Phase mode.
+* Dynamic Kaiser Windowing: Automatically calculates optimal beta parameters to ensure perfect impulse response truncation and minimal ripples.
 
-Advanced FIR Engine: Generates high-precision 32-bit float FIR filters for room and speaker correction.
+--- MAGNITUDE & TARGETING ---
+* Level Matching Engine:
+    - Automatic and Manual modes.
+    - Configurable frequency window (e.g., 500Hz - 2000Hz) for sensitivity calculation.
+    - Selectable algorithms: 'Median' (robust against narrow spikes) or 'Average'.
+* Integrated Target Curves: Includes Harman (+6dB/+8dB), Dr. Toole, B&K 1974, Flat, and Cinema X-Curve.
+* Custom Target Support: Full support for uploading personal target curve files in .txt format.
+* Psychoacoustic Smoothing: Variable-bandwidth smoothing logic that simulates human hearing integration.
 
-Quad-Phase Strategy:
+--- ACOUSTIC INTELLIGENCE & ANALYTICS ---
+* Reflection Tracking: Automatically detects physical reflections (desks, walls) by calculating path distances based on impulse artifacts.
+* Confidence Masking: Calculates a real-time reliability score (%) for every frequency bin to guide the correction engine.
+* High-Resolution Plots: Generates magnitude, phase, and group delay plots using Matplotlib (PNG) and interactive Plotly (HTML).
+* Phase Limit Control: User-adjustable frequency limit for phase correction to preserve natural high-frequency dispersion.
 
-Linear Phase: Full timing and frequency correction for audiophile performance.
+--- SYSTEM INTEGRATION ---
+* CamillaDSP Support: Automatically generates 'camilladsp.yml' configuration snippets for seamless integration.
+* Universal Compatibility: Exports filters as standard IEEE 32-bit float .wav files, compatible with Roon, MiniDSP, and EAPO.
+* Multi-Rate Export: One-click generation for all common sample rates (44.1k to 192k).
 
-Asymmetric Linear Phase: Low-latency linear phase mode using a 100ms/500ms windowing strategy to minimize pre-ringing.
+--- UTILITIES & PROTECTION ---
+* Crossover Linearization: Built-in tool to correct the phase shift of existing analog or digital crossovers (1st to 8th order).
+* Excursion Protection: Prevents bass boost below a user-defined frequency (e.g., port tuning) to protect drivers.
+* Subsonic HPF: Integrated high-pass filter with selectable slopes (6dB to 48dB/oct).
+* Automatic Normalization: Safeguards against digital clipping by normalizing filter peaks to a safe headroom level.
+* Impulse Alignment: Automatically aligns L/R channel peaks to correct hardware or placement-induced time delays.
+* Stereo Link: Maintains the original volume balance between Left and Right channels during correction.
 
-Minimum Phase: Zero-latency correction, ideal for gaming and live TV.
-
-Mixed Phase: Hybrid approach using Linear Phase for bass (<300Hz) and Minimum Phase for treble.
-
-Temporal Decay Control (TDC): Active resonance damping that identifies ringing frequencies and reduces their decay time (ms) in the time domain.
-
-Adaptive FDW (A-FDW): Intelligent windowing that dynamically adjusts cycle counts based on acoustic confidence masking to prevent artifacts in chaotic regions.
-
-Transparent FIR Split: Uses a complementary linear-phase crossover for seamless sub-band merging in Mixed Phase mode.
-
-Dynamic Kaiser Windowing: Automatically calculates optimal beta parameters to ensure perfect impulse response truncation and minimal ripples.
 === CamillaFIR Features List (v2.5.7) ===
 
 --- CORE DSP & FILTER GENERATION ---
