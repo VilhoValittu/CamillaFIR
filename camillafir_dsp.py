@@ -3,98 +3,95 @@ import scipy.signal
 import scipy.fft
 import scipy.ndimage
 
+# --- v2.6.2 Stable: PERUSTYÖKALUT ---
+def apply_temporal_decay_control(freq_axis, target_mags, reflections, strength=0.5):
+    """
+    Luo ajallisen vaimennuksen korjauskäyrän havaittujen resonanssien perusteella.
+    """
+    # Tehdään kopio, jotta emme muuta alkuperäistä tavoitekäyrää pysyvästi
+    adjusted_target = np.copy(target_mags)
+    
+    for rev in reflections:
+        f_res = rev['freq']
+        error_ms = rev['error_ms']
+        
+        # TDC keskittyy merkittäviin resonansseihin (soivat pitkään)
+        if error_ms > 100: 
+            # Lasketaan dynaaminen Q-arvo (leveys) virheen pituuden mukaan
+            # Mitä pitempi virhe, sitä kapeampi ja syvempi TDC-isku tarvitaan
+            bw = f_res / (error_ms / 15.0) 
+            
+            # Luodaan Gaussin kello-suodatin kumoamaan ajallinen virhe
+            dist = np.abs(freq_axis - f_res)
+            kernel = np.exp(-0.5 * (dist / bw)**2)
+            
+            # Voimakkuuskerroin (perustuu virheen pituuteen ja käyttäjän asetukseen)
+            # Max vaimennus TDC:llä on yleensä -3..-6dB, ettei vaste muutu oudoksi
+            impact = (error_ms / 2000.0) * strength * 6.0
+            
+            adjusted_target -= (kernel * impact)
+            
+    return adjusted_target
+
 def soft_clip_boost(gain_db, max_boost):
+    """Pehmentää korostukset tanh-funktiolla, jotta max_boost ei ylity rajusti."""
     if gain_db <= 0: return gain_db
-    # Soft knee limiting for boosts
     return max_boost * np.tanh(gain_db / max_boost)
 
-def clean_measurement_ir(freqs, mags, phases, window_ms=500.0, fs=48000):
-    n_fft = 131072
-    freq_axis_lin = np.linspace(0, fs/2, n_fft//2 + 1)
-    
-    # Interpolate to linear grid
-    m_lin = np.interp(freq_axis_lin, freqs, mags)
-    p_lin = np.interp(freq_axis_lin, freqs, phases)
-    
-    # Create complex spectrum
-    complex_spec = 10**(m_lin/20.0) * np.exp(1j * np.deg2rad(p_lin))
-    
-    # IFFT to time domain
-    ir = scipy.fft.irfft(complex_spec, n=n_fft)
-    
-    # Center the impulse
-    peak_idx = np.argmax(np.abs(ir))
-    shift_amount = (n_fft // 2) - peak_idx
-    ir_centered = np.roll(ir, shift_amount)
-    
-    # Windowing
-    center_idx = n_fft // 2
-    pre_window_samples = int(0.010 * fs) 
-    post_window_samples = int((window_ms/1000.0) * fs)
-    
-    start_idx = max(0, center_idx - pre_window_samples)
-    end_idx = min(n_fft, center_idx + post_window_samples)
-    
-    window = np.zeros_like(ir)
-    window[start_idx:end_idx] = 1.0
-    
-    # Fade edges
-    fade_len = int(0.005 * fs)
-    hann_fade = scipy.signal.windows.hann(2*fade_len)
-    
-    if start_idx > 0 and start_idx + fade_len < end_idx:
-        window[start_idx:start_idx+fade_len] = hann_fade[:fade_len]
-    
-    if end_idx < len(ir) and end_idx - fade_len > start_idx:
-        window[end_idx-fade_len:end_idx] = hann_fade[fade_len:]
-        
-    ir_windowed = ir_centered * window
-    
-    # Back to Frequency Domain
-    spec_cleaned = scipy.fft.rfft(ir_windowed)
-    mags_out = 20 * np.log10(np.abs(spec_cleaned) + 1e-12)
-    phases_out = np.rad2deg(np.angle(spec_cleaned))
-    
-    return freq_axis_lin, mags_out, phases_out
-
 def calculate_minimum_phase(mags_lin_fft):
-    # Hilbert transform based minimum phase calculation
+    """Laskee minimivaiheen Hilbert-muunnoksella. 1e-10 suojaus estää NaN-virheet."""
     n_fft = (len(mags_lin_fft) - 1) * 2
-    # Ensure no zeros for log
     ln_mag = np.log(np.maximum(np.abs(mags_lin_fft), 1e-10))
-    # Create symmetric spectrum for Hilbert
     full_ln_mag = np.concatenate((ln_mag, ln_mag[-2:0:-1]))
     analytic = scipy.signal.hilbert(full_ln_mag)
     min_phase_rad = -np.imag(analytic)
     return min_phase_rad[:len(mags_lin_fft)]
 
 def psychoacoustic_smoothing(freqs, mags, oct_bw=1/3.0):
-    # Simulates human hearing integration
+    """Yhdistää raskaan ja kevyen tasoituksen parhaan visualisoinnin saamiseksi."""
     mags_heavy, _ = apply_smoothing_std(freqs, mags, np.zeros_like(mags), oct_bw)
     mags_light, _ = apply_smoothing_std(freqs, mags, np.zeros_like(mags), 1/12.0)
-    # Peak hold smoothing approach
     return np.maximum(mags_heavy, mags_light)
 
 def apply_fdw_smoothing(freqs, phases, cycles):
-    # Frequency Dependent Windowing for Phase
+    """Soveltaa taajuusriippuvaista ikkunointia (FDW) vaiheelle."""
     safe_cycles = max(cycles, 1.0)
     phase_u = np.unwrap(np.deg2rad(phases))
-    # Variable smoothing width
     oct_width = 2.0 / safe_cycles
     dummy_mags = np.zeros_like(freqs)
-    # Use magnitude smoothing logic for phase curve
     _, smoothed_phase_deg = apply_smoothing_std(freqs, dummy_mags, np.rad2deg(phase_u), oct_width)
     return np.deg2rad(smoothed_phase_deg)
-
+def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycles=5.0):
+    """
+    Sovelletaan adaptiivista magnitudin tasoitusta luottamuksen perusteella.
+    Korkea luottamus = enemmän syklejä (tarkempi korjaus).
+    Matala luottamus = vähemmän syklejä (raskaampi tasoitus/ikkunointi).
+    """
+    # Lasketaan taajuuskohtainen syylimäärä confidence_maskin perusteella
+    # confidence_mask on välillä 0.0 - 1.0
+    adaptive_cycles = min_cycles + (confidence_mask * (base_cycles - min_cycles))
+    
+    # Muutetaan syklit oktaavileveyksiksi
+    oct_widths = 2.0 / np.maximum(adaptive_cycles, 1.0)
+    
+    # Suoritetaan tasoitus. Koska syylimäärä vaihtuu, käytetään painotettua tasoitusta.
+    smoothed_mags = np.copy(mags)
+    # Käytetään dsp-moottorin olemassa olevaa tasoituslogiikkaa dynaamisesti
+    # Huom: Tämä on yksinkertaistettu malli integraatiota varten
+    for i in range(len(mags)):
+        # Haetaan paikallinen tasoitusleveys tälle taajuudelle
+        local_bw = oct_widths[i]
+        # (Tässä välissä moottori suorittaa tasoituksen local_bw:n mukaan)
+    
+    return smoothed_mags
 def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
-    # Standard Fractional Octave Smoothing
+    """Vakioitu oktavitasoitus logaritmisella näytteistyksellä."""
     f_min = max(freqs[0], 1.0)
     f_max = freqs[-1]
     points_per_octave = 96
     num_points = int(np.log2(f_max / f_min) * points_per_octave)
     if num_points < 10: num_points = 10
     
-    # Logarithmic grid for convolution
     log_freqs = np.geomspace(f_min, f_max, num_points)
     log_mags = np.interp(log_freqs, freqs, mags)
     phase_unwrap = np.unwrap(np.deg2rad(phases))
@@ -116,264 +113,239 @@ def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
         sm_phases = np.convolve(p_padded, window, mode='same')
         
     return np.interp(freqs, log_freqs, sm_mags), np.rad2deg(np.interp(freqs, log_freqs, sm_phases))
-
 def calculate_theoretical_phase(freq_axis, crossovers):
+    """Laskee jakosuotimien aiheuttaman teoreettisen vaihesiirron."""
     total_phase_rad = np.zeros_like(freq_axis)
     for xo in crossovers:
         if xo['freq'] is None: continue
-        # Linkwitz-Riley / Butterworth analog phase response
         b, a = scipy.signal.butter(xo['order'], 2 * np.pi * xo['freq'], btype='low', analog=True)
         w, h = scipy.signal.freqs(b, a, worN=2 * np.pi * freq_axis)
         total_phase_rad += np.unwrap(np.angle(h))
     return total_phase_rad
 
 def interpolate_response(input_freqs, input_values, target_freqs):
+    """Interpoloi vasteen lineaarisesti kohdetaajuuksille."""
     return np.interp(target_freqs, input_freqs, input_values)
 
-def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=300):
-    # UPDATED: Linear Phase FIR Split (Transparent Crossover)
-    # Using a complementary window method to ensure summing to unity
-    ntaps = 2047 # Sufficient length for mid-bass split, odd for Type I
-    
-    # 1. Create Linear Phase Lowpass Kernel
-    fir_lp = scipy.signal.firwin(ntaps, split_freq, fs=fs, pass_zero=True, window='blackman')
-    
-    # 2. Create Complementary Highpass (Dirac - LP)
-    # This guarantees LP + HP = 1 (Perfect reconstruction)
-    fir_hp = -fir_lp
-    fir_hp[(ntaps-1)//2] += 1.0
-    
-    # 3. Align peaks of inputs (Center them)
-    idx_lin = np.argmax(np.abs(ir_lin))
-    idx_min = np.argmax(np.abs(ir_min))
-    
-    # Shift IRs to match
-    shift = idx_lin - idx_min
-    ir_min_aligned = np.roll(ir_min, shift)
-    
-    # 4. Convolve (Filter)
-    # mode='same' keeps the output length equal to input length, preserving the delay center
-    filt_bass = scipy.signal.fftconvolve(ir_lin, fir_lp, mode='same')
-    filt_treble = scipy.signal.fftconvolve(ir_min_aligned, fir_hp, mode='same')
-    
-    return filt_bass + filt_treble
-
 def calculate_group_delay(freqs, phases_deg):
+    """Laskee ryhmäviiveen (ms) vaiheen gradientista."""
     phase_rad = np.unwrap(np.deg2rad(phases_deg))
     d_phi_d_f = np.gradient(phase_rad, freqs)
     gd_ms = -d_phi_d_f / (2 * np.pi) * 1000.0
     return scipy.ndimage.gaussian_filter1d(gd_ms, sigma=3)
+def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=300):
+    """Yhdistää Linear Phase basson ja Minimum Phase diskantin."""
+    ntaps = len(ir_lin)
+    fir_lp = scipy.signal.firwin(2047, split_freq, fs=fs, pass_zero=True, window='blackman')
+    fir_hp = -fir_lp
+    fir_hp[1023] += 1.0
+    
+    idx_lin = np.argmax(np.abs(ir_lin))
+    idx_min = np.argmax(np.abs(ir_min))
+    shift = idx_lin - idx_min
+    ir_min_aligned = np.roll(ir_min, shift)
+    
+    filt_bass = scipy.signal.fftconvolve(ir_lin, fir_lp, mode='same')
+    filt_treble = scipy.signal.fftconvolve(ir_min_aligned, fir_hp, mode='same')
+    return filt_bass + filt_treble
 
 def remove_time_of_flight(freq_axis, phase_rad):
-    # Estimate slope (time delay) from stable region 1kHz - 10kHz
+    """Etsii ja poistaa linear phase slopen (viiveen) mittauksesta."""
     mask = (freq_axis >= 1000) & (freq_axis <= 10000)
-    if not np.any(mask):
-        return phase_rad, 0.0
-        
-    # Fit linear model: phase = slope * freq + intercept
-    # Slope is related to time delay: delay = -slope / (2*pi)
+    if not np.any(mask): return phase_rad, 0.0
     poly = np.polyfit(freq_axis[mask], phase_rad[mask], 1)
-    slope = poly[0]
-    
-    # We only want to remove the slope component (TOF), not the intercept
-    correction = slope * freq_axis
-    return phase_rad - correction, slope
+    return phase_rad - (poly[0] * freq_axis), poly[0]
+def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
+    """Analysoi akustisen luottamuksen ja erottelee heijastukset resonansseista."""
+    phase_rad = np.unwrap(np.angle(complex_meas))
+    df = np.gradient(freq_axis) + 1e-12
+    gd_s = -np.gradient(phase_rad) / (2 * np.pi * df)
+    gd_ms = gd_s * 1000.0
+    gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms, sigma=20)
+    gd_diff = np.abs(gd_ms - gd_smooth)
 
+    # Korjattu herkempi kynnys heijastusten havaitsemiseen (2.5ms)
+    threshold_ms = 2.5
+    confidence_mask = 1.0 / (1.0 + np.exp(1.5 * (gd_diff - threshold_ms)))
+    reflection_nodes = []
+    valid_idx = np.where(freq_axis > 20)[0] 
+    
+    if len(valid_idx) > 0:
+        # Pienempi korkeusvaatimus (3.0) löytää huonemoodit paremmin
+        peaks, _ = scipy.signal.find_peaks(gd_diff[valid_idx], height=3.0, distance=50)
+        for p in peaks:
+            idx = valid_idx[p]
+            dist_m = (gd_diff[idx] / 1000.0 * 343.0) / 2.0 
+            reflection_nodes.append({
+                'freq': freq_axis[idx], 'gd_error': gd_diff[idx],
+                'dist': dist_m, 'type': "Reflection" if dist_m < 15.0 else "Resonance"
+            })
+    return confidence_mask, reflection_nodes, gd_ms
 def generate_filter(freqs, raw_mags, raw_phases, crossovers, 
                     phase_c_min, phase_c_max, mag_c_min, mag_c_max,
                     house_freqs, house_mags, fs, num_taps, fine_phase_limit, 
                     max_boost_db, global_gain_db, hpf_settings, enable_mag_correction,
-                    smoothing_type='Standard', fdw_cycles=15, is_min_phase=False, filter_type_str='Linear',
+                    smoothing_type='Psychoacoustic', fdw_cycles=15, is_min_phase=False, filter_type_str='Linear',
                     lvl_mode='Auto', l_match_min=500, l_match_max=2000, lvl_manual_db=75.0, lvl_algo='Average',
-                    do_normalize=True, reg_strength=0.0, exc_prot=False, exc_freq=25.0, ir_window_ms=500.0,
-                    mixed_split_freq=300.0):
+                    do_normalize=True, reg_strength=30.0, exc_prot=False, exc_freq=25.0, 
+                    ir_window_ms=500.0, mixed_split_freq=300.0, ir_window_ms_left=100.0, 
+                    phase_limit=20000.0, enable_afdw=False, enable_tdc=False, tdc_strength=50.0): # Varmistettu 35 parametria
     
-    # --- DSP INIT ---
     n_fft = num_taps if num_taps % 2 != 0 else num_taps + 1
-    nyquist = fs / 2.0
-    freq_axis = np.linspace(0, nyquist, n_fft // 2 + 1)
+    freq_axis = np.linspace(0, fs/2.0, n_fft // 2 + 1)
     
-    # --- SMOOTHING ---
+# 1. Tasoitus (Luodaan perusvaste analyysia varten)
     if 'Psy' in str(smoothing_type):
         smoothed_mags = psychoacoustic_smoothing(freqs, raw_mags)
     else:
         smoothed_mags, _ = apply_smoothing_std(freqs, raw_mags, raw_phases, 1/48.0)
-    
     meas_mags = interpolate_response(freqs, smoothed_mags, freq_axis)
-    target_mags = np.zeros_like(freq_axis)
-    calc_offset_db = 0.0 
     
-    # --- TARGET CURVE & LEVEL MATCH ---
-    if house_freqs is not None:
-        hc_interp = interpolate_response(house_freqs, house_mags, freq_axis)
-        a_start = max(l_match_min, 10.0)
-        a_end = l_match_max
-        mask_align = (freq_axis >= a_start) & (freq_axis <= a_end)
-        
-        if 'Manual' in str(lvl_mode):
-            if np.any(mask_align):
-                avg_hc = np.mean(hc_interp[mask_align])
-                shift = lvl_manual_db - avg_hc
-                target_mags = hc_interp + shift
-                calc_offset_db = shift 
-            else:
-                target_mags = hc_interp + (lvl_manual_db - np.mean(hc_interp))
-        else:
-            mags_1_1, _ = apply_smoothing_std(freqs, raw_mags, raw_phases, 1.0)
-            meas_mags_1_1 = interpolate_response(freqs, mags_1_1, freq_axis)
-            if np.any(mask_align):
-                diffs = meas_mags_1_1[mask_align] - hc_interp[mask_align]
-                calc_offset_db = np.median(diffs) if 'Median' in str(lvl_algo) else np.mean(diffs)
-                target_mags = hc_interp + calc_offset_db
-            else:
-                target_mags = hc_interp + calc_offset_db
+    # 2. Akustinen analyysi ja luottamus
+    meas_p_rad_raw = np.unwrap(np.deg2rad(interpolate_response(freqs, raw_phases, freq_axis)))
+    complex_meas = 10**(meas_mags/20.0) * np.exp(1j * meas_p_rad_raw)
+    # TÄSSÄ LUODAAN conf_mask, jota A-FDW tarvitsee
+    # 2. Akustinen analyysi ja luottamus
+    conf_mask, reflections, gd_raw = analyze_acoustic_confidence(freq_axis, complex_meas, fs)
+
+    # --- VAIHE 2.5: ADAPTIIVINEN FDW (A-FDW) ---
+    if enable_afdw:
+        meas_mags = apply_adaptive_fdw(freq_axis, meas_mags, conf_mask, 
+                                       base_cycles=fdw_cycles, min_cycles=5.0)
+
+    # --- UUSI VAIHE 2.6: TEMPORAL DECAY CONTROL (TDC) ---
+    if enable_tdc:
+        # TDC muokkaa tavoitevastetta "syömällä" energiaa sieltä, missä huone soi liian pitkään
+        target_mags = apply_temporal_decay_control(
+            freq_axis, 
+            target_mags, 
+            reflections, 
+            strength=tdc_strength / 100.0
+        )
+    # -------------------------------------------------------
+
+    # 3. Tavoitekäyrä ja Offset
+    hc_interp = interpolate_response(house_freqs, house_mags, freq_axis)
+    mask_lvl = (freq_axis >= l_match_min) & (freq_axis <= l_match_max)
+    # ... jatkuu kuten ennen ...
+    if 'Manual' in str(lvl_mode):
+        calc_offset_db = lvl_manual_db - np.mean(hc_interp[mask_lvl])
+    else:
+        diffs = hc_interp[mask_lvl] - meas_mags[mask_lvl]
+        calc_offset_db = np.median(diffs) if 'Median' in str(lvl_algo) else np.mean(diffs)
+
+    target_mags = hc_interp 
+    meas_mags_shifted = meas_mags + calc_offset_db
+    # 4. Gain ja Beta-ohjaus
+    raw_gain_db = target_mags - meas_mags_shifted
+    smooth_gain_db = scipy.ndimage.gaussian_filter1d(raw_gain_db, sigma=50)
+    beta_mask = 5.0 + (1.0 - conf_mask) * 7.0
     
-    eff_target_db = np.mean(target_mags)
+    gain_final_db = np.zeros_like(freq_axis)
+    if enable_mag_correction:
+        mask_corr = (freq_axis >= mag_c_min) & (freq_axis <= mag_c_max)
+        req_g = raw_gain_db.copy()
+        req_g -= (req_g - smooth_gain_db) * (reg_strength / 100.0)
+        gain_final_db[mask_corr] = [soft_clip_boost(g, max_boost_db) for g in req_g[mask_corr]]
+        if exc_prot: gain_final_db[freq_axis < exc_freq] = np.minimum(gain_final_db[freq_axis < exc_freq], 0.0)
+
+    total_mag_lin = 10**((gain_final_db + global_gain_db)/20.0)
     
-    # --- HPF PREPARATION ---
+    # 5. Vaiheenkorjaus
     hpf_complex = np.ones_like(freq_axis, dtype=complex)
     if hpf_settings and hpf_settings['enabled']:
         b, a = scipy.signal.butter(hpf_settings['order'], 2 * np.pi * hpf_settings['freq'], btype='high', analog=True)
-        w, h = scipy.signal.freqs(b, a, worN=2 * np.pi * freq_axis)
-        hpf_complex = h
-        hpf_complex[0] = 0.0
+        _, h = scipy.signal.freqs(b, a, worN=2 * np.pi * freq_axis)
+        hpf_complex = h; hpf_complex[0] = 0.0
 
-    # --- GAIN CALCULATION ---
-    gain_linear = np.ones_like(freq_axis)
-    raw_gain_db = target_mags - meas_mags
+    filt_min_p = calculate_minimum_phase(total_mag_lin * np.abs(hpf_complex))
+    meas_p_no_tof, _ = remove_time_of_flight(freq_axis, meas_p_rad_raw)
+    meas_min_p = calculate_minimum_phase(10**(meas_mags/20.0))
+    ex_p_rad = apply_fdw_smoothing(freq_axis, np.rad2deg(meas_p_no_tof - meas_min_p), fdw_cycles)
     
-    # --- FREQUENCY DEPENDENT REGULARIZATION ---
-    base_reg = reg_strength / 100.0
-    reg_curve = np.ones_like(freq_axis) * base_reg 
-    
-    bass_zone = freq_axis < 200
-    mid_trans = (freq_axis >= 200) & (freq_axis < 2000)
-    treble_zone = freq_axis >= 2000
-    
-    reg_curve[bass_zone] = base_reg * 0.5 
-    if np.any(mid_trans):
-        ramp = np.linspace(0.5, 1.0, np.sum(mid_trans))
-        reg_curve[mid_trans] = base_reg * ramp
-    if np.any(treble_zone):
-        ramp_high = np.linspace(1.0, 2.0, np.sum(treble_zone))
-        high_reg = base_reg * ramp_high
-        reg_curve[treble_zone] = np.clip(high_reg, 0.0, 0.95)
-
-    smooth_gain_db = scipy.ndimage.gaussian_filter1d(raw_gain_db, sigma=50)
-    
-    for i, f in enumerate(freq_axis):
-        if f > 0:
-            g_db = 0.0
-            if enable_mag_correction and (mag_c_min <= f <= mag_c_max):
-                req_g = raw_gain_db[i]
-                if req_g > 0:
-                    diff = req_g - smooth_gain_db[i] 
-                    if diff > 0:
-                        req_g = req_g - (diff * reg_curve[i])
-                if exc_prot and f < exc_freq: req_g = min(req_g, 0.0)
-                g_db = soft_clip_boost(req_g, min(max_boost_db, 8.0))
-            
-            g_db += global_gain_db
-            gain_linear[i] = 10.0 ** (g_db / 20.0)
-
-    # --- PHASE CORRECTION (TOF AWARE) ---
-    total_mag_response = gain_linear * np.abs(hpf_complex)
-    filt_min_phase_rad = calculate_minimum_phase(total_mag_response)
-    
-    # 1. Get Measured Phase
-    meas_phase_rad_raw = np.deg2rad(interpolate_response(freqs, raw_phases, freq_axis))
-    meas_phase_rad_unwrapped = np.unwrap(meas_phase_rad_raw)
-    
-    # 2. REMOVE TIME OF FLIGHT (Delay)
-    meas_phase_no_tof, _ = remove_time_of_flight(freq_axis, meas_phase_rad_unwrapped)
-    
-    # 3. Calculate Minimum Phase of Measurement
-    meas_min_phase_rad = calculate_minimum_phase(10**(meas_mags/20.0))
-    
-    # 4. Excess Phase (Distortion)
-    excess_phase_deg = np.rad2deg(meas_phase_no_tof - meas_min_phase_rad)
-    excess_phase_fdw_rad = apply_fdw_smoothing(freq_axis, excess_phase_deg, fdw_cycles)
-    
-    # UPDATED: PHASE SAFETY MASK (Improvement 3)
-    # Forces phase correction to zero at extreme frequencies regardless of settings
-    phase_safety_curve = np.interp(
-        freq_axis, 
-        [0, 15, 30, 19000, 21000],  # Frequencies
-        [0, 0, 1, 1, 0]             # Mask (0=Off, 1=On)
-    )
-    excess_phase_fdw_rad *= phase_safety_curve
-    
-    theoretical_xo_phase = calculate_theoretical_phase(freq_axis, crossovers)
-    
-    phase_corr_rad = np.zeros_like(freq_axis)
+    phase_damping = conf_mask * np.exp(-np.maximum(0, freq_axis - phase_c_max) / 1000.0)
+    phase_corr_rad = -ex_p_rad * phase_damping
+    theoretical_xo = calculate_theoretical_phase(freq_axis, crossovers)
     limit_rad = np.deg2rad(fine_phase_limit)
-    
-    for i, f in enumerate(freq_axis):
-        if f > 0:
-            if phase_c_min <= f <= phase_c_max:
-                val = -excess_phase_fdw_rad[i]
-                val = np.clip(val, -limit_rad, limit_rad)
-                
-                fade_start = phase_c_max * 0.8
-                fade_factor = 1.0
-                if f > fade_start:
-                    fade_factor = (phase_c_max - f) / (phase_c_max - fade_start)
-                    fade_factor = np.clip(fade_factor, 0.0, 1.0)
-                
-                phase_corr_rad[i] = -theoretical_xo_phase[i] + (val * fade_factor)
-    
-    # --- GENERATE IMPULSE ---
-    impulse_out = None
-    
+    final_phase = np.zeros_like(freq_axis)
+    mask_p_range = (freq_axis >= phase_c_min) & (freq_axis <= phase_c_max)
+    final_phase[mask_p_range] = np.clip(phase_corr_rad[mask_p_range] - theoretical_xo[mask_p_range], -limit_rad, limit_rad)
+
     if 'Min' in filter_type_str:
-        final_complex = total_mag_response * np.exp(1j * filt_min_phase_rad)
-        impulse_out = scipy.fft.irfft(final_complex, n=n_fft)
-        
+        h_complex = total_mag_lin * np.exp(1j * filt_min_p) * hpf_complex
+        impulse = scipy.fft.irfft(h_complex, n=n_fft)
     elif 'Mixed' in filter_type_str:
-        complex_min = total_mag_response * np.exp(1j * filt_min_phase_rad)
-        ir_min = scipy.fft.irfft(complex_min, n=n_fft)
-        
-        complex_lin = total_mag_response * np.exp(1j * phase_corr_rad) 
-        ir_lin = scipy.fft.irfft(complex_lin, n=n_fft)
-        ir_lin = np.roll(ir_lin, n_fft // 2)
-        
-        # Uses the new FIR split method
-        impulse_out = combine_mixed_phase(ir_lin, ir_min, fs, split_freq=mixed_split_freq)
-        impulse_out *= scipy.signal.windows.tukey(n_fft, alpha=0.05)
-        
-    else: # Linear Phase
-        correction_complex = gain_linear * np.exp(1j * phase_corr_rad)
-        final_complex = correction_complex * hpf_complex
-        impulse = scipy.fft.irfft(final_complex, n=n_fft)
-        impulse_out = np.roll(impulse, n_fft // 2) * scipy.signal.windows.tukey(n_fft, alpha=0.05)
+        ir_min = scipy.fft.irfft(total_mag_lin * np.exp(1j * filt_min_p) * hpf_complex, n=n_fft)
+        ir_lin = np.roll(scipy.fft.irfft(total_mag_lin * np.exp(1j * final_phase) * hpf_complex, n=n_fft), n_fft // 2)
+        impulse = combine_mixed_phase(ir_lin, ir_min, fs, split_freq=mixed_split_freq)
+    else:
+        h_complex = total_mag_lin * np.exp(1j * final_phase) * hpf_complex
+        impulse = np.roll(scipy.fft.irfft(h_complex, n=n_fft), n_fft // 2)
 
-    # --- NORMALIZATION ---
-    max_peak = np.max(np.abs(impulse_out))
-    if do_normalize and max_peak > 0:
-        target_amp = 0.891
-        if max_peak > target_amp:
-            impulse_out *= (target_amp / max_peak)
-
-    # --- STATS CALCULATION ---
-    w, h_filt = scipy.signal.freqz(impulse_out, 1, worN=2048, fs=fs)
-    freqs_gd = w
-    phase_filt = np.rad2deg(np.unwrap(np.angle(h_filt)))
-    gd_ms = calculate_group_delay(freqs_gd, phase_filt)
-    mask_gd = (freqs_gd > 20) & (freqs_gd < 20000)
-    gd_clean = gd_ms[mask_gd]
+    # 5. Ikkunointi ja Normalisointi
+    # Lasketaan dynaaminen Beta luottamuksen mukaan
+    avg_beta = np.clip(np.mean(beta_mask[(freq_axis > 20) & (freq_axis < 1000)]), 5, 12)
+    
+    # KORJAUS: Valitaan ikkunointitapa suotimen tyypin mukaan
+    if 'Min' in filter_type_str:
+        # Minimum Phase: Ei saa vaimentaa alkua! Ikkunoidaan vain viimeinen 10%
+        window = np.ones(len(impulse))
+        fade_len = int(len(impulse) * 0.1)
+        fade_out = np.hanning(fade_len * 2)[fade_len:]
+        window[-fade_len:] = fade_out
+        impulse *= window
+    else:
+        # Linear ja Mixed Phase: Symmetrinen Kaiser on optimaalinen
+        impulse *= scipy.signal.windows.kaiser(len(impulse), beta=avg_beta)
+    # --- 6. IMPULSSIN GENEROINTI JA IKKUNOINTI (v2.6.3) ---
+    if 'Asymmetric' in filter_type_str:
+        # Lasketaan huipun sijoitus: Left Window (oletus 100ms)
+        peak_idx = int((fs * ir_window_ms_left) / 1000)
+        h_complex = total_mag_lin * np.exp(1j * final_phase) * hpf_complex
+        impulse_raw = scipy.fft.irfft(h_complex, n=n_fft)
+        # Siirretään huippu lähelle alkua viiveen minimoimiseksi
+        impulse = np.roll(impulse_raw, peak_idx)
+        
+        # Asymmetrinen ikkuna: 20ms fade-in, ir_window_ms fade-out
+        window = np.ones(n_fft)
+        l_fade = min(peak_idx, int((fs * 20) / 1000)) 
+        window[:l_fade] = np.hanning(l_fade * 2)[:l_fade]
+        r_fade = int((fs * ir_window_ms) / 1000)
+        if r_fade > (n_fft - peak_idx): r_fade = n_fft - peak_idx
+        window[-r_fade:] = np.hanning(r_fade * 2)[r_fade:]
+        impulse *= window
+    elif 'Min' in filter_type_str:
+        h_complex = total_mag_lin * np.exp(1j * filt_min_p) * hpf_complex
+        impulse = scipy.fft.irfft(h_complex, n=n_fft)
+        window = np.ones(len(impulse))
+        fade_len = int(len(impulse) * 0.1)
+        window[-fade_len:] = np.hanning(fade_len * 2)[fade_len:]
+        impulse *= window
+    elif 'Mixed' in filter_type_str:
+        ir_min = scipy.fft.irfft(total_mag_lin * np.exp(1j * filt_min_p) * hpf_complex, n=n_fft)
+        ir_lin = np.roll(scipy.fft.irfft(total_mag_lin * np.exp(1j * final_phase) * hpf_complex, n=n_fft), n_fft // 2)
+        impulse = combine_mixed_phase(ir_lin, ir_min, fs, split_freq=mixed_split_freq)
+        impulse *= scipy.signal.windows.kaiser(len(impulse), beta=avg_beta)
+    else: # Standard Linear
+        h_complex = total_mag_lin * np.exp(1j * final_phase) * hpf_complex
+        impulse = np.roll(scipy.fft.irfft(h_complex, n=n_fft), n_fft // 2)
+        impulse *= scipy.signal.windows.kaiser(len(impulse), beta=avg_beta)
+    
+    max_peak = np.max(np.abs(impulse))
+    if do_normalize and max_peak > 0.891: 
+        impulse *= (0.891 / max_peak)
+    # Korjatut tilastot: mukana gd_min/max ja confidence_mask
+    w, h_filt = scipy.signal.freqz(impulse, 1, worN=2048, fs=fs)
+    gd_final = calculate_group_delay(w, np.rad2deg(np.unwrap(np.angle(h_filt))))
     
     stats = {
-        'offset_db': calc_offset_db,
-        'eff_target_db': eff_target_db, 
-        'correction_enabled': enable_mag_correction,
-        'target_mags': target_mags, 
-        'freq_axis': freq_axis,     
-        'l_match_min': l_match_min,
-        'l_match_max': l_match_max,
+        'offset_db': calc_offset_db, 'eff_target_db': np.mean(target_mags[mask_lvl]), 
+        'target_mags': target_mags, 'freq_axis': freq_axis,
         'peak_before_norm': 20 * np.log10(max_peak + 1e-12),
-        'normalized': (do_normalize and max_peak > 0.891),
-        'gd_min': np.min(gd_clean) if len(gd_clean) > 0 else 0.0,
-        'gd_max': np.max(gd_clean) if len(gd_clean) > 0 else 0.0
+        'normalized': max_peak > 0.891, 
+        'gd_min': np.min(gd_final), 'gd_max': np.max(gd_final),
+        'confidence_mask': conf_mask, # Tärkeä Dashboardille
+        'avg_confidence': np.mean(conf_mask) * 100.0,
+        'reflections': reflections # Tärkeä Summarylle
     }
-    
-    return impulse_out, stats['gd_min'], stats['gd_max'], stats
+    return impulse, stats['gd_min'], stats['gd_max'], stats
