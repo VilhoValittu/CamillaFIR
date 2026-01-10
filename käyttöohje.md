@@ -12,7 +12,7 @@ Määritellään lähdemateriaali ja suodattimen tekniset raamit.
 * **Number of Taps**: Suodattimen pituus.
     * **65536**: Standardi, erinomainen tarkkuus.
     * **131072**: Äärimmäinen tarkkuus bassoalueelle, vaatii enemmän CPU-tehoa.
-* **Output Format**: `WAV` (standardi CamillaDSP:lle) tai `IEEE Float`.
+* **Output Format**: `WAV` (standardi CamillaDSP:lle) tai `TXT`.
 
 
 
