@@ -95,7 +95,7 @@ def load_config():
         'mixed_freq': 300.0, 'phase_limit': 6000.0,
         'filter_type': 'Linear Phase',
         'ir_window': 500.0,       # Oikea ikkuna (Right)
-        'ir_window_left': 100.0,  # Vasen ikkuna (Left) - 
+        'ir_window_left': 100.0,  # Vasen ikkuna (Left) - UUSI
         'enable_tdc': True,       # TDC oletuksena päälle
         'tdc_strength': 50.0,     # TDC voimakkuus 50%
         'enable_afdw': True,      # Adaptiivinen FDW oletuksena päälle
@@ -145,6 +145,9 @@ def main():
     d = load_config(); get_val = lambda k, def_v: d.get(k, def_v)
     hc_opts = [t('hc_harman'), t('hc_harman8'), t('hc_toole'), t('hc_bk'), t('hc_flat'), t('hc_cinema'), t('hc_mode_upload')]
     fs_opts = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]; taps_opts = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288]; slope_opts = [6, 12, 18, 24, 36, 48]
+    
+#--- #1 Tiedostot
+    
     tab_files = [
         put_markdown(f"### 📂 {t('tab_files')}"),
         put_file_upload('file_l', label=t('upload_l'), accept='.txt'), 
@@ -155,6 +158,9 @@ def main():
         put_radio('layout', label=t('layout'), options=[t('layout_mono'), t('layout_stereo')], value=get_val('layout', t('layout_stereo')), inline=True),
         put_checkbox('multi_rate_opt', options=[{'label': t('multi_rate'), 'value': True}], value=[True] if get_val('multi_rate_opt', False) else [], help_text=t('multi_rate_help'))
     ]
+    
+#--- #2 Perus
+
     tab_basic = [
         put_markdown(f"### ⚙️ {t('tab_basic')}"),
         put_row([
@@ -179,18 +185,20 @@ def main():
         put_input('lvl_manual_db', label=t('lvl_target_db'), type=FLOAT, value=get_val('lvl_manual_db', 75.0), help_text=t('lvl_manual_help'))
     ]
     
+#--- #3 Target
+    
     tab_target = [
         put_markdown(f"### 🎯 {t('tab_target')}"),
         put_select('hc_mode', label=t('hc_mode'), options=hc_opts, value=get_val('hc_mode', t('hc_harman')), help_text=t('hc_mode_help')),
         
-        # Lisätään tiedostonlatauskenttä omaa käyrää varten
-        put_file_upload('hc_custom_file', label=t('hc_custom'), accept='.txt', help_text=t('hc_custom_help')),
         
+        put_file_upload('hc_custom_file', label=t('hc_custom'), accept='.txt', help_text=t('hc_custom_help')),
+        put_checkbox('mag_correct', options=[{'label': t('enable_corr'), 'value': True}], value=[True] if get_val('mag_correct', True) else []),
         put_input('max_boost', label=t('max_boost'), type=FLOAT, value=get_val('max_boost', 5.0), help_text=t('max_boost_help')),
-        put_input('phase_limit', label=t('phase_limit'), type=FLOAT, value=get_val('phase_limit', 12000.0), help_text=t('phase_limit_help')),
-        put_checkbox('mag_correct', options=[{'label': t('enable_corr'), 'value': True}], value=[True] if get_val('mag_correct', True) else [])
+        put_input('phase_limit', label=t('phase_limit'), type=FLOAT, value=get_val('phase_limit', 12000.0), help_text=t('phase_limit_help'))
+        
     ]
-# Välilehti 4: Edistyneet asetukset (Kaikki yhdistetty ja siivottu)
+#--- #4 Edistyneet
     tab_adv = [
         put_markdown(f"### 🛠️ {t('tab_adv')}"),
         
@@ -239,7 +247,7 @@ def main():
         ])
     ]
 
-    # Välilehti 5: Jakosuotimet
+#--- #5 XO
     tab_xo = [
         put_markdown(f"### ❌ {t('tab_xo')}"), 
         put_grid([[
@@ -318,8 +326,9 @@ def main():
                     zf.writestr("R_Dashboard.html", plots.generate_prediction_plot(f_r, m_r, p_r, r_imp, fs_v, "Right", None, r_st, split, zoom))
                     zf.writestr("L_Plot.png", plots.generate_combined_plot_mpl(f_l, m_l, p_l, l_imp, fs_v, "Left", l_st))
                     zf.writestr("R_Plot.png", plots.generate_combined_plot_mpl(f_r, m_r, p_r, r_imp, fs_v, "Right", r_st))
-            zf.writestr("camilladsp.yml", f"filters:\n  ir_l:\n    filename: L_{ft_short}_$samplerate$Hz_{file_ts}.wav\n...")
-        fname = f"CamillaFIR_{ft_short}_{ts}.zip"
+                    yaml_content = generate_raspberry_yaml(data['fs'], ft_short, file_ts)
+                    zf.writestr("camilladsp.yml", yaml_content)
+                    fname = f"CamillaFIR_{ft_short}_{ts}.zip"
         try:
             with open(fname, "wb") as f: f.write(zip_buffer.getvalue())
             save_msg = f"Tallennettu: {os.path.abspath(fname)}"
@@ -346,7 +355,48 @@ def main():
         transition: 0.3s;
         cursor: pointer;
     """)
+#snipet
+def generate_raspberry_yaml(fs, ft_short, file_ts):
+
+    import textwrap
+    return textwrap.dedent(f"""\
+        devices:
+          samplerate: {int(fs)}
+          chunksize: 4096
+          queuesize: 10
+          capture:
+            type: Alsa
+            channels: 2
+            device: "hw:1,0"
+            format: S32LE
+          playback:
+            type: Alsa
+            channels: 2
+            device: "hw:1,0"
+            format: S32LE
+
+        filters:
+          ir_l:
+            type: File
+            filename: L_{ft_short}_$samplerate$Hz_{file_ts}.wav
+            format: S32LE
+            setting: 0
+          ir_r:
+            type: File
+            filename: R_{ft_short}_$samplerate$Hz_{file_ts}.wav
+            format: S32LE
+            setting: 0
+
+        pipeline:
+          - type: Filter
+            channel: 0
+            names:
+              - ir_l
+          - type: Filter
+            channel: 1
+            names:
+              - ir_r
+    """).strip()
 
 if __name__ == '__main__':
     start_server(main, port=8080, debug=True, auto_open_webbrowser=True)
-
