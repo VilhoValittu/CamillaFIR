@@ -1,4 +1,4 @@
-# CamillaFIR (v2.6.3 Stable) – Käyttöopas
+# CamillaFIR (v2.6.5 Stable) – Käyttöopas
 
 CamillaFIR on tekoälyavusteinen DSP-moottori korkean resoluution FIR-suodattimien luomiseen. Ohjelma analysoi huoneakustiikan ja korjaa taajuusvasteen lisäksi ajoitusvirheitä ja resonansseja (huonemoodeja).
 
