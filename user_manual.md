@@ -7,12 +7,12 @@ CamillaFIR is an AI-assisted DSP engine designed for creating high-resolution FI
 ## 1. Basic Settings (Input & Technical)
 Define your source material and the technical framework for the filter.
 
-* **Local Path L / R**: Select the measurement files exported from REW (Room EQ Wizard) as `.txt` or `.frd`. Ensure the file includes both **Magnitude (dB)** and **Phase**.
+* **Local Path L / R**: Select the measurement files exported from REW (Room EQ Wizard) as `.txt`. Ensure the file includes both **Magnitude (dB)** and **Phase**.
 * **Sample Rate (Hz)**: Matches your CamillaDSP system rate (usually 44100 or 48000).
 * **Number of Taps**: The length/resolution of the filter.
     * **65536**: Standard high resolution for most systems.
     * **131072**: Extreme resolution for ultra-precise low-bass correction.
-* **Output Format**: `WAV` (standard for CamillaDSP) or `IEEE Float`.
+* **Output Format**: `WAV` (standard for CamillaDSP) or `txt`.
 
 
 
