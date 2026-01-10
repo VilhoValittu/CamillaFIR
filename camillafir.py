@@ -24,7 +24,7 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.6.3 Stable"
+VERSION = "v2.6.5"
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
@@ -92,7 +92,7 @@ def load_config():
         'local_path_l': '', 'local_path_r': '',
         'xo1_f': None, 'xo1_s': 12, 'xo2_f': None, 'xo2_s': 12,
         'xo3_f': None, 'xo3_s': 12, 'xo4_f': None, 'xo4_s': 12, 'xo5_f': None, 'xo5_s': 12,
-        'mixed_freq': 300.0, 'phase_limit': 6000.0,
+        'mixed_freq': 300.0, 'phase_limit': 1000.0,
         'filter_type': 'Linear Phase',
         'ir_window': 500.0,       # Oikea ikkuna (Right)
         'ir_window_left': 100.0,  # Vasen ikkuna (Left) - UUSI
@@ -311,8 +311,8 @@ def main():
                     'enable_tdc' in data, # Tämä tarkistaa onko checkbox valittu
                     data.get('tdc_strength', 50.0) # .get estää KeyErrorin jos kenttää ei löydy
                 )
-                l_imp, _, _, l_st = dsp.generate_filter(f_l, m_l, p_l, *args)
-                r_imp, _, _, r_st = dsp.generate_filter(f_r, m_r, p_r, *args)
+                l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, *args)
+                r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, *args)
                 if data['align_opt']:
                     d_s = np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp))
                     if d_s > 0: r_imp = np.roll(r_imp, d_s)
