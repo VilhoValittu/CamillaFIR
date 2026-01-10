@@ -92,10 +92,13 @@ def load_config():
         'local_path_l': '', 'local_path_r': '',
         'xo1_f': None, 'xo1_s': 12, 'xo2_f': None, 'xo2_s': 12,
         'xo3_f': None, 'xo3_s': 12, 'xo4_f': None, 'xo4_s': 12, 'xo5_f': None, 'xo5_s': 12,
-        'mixed_freq': 300.0, 'phase_limit': 20000.0,
+        'mixed_freq': 300.0, 'phase_limit': 6000.0,
         'filter_type': 'Linear Phase',
         'ir_window': 500.0,       # Oikea ikkuna (Right)
-        'ir_window_left': 100.0,  # Vasen ikkuna (Left) - UUSI
+        'ir_window_left': 100.0,  # Vasen ikkuna (Left) - 
+        'enable_tdc': True,       # TDC oletuksena päälle
+        'tdc_strength': 50.0,     # TDC voimakkuus 50%
+        'enable_afdw': True,      # Adaptiivinen FDW oletuksena päälle
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -346,3 +349,4 @@ def main():
 
 if __name__ == '__main__':
     start_server(main, port=8080, debug=True, auto_open_webbrowser=True)
+
