@@ -2,7 +2,7 @@ import numpy as np
 import scipy.signal
 import scipy.fft
 import scipy.ndimage
-
+#CamillaFIR DSP Engine v1.0
 # --- v2.6.2 Stable: PERUSTYÖKALUT ---
 def apply_temporal_decay_control(freq_axis, target_mags, reflections, strength=0.5):
     """
@@ -65,23 +65,21 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
     """
     Sovelletaan adaptiivista magnitudin tasoitusta luottamuksen perusteella.
     Korkea luottamus = enemmän syklejä (tarkempi korjaus).
-    Matala luottamus = vähemmän syklejä (raskaampi tasoitus/ikkunointi).
+    Matala luottamus = vähemmän syklejä (raskaampi tasoitus).
     """
     # Lasketaan taajuuskohtainen syylimäärä confidence_maskin perusteella
-    # confidence_mask on välillä 0.0 - 1.0
     adaptive_cycles = min_cycles + (confidence_mask * (base_cycles - min_cycles))
-    
-    # Muutetaan syklit oktaavileveyksiksi
     oct_widths = 2.0 / np.maximum(adaptive_cycles, 1.0)
     
-    # Suoritetaan tasoitus. Koska syylimäärä vaihtuu, käytetään painotettua tasoitusta.
     smoothed_mags = np.copy(mags)
-    # Käytetään dsp-moottorin olemassa olevaa tasoituslogiikkaa dynaamisesti
-    # Huom: Tämä on yksinkertaistettu malli integraatiota varten
-    for i in range(len(mags)):
-        # Haetaan paikallinen tasoitusleveys tälle taajuudelle
-        local_bw = oct_widths[i]
-        # (Tässä välissä moottori suorittaa tasoituksen local_bw:n mukaan)
+    
+    # Tehdään tasoitus usealla eri tarkkuudella ja yhdistetään ne maskin avulla
+    # Tämä on nopeampi ja vakaampi tapa kuin taajuuskohtainen silmukka
+    for bw in [1/3, 1/6, 1/12, 1/24, 1/48]:
+        sm, _ = apply_smoothing_std(freqs, mags, np.zeros_like(mags), bw)
+        # Valitaan tälle taajuudelle sopiva tasoitusleveys
+        mask = (oct_widths >= bw * 0.7) & (oct_widths < bw * 1.5)
+        smoothed_mags[mask] = sm[mask]
     
     return smoothed_mags
 def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
@@ -181,6 +179,7 @@ def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
                 'dist': dist_m, 'type': "Reflection" if dist_m < 15.0 else "Resonance"
             })
     return confidence_mask, reflection_nodes, gd_ms
+
 def generate_filter(freqs, raw_mags, raw_phases, crossovers, 
                     phase_c_min, phase_c_max, mag_c_min, mag_c_max,
                     house_freqs, house_mags, fs, num_taps, fine_phase_limit, 
@@ -189,12 +188,12 @@ def generate_filter(freqs, raw_mags, raw_phases, crossovers,
                     lvl_mode='Auto', l_match_min=500, l_match_max=2000, lvl_manual_db=75.0, lvl_algo='Average',
                     do_normalize=True, reg_strength=30.0, exc_prot=False, exc_freq=25.0, 
                     ir_window_ms=500.0, mixed_split_freq=300.0, ir_window_ms_left=100.0, 
-                    phase_limit=20000.0, enable_afdw=False, enable_tdc=False, tdc_strength=50.0): # Varmistettu 35 parametria
+                    phase_limit=20000.0, enable_afdw=False, enable_tdc=False, tdc_strength=50.0):
     
     n_fft = num_taps if num_taps % 2 != 0 else num_taps + 1
     freq_axis = np.linspace(0, fs/2.0, n_fft // 2 + 1)
     
-# 1. Tasoitus (Luodaan perusvaste analyysia varten)
+    # 1. Tasoitus (Luodaan perusvaste analyysia varten)
     if 'Psy' in str(smoothing_type):
         smoothed_mags = psychoacoustic_smoothing(freqs, raw_mags)
     else:
@@ -204,14 +203,40 @@ def generate_filter(freqs, raw_mags, raw_phases, crossovers,
     # 2. Akustinen analyysi ja luottamus
     meas_p_rad_raw = np.unwrap(np.deg2rad(interpolate_response(freqs, raw_phases, freq_axis)))
     complex_meas = 10**(meas_mags/20.0) * np.exp(1j * meas_p_rad_raw)
-    # TÄSSÄ LUODAAN conf_mask, jota A-FDW tarvitsee
-    # 2. Akustinen analyysi ja luottamus
     conf_mask, reflections, gd_raw = analyze_acoustic_confidence(freq_axis, complex_meas, fs)
 
     # --- VAIHE 2.5: ADAPTIIVINEN FDW (A-FDW) ---
     if enable_afdw:
         meas_mags = apply_adaptive_fdw(freq_axis, meas_mags, conf_mask, 
                                        base_cycles=fdw_cycles, min_cycles=5.0)
+
+    # --- VAIHE 3: TAVOITEKÄYRÄ JA TDC ---
+    # KORJAUS: Siirretty tavoitekäyrän luonti tänne, jotta TDC:llä on mitä muokata
+    hc_interp = interpolate_response(house_freqs, house_mags, freq_axis)
+    target_mags = np.copy(hc_interp)
+
+    # --- VAIHE 2.6: TEMPORAL DECAY CONTROL (TDC) ---
+    if enable_tdc:
+        # TDC muokkaa tavoitevastetta "syömällä" energiaa resonanssikohdista
+        target_mags = apply_temporal_decay_control(
+            freq_axis, 
+            target_mags, 
+            reflections, 
+            strength=tdc_strength / 100.0
+        )
+
+    # 4. Offsetin ja Gainin laskenta
+    mask_lvl = (freq_axis >= l_match_min) & (freq_axis <= l_match_max)
+    if 'Manual' in str(lvl_mode):
+        calc_offset_db = lvl_manual_db - np.mean(target_mags[mask_lvl])
+    else:
+        diffs = target_mags[mask_lvl] - meas_mags[mask_lvl]
+        calc_offset_db = np.median(diffs) if 'Median' in str(lvl_algo) else np.mean(diffs)
+    
+    # ... jatkuu kuten ennen ...
+
+    target_mags = hc_interp 
+    meas_mags_shifted = meas_mags + calc_offset_db
 
     # --- UUSI VAIHE 2.6: TEMPORAL DECAY CONTROL (TDC) ---
     if enable_tdc:
