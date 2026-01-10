@@ -1,4 +1,4 @@
-# Please update to versions (CamillaFIR_2.6.3 & CamillaFIR_DSP 1.0.1) Major bug fixes on the engine!
+# Please update to versions (CamillaFIR_2.6.5 & CamillaFIR_DSP 1.0.1) Major bug fixes on the engine!
 
 ---
 
