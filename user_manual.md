@@ -1,6 +1,16 @@
 # CamillaFIR (v2.6.5 Stable) – Official Documentation
 
 CamillaFIR is an AI-assisted DSP engine designed for creating high-resolution FIR filters. The program analyzes room acoustics to correct not only the frequency response but also time-domain errors, phase shifts, and room resonances (modes).
+---
+
+## Technical Note: Filter Activity Beyond Defined Limits
+
+You may notice "debris" or slight ripples in the filter response even above the specified correction limits (such as `mag_c_max` or `phase_limit`). This is normal and occurs due to the following technical reasons:
+
+1. **Global Normalization Offset:** To prevent digital clipping caused by significant bass boosts, the engine lowers the entire filter level (e.g., -69 dB). This shifts the entire response away from the zero-line, making the filter appear "active" across the whole spectrum.
+2. **Theoretical Phase (Crossovers):** If crossovers are defined, their phase correction is calculated across the entire frequency range (up to 20,000 Hz). This ensures timing integrity for the crossover slopes.
+3. **FIR Math & Windowing:** Sharp, narrow-band corrections at low frequencies (like a 32 Hz resonance notch) create mathematical "ringing" or sidelobes. The application of the Hann window makes this energy visible even far outside the primary correction zone.
+4. **Soft Transition (Damping):** Phase correction does not cut off abruptly at the limit. It tapers off gradually to avoid electrical artifacts and ringing in the transition region, resulting in a more natural sound.
 
 ---
 
