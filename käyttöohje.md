@@ -69,7 +69,7 @@ Varmistaa, ettei suodatin muuta äänenvoimakkuutta merkittävästi.
 Määrittää korjauksen "tiukkuuden".
 
 * **Regulation Strength**:
-    * **1–10**: Erittäin tiukka seuranta (veitsenterävä basso). *Huom: v2.6.3 versiossa asetus 30 vastaa aiempaa 1-arvoa.*
+    * **1–10**: Erittäin tiukka seuranta (veitsenterävä basso). *Huom: v2.6.5--> versiossa asetus 30 vastaa aiempaa 1-arvoa.*
     * **50+**: Pehmeämpi korjaus, säästää kaiuttimen luonnetta.
 * **Smoothing Type**: `Psychoacoustic` (suositus) vastaa ihmiskorvan aistimusta.
 * **FDW Cycles**: Aikaikkunan pituus. Suositus: 15.
