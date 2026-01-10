@@ -69,7 +69,7 @@ Ensures the filter does not significantly change the perceived loudness.
 Determines the "tightness" of the correction.
 
 * **Regulation Strength**:
-    * **1–10**: "Surgical". Extremely tight tracking of the target (use for sharp resonances). *Note: In v2.6.3, a value of 30 corresponds to 1 in older versions.*
+    * **1–10**: "Surgical". Extremely tight tracking of the target (use for sharp resonances). *Note: In v2.6.5 -->, a value of 30 corresponds to 1 in older versions.*
     * **50+**: Softer correction that preserves the speaker's natural character.
 * **Smoothing Type**: `Psychoacoustic` (recommended) as it mimics human hearing.
 * **FDW Cycles**: Determines the timing window. Recommended: 15.
