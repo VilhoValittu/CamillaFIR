@@ -2,7 +2,8 @@ import numpy as np
 import scipy.signal
 import scipy.fft
 import scipy.ndimage
-#CamillaFIR DSP Engine v1.0.1
+#CamillaFIR DSP Engine v1.0.2
+#1.0.2 Fix comma mistake at HPF
 
 
 #def apply_temporal_decay_control(freq_axis, target_mags, reflections, strength=0.5):
@@ -66,6 +67,16 @@ def apply_smart_tdc(freq_axis, target_mags, reflections, rt60_avg, base_strength
             adjusted_target -= (kernel * reduction_db)
             
     return adjusted_target
+
+def apply_hpf_to_mags(freqs, mags, cutoff, order):
+    """Soveltaa Butterworth-ylipäästösuodatusta magnitudivasteeseen (dB)."""
+    if cutoff <= 0 or order <= 0:
+        return mags
+    # Butterworth vaste: 1 / sqrt(1 + (fc/f)^(2*order))
+    # Muutetaan desibeleiksi: -10 * log10(1 + (fc/f)^(2*order))
+    with np.errstate(divide='ignore'):
+        attenuation = -10 * np.log10(1 + (cutoff / (freqs + 1e-12))**(2 * order))
+    return mags + attenuation
 
 def soft_clip_boost(gain_db, max_boost):
     """Pehmentää korostukset tanh-funktiolla, jotta max_boost ei ylity rajusti."""
@@ -256,6 +267,12 @@ def generate_filter(freqs, meas_mags, raw_phases, crossovers,
 
     # --- 7. TAVOITEKÄYRÄ JA OFFSET ---
     target_mags = interpolate_response(house_freqs, house_mags, freq_axis)
+    
+    if hpf_settings and hpf_settings.get('enabled'):
+        target_mags = apply_hpf_to_mags(freq_axis, target_mags, 
+                                        hpf_settings['freq'], 
+                                        hpf_settings['order'])
+    
     if enable_tdc:
         target_mags = apply_smart_tdc(freq_axis, target_mags, reflections, current_rt60, base_strength=tdc_strength/100.0)
 
