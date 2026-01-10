@@ -24,7 +24,8 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.6.5"
+VERSION = "v2.6.6"
+#fix at dsp engine. HPF comma mistake
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
@@ -400,3 +401,4 @@ def generate_raspberry_yaml(fs, ft_short, file_ts):
 
 if __name__ == '__main__':
     start_server(main, port=8080, debug=True, auto_open_webbrowser=True)
+
