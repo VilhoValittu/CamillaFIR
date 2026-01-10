@@ -1,6 +1,16 @@
 # CamillaFIR (v2.6.5 Stable) – Käyttöopas
 
 CamillaFIR on tekoälyavusteinen DSP-moottori korkean resoluution FIR-suodattimien luomiseen. Ohjelma analysoi huoneakustiikan ja korjaa taajuusvasteen lisäksi ajoitusvirheitä ja resonansseja (huonemoodeja).
+---
+
+## Tekninen huomio: Suodattimen aktiivisuus rajojen ulkopuolella
+
+Saatat havaita suodattimessa "roskaa" tai pientä väreilyä myös asetettujen rajojen (kuten `mag_c_max` tai `phase_limit`) yläpuolella. Tämä on normaalia ja johtuu seuraavista teknisistä syistä:
+
+1. **Globaali normalisointi (Normalization Offset):** Jotta suodatin ei säröydy bassoalueen suurten korjausten vuoksi, ohjelma laskee koko suodattimen tasoa (esim. -69 dB). Tämä siirtää koko vasteen pois nollasta, jolloin suodatin näyttää "aktiiviselta" koko taajuusalueella.
+2. **Teoreettinen vaihe (Jakosuotimet):** Jos järjestelmässä on määritelty jakosuotimia (Crossovers), niiden vaihekorjaus lasketaan koko taajuusalueelle (20 000 Hz asti). Tämä on välttämätöntä, jotta ajoitus säilyy eheänä koko kaistalla.
+3. **FIR-matematiikka ja ikkunointi:** Erittäin jyrkät korjaukset matalilla taajuuksilla (esim. 32 Hz resonanssin vaimennus) aiheuttavat matemaattista "aaltoilua", joka leviää ylemmille taajuuksille. Hann-ikkunointi tekee tästä energiasta näkyvää myös varsinaisen korjausalueen ulkopuolella.
+4. **Pehmeä vaimennus (Soft Damping):** Vaiheenkorjaus ei katkea pystysuoraan rajan kohdalla, vaan se vaimenee asteittain. Tämä estää siirtymäalueen sähköiset häiriöt ja tekee äänestä luonnollisemman.
 
 ---
 
