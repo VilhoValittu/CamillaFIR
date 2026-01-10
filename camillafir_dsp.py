@@ -2,7 +2,7 @@ import numpy as np
 import scipy.signal
 import scipy.fft
 import scipy.ndimage
-#CamillaFIR DSP Engine v1.0
+#CamillaFIR DSP Engine v1.0.1
 # --- v2.6.2 Stable: PERUSTYÖKALUT ---
 def apply_temporal_decay_control(freq_axis, target_mags, reflections, strength=0.5):
     """
@@ -374,3 +374,4 @@ def generate_filter(freqs, raw_mags, raw_phases, crossovers,
         'reflections': reflections # Tärkeä Summarylle
     }
     return impulse, stats['gd_min'], stats['gd_max'], stats
+
