@@ -9,6 +9,8 @@ from datetime import datetime
 # Tuodaan tarvittavat funktiot DSP-moduulista
 from camillafir_dsp import apply_smoothing_std, psychoacoustic_smoothing, calculate_rt60
 
+#--- Plot v.1.1.0
+
 def smooth_complex(freqs, spec, oct_frac=1.0):
     """Tasoittaa kompleksisen vasteen Real ja Imag osat erikseen vaiheen säilyttämiseksi."""
     real_parts = np.nan_to_num(np.real(spec))
@@ -68,19 +70,35 @@ def format_summary_content(settings, l_stats, r_stats):
     return "\n".join(lines)
 
 def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, title, save_filename=None, target_stats=None, mixed_split=None, zoom_hint=""):
-    """Luo 5-paneelisen HTML-dashboardin."""
+    """Luo 5-paneelisen HTML-dashboardin, jossa viivat kohtaavat ja Step-alue näkyy harmaana."""
     try:
         n_fft = len(filt_ir)
         f_lin = scipy.fft.rfftfreq(n_fft, d=1/fs)
         h_filt = scipy.fft.rfft(filt_ir)
-        offset = target_stats.get('offset_db', 0) if target_stats else 0
-        avg_t = target_stats.get('eff_target_db', 75) if target_stats else 75
         
-        m_lin = np.interp(f_lin, orig_freqs, orig_mags)
+        # 1. HAETAAN TASOTIEDOT
+        # eff_target_db on tavoitteen taso (esim 75dB)
+        avg_t = target_stats.get('eff_target_db', 75) if target_stats else 75
+        match_range = target_stats.get('match_range', [500, 2000])
+
+        # 2. KOHDISTUS JA TASOITUS (Measured Clean)
+        if target_stats and 'measured_mags' in target_stats:
+            m_stats = np.array(target_stats['measured_mags'])
+            f_stats = np.array(target_stats['freq_axis'])
+            # M_stats on nollan ympärillä. Lisätään avg_t, jotta se nousee tavoitteen tasolle.
+            m_interp = np.interp(f_lin, f_stats, m_stats) + avg_t
+            m_lin_clean = psychoacoustic_smoothing(f_lin, m_interp)
+        else:
+            m_raw = np.interp(f_lin, orig_freqs, orig_mags)
+            m_lin_clean = psychoacoustic_smoothing(f_lin, m_raw)
+
+        # Ennuste (Predicted)
         p_lin = np.interp(f_lin, orig_freqs, orig_phases)
-        total_spec = 10**((m_lin + offset)/20.0) * np.exp(1j * np.deg2rad(p_lin)) * h_filt
-        spec_sm = smooth_complex(f_lin, total_spec, 1.0)
+        total_spec = 10**(m_lin_clean/20.0) * np.exp(1j * np.deg2rad(p_lin)) * h_filt
         p_sm = psychoacoustic_smoothing(f_lin, 20*np.log10(np.abs(total_spec)+1e-12))
+        
+        # Vaihe ja Group Delay
+        spec_sm = smooth_complex(f_lin, total_spec, 3.0)
         ph_sm = (np.rad2deg(np.angle(spec_sm)) + 180) % 360 - 180
         gd_sm = calculate_clean_gd(f_lin, spec_sm)
         filt_db = 20 * np.log10(np.abs(h_filt) + 1e-12)
@@ -88,34 +106,57 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
         fig = make_subplots(rows=5, cols=1, vertical_spacing=0.05, 
                             subplot_titles=("<b>Magnitude & Confidence</b>", "<b>Phase</b>", "<b>Group Delay</b>", "<b>Filter (dB)</b>", "<b>Step Response</b>"))
 
+        # 3. PIIRRETÄÄN HARMAA ALUE (Level Match Range)
+        # Käytetään varmempaa add_shape -metodia
+        fig.add_shape(type="rect", xref="x", yref="y",
+                      x0=match_range[0], x1=match_range[1],
+                      y0=avg_t-30, y1=avg_t+30, # Katetaan pystysuuntainen näkymä
+                      fillcolor="rgba(128, 128, 128, 0.2)", layer="below", line_width=0,
+                      row=1, col=1)
+
         # Akustinen luottamus
         if target_stats and 'confidence_mask' in target_stats:
-            conf_line = (avg_t - 20) + (target_stats['confidence_mask'] * 10)
-            fig.add_trace(go.Scatter(x=target_stats['freq_axis'], y=conf_line, name='Confidence', line=dict(color='magenta', width=2), opacity=0.3), row=1, col=1)
+            conf_mask = np.array(target_stats['confidence_mask'])
+            conf_line = (avg_t - 20) + (conf_mask * 10)
+            fig.add_trace(go.Scatter(x=target_stats['freq_axis'], y=conf_line, name='Confidence', 
+                                     line=dict(color='magenta', width=2), opacity=0.3), row=1, col=1)
 
-        fig.add_trace(go.Scatter(x=orig_freqs, y=orig_mags + offset, name='Original', line=dict(color='rgba(0,0,255,0.2)', dash='dot')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=f_lin, y=p_sm, name='Predicted', line=dict(color='orange', width=3)), row=1, col=1)
-        if target_stats: fig.add_trace(go.Scatter(x=target_stats['freq_axis'], y=target_stats['target_mags'], name='Target', line=dict(color='green', dash='dash')), row=1, col=1)
-
-        fig.add_trace(go.Scatter(x=f_lin, y=ph_sm, line=dict(color='orange'), showlegend=False), row=2, col=1)
-        fig.add_trace(go.Scatter(x=f_lin, y=gd_sm, line=dict(color='orange'), showlegend=False), row=3, col=1)
-        fig.add_trace(go.Scatter(x=f_lin, y=filt_db, line=dict(color='red'), showlegend=False), row=4, col=1)
+        # 4. REVISIOIDUT MAGNITUDIKÄYRÄT
+        # Siisti mitattu vaste
+        fig.add_trace(go.Scatter(x=f_lin, y=m_lin_clean, name='Measured (Clean)', 
+                                 line=dict(color='rgba(0,0,255,0.4)', width=1.5)), row=1, col=1)
         
-        # Step Response - KORJATTU
-        step_resp = np.cumsum(filt_ir)
-        step_resp /= np.max(np.abs(step_resp))
-        time_axis_ms = (np.arange(len(filt_ir)) / fs) * 1000.0
-        fig.add_trace(go.Scatter(x=time_axis_ms[:int(fs*0.2)], y=step_resp[:int(fs*0.2)], name="Step", line=dict(color='yellow')), row=5, col=1)
+        # Tavoitekäyrä (House Curve)
+        if target_stats:
+            fig.add_trace(go.Scatter(x=target_stats['freq_axis'], y=target_stats['target_mags'], 
+                                     name='Target', line=dict(color='green', dash='dash', width=2.5)), row=1, col=1)
 
+        # Lopullinen ennustettu vaste
+        fig.add_trace(go.Scatter(x=f_lin, y=p_sm, name='Predicted', 
+                                 line=dict(color='orange', width=3)), row=1, col=1)
+
+        # Paneelit 2-5 (Phase, GD, Filter, Step)
+        fig.add_trace(go.Scatter(x=f_lin, y=ph_sm, name="Phase", line=dict(color='orange'), showlegend=False), row=2, col=1)
+        fig.add_trace(go.Scatter(x=f_lin, y=gd_sm, name="Group Delay", line=dict(color='orange'), showlegend=False), row=3, col=1)
+        fig.add_trace(go.Scatter(x=f_lin, y=filt_db, name="Filter dB", line=dict(color='red'), showlegend=False), row=4, col=1)
+        
+        step_resp = np.cumsum(filt_ir)
+        step_resp /= (np.max(np.abs(step_resp)) + 1e-12)
+        time_axis_ms = (np.arange(len(filt_ir)) / fs) * 1000.0
+        fig.add_trace(go.Scatter(x=time_axis_ms[:int(fs*0.05)], y=step_resp[:int(fs*0.05)], name="Step Resp", line=dict(color='yellow')), row=5, col=1)
+
+        # ASETUKSET
         t_vals = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
         for r in range(1, 5): 
             fig.update_xaxes(type="log", range=[np.log10(20), np.log10(20000)], tickvals=t_vals, row=r, col=1)
         
-        fig.update_yaxes(range=[avg_t-40, avg_t+20], row=1, col=1)
+        fig.update_yaxes(range=[avg_t-20, avg_t+20], row=1, col=1)
         fig.update_yaxes(range=[-180, 180], row=2, col=1)
-        fig.update_layout(height=1600, width=1750, template="plotly_white", title_text=f"{title} Analysis {zoom_hint}")
+        fig.update_yaxes(range=[-10, 10], row=4, col=1) # Tarkka suodatin-näkymä
+        
+        fig.update_layout(height=1600, width=1750, template="plotly_white", title_text=f"{title} Analysis")
         return fig.to_html(include_plotlyjs=True, full_html=True)
-    except Exception as e: return f"Visual Engine Error: {e}"
+    except Exception as e: return f"Visual Engine Error: {str(e)}"
 
 def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, title, target_stats=None):
     """Luo staattisen PNG-kuvan."""
@@ -125,13 +166,12 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
         avg_t = target_stats.get('eff_target_db', 75) if target_stats else 75
         m_lin = np.interp(f_lin, orig_freqs, orig_mags); p_lin = np.interp(f_lin, orig_freqs, orig_phases)
         total_spec = 10**((m_lin + offset)/20.0) * np.exp(1j * np.deg2rad(p_lin)) * h_filt
-        
         fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(12, 18))
         ax1.semilogx(orig_freqs, orig_mags + offset, 'b:', alpha=0.3)
         ax1.semilogx(f_lin, psychoacoustic_smoothing(f_lin, 20*np.log10(np.abs(total_spec)+1e-12)), 'orange', linewidth=2)
         if target_stats: ax1.semilogx(target_stats['freq_axis'], target_stats['target_mags'], 'g--')
         
-        ax1.set_ylim(avg_t-40, avg_t+20)
+        ax1.set_ylim(avg_t-15, avg_t+15)
         ax3.semilogx(f_lin, calculate_clean_gd(f_lin, total_spec), 'orange')
         ax4.semilogx(f_lin, 20*np.log10(np.abs(h_filt)+1e-12), 'r')
         
