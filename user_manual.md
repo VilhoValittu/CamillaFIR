@@ -1,16 +1,55 @@
-# CamillaFIR (v2.6.5 Stable) – Official Documentation
+# CamillaFIR (v2.7.0 Stable) – Official Documentation
 
-CamillaFIR is an AI-assisted DSP engine designed for creating high-resolution FIR filters. The program analyzes room acoustics to correct not only the frequency response but also time-domain errors, phase shifts, and room resonances (modes).
+CamillaFIR is an AI-assisted DSP engine designed for creating high-resolution FIR filters. The program analyzes room acoustics to correct frequency response, time-domain errors, and room resonances (modes).
+
 ---
 
-## Technical Note: Filter Activity Beyond Defined Limits
+## What's New in v2.7.0?
 
-You may notice "debris" or slight ripples in the filter response even above the specified correction limits (such as `mag_c_max` or `phase_limit`). This is normal and occurs due to the following technical reasons:
+1. **Smart Windowing (Tukey Window)**: `Asymmetric` and `Minimum Phase` filters now utilize a Tukey window. This preserves the leading-edge energy and transients of the impulse response much more effectively than the traditional Hann window, resulting in punchier and more dynamic sound.
+2. **True Acoustic Analysis**: The engine now removes the speaker's Time of Flight (TOF) before analysis. As a result, the distances listed under "Acoustic Events" in the Summary (e.g., 1.2m or 0.8m) represent actual acoustic reflections from room surfaces.
+3. **Enhanced Dashboard**: 
+   - **Level Match Range**: A grey shaded area in the magnitude plot indicates the specific frequency range where the speaker's level has been synchronized with the target curve.
+   - **Measured (Clean)**: The measured response is now psychoacoustically smoothed for better readability, matching the default view in professional tools like REW.
 
-1. **Global Normalization Offset:** To prevent digital clipping caused by significant bass boosts, the engine lowers the entire filter level (e.g., -69 dB). This shifts the entire response away from the zero-line, making the filter appear "active" across the whole spectrum.
-2. **Theoretical Phase (Crossovers):** If crossovers are defined, their phase correction is calculated across the entire frequency range (up to 20,000 Hz). This ensures timing integrity for the crossover slopes.
-3. **FIR Math & Windowing:** Sharp, narrow-band corrections at low frequencies (like a 32 Hz resonance notch) create mathematical "ringing" or sidelobes. The application of the Hann window makes this energy visible even far outside the primary correction zone.
-4. **Soft Transition (Damping):** Phase correction does not cut off abruptly at the limit. It tapers off gradually to avoid electrical artifacts and ringing in the transition region, resulting in a more natural sound.
+---
+
+## Technical Note: Filter Behavior
+
+You may notice slight ripples in the filter response even above specified limits. This occurs for several technical reasons:
+1. **Global Offset**: The entire filter level is shifted (e.g., -70 dB) to accommodate significant bass boosts without digital clipping. The Dashboard aligns these lines visually for easier comparison.
+2. **Theoretical Phase**: Crossover phase corrections are calculated across the full spectrum (up to 20 kHz) to ensure perfect timing integrity across all bands.
+3. **Soft Clipping**: The `max_boost` setting is enforced using a "Soft Clip" algorithm. This ensures a smooth transition and prevents harsh digital artifacts if the target curve demands more gain than allowed.
+
+---
+
+## Summary: The Ideal Dashboard (v2.7.0)
+
+1. **Magnitude**: The orange `Predicted` line follows the green target line within the correction zone. The grey vertical bar shows where the levels were matched.
+2. **Measured (Clean)**: The blue line is smooth and intersects the target curve perfectly within the grey match range.
+3. **Group Delay**: Bass region peaks are significantly flattened. The Summary report should now show logical distances (centimeters or meters) for room reflections.
+4. **Filter dB**: The purple line represents the filter's workload, staying within the bounds of your `max_boost` setting.
+
+
+## Acoustic Intelligence: Analysis and Actions
+
+Starting from version 2.7.0, the reported distances are highly accurate because the speaker's Time of Flight (TOF) is removed before analysis. The "Acoustic Events" list in the Summary report acts as an acoustic X-ray of your room:
+
+1. **Resonance**:
+   - Typically found at frequencies below 200 Hz.
+   - These represent standing waves (room modes).
+   - **Action**: Use the TDC (Temporal Decay Control) feature to dampen the decay time of these modes. The higher the "Error (ms)", the more beneficial the TDC correction will be.
+
+2. **Reflection**:
+   - Generally found at frequencies above 200 Hz.
+   - The reported "Distance" indicates the extra path length the sound travelled (from the speaker to a surface and back to the microphone).
+   - **Example**: If you see a reflection at 1.2 meters, look for a reflective surface (like a desk, floor, or side wall) approximately 60 cm away from the speaker.
+   - **Action**: You can mitigate these by placing acoustic panels at the reflection points or by fine-tuning the placement of your speakers or listening chair.
+
+3. **Confidence Index (Confidence %)**:
+   - Represents how clearly the DSP engine can distinguish the direct sound from room noise and clutter.
+   - A value above 80% is excellent. A low value at a specific frequency suggests a very strong or complex reflection that is difficult to correct perfectly through DSP alone without physical acoustic treatment.
+
 
 ---
 
