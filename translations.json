@@ -1,5 +1,6 @@
 {
     "en": {
+        "trans_width": "The width of the frequency range where the correction tapers to zero (recommended 50-200 Hz)." ,
         "enable_tdc": "Temporal Decay Control (TDC)",
         "tdc_strength": "TDC Strength (0-100%)",
         "tdc_help": "Reduces the ringing time (decay) of resonances. Very effective for room modes",
@@ -47,12 +48,6 @@
         "ir_window_help": "Window length for Minimum Phase calculation.",
         "phase_limit": "Phase Corr Limit (Hz)",
         "phase_limit_help": "Max frequency for phase correction.",
-        "saved_local": "Saved locally:",
-        "done_msg": "Analysis Complete.",
-        "stat_calc": "Calculating...",
-        "stat_reading": "Reading...",
-        "stat_plot": "Plotting...",
-        "stat_done": "Done!",
         "title": "CamillaFIR",
         "subtitle": "By VilhoValittu & GeminiPro",
         "grp_settings": "Settings & Files",
@@ -182,6 +177,7 @@
     },
     
     "fi": {
+        "trans_width": "Kuinka leveällä alueella korjaus vaimenee nollaan (suositus 50-200 Hz)." ,
         "enable_tdc": "Resonanssin ajallinen vaimennus (TDC)",
         "tdc_strength": "TDC Voimakkuus (0-100%)",
         "tdc_help": "Vähentää resonanssien sointiaikaa (decay). Erittäin tehokas huonemoodeihin.",
