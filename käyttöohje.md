@@ -1,16 +1,54 @@
-# CamillaFIR (v2.6.5 Stable) – Käyttöopas
+# CamillaFIR (v2.7.0 Stable) – Käyttöopas
 
 CamillaFIR on tekoälyavusteinen DSP-moottori korkean resoluution FIR-suodattimien luomiseen. Ohjelma analysoi huoneakustiikan ja korjaa taajuusvasteen lisäksi ajoitusvirheitä ja resonansseja (huonemoodeja).
+
 ---
 
-## Tekninen huomio: Suodattimen aktiivisuus rajojen ulkopuolella
+## Mitä uutta versiossa 2.7.0?
 
-Saatat havaita suodattimessa "roskaa" tai pientä väreilyä myös asetettujen rajojen (kuten `mag_c_max` tai `phase_limit`) yläpuolella. Tämä on normaalia ja johtuu seuraavista teknisistä syistä:
+1. **Älykäs Ikkunointi (Tukey-ikkuna)**: `Asymmetric`- ja `Minimum Phase` -suodattimet käyttävät nyt Tukey-ikkunaa. Tämä säilyttää impulssivasteen alun energian ja transientit huomattavasti perinteistä Hann-ikkunaa paremmin, mikä kuuluu tarkempana ja dynaamisempana äänenä.
+2. **Aito Akustinen Analyysi**: Ohjelma poistaa kaiuttimen etäisyysviiveen (TOF) ennen analyysia. Tämän ansiosta Summary-raportin "Acoustic Events" -kohdassa näkyvät etäisyydet (esim. 1.2m tai 0.8m) ovat todellisia huoneheijastuksia pinnoista.
+3. **Päivitetty Dashboard**: 
+   - **Level Match Range**: Harmaa alue magnitudikuvaajassa osoittaa taajuusalueen, jolla kaiuttimen taso on sovitettu tavoitekäyrään.
+   - **Measured (Clean)**: Mitattu vaste on nyt psykoakustisesti tasoitettu, mikä tekee kuvaajasta selkeämmän lukea.
 
-1. **Globaali normalisointi (Normalization Offset):** Jotta suodatin ei säröydy bassoalueen suurten korjausten vuoksi, ohjelma laskee koko suodattimen tasoa (esim. -69 dB). Tämä siirtää koko vasteen pois nollasta, jolloin suodatin näyttää "aktiiviselta" koko taajuusalueella.
-2. **Teoreettinen vaihe (Jakosuotimet):** Jos järjestelmässä on määritelty jakosuotimia (Crossovers), niiden vaihekorjaus lasketaan koko taajuusalueelle (20 000 Hz asti). Tämä on välttämätöntä, jotta ajoitus säilyy eheänä koko kaistalla.
-3. **FIR-matematiikka ja ikkunointi:** Erittäin jyrkät korjaukset matalilla taajuuksilla (esim. 32 Hz resonanssin vaimennus) aiheuttavat matemaattista "aaltoilua", joka leviää ylemmille taajuuksille. Hann-ikkunointi tekee tästä energiasta näkyvää myös varsinaisen korjausalueen ulkopuolella.
-4. **Pehmeä vaimennus (Soft Damping):** Vaiheenkorjaus ei katkea pystysuoraan rajan kohdalla, vaan se vaimenee asteittain. Tämä estää siirtymäalueen sähköiset häiriöt ja tekee äänestä luonnollisemman.
+---
+
+## Tekninen huomio: Suodattimen toiminta
+
+Saatat havaita suodattimessa pientä väreilyä myös asetettujen rajojen yläpuolella. Tämä johtuu seuraavista syistä:
+1. **Globaali Offset**: Koko suodattimen tasoa siirretään (esim. -70 dB), jotta suuret bassokorotukset eivät aiheuta digitaalista säröä. Dashboardilla viivat on kohdistettu vastaamaan toisiaan visuaalisesti.
+2. **Teoreettinen vaihe**: Jakosuotimien (Crossovers) vaihekorjaus lasketaan aina koko kaistalle (20 kHz asti), jotta ajoitus säilyy eheänä.
+3. **Soft Clip**: `max_boost` -arvoa noudatetaan pehmeällä vaimennuksella (Soft Clipping), joka estää äkilliset leikkaukset äänessä, vaikka tavoite vaatisi enemmän vahvistusta.
+
+---
+
+## Summary: Täydellinen Dashboard (v2.7.0)
+
+1. **Magnitude**: Oranssi ennusteviiva (`Predicted`) seuraa vihreää tavoitetta korjausalueella. Harmaa kaistale osoittaa, missä taso on täsmätty.
+2. **Measured (Clean)**: Sininen viiva on siisti ja se kohtaa tavoitekäyrän täsmälleen harmaan alueen sisällä.
+3. **Group Delay**: Bassopään piikit on tasoitettu, ja Summary-raportti näyttää järkeviä etäisyyksiä (senttimetrejä tai metrejä) huoneen heijastuksille.
+4. **Filter dB**: Purppura viiva näyttää suodattimen tekemän työn. Se pysyy hallittuna `max_boost` -asetuksen puitteissa.
+
+## Akustinen analyysi ja toimenpiteet (Acoustic Intelligence)
+
+Versiosta 2.7.0 alkaen ohjelman ilmoittamat etäisyydet ovat erittäin tarkkoja, koska kaiuttimen oma etäisyysviive (TOF) on poistettu laskennasta. Summary-raportin "Acoustic Events" -lista auttaa sinua ymmärtämään huoneesi ongelmia:
+
+1. **Resonance (Resonanssi)**:
+   - Näitä esiintyy tyypillisesti alle 200 Hz taajuuksilla.
+   - Ne ovat huoneen seisovia aaltoja (huonemoodeja).
+   - **Toimenpide**: Käytä TDC (Temporal Decay Control) -toimintoa vaimentamaan näiden soimisaikaa. Mitä suurempi "Virhe (ms)", sitä tärkeämpää korjaus on.
+
+2. **Reflection (Heijastus)**:
+   - Näitä esiintyy yleensä yli 200 Hz taajuuksilla.
+   - Raportin ilmoittama "Etäisyys" kertoo, kuinka monta metriä heijastunut ääni on kulkenut kaiuttimesta pintaan ja takaisin mikrofoniin.
+   - **Esimerkki**: Jos näet heijastuksen 1.2 metrin kohdalla, etsi heijastavaa pintaa (kuten työpöytä, lattia tai sivuseinä) noin 60 cm etäisyydeltä kaiuttimesta.
+   - **Toimenpide**: Voit yrittää vaimentaa näitä akustointilevyillä tai muuttamalla kaiuttimen/kuuntelupaikan sijoitusta.
+
+3. **Luottamusindeksi (Confidence %)**:
+   - Kertoo, kuinka hyvin DSP-moottori pystyy erottamaan suoran äänen huoneen hälystä.
+   - Yli 80 % lukema on erinomainen. Jos lukema on matala tietyllä taajuudella, huoneessa on kyseisellä kohdalla erittäin voimakas ja monimutkainen heijastus, jota on vaikea korjata täydellisesti ilman fyysistä akustointia.
+
 
 ---
 
