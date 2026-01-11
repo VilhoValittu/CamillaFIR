@@ -24,8 +24,7 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.6.6"
-#fix at dsp engine. HPF comma mistake
+VERSION = "v2.7.0"
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
@@ -195,9 +194,17 @@ def main():
         
         put_file_upload('hc_custom_file', label=t('hc_custom'), accept='.txt', help_text=t('hc_custom_help')),
         put_checkbox('mag_correct', options=[{'label': t('enable_corr'), 'value': True}], value=[True] if get_val('mag_correct', True) else []),
+        put_select('smoothing_level', label="Smoothing Detail (Octave)", options=[
+            {'label': '1/1 Octave', 'value': 1},
+            {'label': '1/3 Octave', 'value': 3},
+            {'label': '1/6 Octave', 'value': 6},
+            {'label': '1/12 Octave (Standard)', 'value': 12},
+            {'label': '1/24 Octave (Fine)', 'value': 24},
+            {'label': '1/48 Octave (Ultra)', 'value': 48}
+                ], value=12),
         put_input('max_boost', label=t('max_boost'), type=FLOAT, value=get_val('max_boost', 5.0), help_text=t('max_boost_help')),
-        put_input('phase_limit', label=t('phase_limit'), type=FLOAT, value=get_val('phase_limit', 12000.0), help_text=t('phase_limit_help'))
-        
+        put_input('phase_limit', label=t('phase_limit'), type=FLOAT, value=get_val('phase_limit', 12000.0), help_text=t('phase_limit_help')),
+        put_input('trans_width', type=NUMBER, label="1/1 Transition Width (Hz)", value=100, help_text=t('trans_width'))
     ]
 #--- #4 Edistyneet
     tab_adv = [
@@ -233,7 +240,7 @@ def main():
         put_markdown("---"),
 
         put_row([
-            put_checkbox('normalize_opt', options=[{'label': t('enable_norm'), 'value': True}], value=[True] if get_val('normalize_opt', True) else [], help_text=t('norm_help')), 
+    #        put_checkbox('normalize_opt', options=[{'label': t('enable_norm'), 'value': True}], value=[True] if get_val('normalize_opt', True) else [], help_text=t('norm_help')), 
             put_checkbox('align_opt', options=[{'label': t('enable_align'), 'value': True}], value=[True] if get_val('align_opt', True) else [], help_text=t('align_help')), 
             put_checkbox('stereo_link', options=[{'label': t('enable_link'), 'value': True}], value=[True] if get_val('stereo_link', False) else [], help_text=t('link_help'))
         ]),
@@ -275,11 +282,14 @@ def main():
             'stereo_link', 'exc_prot', 'exc_freq', 'hpf_enable', 'hpf_freq', 
             'hpf_slope', 'multi_rate_opt', 'ir_window', 'ir_window_left', 
             'local_path_l', 'local_path_r', 'fmt', 'lvl_manual_db', 
-            'lvl_min', 'lvl_max', 'lvl_algo', 'smoothing_type', 'fdw_cycles'
+            'lvl_min', 'lvl_max', 'lvl_algo', 'smoothing_type', 'fdw_cycles',
+            'trans_width', 'smoothing_level'
         ]
+        
         data = {k: pin[k] for k in p_keys}
         for i in range(1, 6): data[f'xo{i}_f'] = pin[f'xo{i}_f']; data[f'xo{i}_s'] = pin[f'xo{i}_s']
         save_config(data)
+        l_st_sum, r_st_sum = None, None
         f_l, m_l, p_l = parse_measurements_from_path(data['local_path_l']) if data['local_path_l'] else (None, None, None)
         f_r, m_r, p_r = parse_measurements_from_path(data['local_path_r']) if data['local_path_r'] else (None, None, None)
         if f_l is None and pin.file_l: f_l, m_l, p_l = parse_measurements_from_bytes(pin.file_l['content'])
@@ -293,53 +303,184 @@ def main():
         zip_buffer = io.BytesIO(); ts = datetime.now().strftime('%d%m%y_%H%M'); file_ts = datetime.now().strftime('%H%M_%d%m%y')
         ft_short = "Asymmetric" if "Asymmetric" in data['filter_type'] else ("Minimum" if "Min" in data['filter_type'] else ("Mixed" if "Mixed" in data['filter_type'] else "Linear"))
         split, zoom = data['mixed_freq'], t('zoom_hint'); l_st_f, r_st_f = None, None
+        
+        
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
             for i, fs_v in enumerate(target_rates):
                 taps_v = int(data['taps'] * (fs_v / data['fs'])); taps_v = taps_v + (taps_v % 2)
                 update_status(f"Lasketaan {fs_v}Hz..."); set_processbar('bar', 0.2 + 0.6 * (i/len(target_rates)))
                 # args-tuple: Nyt 34 arvoa + f_l, m_l, p_l = 37 yhteensä
                 args = (
-                    xos, 20, data['phase_limit'], data['hc_min'], data['hc_max'], 
-                    hc_f, hc_m, fs_v, taps_v, FINE_TUNE_LIMIT, 
-                    data['max_boost'], data['gain'], hpf, data['mag_correct'], 
-                    data['smoothing_type'], data['fdw_cycles'], 'Min' in ft_short, 
-                    data['filter_type'], data['lvl_mode'], data['lvl_min'], 
-                    data['lvl_max'], data['lvl_manual_db'], data['lvl_algo'], 
-                    data['normalize_opt'], data['reg_strength'], data['exc_prot'], 
-                    data['exc_freq'], data['ir_window'], data['mixed_freq'], 
-                    data['ir_window_left'], data['phase_limit'], 
-                    'enable_afdw' in data,
-                    'enable_tdc' in data, # Tämä tarkistaa onko checkbox valittu
-                    data.get('tdc_strength', 50.0) # .get estää KeyErrorin jos kenttää ei löydy
-                )
+                        xos, 20, data['phase_limit'], data['hc_min'], data['hc_max'], 
+                        hc_f, hc_m, fs_v, taps_v, FINE_TUNE_LIMIT, 
+                        data['max_boost'], data['gain'], hpf, data['mag_correct'], 
+                        data['smoothing_type'], data['fdw_cycles'], 'Min' in ft_short, 
+                        data['filter_type'], data['lvl_mode'], data['lvl_min'], 
+                        data['lvl_max'], data['lvl_manual_db'], data['lvl_algo'], 
+                        data['normalize_opt'], data['reg_strength'], data['exc_prot'], 
+                        data['exc_freq'], data['ir_window'], data['mixed_freq'], 
+                        data['ir_window_ms_left'] if 'ir_window_ms_left' in data else 100.0, 
+                        data['phase_limit'], 
+                        'enable_afdw' in data,
+                        'enable_tdc' in data,
+                        data.get('tdc_strength', 50.0),
+                        data['trans_width'],
+                        data['smoothing_level']
+                       )
+                # filtterin kutsu
+                try:
+    
+                    s_level = float(pin['smoothing_level'])
+                except:
+                    s_level = 12.0  # Oletusarvo, jos valintaa ei löydy
                 l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, *args)
                 r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, *args)
                 if data['align_opt']:
                     d_s = np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp))
                     if d_s > 0: r_imp = np.roll(r_imp, d_s)
                     else: l_imp = np.roll(l_imp, -d_s)
-                wav_l, wav_r = io.BytesIO(), io.BytesIO(); scipy.io.wavfile.write(wav_l, fs_v, l_imp.astype(np.float32)); scipy.io.wavfile.write(wav_r, fs_v, r_imp.astype(np.float32))
-                zf.writestr(f"L_{ft_short}_{fs_v}Hz_{file_ts}.wav", wav_l.getvalue()); zf.writestr(f"R_{ft_short}_{fs_v}Hz_{file_ts}.wav", wav_r.getvalue())
                 if fs_v == data['fs']:
                     l_st_f, r_st_f, l_imp_f, r_imp_f = l_st, r_st, l_imp, r_imp
-                    zf.writestr("Summary.txt", plots.format_summary_content(data, l_st, r_st))
-                    zf.writestr("L_Dashboard.html", plots.generate_prediction_plot(f_l, m_l, p_l, l_imp, fs_v, "Left", None, l_st, split, zoom))
-                    zf.writestr("R_Dashboard.html", plots.generate_prediction_plot(f_r, m_r, p_r, r_imp, fs_v, "Right", None, r_st, split, zoom))
-                    zf.writestr("L_Plot.png", plots.generate_combined_plot_mpl(f_l, m_l, p_l, l_imp, fs_v, "Left", l_st))
-                    zf.writestr("R_Plot.png", plots.generate_combined_plot_mpl(f_r, m_r, p_r, r_imp, fs_v, "Right", r_st))
-                    yaml_content = generate_raspberry_yaml(data['fs'], ft_short, file_ts)
-                    zf.writestr("camilladsp.yml", yaml_content)
-                    fname = f"CamillaFIR_{ft_short}_{ts}.zip"
+
+# --- AUTO-ALIGN LASKENTA ---
+                if 'delay_samples' in l_st and 'delay_samples' in r_st:
+                    # Lasketaan ero näytteinä (perustuu raakamittaukseen)
+                    # Huom: delay_samples on negatiivinen slope, joten katsotaan erotus
+                    diff_samples = r_st['delay_samples'] - l_st['delay_samples']
+                    
+                    delay_ms = round((diff_samples / fs_v) * 1000, 3)
+                    distance_cm = round((delay_ms / 1000) * 34300, 2)
+                    
+                    # Lasketaan tason ero perustuen tavoitteeseen sovitukseen
+                    gain_diff = round(l_st['offset_db'] - r_st['offset_db'], 2)
+                    
+                    align_results = {
+                        'delay_ms': delay_ms,
+                        'distance_cm': distance_cm,
+                        'gain_diff_db': gain_diff
+                    }
+                    l_st['auto_align'] = align_results
+
+                    # Tulostus konsoliin käyttäjälle
+                    print("\n" + "="*35)
+                    print("     AUTO-ALIGN RECOMMENDATION")
+                    print("="*35)
+                    if delay_ms > 0:
+                        print(f" Delay:    Add {delay_ms} ms to RIGHT channel")
+                        print(f" Distance: Left is {distance_cm} cm further away")
+                    elif delay_ms < 0:
+                        print(f" Delay:    Add {abs(delay_ms)} ms to LEFT channel")
+                        print(f" Distance: Right is {abs(distance_cm)} cm further away")
+                    else:
+                        print(" Delay:    Channels are perfectly aligned!")
+                    
+                    print(f" Gain:     Adjust balance by {abs(gain_diff)} dB")
+                    print("="*35 + "\n")
+
+                # Tallennetaan WAV-tiedostot
+                wav_l, wav_r = io.BytesIO(), io.BytesIO()
+                scipy.io.wavfile.write(wav_l, fs_v, l_imp.astype(np.float32))
+                scipy.io.wavfile.write(wav_r, fs_v, r_imp.astype(np.float32))
+                zf.writestr(f"L_{ft_short}_{fs_v}Hz_{file_ts}.wav", wav_l.getvalue())
+                zf.writestr(f"R_{ft_short}_{fs_v}Hz_{file_ts}.wav", wav_r.getvalue())
+
+                # Tallennetaan Summary.txt vain kerran (päätaajuudella)
+                if fs_v == data['fs']: l_st_f, r_st_f, l_imp_f, r_imp_f = l_st, r_st, l_imp, r_imp
+                summary_content = plots.format_summary_content(data, l_st, r_st)
+                if 'auto_align' in l_st:
+                        res = l_st['auto_align']
+                        align_text = "\n" + "="*45 + "\n"
+                        align_text += "        AUTO-ALIGN CONFIGURATION DATA\n"
+                        align_text += "="*45 + "\n"
+                        if res['delay_ms'] > 0:
+                            align_text += f" Delay:    Add {res['delay_ms']} ms to RIGHT channel\n"
+                        else:
+                            align_text += f" Delay:    Add {abs(res['delay_ms'])} ms to LEFT channel\n"
+                        align_text += f" Gain:     Relative Gain change: {res['gain_diff_db']} dB\n"
+                        align_text += "="*45 + "\n"
+                        summary_content += align_text
+                    
+                zf.writestr("Summary.txt", summary_content)
+
+# 3. Kirjoitetaan lopullinen kokonaisuus Summary.txt tiedostoon
+                    
+                zf.writestr("L_Dashboard.html", plots.generate_prediction_plot(f_l, m_l, p_l, l_imp, fs_v, "Left", None, l_st, split, zoom))
+                zf.writestr("R_Dashboard.html", plots.generate_prediction_plot(f_r, m_r, p_r, r_imp, fs_v, "Right", None, r_st, split, zoom))
+                zf.writestr("L_Plot.png", plots.generate_combined_plot_mpl(f_l, m_l, p_l, l_imp, fs_v, "Left", l_st))
+                zf.writestr("R_Plot.png", plots.generate_combined_plot_mpl(f_r, m_r, p_r, r_imp, fs_v, "Right", r_st))
+                yaml_content = generate_raspberry_yaml(data['fs'], ft_short, file_ts)
+                zf.writestr("camilladsp.yml", yaml_content)
+                fname = f"CamillaFIR_{ft_short}_{ts}.zip"
+        try:
+            with open(fname, "wb") as f: f.write(zip_buffer.getvalue())
+            save_msg = f"Tallennettu: {os.path.abspath(fname)}"
+        except: save_msg = "Tallennus epäonnistui."
+        
+        update_status(t('stat_plot')); set_processbar('bar', 1.0)
+    
+        with use_scope('results', clear=True):
+            if l_st_f is None or r_st_f is None:
+                put_error("Virhe: Tuloksia ei saatu talteen.")
+                return
+
+            put_success(t('done_msg'))
+            put_text(save_msg).style('font-style: italic; color: #888;')
+
+            # Auto-Align suositukset
+            if 'auto_align' in l_st_f:
+                res = l_st_f['auto_align']
+                
+                    
+                # Tehdään visuaalinen laatikko suosituksille
+                if res['delay_ms'] > 0:
+                            msg = f"**Delay:** Add **{res['delay_ms']} ms** to **RIGHT** channel.\n"
+                            msg += f"**Distance:** Left speaker is **{res['distance_cm']} cm** further away."
+                elif res['delay_ms'] < 0:
+                    msg = f"**Delay:** Add **{abs(res['delay_ms'])} ms** to **LEFT** channel.\n"
+                    msg += f"**Distance:** Right speaker is **{abs(res['distance_cm'])} cm** further away."
+                else:
+                    msg = "**Perfect Alignment!** No delay adjustment needed."
+                
+            
+            put_markdown(f"### 📊 {t('rep_header')}")
+            
+            
+        
+            with put_collapse("📋 Tarkemmat DSP-tiedot"):
+                put_markdown(f"""
+                - **Pituus:** {data['taps']} taps ({data['taps']/data['fs']*1000:.1f} ms)
+                - **Resoluutio:** {data['fs']/data['taps']:.2f} Hz
+                - **Ikkuna:** {data['ir_window']} ms
+                - **FDW:** {data['fdw_cycles']}
+                - **Tavoite:** {data['hc_mode']} ({data['hc_min']}-{data['hc_max']} Hz)
+                - **Tyyppi:** {data['filter_type']}
+                - **Taso-algo:** {data['lvl_algo']}
+                """)
+            
+            
+                #put_info(put_markdown(msg + f"\n**Gain Adjustment:** {res['gain_diff_db']} dB"))
+
+            # Tulostaulukko ja Dashboardit
+            put_table([
+            ['Speaker', 'L', 'R'],
+            ['Target', f"{l_st_f.get('eff_target_db', 0):.1f} dB", f"{r_st_f.get('eff_target_db', 0):.1f} dB"],
+            ['Peak before norm', f"{l_st_f.get('peak_before_norm', 0):.1f} dB", f"{r_st_f.get('peak_before_norm', 0):.1f} dB"],
+            ['Offset', f"{l_st_f.get('offset_db', 0):.1f} dB", f"{r_st_f.get('offset_db', 0):.1f} dB"],
+            ['Confidence', f"{l_st_f.get('avg_confidence', 0):.1f}%", f"{r_st_f.get('avg_confidence', 0):.1f}%"]
+        ])
+            
+            put_tabs([
+                {'title': 'L Dashboard', 'content': put_html(plots.generate_prediction_plot(f_l, m_l, p_l, l_imp_f, data['fs'], "Left", None, l_st_f, split, zoom))},
+                {'title': 'R Dashboard', 'content': put_html(plots.generate_prediction_plot(f_r, m_r, p_r, r_imp_f, data['fs'], "Right", None, r_st_f, split, zoom))}
+            ])
+            put_file(fname, zip_buffer.getvalue(), label="⬇️ DOWNLOAD FILTER ZIP (if automatic save don't work)")
         try:
             with open(fname, "wb") as f: f.write(zip_buffer.getvalue())
             save_msg = f"Tallennettu: {os.path.abspath(fname)}"
         except: save_msg = "Tallennus epäonnistui."
         update_status(t('stat_plot')); set_processbar('bar', 1.0)
-        with use_scope('results', clear=True):
-            put_success(t('done_msg')); put_text(save_msg).style('font-style: italic; color: #888;')
-            put_table([['Suure', 'L', 'R'], ['Tavoite', f"{l_st_f['eff_target_db']:.1f} dB", f"{r_st_f['eff_target_db']:.1f} dB"], ['Huippu', f"{l_st_f['peak_before_norm']:.1f} dB", f"{r_st_f['peak_before_norm']:.1f} dB"], ['Offset', f"{l_st_f['offset_db']:.1f} dB", f"{r_st_f['offset_db']:.1f} dB"], ['Luottamus', f"{l_st_f['avg_confidence']:.1f}%", f"{r_st_f['avg_confidence']:.1f}%"]])
-            put_tabs([{'title': 'L Dashboard', 'content': put_html(plots.generate_prediction_plot(f_l, m_l, p_l, l_imp_f, data['fs'], "Left", None, l_st_f, split, zoom))}, {'title': 'R Dashboard', 'content': put_html(plots.generate_prediction_plot(f_r, m_r, p_r, r_imp_f, data['fs'], "Right", None, r_st_f, split, zoom))}])
-            put_file(fname, zip_buffer.getvalue(), label="⬇️ ZIP")
+    
+
     # Napin päivitys: Täysin puhdas teksti ilman taustaa tai kehyksiä
     put_button("🚀 START", onclick=process_run).style("""
         width: 100%; 
@@ -401,4 +542,3 @@ def generate_raspberry_yaml(fs, ft_short, file_ts):
 
 if __name__ == '__main__':
     start_server(main, port=8080, debug=True, auto_open_webbrowser=True)
-
