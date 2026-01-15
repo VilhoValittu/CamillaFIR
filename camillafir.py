@@ -32,6 +32,13 @@ PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
 
+def get_resource_path(relative_path):
+    """ Palauttaa polun resurssiin, oli se EXE-paketin sisällä tai kehityskoneella. """
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
+TRANS_FILE = get_resource_path('translations.json')
+
 def parse_measurements_from_path(path):
     """Lukee mittausdatan paikallisesta tiedostopolusta (REW .txt export) robustisti."""
     try:
@@ -923,3 +930,4 @@ def calculate_score(st, is_predicted=False):
 
 if __name__ == '__main__':
     start_server(main, port=8080, debug=True, auto_open_webbrowser=True)
+
