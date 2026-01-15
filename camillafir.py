@@ -27,32 +27,71 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.7.1"    #kaikki toimii edition
+VERSION = "v2.7.2"    #kaikki toimii edition
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
 
 def parse_measurements_from_path(path):
-    """Lukee mittausdatan paikallisesta tiedostopolusta (REW .txt export)."""
+    """Lukee mittausdatan paikallisesta tiedostopolusta (REW .txt export) robustisti."""
     try:
         if not path: return None, None, None
-        # Siivotaan polku lainausmerkeistä ja välilyönneistä (Windows "Copy as path")
+        
+        # 1. Siivotaan polku (poistetaan lainausmerkit ja välilyönnit)
         p = path.strip().strip('"').strip("'")
+        
         if not os.path.exists(p):
             logger.error(f"Tiedostoa ei löydy: {p}")
             return None, None, None
             
-        # REW export muoto: Freq, Mag, Phase. Ohitetaan kommenttirivit.
-        data = np.loadtxt(p, comments=['*', '['])
-        if data.size == 0: return None, None, None
+        # 2. Avataan tiedosto
+        with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+
+        freqs, mags, phases = [], [], []
+
+        for line in lines:
+            line = line.strip()
+            
+            # Ohitetaan kommentit ja tyhjät
+            if not line or line.startswith(('*', '#', ';')):
+                continue
+            
+            # Ohitetaan rivit, jotka eivät ala numerolla
+            if not line[0].isdigit() and line[0] != '-':
+                continue
+
+            # --- ÄLYKÄS EROTTIMEN TUNNISTUS ---
+            # Jos rivillä on sekä piste että pilkku (esim. "0.36, 41.8"), pilkku on erotin -> vaihdetaan väliksi
+            if ',' in line and '.' in line:
+                line = line.replace(',', ' ')
+            else:
+                # Jos rivillä on vain pilkkuja, ne ovat todennäköisesti desimaaleja (Suomi) -> vaihdetaan pisteeksi
+                line = line.replace(',', '.')
+            # ----------------------------------
+
+            parts = line.split()
+
+            if len(parts) >= 2:
+                try:
+                    f_val = float(parts[0])
+                    m_val = float(parts[1])
+                    p_val = float(parts[2]) if len(parts) > 2 else 0.0
+                    
+                    freqs.append(f_val)
+                    mags.append(m_val)
+                    phases.append(p_val)
+                except ValueError:
+                    continue 
         
-        f = data[:, 0]
-        m = data[:, 1]
-        # Jos vaihesaraketta ei ole, täytetään nollilla
-        p_deg = data[:, 2] if data.shape[1] > 2 else np.zeros_like(m)
-        return f, m, p_deg
+        if len(freqs) == 0:
+            logger.warning(f"Tiedostosta {p} ei löytynyt dataa.")
+            return None, None, None
+            
+        return np.array(freqs), np.array(mags), np.array(phases)
+
     except Exception as e:
-        logger.error(f"Virhe polun luvussa ({path}): {e}")
+        logger.error(f"Kriittinen virhe polun luvussa ({path}): {e}")
         return None, None, None
 
 
@@ -77,11 +116,50 @@ def update_status(msg):
         put_text(msg).style('font-weight: bold; color: #4CAF50; margin-bottom: 10px;')
 
 def parse_measurements_from_bytes(file_content):
+    """Lukee mittausdatan (REW export) tavuista robustisti."""
     try:
-        f = io.BytesIO(file_content)
-        data = np.loadtxt(f, comments=['#', '*'])
-        return data[:, 0], data[:, 1], data[:, 2] 
-    except: return None, None, None
+        # Dekoodataan tavut tekstiksi
+        content_str = file_content.decode('utf-8', errors='ignore')
+        lines = content_str.split('\n')
+        
+        freqs, mags, phases = [], [], []
+        
+        for line in lines:
+            line = line.strip()
+            # Ohitetaan tyhjät rivit ja kommentit (* tai #)
+            if not line or line.startswith(('*', '#')):
+                continue
+            
+            # Yritetään tunnistaa onko rivi dataa (alkaa numerolla)
+            if not line[0].isdigit() and line[0] != '-':
+                continue
+                
+            # Korvataan pilkku pisteellä (Suomi-yhteensopivuus)
+            line = line.replace(',', '.')
+            
+            # Pilkotaan välilyöntien/tabulaattorien perusteella
+            parts = line.split()
+            
+            if len(parts) >= 3:
+                try:
+                    f = float(parts[0])
+                    m = float(parts[1])
+                    p = float(parts[2])
+                    
+                    freqs.append(f)
+                    mags.append(m)
+                    phases.append(p)
+                except ValueError:
+                    continue
+        
+        if len(freqs) == 0:
+            return None, None, None
+            
+        return np.array(freqs), np.array(mags), np.array(phases)
+
+    except Exception as e:
+        print(f"Error parsing file: {e}")
+        return None, None, None
 
 def update_lvl_ui(mode):
     # Päivitetään ohjetekstit dynaamisesti kielen ja tilan mukaan
@@ -140,6 +218,10 @@ def load_target_curve(file_content):
         # Jos eivät ole, np.interp tekee "sahalaitaa" tai monttuja.
         freqs = np.array(freqs)
         mags = np.array(mags)
+        if np.mean(mags) > 30:
+            mags -= np.mean(mags)
+
+        # Lajittelu taajuuden mukaan (tärkeää interpoloinnille)
         sort_idx = np.argsort(freqs)
         
         return freqs[sort_idx], mags[sort_idx]
@@ -539,6 +621,8 @@ def process_run():
                 r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, cfg)
                 # --- KORJAUS PÄÄTTYY ---
 
+
+
                 if data['align_opt']:
                     d_s = np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp))
                     if d_s > 0: r_imp = np.roll(r_imp, d_s)
@@ -562,41 +646,114 @@ def process_run():
                 zf.writestr(f"L_{ft_short}_{fs_v}Hz_{file_ts}.wav", wav_l.getvalue())
                 zf.writestr(f"R_{ft_short}_{fs_v}Hz_{file_ts}.wav", wav_r.getvalue())
 
-                if fs_v == data['fs']: l_st_f, r_st_f, l_imp_f, r_imp_f = l_st, r_st, l_imp, r_imp
+              #  if fs_v == data['fs']: l_st_f, r_st_f, l_imp_f, r_imp_f = l_st, r_st, l_imp, r_imp
+                
+                sum_name = f"Summary_{ft_short}_{fs_v}Hz.txt"
+                l_dash_name = f"L_Dashboard_{ft_short}_{fs_v}Hz.html"
+                r_dash_name = f"R_Dashboard_{ft_short}_{fs_v}Hz.html"
                 
                 summary_content = plots.format_summary_content(data, l_st, r_st)
+                
+                for side, st in [("LEFT", l_st), ("RIGHT", r_st)]:
+                    if 'reflections' in st and st['reflections']:
+                        summary_content += f"\n=== ACOUSTIC EVENTS ({side}) ===\n"
+                        summary_content += f"{'Freq (Hz)':<10} {'Type':<12} {'Error (ms)':<12} {'Dist (m)':<10}\n"
+                        summary_content += "-" * 50 + "\n"
+                        for rev in st['reflections']:
+                            summary_content += f"{rev['freq']:<10} {rev['type']:<12} {rev['gd_error']:<12} {rev['dist']:<10}\n"
+                            summary_content += f"\n=== HEADROOM MANAGEMENT ===\n"
+                            summary_content += f"Peak Gain: {l_st['peak_gain_db']:.2f} dB\n"
+                            summary_content += f"Applied Headroom: {l_st['auto_headroom_db']:.2f} dB (to prevent clipping)\n"
                 
                 if 'auto_align' in l_st:
                     res = l_st['auto_align']
                     summary_content += f"\n=== AUTO-ALIGN ===\nDelay: {res['delay_ms']} ms\nDistance Diff: {res['distance_cm']} cm\nGain Diff: {res['gain_diff_db']} dB\n"
 
-                zf.writestr("Summary.txt", summary_content)
-                zf.writestr("L_Dashboard.html", plots.generate_prediction_plot(f_l, m_l, p_l, l_imp, fs_v, "Left", None, l_st, split, zoom))
-                zf.writestr("R_Dashboard.html", plots.generate_prediction_plot(f_r, m_r, p_r, r_imp, fs_v, "Right", None, r_st, split, zoom))
-                
+                zf.writestr(sum_name, summary_content)
+                zf.writestr(l_dash_name, plots.generate_prediction_plot(
+                    f_l, m_l, p_l, l_imp, fs_v, "Left", None, l_st, data['mixed_freq'], "low"
+                ))
+                zf.writestr(r_dash_name, plots.generate_prediction_plot(
+                    f_r, m_r, p_r, r_imp, fs_v, "Right", None, r_st, data['mixed_freq'], "low"
+                ))
+                hlc_cfg = generate_hlc_config(fs_v, ft_short, file_ts)
+                zf.writestr(f"Config_{ft_short}_{fs_v}Hz.cfg", hlc_cfg)
                 yaml_content = generate_raspberry_yaml(data['fs'], ft_short, file_ts)
-                zf.writestr("camilladsp.yml", yaml_content)
+                zf.writestr(f"camilladsp_{ft_short}_{fs_v}Hz.yml", yaml_content)
 
+        
         fname = f"CamillaFIR_{ft_short}_{ts}.zip"
         try:
             with open(fname, "wb") as f: f.write(zip_buffer.getvalue())
             save_msg = f"Tallennettu: {os.path.abspath(fname)}"
         except: save_msg = "Tallennus epäonnistui."
         
+        
+
         update_status(t('stat_plot')); set_processbar('bar', 1.0)
     
         with use_scope('results', clear=True):
             if l_st_f is None or r_st_f is None:
-                put_error("Virhe: Tuloksia ei saatu talteen.")
+                put_error("Error: No results captured.")
                 return
 
             put_success(t('done_msg'))
-            put_text(save_msg).style('font-style: italic; color: #888;')
 
-#            if 'auto_align' in l_st_f:
-#                res = l_st_f['auto_align']
-#                msg = f"**Delay:** Add **{abs(res['delay_ms'])} ms** to {'RIGHT' if res['delay_ms'] > 0 else 'LEFT'} channel."
-#                put_info(put_markdown(msg))
+            # --- 1. LASKENNALLISET TULOKSET ---
+            l_score_orig = calculate_score(l_st_f, is_predicted=False)
+            l_score_pred = calculate_score(l_st_f, is_predicted=True)
+            r_score_orig = calculate_score(r_st_f, is_predicted=False)
+            r_score_pred = calculate_score(r_st_f, is_predicted=True)
+            
+            avg_orig = (l_score_orig + r_score_orig) / 2
+            avg_pred = (l_score_pred + r_score_pred) / 2
+            improvement = avg_pred - avg_orig
+
+            # Target Match laskenta
+            l_match = calculate_target_match(l_st_f)
+            r_match = calculate_target_match(r_st_f)
+            avg_match = (l_match + r_match) / 2
+
+            # --- KAKSOISMITTARI-KORTTI ---
+            score_color = "#4CAF50" if avg_pred > 75 else "#FFC107" if avg_pred > 50 else "#F44336"
+            match_color = "#4bafff" # Sininen tavoitteen seurannalle
+
+            put_row([
+                put_html(f"""
+                    <div style="background: #1e1e1e; padding: 25px; border-radius: 15px; border: 1px solid #333; margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 15px;">
+                            <div>
+                                <h2 style="margin:0; color: {score_color};">Acoustic Score: {avg_pred:.0f}%</h2>
+                                <p style="margin:5px 0 0 0; color: #888;">Improvement: <b style="color:#4CAF50;">+{improvement:.0f}%</b></p>
+                            </div>
+                            <div style="text-align: right; color: #666;">
+                                Measured: {avg_orig:.0f}% | Filtered: {avg_pred:.0f}%
+                            </div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <h3 style="margin:0; color: {match_color};">Target Curve Match: {avg_match:.0f}%</h3>
+                                <p style="margin:5px 0 0 0; color: #888;">Precision of the FIR correction</p>
+                            </div>
+                            <div style="width: 200px; background: #333; height: 10px; border-radius: 5px;">
+                                <div style="width: {avg_match}%; background: {match_color}; height: 10px; border-radius: 5px;"></div>
+                            </div>
+                        </div>
+                    </div>
+                """)
+            ])
+
+            # --- 3. PÄÄTIEDOT TAULUKOSSA ---
+            put_table([
+                ['Speaker', 'L', 'R'],
+                ['Target Level', f"{l_st_f.get('eff_target_db', 0):.1f} dB", f"{r_st_f.get('eff_target_db', 0):.1f} dB"],
+                ['Smart Scan Range', 
+                 f"{l_st_f.get('smart_scan_range', [0,0])[0]:.0f}-{l_st_f.get('smart_scan_range', [0,0])[1]:.0f} Hz",
+                 f"{r_st_f.get('smart_scan_range', [0,0])[0]:.0f}-{r_st_f.get('smart_scan_range', [0,0])[1]:.0f} Hz"],
+                ['Offset to Meas.', f"{l_st_f.get('offset_db', 0):.1f} dB", f"{r_st_f.get('offset_db', 0):.1f} dB"],
+                ['Acoustic Confidence', f"{l_st_f.get('avg_confidence', 0):.1f}%", f"{r_st_f.get('avg_confidence', 0):.1f}%"],
+                ['Estimated RT60', f"{l_st_f.get('rt60_val', 0):.2f} s", f"{r_st_f.get('rt60_val', 0):.2f} s"] # KORJATTU
+            ])
 
             put_markdown(f"### 📊 {t('rep_header')}")
             with put_collapse("📋 DSP info"):
@@ -609,22 +766,44 @@ def process_run():
                 - **Filter type:** {data['filter_type']}
                 - **Smoothing:** {data['lvl_algo']}
                 """))
-            # --- UI TAULUKKO KORJATTU ---
-            # Käytetään avaimia jotka täsmäävät DSP:n palautukseen (rt60_val, eff_target_db)
-            put_table([
-                ['Speaker', 'L', 'R'],
-                ['Target Level', f"{l_st_f.get('eff_target_db', 0):.1f} dB", f"{r_st_f.get('eff_target_db', 0):.1f} dB"],
-                ['Smart Scan Range', 
-                 f"{l_st_f.get('smart_scan_range', [0,0])[0]:.0f}-{l_st_f.get('smart_scan_range', [0,0])[1]:.0f} Hz",
-                 f"{r_st_f.get('smart_scan_range', [0,0])[0]:.0f}-{r_st_f.get('smart_scan_range', [0,0])[1]:.0f} Hz"],
-                ['Offset to Meas.', f"{l_st_f.get('offset_db', 0):.1f} dB", f"{r_st_f.get('offset_db', 0):.1f} dB"],
-                ['Acoustic Confidence', f"{l_st_f.get('avg_confidence', 0):.1f}%", f"{r_st_f.get('avg_confidence', 0):.1f}%"],
-                ['Estimated RT60', f"{l_st_f.get('rt60_val', 0):.2f} s", f"{r_st_f.get('rt60_val', 0):.2f} s"] # KORJATTU
+
+            # --- 4. AKUSTISTEN TAPAHTUMIEN ANALYYSI ---
+            event_cols = []
+            for side, st in [("Left", l_st_f), ("Right", r_st_f)]:
+                events = st.get('reflections', [])
+                table_rows = [['Type', 'Freq', 'Impact', 'Dist']]
+                
+                for ev in events:
+                    impact = "High" if ev['gd_error'] > 5 else "Medium"
+                    color = "#ff4b4b" if ev['type'] == "Resonance" else "#4bafff"
+                    table_rows.append([
+                        put_text(ev['type']).style(f'color: {color}; font-weight: bold'),
+                        f"{ev['freq']} Hz",
+                        put_text(impact).style(f'color: {"#ff4b4b" if impact=="High" else "#ccc"}'),
+                        f"{ev['dist']} m"
+                    ])
+                
+                event_cols.append(put_scope(f'ev_{side}', [
+                    put_markdown(f"#### {side} Channel"),
+                    put_table(table_rows) if events else put_text("No significant reflections detected.")
+                ]))
+
+            put_collapse("🔍 Detailed Acoustic Intelligence Analysis", [
+                put_row(event_cols),
+                put_markdown("---"),
+                put_markdown(f"""
+                **Analysis Summary:**
+                * **Improvement:** The filter improves accuracy by **{improvement:.0f}** percentage points.
+                * **Resonances:** Identified as peaks in Group Delay. These cause bass "boominess".
+                * **Reflections:** Delayed arrivals that smear the stereo image and clarity.
+                """)
             ])
+
             
+
             put_tabs([
-                {'title': 'Left Channel', 'content': put_html(plots.generate_prediction_plot(f_l, m_l, p_l, l_imp_f, data['fs'], "Left", None, l_st_f, data['mixed_freq'], "low"))},
-                {'title': 'Right Channel', 'content': put_html(plots.generate_prediction_plot(f_r, m_r, p_r, r_imp_f, data['fs'], "Right", None, r_st_f, data['mixed_freq'], "low"))}
+                {'title': 'Left Channel', 'content': put_html(plots.generate_prediction_plot(f_l, m_l, p_l, l_imp_f, data['fs'], "Left", None, l_st_f, data['mixed_freq'], "low", create_full_html=False))},
+                {'title': 'Right Channel', 'content': put_html(plots.generate_prediction_plot(f_r, m_r, p_r, r_imp_f, data['fs'], "Right", None, r_st_f, data['mixed_freq'], "low", create_full_html=False))}
             ]) 
             put_file(fname, zip_buffer.getvalue(), label="⬇️ DOWNLOAD FILTER ZIP")
         try:
@@ -676,6 +855,71 @@ def generate_raspberry_yaml(fs, ft_short, file_ts):
             names:
               - ir_r
     """).strip()
+
+def generate_hlc_config(fs, ft_short, file_ts):
+    """
+    Luo standardin .cfg konfiguraatiotiedoston (HLC, Convolver VST, BruteFIR).
+    Generoi tiedostonimet sisäisesti samoilla säännöillä kuin YAML-funktio.
+    """
+    # Generoidaan tiedostonimet täsmälleen samalla kaavalla kuin tallennuksessa
+    l_name = f"L_{ft_short}_{fs}Hz_{file_ts}.wav"
+    r_name = f"R_{ft_short}_{fs}Hz_{file_ts}.wav"
+
+    config = [
+        f"{int(fs)} 2 2 0",  # Header: SampleRate, 2 In, 2 Out, 0 Offset
+        f"{l_name}",         # Vasen tiedosto
+        "0",                 # Input Index (L)
+        "0",                 # Output Index (L)
+        f"{r_name}",         # Oikea tiedosto
+        "1",                 # Input Index (R)
+        "1"                  # Output Index (R)
+    ]
+    return "\n".join(config)
+
+# camillafir.py
+
+def calculate_target_match(st):
+    """Laskee kuinka hyvin korjattu vaste seuraa tavoitekäyrää (0-100%)."""
+    if not st: return 0
+    meas = np.array(st.get('measured_mags', []))
+    target = np.array(st.get('target_mags', []))
+    filt = np.array(st.get('filter_mags', []))
+    
+    if len(meas) == 0 or len(target) == 0: return 0
+    
+    # Korjattu vaste = Mittaus + Suodin
+    final_error = np.std((meas + filt) - target)
+    
+    # 0dB virhe = 100%, 6dB virhe = 0%
+    match_score = max(0, 100 - (final_error * 16.6))
+    return min(100, match_score)
+
+def calculate_score(st, is_predicted=False):
+    if not st: return 0
+    
+    # 1. PERUSPISTEET: Vasteen tasaisuus
+    meas = np.array(st.get('measured_mags', []))
+    target = np.array(st.get('target_mags', []))
+    filt = np.array(st.get('filter_mags', []))
+    
+    if len(meas) > 0 and len(target) > 0:
+        error_orig = np.std(meas - target)
+        error_pred = np.std((meas + filt) - target)
+        error = error_pred if is_predicted else error_orig
+        flatness_score = max(0, 100 - (error * 12))
+    else:
+        flatness_score = st.get('avg_confidence', 75)
+
+    # 2. RANGAISTUKSET
+    rt60 = st.get('rt60_val', 0.4)
+    rt_penalty = min(30, max(0, (rt60 - 0.4) * 25)) if rt60 > 0 else 0
+    
+    events = st.get('reflections', [])
+    penalty_mult = 0.5 if is_predicted else 1.0
+    event_penalty = min(40, (len(events) * 4) * penalty_mult)
+    
+    final_score = flatness_score - rt_penalty - event_penalty
+    return max(15, min(99, final_score))
 
 if __name__ == '__main__':
     start_server(main, port=8080, debug=True, auto_open_webbrowser=True)
