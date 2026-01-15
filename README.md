@@ -185,7 +185,7 @@ For MiniDSP etc. users
 The MiniDSP Flex typically supports a limited number of taps per output channel (e.g., 1024 or 2048 taps at 48kHz/96kHz).
 
 * For Bass/Subwoofers: To linearize phase in the sub-bass region (e.g., 30Hz–80Hz), you typically need huge tap counts (e.g., 16,000+). With ~1024 taps, the frequency resolution is too low to effectively linearize sub-bass phase without causing significant artifacts or simply not working.
-* Your Conclusion: You are correct. Using FIR to linearize the subwoofers themselves on a Flex is likely not feasible due to the tap count constraint. Stick to IIR (PEQ) for the subwoofers.
+* Using FIR to linearize the subwoofers themselves on a Flex is likely not feasible due to the tap count constraint. Stick to IIR (PEQ) for the subwoofers.
 
 2. The Solution: Linearizing the Crossover (Mains)
 Since you cannot place FIR on the Inputs of the Flex, you have to treat the outputs. Here is the recommended workflow with CamillaFIR for your setup:
