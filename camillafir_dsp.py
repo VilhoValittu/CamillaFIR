@@ -5,11 +5,11 @@ import scipy.ndimage
 import logging
 logger = logging.getLogger("CamillaFIR.dsp")
 from models import FilterConfig
-#CamillaFIR DSP Engine v1.0.4
+#CamillaFIR DSP Engine v1.0.5
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
 #1.04 All features works at different configurations
-
+#1.05 Multiplier changes
 
 def apply_smart_tdc(freq_axis, target_mags, reflections, rt60_avg, base_strength=0.5):
     adjusted_target = np.copy(target_mags)
@@ -186,19 +186,21 @@ def remove_time_of_flight(freq_axis, phase_rad):
     if not np.any(mask): return phase_rad, 0.0
     poly = np.polyfit(freq_axis[mask], phase_rad[mask], 1)
     return phase_rad - (poly[0] * freq_axis), poly[0]
+
 def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
-    """Analysoi akustisen luottamuksen ja erottelee heijastukset resonansseista herkemmin."""
+    """Analysoi akustisen luottamuksen skaalautuvalla resoluutiolla."""
     phase_rad = np.unwrap(np.angle(complex_meas))
     df = np.gradient(freq_axis) + 1e-12
     gd_s = -np.gradient(phase_rad) / (2 * np.pi * df)
     gd_ms = gd_s * 1000.0
     
-    # Tasoitus: sigma=20 on hyvä perusarvo, joka erottaa piikit taustasta
-    gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms, sigma=20)
+    # KORJAUS: Skaalataan sigma näytetaajuuden mukaan (perustaso 44100 Hz)
+    # Tämä pitää tasoituksen leveyden (Hz) vakiona näytetaajuudesta riippumatta.
+    sigma_scaling = fs / 44100.0
+    gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms, sigma=10 * sigma_scaling)
     gd_diff = np.abs(gd_ms - gd_smooth)
 
-    # 1. CONFIDENCE MASK (Luottamusmaski)
-    # Pidetään 2.5ms kynnys, se toimii hyvin magnitudikorjauksen vaimennuksessa
+    # Luottamusmaski
     threshold_ms = 2.5
     confidence_mask = 1.0 / (1.0 + np.exp(1.5 * (gd_diff - threshold_ms)))
     
@@ -209,30 +211,20 @@ def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
         # 2. PIIKKIEN ETSINTÄ (Herkkyyden lisäys)
         # Lasketaan korkeusvaatimus 3.0 -> 2.0, jotta pienemmätkin moodit löytyvät
         # Lyhennetään distance 50 -> 30, jotta lähekkäiset resonanssit tunnistetaan
-        peaks, props = scipy.signal.find_peaks(gd_diff[valid_idx], height=2.0, distance=30)
-        
-        for p in peaks:
-            idx = valid_idx[p]
-            f_res = freq_axis[idx]
-            error_ms = gd_diff[idx]
-            
-            # Lasketaan etäisyys heijastukselle (jos se on sellainen)
-            dist_m = (error_ms / 1000.0 * 343.0) / 2.0 
-            
-            # 3. DYNAAMINEN LUOKITTELU (Acoustic Intelligence)
-            # Bassotaajuuksilla (< 200 Hz) lähes kaikki piikit ovat resonansseja (huonemoodeja)
-            # Korkeammilla taajuuksilla ne ovat heijastuksia pinnoista
-            if f_res < 200:
-                event_type = "Resonance"
-            else:
-                event_type = "Reflection" if error_ms < 15.0 else "Resonance"
-
-            reflection_nodes.append({
-                'freq': round(f_res, 1), 
-                'gd_error': round(error_ms, 2),
-                'dist': round(dist_m, 2), 
-                'type': event_type
-            })
+       peaks, props = scipy.signal.find_peaks(gd_diff[valid_idx], height=2.0, distance=100)
+    
+    raw_nodes = []
+    for p in peaks:
+        idx = valid_idx[p]
+        raw_nodes.append({
+            'freq': round(freq_axis[idx], 1), 
+            'gd_error': round(gd_diff[idx], 2),
+            'dist': round((gd_diff[idx] / 1000.0 * 343.0) / 2.0, 2), 
+            'type': "Resonance" if freq_axis[idx] < 200 else "Reflection"
+        })
+    
+    # POIMITAAN VAIN 15 VOIMAKKAINTA (estää pisteytyksen romahtamisen)
+    reflection_nodes = sorted(raw_nodes, key=lambda x: x['gd_error'], reverse=True)[:15]
             
     return confidence_mask, reflection_nodes, gd_ms
 
@@ -333,10 +325,7 @@ from models import FilterConfig
 
 logger = logging.getLogger("CamillaFIR.dsp")
 
-# ... (Säilytä kaikki apufunktiot: apply_smart_tdc, apply_hpf_to_mags, jne. ennallaan) ...
-# ... (Varmista, että analyze_acoustic_confidence, find_stable_level_window jne. ovat mukana) ...
-
-# --- TÄMÄ ON KORJATTU GENEROINTIFUNKTIO ---
+#----- FILTTERI
 
 def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # --- 1. DATAN TASAUS ---
@@ -347,22 +336,31 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     n_fft = cfg.num_taps if cfg.num_taps % 2 != 0 else cfg.num_taps + 1
     freq_axis = np.linspace(0, cfg.fs/2.0, n_fft // 2 + 1)
     
-    # --- 3. TASOITUS ---
+    # --- 3. TASOITUS (Skaalautuva resoluutio) ---
     oct_frac = 1.0 / float(cfg.smoothing_level) if cfg.smoothing_level > 0 else 1/12.0
     is_psy = 'Psy' in str(cfg.smoothing_type).lower()
+    
+    # Magnituditasoitus
     m_smooth, _ = apply_smoothing_std(f_in, m_in, np.zeros_like(m_in), oct_frac * (1.5 if is_psy else 1.0))
-    p_smooth, _ = apply_smoothing_std(f_in, p_in, np.zeros_like(p_in), 1/24.0)
+    
+    # KORJAUS: Dynaaminen vaihetasoitus näytetaajuuden mukaan
+    # Korkeilla taajuuksilla (>96kHz) interpolointi luo vaiheeseen "kulmia", 
+    # jotka siistitään raskaammalla (1/12 oct) tasoituksella.
+    p_smooth_oct = 1/12.0 if cfg.fs > 96000 else 1/24.0
+    p_smooth, _ = apply_smoothing_std(f_in, p_in, np.zeros_like(p_in), p_smooth_oct)
 
     # --- 4. TOF & INTERPOLOINTI ---
     m_interp = np.interp(freq_axis, f_in, m_in)
     p_rad_raw = np.deg2rad(np.interp(freq_axis, f_in, p_in))
     p_rad_interp, delay_slope = remove_time_of_flight(freq_axis, p_rad_raw)
 
-    # --- 5. ANALYYSI ---
+    # --- 5. ANALYYSI (Skaalattu luottamusmaski) ---
     m_anal = np.interp(freq_axis, f_in, m_smooth)
     p_anal_rad = np.deg2rad(np.interp(freq_axis, f_in, p_smooth))
     p_anal_rad, _ = remove_time_of_flight(freq_axis, p_anal_rad)
     complex_anal = 10**(m_anal/20.0) * np.exp(1j * p_anal_rad)
+    
+    # Confidence mask ja heijastusanalyysi skaalautuvalla sigmalla
     conf_mask, reflections, _ = analyze_acoustic_confidence(freq_axis, complex_anal, cfg.fs)
 
     # --- 6. RT60 & TARGET ---
@@ -398,7 +396,10 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     gain_db = np.zeros_like(freq_axis)
     if cfg.enable_mag_correction:
         raw_g = target_mags - (m_anal - calc_offset_db)
-        sigma = max(2, 60 // (cfg.smoothing_level / 12 if cfg.smoothing_level > 0 else 1))
+        sigma_scaling = cfg.fs / 44100.0
+        base_sigma = 60 // (cfg.smoothing_level / 12 if cfg.smoothing_level > 0 else 1)
+        sigma = max(2, int(base_sigma * sigma_scaling))
+        
         sm_g = scipy.ndimage.gaussian_filter1d(raw_g, sigma=sigma)
         final_g = raw_g - (raw_g - sm_g) * (cfg.reg_strength / 100.0)
         
@@ -413,7 +414,27 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         fade_len = cfg.mag_c_max - f_start
         if np.any(f_mask) and fade_len > 0: 
             gain_db[f_mask] *= (cfg.mag_c_max - freq_axis[f_mask]) / fade_len
-        if cfg.exc_prot: gain_db[freq_axis < cfg.exc_freq] = np.minimum(gain_db[freq_axis < cfg.exc_freq], 0.0)
+        if cfg.exc_prot:
+            # Määritetään siirtymäalue (n. 1/2 oktaavia, kerroin 1.41)
+            f_start = cfg.exc_freq
+            f_end = cfg.exc_freq * 1.41
+            
+            # 1. Täysi suojaus f_start alapuolella: Pakotetaan boost nollaan, sallitaan leikkaus
+            prot_mask = freq_axis < f_start
+            gain_db[prot_mask] = np.minimum(gain_db[prot_mask], 0.0)
+            
+            # 2. Pehmeä siirtymäalue f_start -> f_end
+            # Tällä alueella sallittu boost kasvaa lineaarisesti 0 dB -> max_boost_db
+            trans_mask = (freq_axis >= f_start) & (freq_axis <= f_end)
+            if np.any(trans_mask):
+                # Lasketaan häivytyskerroin (0.0 -> 1.0)
+                fade = (freq_axis[trans_mask] - f_start) / (f_end - f_start)
+                # Sallittu maksimiboost tällä taajuudella
+                allowed_boost = fade * cfg.max_boost_db
+                # Rajoitetaan boost, mutta pidetään kaikki vaimennukset (leikkaukset)
+                gain_db[trans_mask] = np.minimum(gain_db[trans_mask], allowed_boost)
+            
+            logger.info(f"Exc Prot: Full protection < {f_start}Hz, Soft fade up to {f_end:.1f}Hz.")
 
     # --- 9. VAIHEEN GENERONTI ---
     theo_xo = calculate_theoretical_phase(freq_axis, cfg.crossovers, 
@@ -425,9 +446,30 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     
     if 'Min' in cfg.filter_type_str: final_phase = min_p
     elif 'Mixed' in cfg.filter_type_str:
-        mask = np.clip((np.log2(freq_axis / (cfg.mixed_split_freq/1.41))) / 0.5, 0, 1)
+        # Lasketaan dynaaminen siirtymäalue oktaaveina (n. 1.0 oktaavia)
+        # f_start = f_split / 1.41, f_end = f_split * 1.41
+        f_center = cfg.mixed_split_freq
+        
+        # Estetään jakolasku nollalla ja varmistetaan järkevä taajuusresoluutio
+        safe_freqs = np.maximum(freq_axis, 1.0)
+        
+        # Logaritminen siirtymämaski (Octave-based transition)
+        # Lasketaan kuinka monta oktaavia kukin taajuus on keskipisteestä
+        octave_dist = np.log2(safe_freqs / f_center)
+        
+        # Skaalataan maski välille -0.5 ... 0.5 oktaavia ja limitoidaan 0...1
+        # Tämä tekee siirtymästä identtisen kaikilla näytetaajuuksilla
+        mask = np.clip((octave_dist + 0.5), 0, 1)
+        
+        # Smoothstep-interpolaatio (3x^2 - 2x^3) takaa jatkuvuuden
         sm_mask = 3 * mask**2 - 2 * mask**3
+        
+        # Yhdistetään vaiheet: 
+        # Lows: -theo_xo (Linear Phase correction for crossovers)
+        # Highs: min_p (Minimum Phase for natural transient response)
         final_phase = (1 - sm_mask) * (-theo_xo) + sm_mask * min_p
+        
+        logger.info(f"Mixed Phase blend: Transition centered at {f_center}Hz over 1.0 octave.")
     else: final_phase = -theo_xo
 
     raw_imp = scipy.fft.irfft(total_mag * np.exp(1j * final_phase), n=n_fft)
@@ -489,6 +531,26 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     impulse *= window
     impulse -= np.mean(impulse) # DC-poisto
     
+    
+    # --- 9. CLIP PREVENTION & HEADROOM (UUSI OSIO) ---
+    # Lasketaan suodattimen suurin mahdollinen vahvistus (Boost + Global Gain)
+    current_peak_gain = np.max(gain_db + cfg.global_gain_db)
+    
+    # Automaattinen headroom: Jos suodin korostaa, vaimennetaan kokonaistasoa
+    # vastaavasti, jotta huippu on tasan 0 dB (tai -0.1 dB varmuuden vuoksi).
+    auto_headroom_db = 0.0
+    if current_peak_gain > 0:
+        auto_headroom_db = -current_peak_gain - 0.1
+        logger.info(f"Clip Prevention: Applied {auto_headroom_db:.2f} dB headroom.")
+
+    # Lasketaan lopullinen magnitudivaste sisältäen suojavaran
+    final_gain_total = gain_db + cfg.global_gain_db + auto_headroom_db
+    total_mag = 10**(final_gain_total / 20.0)
+    
+    # Jatka vaiheen generointiin kuten ennen, mutta käytä total_mag
+    min_p = calculate_minimum_phase(total_mag)
+    
+    
     # --- 11. STATS & RETURN ---
     max_peak = np.max(np.abs(impulse))
     if cfg.do_normalize and max_peak > 0: impulse *= (0.89 / max_peak)
@@ -499,12 +561,16 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'measured_mags': (m_anal - calc_offset_db).tolist(),
         'filter_mags': gain_db.tolist(),
         'confidence_mask': conf_mask.tolist(),
+        'reflections': reflections,
         'smart_scan_range': [float(s_min), float(s_max)],
         'eff_target_db': float(target_level_db),
         'offset_db': float(calc_offset_db),
         'rt60_val': float(current_rt60),
         'avg_confidence': float(np.mean(conf_mask)*100),
         'delay_samples': float((delay_slope * cfg.fs) / (2 * np.pi)) if 'delay_slope' in locals() else 0.0,
-        'peak_before_norm': float(20*np.log10(max_peak + 1e-12))
+        'peak_before_norm': float(20*np.log10(max_peak + 1e-12)),
+        'auto_headroom_db': float(auto_headroom_db),
+        'peak_gain_db': float(current_peak_gain),
+        'final_max_db': float(np.max(final_gain_total))
     }
     return impulse, stats
