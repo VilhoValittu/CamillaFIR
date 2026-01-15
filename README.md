@@ -1,4 +1,4 @@
-# Please update to versions (CamillaFIR_2.7.2 & CamillaFIR_DSP 1.0.5 & Camillafir_plot 1.1.0) Added new config file and smaller .html files
+# Please update to versions (CamillaFIR_2.7.2 & CamillaFIR_DSP 1.0.5 & Camillafir_plot 1.1.0) Added "industry standard" config file generator, much  smaller .html files, minor ui changes.
 
 ---
 
