@@ -874,12 +874,16 @@ def generate_hlc_config(fs, ft_short, file_ts):
 
     config = [
         f"{int(fs)} 2 2 0",  # Header: SampleRate, 2 In, 2 Out, 0 Offset
+        "0 0",
+        "0 0",
         f"{l_name}",         # Vasen tiedosto
         "0",                 # Input Index (L)
-        "0",                 # Output Index (L)
+        "0.0",
+        "0.0",                 # Output Index (L)
         f"{r_name}",         # Oikea tiedosto
-        "1",                 # Input Index (R)
-        "1"                  # Output Index (R)
+        "0",                 # Input Index (R)
+        "1.0",
+        "1.0"                  # Output Index (R)
     ]
     return "\n".join(config)
 
@@ -930,4 +934,5 @@ def calculate_score(st, is_predicted=False):
 
 if __name__ == '__main__':
     start_server(main, port=8080, debug=True, auto_open_webbrowser=True)
+
 
