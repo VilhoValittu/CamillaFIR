@@ -2,3 +2,4 @@ numpy
 scipy
 matplotlib
 pywebio
+plotly
