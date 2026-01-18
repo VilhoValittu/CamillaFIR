@@ -1,9 +1,3 @@
-
-
-
-
-
-
 import io, scipy.signal, scipy.fft, scipy.ndimage
 import numpy as np
 import matplotlib
@@ -547,3 +541,4 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
         print(f"Virhe visualisoinnissa ({title}): {e}")
         return b""
     
+
