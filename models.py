@@ -36,6 +36,8 @@ class FilterConfig:
     # --- 4. EDISTYNEET OMINAISUUDET ---
     enable_tdc: bool = True         # Temporal Decay Control (TDC)
     tdc_strength: float = 50.0      # TDC:n voimakkuus prosentteina
+    tdc_max_reduction_db: float = 9.0       # Max total TDC reduction (dB) per frequency bin
+    tdc_slope_db_per_oct: float = 6.0       # Optional slope limit for TDC reduction curve (dB/oct), 0 = off
     enable_afdw: bool = True        # Adaptiivinen FDW (A-FDW)
     ir_window_ms: float = 500.0     # Oikean puolen aikaikkuna (Right)
     ir_window_ms_left: float = 10  # Vasemman puolen aikaikkuna (Left / Pre-ringing)

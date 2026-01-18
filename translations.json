@@ -1,5 +1,9 @@
 {
     "en": {
+        "tdc_max_reduction_db": "TDC Max Reduction (dB)",
+        "tdc_max_reduction_db_help": "Safety brake for Temporal Decay Control. Caps the total TDC target reduction per frequency, preventing deep stacked notches when multiple resonances overlap. Typical: 6–12 dB.",
+        "tdc_slope_db_per_oct": "TDC Slope Limit (dB/oct)",
+        "tdc_slope_db_per_oct_help": "Optional smoothing limit for the TDC reduction curve in dB per octave. Helps keep TDC changes gradual and predictable. Set 0 to disable.",
         "phase_safe_2058": "2058-safe phase mode",
         "phase_safe_2058_help": "Disables room phase correction (confidence/FDW/excess-phase). Uses only theoretical XO phase (-theo_xo) and minimum-phase where applicable. Recommended if phase/GD looks 'spiky' or step response rings.",
         "lvl_mode": "Mode",
@@ -211,13 +215,20 @@
         "guide_low_bass_cut_body": "**Boost lock** is a correction-policy limiter.\n\n- Prevents the FIR filter from boosting infra-bass.\n- No added latency and no phase impact.\n- Useful for room modes and bass-reflex systems.\n\n**Tip:** Set slightly above the usable low-frequency limit of your system.",
 
         "guide_exc_prot_title": "🛡️ Guide: Excursion Protection",
-        "guide_exc_prot_body": "**Excursion Protection** is a safety mechanism.\n\n- Reacts dynamically to measurement and target.\n- May reduce boost or enforce cuts.\n- Designed to protect the driver from over-excursion.\n\nThis does not replace an HPF, but complements it."
-
+        "guide_exc_prot_body": "**Excursion Protection** is a safety mechanism.\n\n- Reacts dynamically to measurement and target.\n- May reduce boost or enforce cuts.\n- Designed to protect the driver from over-excursion.\n\nThis does not replace an HPF, but complements it.",
+        "tdc_preset_safe": "Safe",
+        "tdc_preset_normal": "Normal",
+        "tdc_preset_aggressive": "Aggressive",
+        "tdc_preset_help": "Quick presets for Temporal Decay Control. Safe limits corrections conservatively, Normal is balanced, and Aggressive allows stronger decay-based target shaping."
 
 
     },
     
     "fi": {
+        "tdc_max_reduction_db": "TDC max-vaimennus (dB)",
+        "tdc_max_reduction_db_help": "TDC:n turvaraja. Rajoittaa TDC:n kokonaisvaimennuksen per taajuus, ettei lähekkäiset resonanssit kasaannu liian syväksi kuopaksi. Tyypillinen: 6–12 dB.",
+        "tdc_slope_db_per_oct": "TDC kaltevuusraja (dB/oktaavi)",
+        "tdc_slope_db_per_oct_help": "Valinnainen rajoitin TDC-vaimennuskäyrän muutokselle (dB per oktaavi). Tekee muutoksista loivempia ja ennustettavia. 0 = pois.",
         "phase_safe_2058": "2058 aka TUPE-moodi",
         "phase_safe_2058_help" : "2.7.0 moodi : poistaa huoneen vaihekorjauksen kokonaan.",
         "low_bass_cut_hz": "Low-bass boost -esto (Hz)",
@@ -429,6 +440,10 @@
         "guide_ai_title": "🧠 Acoustic Intelligence",
         "guide_ai_body": "**Acoustic Intelligence** analysoi huoneen akustiikan automaattisesti.\n- **Luottamus:** Tavoittele >85%. Matala arvo kertoo liiallisesta taustahälystä.\n- **Tapahtumat:** Erottaa seisovat aallot (Resonanssi) ja heijastukset (Reflection).",
         "guide_summary_title": "📝 Summary-raportin lukuohje",
-        "guide_summary_body": "- **Virhe (ms):** Resonanssin kesto. Yli 300ms on kriittinen huonemoodi.\n- **Etäisyys (m):** Heijastuksen matka (esim. 13m = takaseinäheijastus).\n- **Merkit:** Taajuudet, joihin on kohdistettu syvä akustinen puhdistus."
+        "guide_summary_body": "- **Virhe (ms):** Resonanssin kesto. Yli 300ms on kriittinen huonemoodi.\n- **Etäisyys (m):** Heijastuksen matka (esim. 13m = takaseinäheijastus).\n- **Merkit:** Taajuudet, joihin on kohdistettu syvä akustinen puhdistus.",
+        "tdc_preset_safe": "Turvallinen",
+        "tdc_preset_normal": "Normaali",
+        "tdc_preset_aggressive": "Aggressiivinen",
+        "tdc_preset_help": "Pikavalinnat Temporal Decay Controlille. Turvallinen rajoittaa korjaukset varovasti, Normaali on tasapainoinen ja Aggressiivinen sallii voimakkaamman jälkikaiuntaan perustuvan muokkauksen."
     }
 }

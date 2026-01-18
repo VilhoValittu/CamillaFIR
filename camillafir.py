@@ -268,6 +268,28 @@ def update_lvl_ui(_=None):
     except Exception:
         pass
 
+def apply_tdc_preset(name: str):
+    """
+    PyWebIO preset buttons for TDC knobs.
+    Note: put_checkbox stores list values ([] / [True]) in this project.
+    """
+    presets = {
+        "Safe":       {"enable": True, "strength": 35.0, "max_red": 6.0,  "slope": 3.0},
+        "Normal":     {"enable": True, "strength": 50.0, "max_red": 9.0,  "slope": 6.0},
+        "Aggressive": {"enable": True, "strength": 70.0, "max_red": 12.0, "slope": 0.0},
+    }
+    p = presets.get(name)
+    if not p:
+        return
+
+    # enable_tdc is a checkbox -> list convention in this UI: [] / [True]
+    pin_update("enable_tdc", value=[True] if p["enable"] else [])
+    pin_update("tdc_strength", value=float(p["strength"]))
+    pin_update("tdc_max_reduction_db", value=float(p["max_red"]))
+    pin_update("tdc_slope_db_per_oct", value=float(p["slope"]))
+
+    # small feedback
+    toast(f"TDC preset applied: {name}", color="success", duration=1.5)
 
 
 def get_house_curve_by_name(name):
@@ -357,6 +379,8 @@ def load_config():
         'max_slope_db_per_oct': 12.0,    # max jyrkkyys (dB/okt), 0 = pois
         'df_smoothing': False,
         'comparison_mode': True,         # LOCK score/match analysis to 44.1k reference grid
+        'tdc_max_reduction_db': 9.0,
+        'tdc_slope_db_per_oct': 6.0,
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -551,13 +575,55 @@ def main():
         put_row([
             put_input('fdw_cycles', label=t('fdw'), type=FLOAT, value=get_val('fdw_cycles', 15.0), help_text=t('fdw_help'))
         ]),
-        # TDC aka Trinov-mode
         put_markdown("---"),
+        # --- TDC aka Trinnov-mode (PyWebIO)
+
+        put_markdown("#### ⏳ Temporal Decay Control (TDC)"),
         put_row([
-            put_checkbox('enable_tdc', options=[{'label': t('enable_tdc'), 'value': True}], 
-                         value=[True] if get_val('enable_tdc', False) else [], help_text=t('tdc_help')),
-            put_input('tdc_strength', label=t('tdc_strength'), type=FLOAT, value=get_val('tdc_strength', 50.0))
+            put_buttons(
+                [
+                    {"label": t("tdc_preset_safe"), "value": "Safe"},
+                    {"label": t("tdc_preset_normal"), "value": "Normal"},
+                    {"label": t("tdc_preset_aggressive"), "value": "Aggressive"},
+                ],
+                onclick=lambda preset: apply_tdc_preset(preset),
+                small=True,
+            ),
         ]),
+        put_html(f"<div style='opacity:0.65; font-size:13px'>{t('tdc_preset_help')}</div>"),
+
+
+        put_checkbox(
+            'enable_tdc',
+            options=[{'label': t('enable_tdc'), 'value': True}],
+            value=[True] if get_val('enable_tdc', True) else [],
+            help_text=t('tdc_help')
+        ),
+
+        put_row([
+            put_input(
+                'tdc_strength',
+                label=t('tdc_strength'),
+                type=FLOAT,
+                value=get_val('tdc_strength', 50.0),
+                help_text=t('tdc_help')
+            ),
+            put_input(
+                'tdc_max_reduction_db',
+                label=t('tdc_max_reduction_db'),
+                type=FLOAT,
+                value=get_val('tdc_max_reduction_db', 9.0),
+                help_text=t('tdc_max_reduction_db_help')
+            ),
+            put_input(
+                'tdc_slope_db_per_oct',
+                label=t('tdc_slope_db_per_oct'),
+                type=FLOAT,
+                value=get_val('tdc_slope_db_per_oct', 6.0),
+                help_text=t('tdc_slope_db_per_oct_help')
+            ),
+        ]),
+        put_markdown("---"),
 
         put_checkbox('df_smoothing', options=[{'label': f"{t('df_smoothing_label')} {t('badge_experimental')}", 'value': True}],
              value=[True] if get_val('df_smoothing', False) else [],
@@ -702,7 +768,8 @@ def process_run():
             'hpf_slope', 'multi_rate_opt', 'ir_window', 'ir_window_left', 
             'local_path_l', 'local_path_r', 'fmt', 'lvl_manual_db', 
             'lvl_min', 'lvl_max', 'lvl_algo', 'smoothing_type', 'fdw_cycles',
-            'trans_width', 'smoothing_level','enable_tdc', 'tdc_strength', 'enable_afdw', 'df_smoothing', 'comparison_mode'
+            'trans_width', 'smoothing_level','enable_tdc', 'tdc_strength', 'tdc_max_reduction_db',
+            'tdc_slope_db_per_oct', 'enable_afdw', 'df_smoothing', 'comparison_mode'
         ]
         
         data = {k: pin[k] for k in p_keys}
@@ -840,6 +907,8 @@ def process_run():
                     enable_afdw=bool(pin.enable_afdw), 
                     enable_tdc=bool(pin.enable_tdc),   
                     tdc_strength=data.get('tdc_strength', 50.0),
+                    tdc_max_reduction_db=float(pin['tdc_max_reduction_db']),
+                    tdc_slope_db_per_oct=float(pin['tdc_slope_db_per_oct']),
                     smoothing_type=data['smoothing_type'],
                     fdw_cycles=data['fdw_cycles'],
                     lvl_manual_db=data['lvl_manual_db'],

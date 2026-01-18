@@ -13,8 +13,25 @@ from camillafir_leveling import compute_leveling
 #1.05 Multiplier changes
 #1.06 added no phase correction mode (2058-safe)
 
-def apply_smart_tdc(freq_axis, target_mags, reflections, rt60_info, base_strength=0.5):
+def apply_smart_tdc(
+    freq_axis,
+    target_mags,
+    reflections,
+    rt60_info,
+    base_strength=0.5,
+    max_total_reduction_db: float = 9.0,
+    max_slope_db_per_oct: float = 0.0,
+):
+    """Temporal Decay Control (TDC)
+
+    Idea: Instead of directly subtracting multiple overlapping kernels from the target
+    (which can unintentionally stack into a deep, narrow notch), we accumulate a
+    *reduction curve* and apply a safety brake:
+      - hard cap max total reduction (dB)
+      - optional slope limit (dB/oct) for smoothness
+    """
     adjusted_target = np.copy(target_mags)
+    tdc_reduction_db = np.zeros_like(adjusted_target)
 
     # rt60_info voi olla:
     #  - float (vanha käytös)
@@ -56,10 +73,28 @@ def apply_smart_tdc(freq_axis, target_mags, reflections, rt60_info, base_strengt
             dist = np.abs(freq_axis - f_res)
             kernel = np.exp(-0.5 * (dist / bw)**2)
             
-            # Voimakkaampi vaimennus tavoitteeseen
-            reduction_db = dynamic_mult * 4.0 
-            adjusted_target -= (kernel * reduction_db)
+            reduction_db = dynamic_mult * 4.0
+            # Kerätään vaikutus erilliseen käyrään (estää "stacking surprise" -notchit)
+            tdc_reduction_db += (kernel * reduction_db)
             
+    # --- Safety brakes ---
+    # 1) Hard cap total reduction (per bin)
+    if max_total_reduction_db and max_total_reduction_db > 0:
+        tdc_reduction_db = np.minimum(tdc_reduction_db, float(max_total_reduction_db))
+
+    # 2) Optional slope limiting in dB/oct to keep the curve smooth/predictable
+    try:
+        if max_slope_db_per_oct and float(max_slope_db_per_oct) > 0:
+            tdc_reduction_db = limit_slope_per_octave(
+                freq_axis,
+                tdc_reduction_db,
+                max_db_per_oct=float(max_slope_db_per_oct),
+            )
+    except Exception:
+        # Never let TDC fail the whole pipeline
+        pass
+
+    adjusted_target -= tdc_reduction_db
     return adjusted_target
 
 def apply_hpf_to_mags(freqs, mags, cutoff, order):
@@ -710,7 +745,26 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     if cfg.enable_tdc:
         # UUSI: TDC saa taajuusriippuvan RT60:n (dict), fallbackaa automaattisesti jos tyhjä
         rt60_for_tdc = rt60_bands if rt60_bands else current_rt60
-        target_mags = apply_smart_tdc(freq_axis, target_mags, reflections, rt60_for_tdc, cfg.tdc_strength/100.0)
+        # Safety brakes: cap total TDC reduction and keep it smooth (avoid deep, stacked notches)
+        # Configurable TDC safety brakes for easy A/B testing
+        tdc_max_red = float(getattr(cfg, "tdc_max_reduction_db", 9.0) or 9.0)
+        tdc_slope = float(getattr(cfg, "tdc_slope_db_per_oct", 0.0) or 0.0)
+
+        # Clamp to sane values (never explode)
+        if tdc_max_red < 0: tdc_max_red = 0.0
+        if tdc_max_red > 24: tdc_max_red = 24.0
+        if tdc_slope < 0: tdc_slope = 0.0
+        if tdc_slope > 24: tdc_slope = 24.0
+
+        target_mags = apply_smart_tdc(
+            freq_axis,
+            target_mags,
+            reflections,
+            rt60_for_tdc,
+            cfg.tdc_strength / 100.0,
+            max_total_reduction_db=tdc_max_red,
+            max_slope_db_per_oct=tdc_slope
+        )
 
     # --- HPF params (always defined) ---
     hpf_f = 0.0
