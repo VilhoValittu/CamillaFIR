@@ -30,7 +30,7 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.7.3"    #kaikki toimii edition
+VERSION = "v2.7.4"    #kaikki toimii edition
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
@@ -231,38 +231,43 @@ def parse_measurements_from_bytes(file_content):
 # clear() voi olla output.clear, mutta use_scope(clear=True) hoitaa sen
 
 def update_lvl_ui(_=None):
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
     try:
-        mode = str(pin.get('lvl_mode', 'Auto'))
+        mode = str(_p('lvl_mode', 'Auto') or 'Auto')
         is_manual = ('Manual' in mode)
 
-        # Sanity: lvl_min <= lvl_max (korjaa ja päivitä kentät)
-        vmin = float(pin.get('lvl_min', 500.0) or 500.0)
-        vmax = float(pin.get('lvl_max', 2000.0) or 2000.0)
+        # Sanity: lvl_min <= lvl_max
+        vmin = float(_p('lvl_min', 500.0) or 500.0)
+        vmax = float(_p('lvl_max', 2000.0) or 2000.0)
         if vmin > vmax:
             vmin, vmax = vmax, vmin
             pin_update('lvl_min', value=vmin)
             pin_update('lvl_max', value=vmax)
-
-        # Dynaaminen help-teksti (markdownina, ei inputin help_text)
-        with use_scope('lvl_range_help_scope', clear=True):
-            put_markdown(
-                (t('lvl_min_help_manual') + "\n\n" + t('lvl_max_help_manual'))
-                if is_manual else
-                (t('lvl_min_help_auto') + "\n\n" + t('lvl_max_help_auto'))
-            )
-
-        # lvl_manual_db näkyy vain Manual-tilassa
+        
+        # lvl_manual_db: näytä AINA, mutta Auto-tilassa harmaana + ei-interaktiivinen
         with use_scope('lvl_manual_scope', clear=True):
-            if is_manual:
-                put_input(
-                    'lvl_manual_db',
-                    label=t('lvl_target_db'),
-                    type=FLOAT,
-                    value=float(pin.get('lvl_manual_db', 75.0) or 75.0),
-                    help_text=t('lvl_manual_help')
+            w = put_input(
+                'lvl_manual_db',
+                label=t('lvl_target_db'),
+                type=FLOAT,
+                value=float(_p('lvl_manual_db', 75.0) or 75.0),
+                help_text=(
+                    t('lvl_manual_help')
+                    if is_manual
+                    else (t('lvl_manual_help') + " (Auto ei käytä tätä arvoa)")
                 )
+            )
+            if not is_manual:
+                w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
+
     except Exception:
         pass
+
 
 
 def get_house_curve_by_name(name):
@@ -342,6 +347,7 @@ def load_config():
         'xo1_f': None, 'xo1_s': 12, 'xo2_f': None, 'xo2_s': 12,
         'xo3_f': None, 'xo3_s': 12, 'xo4_f': None, 'xo4_s': 12, 'xo5_f': None, 'xo5_s': 12,
         'mixed_freq': 300.0, 'phase_limit': 1000.0,
+        'phase_safe_2058': False, # TUPE-mode
         'ir_window': 500.0,       # Oikea ikkuna (Right)
         'ir_window_left': 50.0,  # Vasen ikkuna (Left) - UUSI
         'enable_tdc': True,       # TDC oletuksena päälle
@@ -356,7 +362,7 @@ def load_config():
         try:
             with open(CONFIG_FILE, 'r') as f:
                 saved = json.load(f)
-                for k in ['mag_correct', 'normalize_opt', 'align_opt', 'multi_rate_opt', 'stereo_link', 'exc_prot', 'hpf_enable', 'df_smoothing', 'comparison_mode']:
+                for k in ['mag_correct', 'normalize_opt', 'align_opt', 'multi_rate_opt', 'stereo_link', 'exc_prot', 'hpf_enable', 'df_smoothing', 'comparison_mode', 'phase_safe_2058']:
                     if k in saved and isinstance(saved[k], list): saved[k] = bool(saved[k])
                 default_conf.update(saved)
         except: pass
@@ -439,7 +445,6 @@ def main():
             put_input('mixed_freq', label=t('mixed_freq'), type=FLOAT, value=get_val('mixed_freq', 300.0), help_text=t('mixed_freq_help'))
         ]),
         
-        # Yksittäinen kenttä välissä
         put_input('gain', label=t('gain'), type=FLOAT, value=get_val('gain', 0.0), help_text=t('gain_help')),
         
         put_select('lvl_algo', label="Algo", options=['Median', 'Average'], value=get_val('lvl_algo', 'Median')),
@@ -448,23 +453,38 @@ def main():
             {'label': t('smooth_psy'), 'value': 'Psychoacoustic'}
             ], value='Psychoacoustic', help_text=t('smooth_help')),
         # Rivi 3: Tilan valinta ja tavoitetaso (jaettu kahteen osaan luettavuuden vuoksi)
+        # Level match range (help_text tulee oikeaan paikkaan suoraan kenttien alle)
         put_row([
-        put_input('lvl_min', label=t('lvl_min'), type=FLOAT, value=get_val('lvl_min', 500.0)),
-        put_input('lvl_max', label=t('lvl_max'), type=FLOAT, value=get_val('lvl_max', 2000.0)),
+            put_input(
+                'lvl_min',
+                label=t('lvl_min'),
+                type=FLOAT,
+                value=get_val('lvl_min', 500.0),
+                help_text=t('lvl_min_help_auto')  # default Auto-tila
+            ),
+            put_input(
+                'lvl_max',
+                label=t('lvl_max'),
+                type=FLOAT,
+                value=get_val('lvl_max', 2000.0),
+                help_text=t('lvl_max_help_auto')  # default Auto-tila
+            ),
         ]),
-        
 
+        # lvl_mode + lvl_manual_db (näytetään aina, mutta Auto-tilassa lukittu)
         put_row([
-            put_select('lvl_mode', label=t('lvl_mode'), 
-                    options=[
-                        {'label': t('lvl_mode_auto'), 'value': 'Auto'},
-                        {'label': t('lvl_mode_manual'), 'value': 'Manual'},
-                    ], 
-                    value=get_val('lvl_mode', 'Auto')), # Poistettu onchange tästä
-           put_scope('lvl_manual_scope'),
-
-        put_scope('lvl_range_help_scope'),
+            put_select(
+                'lvl_mode',
+                label=t('lvl_mode'),
+                options=[
+                    {'label': t('lvl_mode_auto'), 'value': 'Auto'},
+                    {'label': t('lvl_mode_manual'), 'value': 'Manual'},
+                ],
+                value=get_val('lvl_mode', 'Auto')
+            ),
+            put_scope('lvl_manual_scope'),
         ]),
+
 
         
             ]
@@ -505,6 +525,13 @@ def main():
               
         
         put_input('phase_limit', label=t('phase_limit'), type=FLOAT, value=get_val('phase_limit', 1000.0), help_text=t('phase_limit_help')),
+        
+        put_checkbox(
+            'phase_safe_2058',
+            options=[{'label': t('phase_safe_2058'), 'value': True}],
+            value=[True] if get_val('phase_safe_2058', False) else [],
+            help_text=t('phase_safe_2058_help')
+        ),
         
     ]
 #--- #4 Edistyneet
@@ -669,7 +696,7 @@ def process_run():
         # --- 1. ASETUSTEN KERÄYS ---
         p_keys = [
             'fs', 'taps', 'filter_type', 'mixed_freq', 'gain', 'hc_mode', 
-            'mag_c_min', 'mag_c_max', 'max_boost','max_cut_db', 'max_slope_db_per_oct','phase_limit', 'mag_correct', 
+            'mag_c_min', 'mag_c_max', 'max_boost','max_cut_db', 'max_slope_db_per_oct','phase_limit', 'phase_safe_2058', 'mag_correct', 
             'lvl_mode', 'reg_strength', 'normalize_opt', 'align_opt', 
             'stereo_link', 'exc_prot', 'exc_freq','low_bass_cut_hz', 'hpf_enable', 'hpf_freq', 
             'hpf_slope', 'multi_rate_opt', 'ir_window', 'ir_window_left', 
@@ -697,6 +724,8 @@ def process_run():
             # --- Manual level default (estää None) ---
             data['lvl_manual_db'] = float(data.get('lvl_manual_db', 75.0) or 75.0)
         save_config(data)
+        
+        logger.info(f"UI: phase_safe_2058 = {bool(data.get('phase_safe_2058', False))}")
 
 
         # --- LOG: DF-based frequency smoothing (A/B toggle) ---
@@ -798,6 +827,7 @@ def process_run():
                     max_cut_db=data.get('max_cut_db', 15.0),
                     max_slope_db_per_oct=data.get('max_slope_db_per_oct', 12.0),
                     phase_limit=data['phase_limit'],
+                    phase_safe_2058=bool(data.get('phase_safe_2058', False)),
                     enable_mag_correction=bool(data['mag_correct']),
                     lvl_mode=data['lvl_mode'],
                     reg_strength=float(data.get('reg_strength', 30.0)),
