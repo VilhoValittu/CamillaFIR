@@ -1,0 +1,7 @@
+cff-version: 1.2.0
+title: CamillaFIR
+message: "If you use CamillaFIR in research or publications, please cite it."
+authors:
+  - family-names: Valittu
+    given-names: Vilho
+version: 2.7.3
