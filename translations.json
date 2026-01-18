@@ -1,5 +1,7 @@
 {
     "en": {
+        "phase_safe_2058": "2058-safe phase mode",
+        "phase_safe_2058_help": "Disables room phase correction (confidence/FDW/excess-phase). Uses only theoretical XO phase (-theo_xo) and minimum-phase where applicable. Recommended if phase/GD looks 'spiky' or step response rings.",
         "lvl_mode": "Mode",
         "lvl_mode_auto": "Smart Scan (Automatic Optimization)",
         "lvl_mode_manual": "Manual Window",
@@ -216,6 +218,8 @@
     },
     
     "fi": {
+        "phase_safe_2058": "2058 aka TUPE-moodi",
+        "phase_safe_2058_help" : "2.7.0 moodi : poistaa huoneen vaihekorjauksen kokonaan.",
         "low_bass_cut_hz": "Low-bass boost -esto (Hz)",
         "low_bass_cut_hz_help": "Alle tämän taajuuden suodin ei koskaan tee boostia – vain leikkaus sallitaan. Tämä ei ole suodin eikä vaikuta vaiheeseen.",
 
