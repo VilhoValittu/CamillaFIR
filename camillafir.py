@@ -1,6 +1,7 @@
 import sys
 import os
 import io
+import math
 import json
 import locale
 import zipfile 
@@ -13,13 +14,15 @@ from pywebio.output import *
 from pywebio.pin import *
 from pywebio import start_server, config
 from pywebio.session import set_env
-from pywebio.pin import put_select, put_input, pin_update, pin
-from pywebio.output import put_scope, put_row, put_markdown, put_widget
 from models import FilterConfig
 from textwrap import dedent
 # IMPORT LOCAL MODULES
 import camillafir_dsp as dsp
 import camillafir_plot as plots
+import models, camillafir_dsp, camillafir_plot
+print("USING models.py      =", models.__file__)
+print("USING camillafir_dsp =", camillafir_dsp.__file__)
+print("USING camillafir_plot=", camillafir_plot.__file__)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("CamillaFIR")
@@ -27,10 +30,66 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.7.2"    #kaikki toimii edition
+VERSION = "v2.7.3"    #kaikki toimii edition
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
+
+def scale_taps_with_fs(
+    fs: int,
+    base_fs: int = 44100,
+    base_taps: int = 65536,
+    allowed_taps=(
+        512, 1024, 2048, 4096, 8192, 16384,
+        32768, 65536, 131072, 262144, 524288
+   ),
+) -> int:
+    """Scale FIR taps with sample rate so that filter *time length* stays constant.
+
+    Reference: 44.1 kHz -> 65 536 taps.
+    For other rates, choose the next allowed taps value >= scaled target.
+    """
+    try:
+        fs_i = int(fs)
+        if fs_i <= 0:
+            return int(base_taps)
+        target = float(base_taps) * (float(fs_i) / float(base_fs))
+        for t in allowed_taps:
+            if int(t) >= target:
+                return int(t)
+        return int(allowed_taps[-1])
+    except Exception:
+        return int(base_taps)
+    
+def update_taps_auto_info(_=None):
+    """
+    UI helper: show Auto-taps mapping when multi-rate is enabled.
+    Uses reference 44.1kHz -> 65536 taps (constant time-length).
+    """
+    # put_checkbox() -> pin['multi_rate_opt'] on lista valituista arvoista:
+    # [] = off, [True] = on (tässä projektissa)
+    try:
+        mr = bool(pin['multi_rate_opt'])
+    except Exception:
+        mr = False
+
+    for scope_name in ('taps_auto_info_scope_files', 'taps_auto_info_scope_basic'):
+        with use_scope(scope_name, clear=True):
+            if not mr:
+                # Näytä jotain myös OFF-tilassa, jotta käyttäjä näkee että UI oikeasti päivittyy
+                put_markdown(f"_{t('auto_taps_title')}: OFF_")
+                continue
+
+            rates = [44100, 48000, 88200, 96000, 176400, 192000]
+            lines = [f"- **{r/1000:.1f} kHz** → **{scale_taps_with_fs(r)}** taps" for r in rates]
+
+            put_markdown(
+                f"### {t('auto_taps_title')}\n"
+                f"{t('auto_taps_body')}\n\n"
+                f"{t('auto_taps_ref')}\n\n"
+                + "\n".join(lines)
+            )
+
 
 def get_resource_path(relative_path):
     """ Palauttaa polun resurssiin, oli se EXE-paketin sisällä tai kehityskoneella. """
@@ -38,6 +97,7 @@ def get_resource_path(relative_path):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 TRANS_FILE = get_resource_path('translations.json')
+
 
 def parse_measurements_from_path(path):
     """Lukee mittausdatan paikallisesta tiedostopolusta (REW .txt export) robustisti."""
@@ -168,15 +228,41 @@ def parse_measurements_from_bytes(file_content):
         print(f"Error parsing file: {e}")
         return None, None, None
 
-def update_lvl_ui(mode):
-    # Päivitetään ohjetekstit dynaamisesti kielen ja tilan mukaan
-    if mode == 'Manual':
-        pin_update('lvl_min', help_text=t('lvl_min_help_manual'))
-        pin_update('lvl_max', help_text=t('lvl_max_help_manual'))
-    else:
-        pin_update('lvl_min', help_text=t('lvl_min_help_auto'))
-        pin_update('lvl_max', help_text=t('lvl_max_help_auto'))
+# clear() voi olla output.clear, mutta use_scope(clear=True) hoitaa sen
 
+def update_lvl_ui(_=None):
+    try:
+        mode = str(pin.get('lvl_mode', 'Auto'))
+        is_manual = ('Manual' in mode)
+
+        # Sanity: lvl_min <= lvl_max (korjaa ja päivitä kentät)
+        vmin = float(pin.get('lvl_min', 500.0) or 500.0)
+        vmax = float(pin.get('lvl_max', 2000.0) or 2000.0)
+        if vmin > vmax:
+            vmin, vmax = vmax, vmin
+            pin_update('lvl_min', value=vmin)
+            pin_update('lvl_max', value=vmax)
+
+        # Dynaaminen help-teksti (markdownina, ei inputin help_text)
+        with use_scope('lvl_range_help_scope', clear=True):
+            put_markdown(
+                (t('lvl_min_help_manual') + "\n\n" + t('lvl_max_help_manual'))
+                if is_manual else
+                (t('lvl_min_help_auto') + "\n\n" + t('lvl_max_help_auto'))
+            )
+
+        # lvl_manual_db näkyy vain Manual-tilassa
+        with use_scope('lvl_manual_scope', clear=True):
+            if is_manual:
+                put_input(
+                    'lvl_manual_db',
+                    label=t('lvl_target_db'),
+                    type=FLOAT,
+                    value=float(pin.get('lvl_manual_db', 75.0) or 75.0),
+                    help_text=t('lvl_manual_help')
+                )
+    except Exception:
+        pass
 
 
 def get_house_curve_by_name(name):
@@ -245,28 +331,32 @@ def load_config():
         'hc_mode': 'Harman (Standard +6dB)', 'mag_correct': True,
         'smoothing_type': 'smooth_psy', 'fdw_cycles': 15.0,
         'mag_c_min': 10.0, 'mag_c_max': 200.0, 'max_boost': 5.0,
-        'lvl_mode': 'Automatic', 'lvl_algo': 'algo_median', 
-        'lvl_manual_db': 75.0, 'lvl_min': 500.0, 'lvl_max': 2000.0,
-        'normalize_opt': True, 'align_opt': True, 'multi_rate_opt': False,
+        'lvl_mode': 'Auto', 'lvl_algo': 'Median', 
+        'lvl_manual_db': 75.0, 'lvl_min': 300.0, 'lvl_max': 3000.0,
+        'normalize_opt': False, 'align_opt': True, 'multi_rate_opt': False,
         'reg_strength': 30.0, 'stereo_link': False, 
-        'exc_prot': False, 'exc_freq': 25.0,
+        'exc_prot': True, 'exc_freq': 20.0, 
+        'low_bass_cut_hz': 40.0,    # alle tämän taajuuden sallitaan vain leikkaus (ei boostia)
         'hpf_enable': False, 'hpf_freq': 20.0, 'hpf_slope': 24,
         'local_path_l': '', 'local_path_r': '',
         'xo1_f': None, 'xo1_s': 12, 'xo2_f': None, 'xo2_s': 12,
         'xo3_f': None, 'xo3_s': 12, 'xo4_f': None, 'xo4_s': 12, 'xo5_f': None, 'xo5_s': 12,
         'mixed_freq': 300.0, 'phase_limit': 1000.0,
-        'filter_type': 'Linear Phase',
         'ir_window': 500.0,       # Oikea ikkuna (Right)
-        'ir_window_left': 0.0,  # Vasen ikkuna (Left) - UUSI
+        'ir_window_left': 50.0,  # Vasen ikkuna (Left) - UUSI
         'enable_tdc': True,       # TDC oletuksena päälle
         'tdc_strength': 50.0,     # TDC voimakkuus 50%
         'enable_afdw': True,      # Adaptiivinen FDW oletuksena päälle
+        'max_cut_db': 15.0,              # max vaimennus (dB)
+        'max_slope_db_per_oct': 12.0,    # max jyrkkyys (dB/okt), 0 = pois
+        'df_smoothing': False,
+        'comparison_mode': True,         # LOCK score/match analysis to 44.1k reference grid
     }
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
                 saved = json.load(f)
-                for k in ['mag_correct', 'normalize_opt', 'align_opt', 'multi_rate_opt', 'stereo_link', 'exc_prot', 'hpf_enable']:
+                for k in ['mag_correct', 'normalize_opt', 'align_opt', 'multi_rate_opt', 'stereo_link', 'exc_prot', 'hpf_enable', 'df_smoothing', 'comparison_mode']:
                     if k in saved and isinstance(saved[k], list): saved[k] = bool(saved[k])
                 default_conf.update(saved)
         except: pass
@@ -277,6 +367,7 @@ def save_config(data):
         clean_data = {k: v for k, v in data.items() if not k.startswith('file_')}
         with open(CONFIG_FILE, 'w') as f: json.dump(clean_data, f, indent=4)
     except: pass
+
 def put_guide_section():
     # Tämä lista ohjaa, mitä oppaita näytetään ja missä järjestyksessä
     guides = [
@@ -289,7 +380,6 @@ def put_guide_section():
         ('guide_lvl', t('guide_lvl_title')),
         ('guide_sl', t('guide_sl_title')),
         ('guide_ep', t('guide_ep_title')),
-        # LISÄÄ NÄMÄ UUDET RIVIT:
         ('guide_asy', t('guide_asy_title')),
         ('guide_ai', t('guide_ai_title')),
         ('guide_summary', t('guide_summary_title')),
@@ -306,7 +396,7 @@ def main():
     put_guide_section(); put_markdown("---")
     d = load_config(); get_val = lambda k, def_v: d.get(k, def_v)
     hc_opts = [t('hc_harman'), t('hc_harman8'), t('hc_toole'), t('hc_bk'), t('hc_flat'), t('hc_cinema'), t('hc_mode_upload')]
-    fs_opts = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]; taps_opts = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288]; slope_opts = [6, 12, 18, 24, 36, 48]
+    fs_opts = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]; taps_opts = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]; slope_opts = [6, 12, 18, 24, 36, 48]
     
 #--- #1 Tiedostot
     
@@ -318,7 +408,12 @@ def main():
         put_input('local_path_r', label=t('path_r'), value=get_val('local_path_r', ''), help_text=t('path_help')),
         put_select('fmt', label=t('fmt'), options=['WAV', 'TXT'], value=get_val('fmt', 'WAV'), help_text=t('fmt_help')),
         put_radio('layout', label=t('layout'), options=[t('layout_mono'), t('layout_stereo')], value=get_val('layout', t('layout_stereo')), inline=True),
-        put_checkbox('multi_rate_opt', options=[{'label': t('multi_rate'), 'value': True}], value=[True] if get_val('multi_rate_opt', False) else [], help_text=t('multi_rate_help'))
+        put_checkbox('multi_rate_opt', options=[{'label': t('multi_rate'), 'value': True}], value=[True] if get_val('multi_rate_opt', False) else [], help_text=t('multi_rate_help')),
+        put_checkbox('comparison_mode',
+                     options=[{'label': t('comparison_mode'), 'value': True}],
+                     value=[True] if get_val('comparison_mode', True) else [],
+                     help_text=t('comparison_mode_help')),
+        put_scope('taps_auto_info_scope_files'),
     ]
     
 #--- #2 Perusasetukset
@@ -331,6 +426,10 @@ def main():
             put_select('fs', label=t('fs'), options=fs_opts, value=get_val('fs', 44100), help_text=t('fs_help')), 
             put_select('taps', label=t('taps'), options=taps_opts, value=get_val('taps', 65536), help_text=t('taps_help'))
         ]),
+
+
+        # Auto-taps info (näkyy vain kun multi_rate_opt päällä)
+        put_scope('taps_auto_info_scope_basic'),
         
         # Rivi 2: Suodintyyppi ja Mixed-taajuus
         put_row([
@@ -343,39 +442,31 @@ def main():
         # Yksittäinen kenttä välissä
         put_input('gain', label=t('gain'), type=FLOAT, value=get_val('gain', 0.0), help_text=t('gain_help')),
         
-        put_select('lvl_algo', label="Algo", options=['Median', 'Average'], value='Median'),
+        put_select('lvl_algo', label="Algo", options=['Median', 'Average'], value=get_val('lvl_algo', 'Median')),
         put_select('smoothing_type', label=t('smooth_type'), options=[
             {'label': t('smooth_std'), 'value': 'Standard'},
             {'label': t('smooth_psy'), 'value': 'Psychoacoustic'}
             ], value='Psychoacoustic', help_text=t('smooth_help')),
         # Rivi 3: Tilan valinta ja tavoitetaso (jaettu kahteen osaan luettavuuden vuoksi)
         put_row([
+        put_input('lvl_min', label=t('lvl_min'), type=FLOAT, value=get_val('lvl_min', 500.0)),
+        put_input('lvl_max', label=t('lvl_max'), type=FLOAT, value=get_val('lvl_max', 2000.0)),
+        ]),
+        
+
+        put_row([
             put_select('lvl_mode', label=t('lvl_mode'), 
                     options=[
                         {'label': t('lvl_mode_auto'), 'value': 'Auto'},
-                       # {'label': t('lvl_mode_manual'), 'value': 'Manual'},
+                        {'label': t('lvl_mode_manual'), 'value': 'Manual'},
                     ], 
                     value=get_val('lvl_mode', 'Auto')), # Poistettu onchange tästä
-           # put_input('lvl_manual_db', label=t('lvl_target_db'), type=FLOAT, 
-                  #  value=get_val('lvl_manual_db', 75.0), help_text=t('lvl_manual_help'))
+           put_scope('lvl_manual_scope'),
+
+        put_scope('lvl_range_help_scope'),
         ]),
 
-        # Rivi 4: Rajat (Min/Max) omalla rivillään
-        put_row([
-            put_input('lvl_min', 
-                    label=t('lvl_min'), 
-                    type=FLOAT, 
-                    value=get_val('lvl_min', 500.0),
-                    # Lisätty 'Auto' oletusarvoksi get_val-kutsuun:
-                    help_text=t('lvl_min_help_auto') if get_val('lvl_mode', 'Auto') == 'Auto' else t('lvl_min_help_manual')),
-
-            put_input('lvl_max', 
-                    label=t('lvl_max'), 
-                    type=FLOAT, 
-                    value=get_val('lvl_max', 2500.0),
-                    # Lisätty 'Auto' oletusarvoksi get_val-kutsuun:
-                    help_text=t('lvl_max_help_auto') if get_val('lvl_mode', 'Auto') == 'Auto' else t('lvl_max_help_manual')),
-        ])
+        
             ]
 #--- #3 Target
     
@@ -385,14 +476,22 @@ def main():
         
         
         put_file_upload('hc_custom_file', label=t('hc_custom'), accept='.txt', help_text=t('hc_custom_help')),
+        put_markdown("---"),
         put_checkbox('mag_correct', options=[{'label': t('enable_corr'), 'value': True}], value=[True] if get_val('mag_correct', True) else []),
-        
+        put_markdown("---"),
         put_row([
             put_input('mag_c_min', label=t('min_freq'), type=FLOAT, value=get_val('mag_c_min', 10.0), help_text=t('hc_range_help')), 
             put_input('mag_c_max', label=t('max_freq'), type=FLOAT, value=get_val('mag_c_max', 200.0), help_text=t('hc_range_help'))
         ]),
-        
-        
+        put_input('max_boost', label=t('max_boost'), type=FLOAT, value=get_val('max_boost', 5.0), help_text=t('max_boost_help')),
+        put_row([
+            put_input('max_cut_db', label="Max cut (dB)", type=FLOAT, value=get_val('max_cut_db', 15.0),
+                      help_text="Rajoittaa vaimennuksen syvyyttä (esim. -15 dB maksimi)."),
+            put_input('max_slope_db_per_oct', label="Max slope (dB/oct)", type=FLOAT, value=get_val('max_slope_db_per_oct', 12.0),
+                      help_text="Rajoittaa gain-käyrän jyrkkyyttä per oktaavi. 0 = pois.")
+        ]),
+        put_input('trans_width', type=NUMBER, label="1/1 Transition Width (Hz)", value=100, help_text=t('trans_width')),
+        put_markdown("---"),
         put_select(('smoothing_level'), label=t('filter_smooth'),
                    options=[
             {'label': '1/1 Octave', 'value': 1},
@@ -404,9 +503,9 @@ def main():
             {'label': '1/96 Octave (HC)', 'value': 96},
             ], value=12,),
               
-        put_input('max_boost', label=t('max_boost'), type=FLOAT, value=get_val('max_boost', 5.0), help_text=t('max_boost_help')),
+        
         put_input('phase_limit', label=t('phase_limit'), type=FLOAT, value=get_val('phase_limit', 1000.0), help_text=t('phase_limit_help')),
-        put_input('trans_width', type=NUMBER, label="1/1 Transition Width (Hz)", value=100, help_text=t('trans_width'))
+        
     ]
 #--- #4 Edistyneet
     tab_adv = [
@@ -419,15 +518,10 @@ def main():
         ]),
         put_markdown("---"),
 
-#        put_row([
-#            put_input('mag_c_min', label=t('min_freq'), type=FLOAT, value=get_val('mag_c_min', 10.0), help_text=t('hc_range_help')), 
-#            put_input('mag_c_max', label=t('max_freq'), type=FLOAT, value=get_val('mag_c_max', 200.0), help_text=t('hc_range_help'))
-#        ]),
+        # Afdw
+        put_checkbox('enable_afdw', options=[{'label': t('enable_afdw'), 'value': True}], 
+             value=[True] if get_val('enable_afdw', True) else [], help_text=t('afdw_help')),
         put_row([
-        #    put_select('smoothing_type', label=t('smooth_type'), options=[
-        #    {'label': t('smooth_std'), 'value': 'Standard'},
-        #    {'label': t('smooth_psy'), 'value': 'Psychoacoustic'}
-        #    ], value='Psychoacoustic', help_text=t('smooth_help')),
             put_input('fdw_cycles', label=t('fdw'), type=FLOAT, value=get_val('fdw_cycles', 15.0), help_text=t('fdw_help'))
         ]),
         # TDC aka Trinov-mode
@@ -437,22 +531,84 @@ def main():
                          value=[True] if get_val('enable_tdc', False) else [], help_text=t('tdc_help')),
             put_input('tdc_strength', label=t('tdc_strength'), type=FLOAT, value=get_val('tdc_strength', 50.0))
         ]),
+
+        put_checkbox('df_smoothing', options=[{'label': f"{t('df_smoothing_label')} {t('badge_experimental')}", 'value': True}],
+             value=[True] if get_val('df_smoothing', False) else [],
+             help_text=t('df_smoothing_help')),
         put_markdown("---"),
-        # Afdw
-        put_checkbox('enable_afdw', options=[{'label': t('enable_afdw'), 'value': True}], 
-             value=[True] if get_val('enable_afdw', True) else [], help_text=t('afdw_help')),
+        
         put_input('reg_strength', label=t('reg_strength'), type=FLOAT, value=get_val('reg_strength', 30.0), help_text=t('reg_help')),
         put_markdown("---"),
+        
+        
 
         put_row([
             put_checkbox('normalize_opt', options=[{'label': t('enable_norm'), 'value': True}], value=[True] if get_val('normalize_opt', True) else [], help_text=t('norm_help')), 
             put_checkbox('align_opt', options=[{'label': t('enable_align'), 'value': True}], value=[True] if get_val('align_opt', True) else [], help_text=t('align_help')), 
             put_checkbox('stereo_link', options=[{'label': t('enable_link'), 'value': True}], value=[True] if get_val('stereo_link', False) else [], help_text=t('link_help'))
         ]),
+        
+        # --- Bass Safety (Advanced tab) ---
+put_markdown("### 🛡️ Bass Safety"),
+put_markdown("---"),
+
+        # 1) Excursion Protection (Driver Safety)
         put_row([
-            put_checkbox('exc_prot', options=[{'label': t('enable_exc'), 'value': True}], value=[True] if get_val('exc_prot', False) else [], help_text=t('exc_help')), 
-            put_input('exc_freq', label=t('exc_freq'), type=FLOAT, value=get_val('exc_freq', 25.0), help_text=t('exc_help'))
+            put_checkbox(
+                'exc_prot',
+                options=[{'label': t('exc_prot_title'), 'value': True}],
+                value=[True] if get_val('exc_prot', False) else [],
+                help_text=t('exc_prot_help_ui')
+            ),
+            put_input(
+                'exc_freq',
+                label=t('exc_freq'),
+                type=FLOAT,
+                value=get_val('exc_freq', 25.0),
+                help_text=t('exc_freq_help_ui')
+            ),
         ]),
+
+        # micro-hint (small, grey)
+        put_html(
+            f"<div style='margin-top:6px; color:#9aa0a6; font-size:13px;'>"
+            f"{t('exc_prot_hint')}"
+            f"</div>"
+        ),
+
+        # guide (collapsible)
+        put_collapse(
+            t('guide_exc_prot_title'),
+            [put_markdown(t('guide_exc_prot_body'))]
+        ),
+
+        # spacing between the two tools
+        put_html("<div style='height:12px'></div>"),
+
+        # 2) Low-bass boost lock (policy limiter)
+        put_input(
+            'low_bass_cut_hz',
+            label=t('low_bass_cut_hz'),
+            type=FLOAT,
+            value=get_val('low_bass_cut_hz', 40.0),
+            help_text=t('low_bass_cut_hz_help')
+        ),
+
+        # micro-hint (small, grey)
+        put_html(
+            f"<div style='margin-top:6px; color:#9aa0a6; font-size:13px;'>"
+            f"{t('low_bass_cut_hint')}"
+            f"</div>"
+        ),
+
+        # guide (collapsible)
+        put_collapse(
+            t('guide_low_bass_cut_title'),
+            [put_markdown(t('guide_low_bass_cut_body'))]
+        ),
+
+        
+        put_markdown("---"),
         put_row([
             put_checkbox('hpf_enable', options=[{'label': t('hpf_enable'), 'value': True}], value=[True] if get_val('hpf_enable', False) else []), 
             put_input('hpf_freq', label=t('hpf_freq'), type=FLOAT, value=get_val('hpf_freq', 20.0), help_text=t('hpf_freq_help')), 
@@ -478,6 +634,17 @@ def main():
         {'title': t('tab_xo'), 'content': tab_xo}
     ])
     pin_on_change('lvl_mode', onchange=update_lvl_ui)
+    pin_on_change('lvl_min', onchange=update_lvl_ui)
+    pin_on_change('lvl_max', onchange=update_lvl_ui)
+    update_lvl_ui()
+
+
+    # Auto-taps UI updater: react when multi-rate toggles (tab_files) or basic changes
+    pin_on_change('multi_rate_opt', onchange=update_taps_auto_info)
+    pin_on_change('fs', onchange=update_taps_auto_info)
+    pin_on_change('taps', onchange=update_taps_auto_info)
+    update_taps_auto_info()
+
     put_markdown("---")
 
     
@@ -502,20 +669,42 @@ def process_run():
         # --- 1. ASETUSTEN KERÄYS ---
         p_keys = [
             'fs', 'taps', 'filter_type', 'mixed_freq', 'gain', 'hc_mode', 
-            'mag_c_min', 'mag_c_max', 'max_boost', 'phase_limit', 'mag_correct', 
+            'mag_c_min', 'mag_c_max', 'max_boost','max_cut_db', 'max_slope_db_per_oct','phase_limit', 'mag_correct', 
             'lvl_mode', 'reg_strength', 'normalize_opt', 'align_opt', 
-            'stereo_link', 'exc_prot', 'exc_freq', 'hpf_enable', 'hpf_freq', 
+            'stereo_link', 'exc_prot', 'exc_freq','low_bass_cut_hz', 'hpf_enable', 'hpf_freq', 
             'hpf_slope', 'multi_rate_opt', 'ir_window', 'ir_window_left', 
             'local_path_l', 'local_path_r', 'fmt', 'lvl_manual_db', 
             'lvl_min', 'lvl_max', 'lvl_algo', 'smoothing_type', 'fdw_cycles',
-            'trans_width', 'smoothing_level','enable_tdc', 'tdc_strength', 'enable_afdw'
+            'trans_width', 'smoothing_level','enable_tdc', 'tdc_strength', 'enable_afdw', 'df_smoothing', 'comparison_mode'
         ]
         
         data = {k: pin[k] for k in p_keys}
+
+       
+        for k in ['mag_correct','normalize_opt','align_opt','multi_rate_opt','stereo_link','exc_prot','hpf_enable','df_smoothing','comparison_mode']:
+            try:
+                if isinstance(data.get(k, None), list):
+                    data[k] = bool(data[k])
+            except Exception:
+                pass
+
         for i in range(1, 6): 
             data[f'xo{i}_f'] = pin[f'xo{i}_f']
             data[f'xo{i}_s'] = pin[f'xo{i}_s']
+            data['max_cut_db'] = abs(float(data.get('max_cut_db', 15.0) or 15.0))
+            data['max_slope_db_per_oct'] = max(0.0, float(data.get('max_slope_db_per_oct', 12.0) or 12.0))
+
+            # --- Manual level default (estää None) ---
+            data['lvl_manual_db'] = float(data.get('lvl_manual_db', 75.0) or 75.0)
         save_config(data)
+
+
+        # --- LOG: DF-based frequency smoothing (A/B toggle) ---
+        try:
+            df_on = bool(pin['df_smoothing'])
+        except Exception:
+            df_on = False
+        logger.info(f"DF smoothing: {'ON' if df_on else 'OFF'}")
 
         # --- 2. MITTAUSTEN LATAUS ---
         l_st_sum, r_st_sum = None, None
@@ -531,7 +720,7 @@ def process_run():
             toast("Measurements missing! Check paths or upload files.", color='red')
             return
         
-        # --- 3. HOUSE CURVE LATAUS ---
+
         # --- 3. HOUSE CURVE LATAUS ---
         hc_f, hc_m = None, None
         hc_source = "Preset"
@@ -582,21 +771,32 @@ def process_run():
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
             for i, fs_v in enumerate(target_rates):
-                taps_v = int(data['taps'] * (fs_v / data['fs']))
-                taps_v = taps_v + (taps_v % 2)
+                
+                # Multi-rate: scale taps automatically with sample rate.
+                # Reference is always 44.1 kHz -> 65 536 taps (keeps time-length constant).
+                # Single-rate: use the user's selected taps as-is.
+                if data['multi_rate_opt']:
+                    taps_v = scale_taps_with_fs(fs_v)
+                    logger.info(f"Auto taps: {int(fs_v)} Hz -> {int(taps_v)} taps (ref 44100 Hz -> 65536 taps)")
+                else:
+                    taps_v = int(data['taps'])
                 update_status(f"Lasketaan {fs_v}Hz..."); set_processbar('bar', 0.2 + 0.6 * (i/len(target_rates)))
                 
-                # --- KORJAUS ALKAA TÄSTÄ: Luodaan FilterConfig-olio ---
+                # --- KORJAUS ALKAA TÄSTÄ:
                 # UI:n data mäpätään FilterConfig-kenttiin
                 cfg = FilterConfig(
                     fs=fs_v,
                     num_taps=taps_v,
+                    df_smoothing=bool(pin['df_smoothing']),
+                    **({"comparison_mode": True} if hasattr(FilterConfig, "comparison_mode") else {}),
                     filter_type_str=data['filter_type'],
                     mixed_split_freq=data['mixed_freq'],
                     global_gain_db=data['gain'],
                     mag_c_min=data['mag_c_min'],
                     mag_c_max=data['mag_c_max'],
                     max_boost_db=data['max_boost'],
+                    max_cut_db=data.get('max_cut_db', 15.0),
+                    max_slope_db_per_oct=data.get('max_slope_db_per_oct', 12.0),
                     phase_limit=data['phase_limit'],
                     enable_mag_correction=bool(data['mag_correct']),
                     lvl_mode=data['lvl_mode'],
@@ -604,6 +804,7 @@ def process_run():
                     do_normalize=bool(data['normalize_opt']),
                     exc_prot=bool(data['exc_prot']),
                     exc_freq=data['exc_freq'],
+                    low_bass_cut_hz=float(data.get('low_bass_cut_hz', 40.0) or 40.0),
                     ir_window_ms=data['ir_window'],
                     ir_window_ms_left=data.get('ir_window_left', 100.0),
                     enable_afdw=bool(pin.enable_afdw), 
@@ -621,8 +822,30 @@ def process_run():
                     house_freqs=hc_f,
                     house_mags=hc_m,
                     trans_width=data.get('trans_width', 100.0)
+                    
                 )
                 
+                    # --- LOG: DF smoothing per fs ---
+                if bool(pin['df_smoothing']):
+                    try:
+                        # sama logiikka kuin DSP:ssä
+                        base_sigma = 60 // (cfg.smoothing_level / 12 if cfg.smoothing_level > 0 else 1)
+                        df_ref = 44100.0 / 65536.0
+                        sigma_hz = base_sigma * df_ref
+
+                        # arvioi nykyinen df Hz/bin
+                        df_cur = (fs_v / cfg.num_taps)
+                        sigma_bins = sigma_hz / df_cur if df_cur > 0 else base_sigma
+
+                        logger.info(
+                            f"{fs_v//1000} kHz → DF smoothing ON "
+                            f"(sigma = {sigma_bins:.1f} bins ≈ {sigma_hz:.1f} Hz)"
+                        )
+                    except Exception:
+                        logger.info(f"{fs_v//1000} kHz → DF smoothing ON")
+                else:
+                    logger.info(f"{fs_v//1000} kHz → DF smoothing OFF")
+
                 # Kutsutaan DSP:tä oliolla
                 l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, cfg)
                 r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, cfg)
@@ -637,6 +860,16 @@ def process_run():
                 
                 if fs_v == data['fs']:
                     l_st_f, r_st_f, l_imp_f, r_imp_f = l_st, r_st, l_imp, r_imp
+                # ==========================================================
+                # FORCE UI to use comparison-grid stats (44.1 kHz locked)
+                # ==========================================================
+                if bool(data.get("comparison_mode", False)):
+                    try:
+                        l_st_f = plots._make_comparison_stats(l_st_f, 44100, 65536)
+                        r_st_f = plots._make_comparison_stats(r_st_f, 44100, 65536)
+                    except Exception as e:
+                        logger.warning(f"Comparison-mode UI stats failed: {e}")
+
 
                 # --- AUTO-ALIGN ---
                 if 'delay_samples' in l_st and 'delay_samples' in r_st:
@@ -653,24 +886,77 @@ def process_run():
                 zf.writestr(f"L_{ft_short}_{fs_v}Hz_{file_ts}.wav", wav_l.getvalue())
                 zf.writestr(f"R_{ft_short}_{fs_v}Hz_{file_ts}.wav", wav_r.getvalue())
 
-              #  if fs_v == data['fs']: l_st_f, r_st_f, l_imp_f, r_imp_f = l_st, r_st, l_imp, r_imp
-                
+                # nimet
                 sum_name = f"Summary_{ft_short}_{fs_v}Hz.txt"
                 l_dash_name = f"L_Dashboard_{ft_short}_{fs_v}Hz.html"
                 r_dash_name = f"R_Dashboard_{ft_short}_{fs_v}Hz.html"
                 
                 summary_content = plots.format_summary_content(data, l_st, r_st)
+
+                # ==========================================================
+                # DSP EFFECTIVE PARAMS (per fs) - helps A/B and reproducibility
+                # ==========================================================
+                try:
+                    # Read toggles from pin safely (PyWebIO: checkbox -> list)
+                    enable_afdw = bool(pin['enable_afdw']) if 'enable_afdw' in pin else bool(data.get('enable_afdw', False))
+                    enable_tdc  = bool(pin['enable_tdc'])  if 'enable_tdc'  in pin else bool(data.get('enable_tdc', False))
+                    tdc_strength = float(data.get('tdc_strength', 0.0) or 0.0)
+                    fdw_cycles = float(data.get('fdw_cycles', 15.0) or 15.0)
+                    # Derived FDW params (these match DSP-side intent; A-FDW runtime adapts, so this is "configured baseline")
+                    fdw_oct_width = (2.0 / fdw_cycles) if fdw_cycles > 0 else 0.0
+                    afdw_min = max(3.0, fdw_cycles / 3.0)
+                    afdw_min_oct_width = (2.0 / afdw_min) if afdw_min > 0 else 0.0
+
+                    # DF smoothing (A/B) sigma estimate (only meaningful if you enabled df_smoothing patch earlier)
+                    df_on = bool(pin['df_smoothing']) if 'df_smoothing' in pin else bool(data.get('df_smoothing', False))
+                    df_ref = 44100.0 / 65536.0
+                    base_sigma = 60 // (data.get('smoothing_level', 12) / 12 if (data.get('smoothing_level', 12) or 0) > 0 else 1)
+                    sigma_hz = float(base_sigma) * df_ref
+                    df_cur = (float(fs_v) / float(data.get('taps', 65536) or 65536))
+                    sigma_bins = (sigma_hz / df_cur) if (df_cur and df_cur > 0) else float(base_sigma)
+
+                    summary_content += "\n=== DSP EFFECTIVE PARAMS (THIS SAMPLE RATE) ===\n"
+                    summary_content += f"Sample rate: {int(fs_v)} Hz\n"
+
+                    # FDW / A-FDW
+                    if enable_afdw:
+                        summary_content += "FDW mode: Adaptive (A-FDW)\n"
+                        summary_content += f"FDW base cycles: {fdw_cycles:.2f}  (oct width ≈ {fdw_oct_width:.3f})\n"
+                        summary_content += f"FDW min cycles:  {afdw_min:.2f}  (oct width ≈ {afdw_min_oct_width:.3f})\n"
+                        summary_content += "Note: A-FDW adapts per frequency/confidence; values above are the configured baseline.\n"
+                    else:
+                        summary_content += "FDW mode: Fixed\n"
+                        summary_content += f"FDW cycles: {fdw_cycles:.2f}  (oct width ≈ {fdw_oct_width:.3f})\n"
+
+                    # TDC
+                    summary_content += f"TDC: {'ON' if enable_tdc else 'OFF'}\n"
+                    if enable_tdc:
+                        summary_content += f"TDC strength: {tdc_strength:.1f}% (base_strength = {tdc_strength/100.0:.3f})\n"
+
+                    # DF smoothing (optional)
+                    summary_content += f"DF smoothing: {'ON' if df_on else 'OFF'}\n"
+                    if df_on:
+                        summary_content += f"DF smoothing sigma: {sigma_bins:.1f} bins ≈ {sigma_hz:.2f} Hz\n"
+                except Exception:
+                    summary_content += "\n=== DSP EFFECTIVE PARAMS (THIS SAMPLE RATE) ===\n"
+                    summary_content += "Could not compute effective params (unexpected data/pin state).\n"
+
                 
                 for side, st in [("LEFT", l_st), ("RIGHT", r_st)]:
-                    if 'reflections' in st and st['reflections']:
+                    reflections = st.get('reflections') or []
+                    if reflections:
                         summary_content += f"\n=== ACOUSTIC EVENTS ({side}) ===\n"
                         summary_content += f"{'Freq (Hz)':<10} {'Type':<12} {'Error (ms)':<12} {'Dist (m)':<10}\n"
                         summary_content += "-" * 50 + "\n"
-                        for rev in st['reflections']:
-                            summary_content += f"{rev['freq']:<10} {rev['type']:<12} {rev['gd_error']:<12} {rev['dist']:<10}\n"
+                        for rev in reflections:
+                            freq = float(rev.get('freq', 0) or 0)
+                            ev_type = str(rev.get('type', 'Event') or 'Event')
+                            gd_error = float(rev.get('gd_error', 0) or 0)
+                            dist = float(rev.get('dist', 0) or 0)
+                            summary_content += f"{freq:<10} {ev_type:<12} {gd_error:<12} {dist:<10}\n"
                             summary_content += f"\n=== HEADROOM MANAGEMENT ===\n"
-                            summary_content += f"Peak Gain: {l_st['peak_gain_db']:.2f} dB\n"
-                            summary_content += f"Applied Headroom: {l_st['auto_headroom_db']:.2f} dB (to prevent clipping)\n"
+                            summary_content += f"Peak Gain: {float(l_st.get('peak_gain_db', 0.0)):.2f} dB\n"
+                            summary_content += f"Applied Headroom: {float(l_st.get('auto_headroom_db', 0.0)):.2f} dB (to prevent clipping)\n"
                 
                 if 'auto_align' in l_st:
                     res = l_st['auto_align']
@@ -685,8 +971,14 @@ def process_run():
                 ))
                 hlc_cfg = generate_hlc_config(fs_v, ft_short, file_ts)
                 zf.writestr(f"Config_{ft_short}_{fs_v}Hz.cfg", hlc_cfg)
-                yaml_content = generate_raspberry_yaml(data['fs'], ft_short, file_ts)
+                yaml_content = generate_raspberry_yaml(
+                    fs_v,
+                    ft_short,
+                    file_ts,
+                    master_gain_db=float(data.get('gain', 0.0) or 0.0)
+                )
                 zf.writestr(f"camilladsp_{ft_short}_{fs_v}Hz.yml", yaml_content)
+
 
         
         fname = f"CamillaFIR_{ft_short}_{ts}.zip"
@@ -777,17 +1069,31 @@ def process_run():
             # --- 4. AKUSTISTEN TAPAHTUMIEN ANALYYSI ---
             event_cols = []
             for side, st in [("Left", l_st_f), ("Right", r_st_f)]:
-                events = st.get('reflections', [])
+                # Use the same analysis context as scoring/summary:
+                # If comparison mode produced coherent cmp_* stats, prefer cmp_reflections.
+                mode = str((st or {}).get('analysis_mode', 'native') or 'native').lower()
+                if mode == "comparison":
+                    events = st.get('cmp_reflections') or []
+                else:
+                    mode = str((st or {}).get('analysis_mode', 'native') or 'native').lower()
+                if mode == "comparison":
+                    events = st.get('cmp_reflections') or st.get('reflections') or []
+                else:
+                    events = st.get('reflections') or []
                 table_rows = [['Type', 'Freq', 'Impact', 'Dist']]
                 
                 for ev in events:
-                    impact = "High" if ev['gd_error'] > 5 else "Medium"
-                    color = "#ff4b4b" if ev['type'] == "Resonance" else "#4bafff"
+                    gd_error = float(ev.get('gd_error', 0) or 0)
+                    ev_type = str(ev.get('type', 'Event') or 'Event')
+                    ev_freq = float(ev.get('freq', 0) or 0)
+                    ev_dist = float(ev.get('dist', 0) or 0)
+                    impact = "High" if gd_error > 5 else "Medium"
+                    color = "#ff4b4b" if ev_type == "Resonance" else "#4bafff"
                     table_rows.append([
-                        put_text(ev['type']).style(f'color: {color}; font-weight: bold'),
-                        f"{ev['freq']} Hz",
+                        put_text(ev_type).style(f'color: {color}; font-weight: bold'),
+                        f"{ev_freq} Hz",
                         put_text(impact).style(f'color: {"#ff4b4b" if impact=="High" else "#ccc"}'),
-                        f"{ev['dist']} m"
+                        f"{ev_dist} m"
                     ])
                 
                 event_cols.append(put_scope(f'ev_{side}', [
@@ -813,55 +1119,91 @@ def process_run():
                 {'title': 'Right Channel', 'content': put_html(plots.generate_prediction_plot(f_r, m_r, p_r, r_imp_f, data['fs'], "Right", None, r_st_f, data['mixed_freq'], "low", create_full_html=False))}
             ]) 
             put_file(fname, zip_buffer.getvalue(), label="⬇️ DOWNLOAD FILTER ZIP")
-        try:
-            with open(fname, "wb") as f: f.write(zip_buffer.getvalue())
-            save_msg = f"Tallennettu: {os.path.abspath(fname)}"
-        except: save_msg = "Tallennus epäonnistui."
         update_status(t('stat_plot')); set_processbar('bar', 1.0)
     
 
 #snipet
-def generate_raspberry_yaml(fs, ft_short, file_ts):
-
+def generate_raspberry_yaml(fs, ft_short, file_ts, master_gain_db=0.0):
     import textwrap
-    return textwrap.dedent(f"""\
-        devices:
-          samplerate: {int(fs)}
-          chunksize: 4096
-          queuesize: 10
-          capture:
-            type: Alsa
-            channels: 2
-            device: "hw:1,0"
-            format: S32LE
-          playback:
-            type: Alsa
-            channels: 2
-            device: "hw:1,0"
-            format: S32LE
 
-        filters:
-          ir_l:
-            type: File
-            filename: L_{ft_short}_$samplerate$Hz_{file_ts}.wav
-            format: S32LE
-            setting: 0
-          ir_r:
-            type: File
-            filename: R_{ft_short}_$samplerate$Hz_{file_ts}.wav
-            format: S32LE
-            setting: 0
+    # FIR .wav files (CamillaDSP replaces $samplerate$ at runtime)
+    l_wav = f"../coeffs/L_{ft_short}_$samplerate$Hz_{file_ts}.wav"
+    r_wav = f"../coeffs/R_{ft_short}_$samplerate$Hz_{file_ts}.wav"
 
-        pipeline:
-          - type: Filter
-            channel: 0
-            names:
-              - ir_l
-          - type: Filter
-            channel: 1
-            names:
-              - ir_r
+    # sanitize
+    try:
+        g = float(master_gain_db)
+    except Exception:
+        g = 0.0
+
+    return textwrap.dedent(f"""
+    description: null
+    devices:
+      capture:
+        type: Stdin
+        channels: 2
+        format: S32LE
+      playback:
+        type: Alsa
+        device: plughw:0,0
+        channels: 2
+        format: S32LE
+      samplerate: {int(fs)}
+      chunksize: 4096
+      queuelimit: 1
+      volume_ramp_time: 150
+
+    filters:
+      ir_left:
+        type: Conv
+        parameters:
+          type: Wav
+          filename: {l_wav}
+          channel: 0
+
+      ir_right:
+        type: Conv
+        parameters:
+          type: Wav
+          filename: {r_wav}
+          channel: 0
+
+      mastergain:
+        type: Gain
+        parameters:
+          gain: {g:.6g}
+
+    mixers:
+      stereo:
+        channels:
+          in: 2
+          out: 2
+        mapping:
+          - dest: 0
+            sources:
+              - channel: 0
+                gain: 0
+          - dest: 1
+            sources:
+              - channel: 1
+                gain: 0
+
+    pipeline:
+      - type: Mixer
+        name: stereo
+      - type: Filter
+        channels: [0]
+        names: [mastergain, ir_left]
+      - type: Filter
+        channels: [1]
+        names: [mastergain, ir_right]
+
+    processors: null
+    title: {ft_short}
     """).strip()
+
+
+
 
 def generate_hlc_config(fs, ft_short, file_ts):
     """
@@ -887,52 +1229,110 @@ def generate_hlc_config(fs, ft_short, file_ts):
     ]
     return "\n".join(config)
 
-# camillafir.py
+
+def _ui_pick(stats, key):
+    """
+    UI helper: pick comparison-grid data if analysis_mode == 'comparison'
+    """
+    if not stats:
+        return None
+    mode = str(stats.get("analysis_mode", "native")).lower()
+    if mode == "comparison":
+        return stats.get("cmp_" + key, stats.get(key))
+    return stats.get(key)
+
+
+def _pick_cmp(stats, key):
+    """
+    Return comparison-mode arrays for UI scoring if available.
+    """
+    if not stats:
+        return None
+    if str(stats.get("analysis_mode", "native")).lower() == "comparison":
+        return stats.get("cmp_" + key, stats.get(key))
+    return stats.get(key)
+
+
 
 def calculate_target_match(st):
     """Laskee kuinka hyvin korjattu vaste seuraa tavoitekäyrää (0-100%)."""
-    if not st: return 0
-    meas = np.array(st.get('measured_mags', []))
-    target = np.array(st.get('target_mags', []))
-    filt = np.array(st.get('filter_mags', []))
-    
-    if len(meas) == 0 or len(target) == 0: return 0
-    
-    # Korjattu vaste = Mittaus + Suodin
-    final_error = np.std((meas + filt) - target)
-    
-    # 0dB virhe = 100%, 6dB virhe = 0%
-    match_score = max(0, 100 - (final_error * 16.6))
-    return min(100, match_score)
+    if not st:
+        return 0.0
+
+    meas = np.asarray(_ui_pick(st, 'measured_mags') or [], dtype=float)
+    target = np.asarray(_ui_pick(st, 'target_mags') or [], dtype=float)
+    filt = np.asarray(_ui_pick(st, 'filter_mags') or [], dtype=float)
+
+    if meas.size == 0 or target.size == 0 or filt.size == 0:
+        return 0.0
+
+    # Varmista samat pituudet
+    n = min(meas.size, target.size, filt.size)
+    meas, target, filt = meas[:n], target[:n], filt[:n]
+
+    # RMS virhe (dB) korjatusta vasteesta
+    diff = (meas + filt) - target
+    rms = float(np.sqrt(np.mean(diff * diff)))
+
+    # Sama muunnos kuin Summaryssä (sigmoidi)
+    m0 = 3.2   # dB @ 50%
+    s0 = 0.9   # jyrkkyys
+    match_pct = 100.0 / (1.0 + np.exp((rms - m0) / s0))
+    if rms <= 0.4:
+        match_pct = 99.0
+    return float(np.clip(match_pct, 0.0, 100.0))
+
 
 def calculate_score(st, is_predicted=False):
-    if not st: return 0
-    
-    # 1. PERUSPISTEET: Vasteen tasaisuus
-    meas = np.array(st.get('measured_mags', []))
-    target = np.array(st.get('target_mags', []))
-    filt = np.array(st.get('filter_mags', []))
-    
-    if len(meas) > 0 and len(target) > 0:
-        error_orig = np.std(meas - target)
-        error_pred = np.std((meas + filt) - target)
-        error = error_pred if is_predicted else error_orig
-        flatness_score = max(0, 100 - (error * 12))
-    else:
-        flatness_score = st.get('avg_confidence', 75)
+    if not st:
+        return 0.0
 
-    # 2. RANGAISTUKSET
-    rt60 = st.get('rt60_val', 0.4)
-    rt_penalty = min(30, max(0, (rt60 - 0.4) * 25)) if rt60 > 0 else 0
-    
-    events = st.get('reflections', [])
+    conf = float(st.get('cmp_avg_confidence', st.get('avg_confidence', 0.0)) or 0.0)
+    conf = float(np.clip(conf, 0.0, 100.0))
+
+    # Match korjatulle tai alkuperäiselle sen mukaan mitä UI tarvitsee:
+    # - is_predicted=False -> "Measured"
+    # - is_predicted=True  -> "Filtered"
+    meas = np.asarray(_ui_pick(st, 'measured_mags') or [], dtype=float)
+    target = np.asarray(_ui_pick(st, 'target_mags') or [], dtype=float)
+    filt = np.asarray(_ui_pick(st, 'filter_mags') or [], dtype=float)
+
+    if meas.size == 0 or target.size == 0:
+        return max(15.0, min(99.0, conf))
+
+    n = min(meas.size, target.size, filt.size if filt.size else meas.size)
+    meas, target = meas[:n], target[:n]
+    filt = filt[:n] if filt.size else np.zeros(n, dtype=float)
+
+    if is_predicted:
+        diff = (meas + filt) - target
+    else:
+        diff = meas - target
+
+    rms = float(np.sqrt(np.mean(diff * diff)))
+
+    # Sigmoid-match kuten Summary
+    m0 = 3.2
+    s0 = 0.9
+    match_pct = 100.0 / (1.0 + np.exp((rms - m0) / s0))
+    if rms <= 0.4:
+        match_pct = 99.0
+    match_pct = float(np.clip(match_pct, 0.0, 100.0))
+
+    # Acoustic Score = 60% match + 40% confidence
+    score = 0.60 * match_pct + 0.40 * conf
+
+    # Rangaistukset (pidä sun nykyinen logiikka)
+    rt60 = float(st.get('rt60_val', 0.4) or 0.4)
+    rt_penalty = min(30.0, max(0.0, (rt60 - 0.4) * 25.0)) if rt60 > 0 else 0.0
+
+    events = st.get('cmp_reflections', st.get('reflections', [])) or []
     penalty_mult = 0.5 if is_predicted else 1.0
-    event_penalty = min(40, (len(events) * 4) * penalty_mult)
-    
-    final_score = flatness_score - rt_penalty - event_penalty
-    return max(15, min(99, final_score))
+    event_penalty = min(40.0, (len(events) * 4.0) * penalty_mult)
+
+    final_score = score - rt_penalty - event_penalty
+    return float(max(15.0, min(99.0, final_score)))
+
 
 if __name__ == '__main__':
     start_server(main, port=8080, debug=True, auto_open_webbrowser=True)
-
-
