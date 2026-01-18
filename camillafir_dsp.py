@@ -6,11 +6,12 @@ import logging
 logger = logging.getLogger("CamillaFIR.dsp")
 from models import FilterConfig
 from camillafir_leveling import compute_leveling
-#CamillaFIR DSP Engine v1.0.5
+#CamillaFIR DSP Engine v1.0.6
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
 #1.04 All features works at different configurations
 #1.05 Multiplier changes
+#1.06 added no phase correction mode (2058-safe)
 
 def apply_smart_tdc(freq_axis, target_mags, reflections, rt60_info, base_strength=0.5):
     adjusted_target = np.copy(target_mags)
@@ -861,17 +862,45 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         gain_db = np.maximum(gain_db, -max_cut_db)
 
     # --- 9. VAIHEEN GENERONTI ---
-    theo_xo = calculate_theoretical_phase(freq_axis, cfg.crossovers, 
-                                        cfg.hpf_settings['freq'] if cfg.hpf_settings else None,
-                                        (cfg.hpf_settings['order']*6) if cfg.hpf_settings else None)
-    # --- 9A. HPF magnitude into FIR (enabled-check) ---
-    if cfg.hpf_settings and cfg.hpf_settings.get('enabled'):
-        hpf_f = float(cfg.hpf_settings.get('freq', 0.0) or 0.0)
-        hpf_order = int(cfg.hpf_settings.get('order', 0) or 0)
-        if hpf_f > 0 and hpf_order > 0:
-            # apply_hpf_to_mags adds attenuation in dB
-            hpf_db = apply_hpf_to_mags(freq_axis, np.zeros_like(freq_axis), hpf_f, hpf_order)
-            gain_db = gain_db + hpf_db
+                # --- THEORETICAL PHASE (single source of truth) ---
+        hpf_freq = None
+        hpf_slope = None
+        hs = cfg.hpf_settings
+
+        if isinstance(hs, dict) and hs.get('enabled'):
+            hpf_freq = float(hs.get('freq', 0.0) or 0.0)
+            hpf_order = int(hs.get('order', 0) or 0)
+            if hpf_freq > 0 and hpf_order > 0:
+                hpf_slope = float(hpf_order * 6)  # dB/oct
+
+        theo_xo = calculate_theoretical_phase(
+            freq_axis,
+            cfg.crossovers,
+            hpf_freq=hpf_freq,
+            hpf_slope=hpf_slope
+        )
+
+        # --- LOGGING: HPF inclusion status ---
+        if hpf_freq and hpf_slope:
+            logger.info(
+                f"Theoretical phase includes HPF: f={hpf_freq:.1f} Hz, "
+                f"slope={hpf_slope:.0f} dB/oct (order={int(hpf_slope/6)})"
+            )
+        else:
+            logger.info("Theoretical phase: HPF not included")
+            
+        if getattr(cfg, "phase_safe_2058", False):
+            logger.info("Phase mode: 2058-safe (no room phase correction)")
+        else:
+            logger.info("Phase mode: modern (excess-phase + confidence + FDW)")
+    
+        # --- 9A. HPF magnitude into FIR (enabled-check) ---
+        if isinstance(hs, dict) and hs.get('enabled'):
+            hpf_f = float(hs.get('freq', 0.0) or 0.0)
+            hpf_order = int(hs.get('order', 0) or 0)
+            if hpf_f > 0 and hpf_order > 0:
+                hpf_db = apply_hpf_to_mags(freq_axis, np.zeros_like(freq_axis), hpf_f, hpf_order)
+                gain_db = gain_db + hpf_db
 
     # --- 9B. CLIP PREVENTION & HEADROOM (MOVED UP, so it affects the actual FIR) ---
     current_peak_gain = float(np.max(gain_db + cfg.global_gain_db))
@@ -883,102 +912,119 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     final_gain_total = gain_db + cfg.global_gain_db + auto_headroom_db
     total_mag = 10**(final_gain_total / 20.0)
     min_p = calculate_minimum_phase(total_mag)
-    
-    
-        # --- 9B. Confidence-ohjattu vaihekohdistus (excess phase) ---
-    # Mitattu vaihe (p_rad_interp) on TOF-poistettu kohdassa 4.
-    # Korjataan vain excess-osuus (mitattu - teoreettinen), jotta:
-    # - conf hyvä => voidaan lähestyä täyttä vaihe-inversiota (-p)
-    # - conf huono => pysytään lähellä -theo_xo (turvallisempi)
-    #
-    # phase_limit = yläraja taajuudelle, johon vaihekorjausta tehdään.
-    try:
-        # Siloitetaan conf_mask vähän, ettei painokerroin vaihtele “sahalaitana”
-        conf_s = scipy.ndimage.gaussian_filter1d(conf_mask.astype(float), sigma=2)
-        conf_s = np.clip(conf_s, 0.0, 1.0)
-    except Exception:
-        conf_s = np.clip(conf_mask.astype(float), 0.0, 1.0)
 
-    phase_lim_hz = float(getattr(cfg, "phase_limit", 1000.0))
-    phase_mask = (freq_axis > 0) & (freq_axis <= phase_lim_hz)
+    # --- 9C. PHASE LOGIC (single entry point) ---
+    theo_xo = calculate_theoretical_phase(freq_axis, cfg.crossovers)
 
-    # Excess phase = mitattu - teoreettinen
-    # (theo_xo on jo unwrapattu funktiossa, p_rad_interp on unwrapattu remove_time_of_flight:ssä)
-    excess_phase = (p_rad_interp - theo_xo)
+    if bool(getattr(cfg, "phase_safe_2058", False)):
+        # === 2058-SAFE PHASE MODE ===
+        # No room phase correction (no excess-phase, FDW, confidence)
 
-    # Painotus: vain maskin sisällä, muualla 0
-    phase_weight = np.zeros_like(freq_axis, dtype=float)
-    # --- 1.1 Pro: C1-jatkuva smoothstep-bassominimi vaihepainoon ---
-    # Tavoite: tukea basson vaihekorjausta, vaikka conf olisi huoneen takia matala,
-    # mutta tehdä se täysin pehmeästi (ei kulmia / derivaatan hyppyjä).
-    #
-    # 20 Hz  -> 0.35
-    # 100 Hz -> 0.20
-    # 200 Hz -> 0.00
-    f0, w0 = 20.0, 0.30
-    f1, w1 = 100.0, 0.20
-    f2, w2 = 200.0, 0.00
+        if 'Min' in cfg.filter_type_str:
+            final_phase = min_p
 
-    def smoothstep01(x):
-        x = np.clip(x, 0.0, 1.0)
-        return x*x*(3.0 - 2.0*x)  # C1 continuous
+        elif 'Mixed' in cfg.filter_type_str:
+            f_center = float(getattr(cfg, "mixed_split_freq", 300.0) or 300.0)
+            f_center = float(np.clip(
+                f_center, 20.0,
+                float(freq_axis[-1] if freq_axis.size else 20000.0)
+            ))
 
-    bass_band = phase_mask & (freq_axis >= f0) & (freq_axis <= f2)
-    f = freq_axis[bass_band]
-    w = np.empty_like(f, dtype=float)
+            safe_freqs = np.maximum(freq_axis, 1.0)
+            octave_dist = np.log2(safe_freqs / f_center)
+            mask = np.clip((octave_dist + 0.5), 0.0, 1.0)
+            sm_mask = 3.0 * mask**2 - 2.0 * mask**3  # smoothstep
 
-    # Segmentti 1: f0..f1 (w0 -> w1) smoothstepillä
-    seg1 = f <= f1
-    x1 = (f[seg1] - f0) / (f1 - f0)
-    s1 = smoothstep01(x1)
-    w[seg1] = w0 + (w1 - w0) * s1
+            low_phase = -theo_xo
+            final_phase = (1.0 - sm_mask) * low_phase + sm_mask * min_p
 
-    # Segmentti 2: f1..f2 (w1 -> w2) smoothstepillä
-    seg2 = ~seg1
-    x2 = (f[seg2] - f1) / (f2 - f1)
-    s2 = smoothstep01(x2)
-    w[seg2] = w1 + (w2 - w1) * s2
+        else:
+            # Linear / Asym
+            final_phase = -theo_xo
 
-    phase_weight[bass_band] = np.maximum(phase_weight[bass_band], w)
-
-    # Lisäkorjaus (rad): -excess * weight
-    extra_phase = -excess_phase * phase_weight
-
-    if 'Min' in cfg.filter_type_str:
-        final_phase = min_p
-    elif 'Mixed' in cfg.filter_type_str:
-        # Lasketaan dynaaminen siirtymäalue oktaaveina (n. 1.0 oktaavia)
-        # f_start = f_split / 1.41, f_end = f_split * 1.41
-        f_center = cfg.mixed_split_freq
-        
-        # Estetään jakolasku nollalla ja varmistetaan järkevä taajuusresoluutio
-        safe_freqs = np.maximum(freq_axis, 1.0)
-        
-        # Logaritminen siirtymämaski (Octave-based transition)
-        # Lasketaan kuinka monta oktaavia kukin taajuus on keskipisteestä
-        octave_dist = np.log2(safe_freqs / f_center)
-        
-        # Skaalataan maski välille -0.5 ... 0.5 oktaavia ja limitoidaan 0...1
-        # Tämä tekee siirtymästä identtisen kaikilla näytetaajuuksilla
-        mask = np.clip((octave_dist + 0.5), 0, 1)
-        
-        # Smoothstep-interpolaatio (3x^2 - 2x^3) takaa jatkuvuuden
-        sm_mask = 3 * mask**2 - 2 * mask**3
-        
-        # Yhdistetään vaiheet: 
-        # Lows: -theo_xo (Linear Phase correction for crossovers)
-        # Highs: min_p (Minimum Phase for natural transient response)
-        low_phase = (-theo_xo) + extra_phase
-        final_phase = (1 - sm_mask) * low_phase + sm_mask * min_p
-        
-        logger.info(f"Mixed Phase blend: Transition centered at {f_center}Hz over 1.0 octave.")
     else:
-        # Linear/Asym: -theo_xo + confidence-ohjattu excess-phase korjaus
-        final_phase = (-theo_xo) + extra_phase
+        # Includes excess-phase, confidence, phase_limit blend, etc.
+        # IMPORTANT: compute low_phase HERE before using it.
 
-    raw_imp = scipy.fft.irfft(total_mag * np.exp(1j * final_phase), n=n_fft)
+        # 1) Smooth confidence slightly (avoid sawtooth weighting)
+        try:
+            conf_s = scipy.ndimage.gaussian_filter1d(conf_mask.astype(float), sigma=2)
+            conf_s = np.clip(conf_s, 0.0, 1.0)
+        except Exception:
+            conf_s = np.clip(conf_mask.astype(float), 0.0, 1.0)
+
+        phase_lim_hz = float(getattr(cfg, "phase_limit", 1000.0))
+        phase_mask = (freq_axis > 0) & (freq_axis <= phase_lim_hz)
+        bass_f2 = float(np.clip(phase_lim_hz, 20.0, 400.0))
+
+        # Excess phase = measured - theoretical
+        excess_phase = (p_rad_interp - theo_xo)
+
+        # Weighting (your smoothstep bass weighting)
+        phase_weight = np.zeros_like(freq_axis, dtype=float)
+        f0, w0 = 20.0, 0.30
+        f2, w2 = bass_f2, 0.00
+        f1 = float(np.clip(0.5 * f2, 80.0, 140.0))
+        w1 = float(np.clip(0.20 - 0.04 * ((f1 - 100.0) / 40.0), 0.14, 0.20))
+        if f2 <= (f1 + 1.0):
+            f2 = f1 + 1.0
+
+        def smoothstep01(x):
+            x = np.clip(x, 0.0, 1.0)
+            return x*x*(3.0 - 2.0*x)
+
+        bass_band = phase_mask & (freq_axis >= f0) & (freq_axis <= f2)
+        f = freq_axis[bass_band]
+        w = np.empty_like(f, dtype=float)
+        seg1 = f <= f1
+        x1 = (f[seg1] - f0) / (f1 - f0)
+        s1 = smoothstep01(x1)
+        w[seg1] = w0 + (w1 - w0) * s1
+        seg2 = ~seg1
+        x2 = (f[seg2] - f1) / (f2 - f1)
+        s2 = smoothstep01(x2)
+        w[seg2] = w1 + (w2 - w1) * s2
+        phase_weight[bass_band] = np.maximum(phase_weight[bass_band], w)
+
+        extra_phase = -excess_phase * phase_weight
+        low_phase = (-theo_xo) + extra_phase
+
+        if 'Mixed' in cfg.filter_type_str:
+            f_center = float(getattr(cfg, "mixed_split_freq", 300.0) or 300.0)
+        else:
+            f_center = float(getattr(cfg, "phase_limit", 1000.0) or 1000.0)
+
+        f_center = float(np.clip(
+            f_center, 20.0,
+            float(freq_axis[-1] if freq_axis.size else 20000.0)
+        ))
+
+        safe_freqs = np.maximum(freq_axis, 1.0)
+        octave_dist = np.log2(safe_freqs / f_center)
+        mask = np.clip((octave_dist + 0.5), 0.0, 1.0)
+        sm_mask = 3.0 * mask**2 - 2.0 * mask**3
+
+        if 'Min' in cfg.filter_type_str:
+            final_phase = min_p
+        else:
+            final_phase = (1.0 - sm_mask) * low_phase + sm_mask * min_p
+
+    # --- 10. IMPULSE GENERATION (common path) ---
+    h_complex = total_mag * np.exp(1j * final_phase)
+    raw_imp = scipy.fft.irfft(h_complex, n=n_fft)
+
+    if 'Asym' in cfg.filter_type_str:
+        shift = min(
+            int(cfg.ir_window_ms_left * cfg.fs / 1000.0),
+            int(n_fft * 0.4)
+        )
+        impulse = np.roll(raw_imp, shift)
+    elif 'Min' in cfg.filter_type_str:
+        impulse = raw_imp
+    else:
+        impulse = np.roll(raw_imp, n_fft // 2)
     
-    # Alustava sijoittelu
+        # Alustava sijoittelu
     if 'Asym' in cfg.filter_type_str:
         shift = min(int(cfg.ir_window_ms_left * cfg.fs / 1000.0), int(n_fft * 0.4))
         impulse = np.roll(raw_imp, shift)
