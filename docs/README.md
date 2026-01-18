@@ -19,7 +19,8 @@ Each phenomenon is corrected using the physically correct DSP method.
 Development inspired by the methodologies of **OCA** (Obsessive Compulsive Audiophile): [https://www.youtube.com/@ocaudiophile](https://www.youtube.com/@ocaudiophile)
 
 ---
-
+**[Download Standalone EXE](https://drive.google.com/drive/folders/1AkESLDo-UhPqxDCdaZuXE6u8-H4EDuOI)**
+---
 
 ## Documentation
 
