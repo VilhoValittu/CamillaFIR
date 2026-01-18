@@ -5,21 +5,44 @@ import scipy.ndimage
 import logging
 logger = logging.getLogger("CamillaFIR.dsp")
 from models import FilterConfig
+from camillafir_leveling import compute_leveling
 #CamillaFIR DSP Engine v1.0.5
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
 #1.04 All features works at different configurations
 #1.05 Multiplier changes
 
-def apply_smart_tdc(freq_axis, target_mags, reflections, rt60_avg, base_strength=0.5):
+def apply_smart_tdc(freq_axis, target_mags, reflections, rt60_info, base_strength=0.5):
     adjusted_target = np.copy(target_mags)
-    ref_rt60 = rt60_avg if rt60_avg > 0.1 else 0.4
+
+    # rt60_info voi olla:
+    #  - float (vanha käytös)
+    #  - dict: {center_hz: rt60_s, ...} (uusi: kaistoittain)
+    def rt60_at(freq_hz: float) -> float:
+        # fallback
+        default = 0.4
+        if isinstance(rt60_info, (int, float)):
+            v = float(rt60_info)
+            return v if v > 0.1 else default
+        if isinstance(rt60_info, dict) and rt60_info:
+            # interpoloidaan log-taajuudessa kaistakeskuksien yli
+            c = np.array(sorted(rt60_info.keys()), dtype=float)
+            r = np.array([rt60_info[k] for k in c], dtype=float)
+            mask = (c > 0) & (r > 0.05) & (r < 5.0)
+            if np.count_nonzero(mask) < 2:
+                # jos ei tarpeeksi kaistoja, yritä esim. mediaani
+                vv = float(np.median(r[mask])) if np.count_nonzero(mask) else 0.0
+                return vv if vv > 0.1 else default
+            c = c[mask]; r = r[mask]
+            x = np.log10(np.clip(freq_hz, c.min(), c.max()))
+            return float(np.interp(x, np.log10(c), r))
+        return default
     
     for rev in reflections:
         f_res = rev['freq']
         # FIXED: Changed 'error_ms' to 'gd_error' to match analyze_acoustic_confidence
         error_ms = rev['gd_error'] 
-        
+        ref_rt60 = rt60_at(f_res)
         # HERKEMPI KYNNYS: Reagoidaan jo 80% kohdalla keskimääräisestä RT60:stä
         excess_ratio = error_ms / (ref_rt60 * 1000.0 + 1e-12)
         
@@ -42,16 +65,86 @@ def apply_hpf_to_mags(freqs, mags, cutoff, order):
     """Soveltaa Butterworth-ylipäästösuodatusta magnitudivasteeseen (dB)."""
     if cutoff <= 0 or order <= 0:
         return mags
+    f = np.asarray(freqs, dtype=float)
+    # Vältä DC-binin (0 Hz) ääretön vaimennus stats/plot -puolella
+    if f.size > 1 and f[0] == 0.0:
+        f = f.copy()
+        f[0] = f[1] if f[1] > 0 else 1e-6
     # Butterworth vaste: 1 / sqrt(1 + (fc/f)^(2*order))
     # Muutetaan desibeleiksi: -10 * log10(1 + (fc/f)^(2*order))
     with np.errstate(divide='ignore'):
-        attenuation = -10 * np.log10(1 + (cutoff / (freqs + 1e-12))**(2 * order))
+        attenuation = -10 * np.log10(1 + (cutoff / (f + 1e-12))**(2 * order))
     return mags + attenuation
 
 def soft_clip_boost(gain_db, max_boost):
     """Pehmentää korostukset tanh-funktiolla, jotta max_boost ei ylity rajusti."""
     if gain_db <= 0: return gain_db
     return max_boost * np.tanh(gain_db / max_boost)
+
+def soft_clip_gain(gain_db, max_boost_db, max_cut_db):
+    """
+    Pehmeä rajoitin sekä boostille että cutille.
+    - boost: +max_boost_db * tanh(g/max_boost_db)
+    - cut:   -max_cut_db  * tanh(|g|/max_cut_db)
+    """
+    g = np.asarray(gain_db, dtype=float)
+    out = np.empty_like(g)
+    pos = g > 0
+    neg = ~pos
+    # Boost
+    if np.any(pos):
+        mb = float(max_boost_db) if max_boost_db > 0 else 0.0
+        out[pos] = mb * np.tanh(g[pos] / (mb + 1e-12)) if mb > 0 else 0.0
+    # Cut
+    if np.any(neg):
+        mc = float(max_cut_db) if max_cut_db > 0 else 0.0
+        out[neg] = -mc * np.tanh((-g[neg]) / (mc + 1e-12)) if mc > 0 else g[neg]
+    return out
+
+def limit_slope_per_octave(freq_axis, gain_db, max_db_per_oct=12.0):
+    """
+    Rajoittaa gain-käyrän muutoksen (dB) per oktaavi (log2(f)).
+    Tekee forward+backward passin, jotta rajoitus toteutuu molempiin suuntiin.
+    """
+    f = np.asarray(freq_axis, dtype=float)
+    g = np.asarray(gain_db, dtype=float).copy()
+    max_db_per_oct = float(max_db_per_oct)
+    if max_db_per_oct <= 0:
+        return g
+
+    # Käytetään vain f>0 alueella (f=0 kohdalla log2 ei toimi)
+    idx = np.where(f > 0)[0]
+    if idx.size < 3:
+        return g
+
+    ii = idx
+    x = np.log2(f[ii])
+    # Forward: rajoita nousu/lasku edelliseen nähden
+    for k in range(1, ii.size):
+        dx = x[k] - x[k-1]
+        if dx <= 1e-12:
+            continue
+        lim = max_db_per_oct * dx
+        dg = g[ii[k]] - g[ii[k-1]]
+        if dg > lim:
+            g[ii[k]] = g[ii[k-1]] + lim
+        elif dg < -lim:
+            g[ii[k]] = g[ii[k-1]] - lim
+
+    # Backward: sama toiseen suuntaan
+    for k in range(ii.size - 2, -1, -1):
+        dx = x[k+1] - x[k]
+        if dx <= 1e-12:
+            continue
+        lim = max_db_per_oct * dx
+        dg = g[ii[k]] - g[ii[k+1]]
+        if dg > lim:
+            g[ii[k]] = g[ii[k+1]] + lim
+        elif dg < -lim:
+            g[ii[k]] = g[ii[k+1]] - lim
+
+    return g
+
 
 def calculate_minimum_phase(mags_lin_fft):
     """Laskee minimivaiheen Hilbert-muunnoksella. 1e-10 suojaus estää NaN-virheet."""
@@ -158,12 +251,37 @@ def interpolate_response(input_freqs, input_values, target_freqs):
     """Interpoloi vasteen lineaarisesti kohdetaajuuksille."""
     return np.interp(target_freqs, input_freqs, input_values)
 
+def _sigma_bins_from_hz(freq_axis, sigma_hz: float, fallback_bins: float = 3.0) -> float:
+    """
+    Muunna tasoituksen leveys (Hz) gaussian_filter1d:n sigma-arvoksi (binneissä).
+    freq_axis oletetaan nousevaksi ja melko tasaväliseksi.
+    """
+    try:
+        f = np.asarray(freq_axis, dtype=float)
+        if f.size < 4:
+            return float(fallback_bins)
+        # Käytä mediaania, robusti pieneen epätasaisuuteen
+        df = np.median(np.diff(f))
+        if not np.isfinite(df) or df <= 0:
+            return float(fallback_bins)
+        s = float(sigma_hz) / float(df)
+        if not np.isfinite(s) or s <= 0:
+            return float(fallback_bins)
+        return float(max(1.0, s))
+    except Exception:
+        return float(fallback_bins)
+
+
 def calculate_group_delay(freqs, phases_deg):
     """Laskee ryhmäviiveen (ms) vaiheen gradientista."""
     phase_rad = np.unwrap(np.deg2rad(phases_deg))
     d_phi_d_f = np.gradient(phase_rad, freqs)
     gd_ms = -d_phi_d_f / (2 * np.pi) * 1000.0
-    return scipy.ndimage.gaussian_filter1d(gd_ms, sigma=3)
+    # Tasoitus "Hz-leveydellä", ei binneillä -> pysyy samana fs/taps muuttuessa
+    sigma_bins = _sigma_bins_from_hz(freqs, sigma_hz=2.0, fallback_bins=3.0)
+    return scipy.ndimage.gaussian_filter1d(gd_ms, sigma=sigma_bins)
+
+
 def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=300):
     """Yhdistää Linear Phase basson ja Minimum Phase diskantin."""
     ntaps = len(ir_lin)
@@ -194,16 +312,18 @@ def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
     gd_s = -np.gradient(phase_rad) / (2 * np.pi * df)
     gd_ms = gd_s * 1000.0
     
-    # KORJAUS: Skaalataan sigma näytetaajuuden mukaan (perustaso 44100 Hz)
-    # Tämä pitää tasoituksen leveyden (Hz) vakiona näytetaajuudesta riippumatta.
-    sigma_scaling = fs / 44100.0
-    gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms, sigma=10 * sigma_scaling)
+    # Tasoitus vakio Hz-leveydellä (vastaa aiempaa ~44.1k/65536-taps käyttäytymistä)
+    # 44.1k & ~65537 FFT-bins -> df ~0.67 Hz -> sigma_bins=10 ~ 6.7 Hz
+    sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=6.7, fallback_bins=10.0)
+    gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms, sigma=sigma_bins)
     gd_diff = np.abs(gd_ms - gd_smooth)
 
     # Luottamusmaski
     threshold_ms = 2.5
     confidence_mask = 1.0 / (1.0 + np.exp(1.5 * (gd_diff - threshold_ms)))
-    
+    # Varmistetaan, että `peaks` on aina määritelty (turvaa mahdollisia refaktorointeja vastaan)
+    peaks = np.array([], dtype=int)
+
     reflection_nodes = []
     valid_idx = np.where(freq_axis > 20)[0] 
     
@@ -211,7 +331,7 @@ def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
         # 2. PIIKKIEN ETSINTÄ (Herkkyyden lisäys)
         # Lasketaan korkeusvaatimus 3.0 -> 2.0, jotta pienemmätkin moodit löytyvät
         # Lyhennetään distance 50 -> 30, jotta lähekkäiset resonanssit tunnistetaan
-       peaks, props = scipy.signal.find_peaks(gd_diff[valid_idx], height=2.0, distance=100)
+        peaks, props = scipy.signal.find_peaks(gd_diff[valid_idx], height=2.0, distance=100)
     
     raw_nodes = []
     for p in peaks:
@@ -229,67 +349,170 @@ def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
     return confidence_mask, reflection_nodes, gd_ms
 
 
-def find_stable_level_window(freq_axis, magnitudes, target_mags, f_min, f_max, window_size_octaves=1.0, hpf_freq=0.0):
-    """
-    Etsii alueen, jossa mittaus seuraa tavoitekäyrän muotoa vakaimmin.
-    """
-    try:
-        safe_f_min = max(f_min, hpf_freq * 1.5)
-        if safe_f_min >= f_max * 0.8: safe_f_min = f_min
-
-        mask = (freq_axis >= safe_f_min) & (freq_axis <= f_max)
-        f_search = freq_axis[mask]
-        
-        # --- MUUTOS: Tarkastellaan erotusta tavoitteeseen, ei pelkkää tasoa ---
-        # Tämä poistaa tavoitekäyrän "kallistuksen" (tilt) vaikutuksen analyysista.
-        m_search = (magnitudes - target_mags)[mask]
-        
-        if len(f_search) < 50: return float(f_min), float(f_max)
-            
-        best_std = float('inf')
-        res_min, res_max = float(safe_f_min), float(f_max)
-        
-        current_f = safe_f_min
-        step = 2**(1/24.0) # Hieman tarkempi askellus (oli 1/12)
-        
-        while current_f * (2**window_size_octaves) <= f_max:
-            w_start, w_end = current_f, current_f * (2**window_size_octaves)
-            w_mask = (f_search >= w_start) & (f_search <= w_end)
-            if np.any(w_mask):
-                current_std = np.std(m_search[w_mask])
-                # Painotus: Suositaan matalampia taajuuksia hieman vähemmän aggressiivisesti
-                weighted_std = current_std * (1.0 + 0.1 * np.log10(w_start / 1000.0))
-                
-                if weighted_std < best_std:
-                    best_std = weighted_std
-                    res_min, res_max = float(w_start), float(w_end)
-            current_f *= step
-        return res_min, res_max
-    except:
-        return float(f_min), float(f_max)
-    
 def calculate_rt60(impulse, fs):
-    """Laskee RT60-estimaatin T10-menetelmällä korkean resoluution datasta."""
+    """
+    Robustimpi RT60-estimaatti:
+    - Schroeder EDC
+    - noise floor -rajaus
+    - EDT, T20, T30 + fallback
+    - laatukriteeri (R^2)
+    Palauttaa float (sekunteina), muuten 0.0
+    """
     try:
-        imp = np.array(impulse)
-        # Etsitään huippu ja neliöidään
-        peak_idx = np.argmax(np.abs(imp))
-        decay = np.abs(imp[peak_idx:])**2
-        
-        # Schroederin integraali
-        schroeder = np.flip(np.cumsum(np.flip(decay)))
-        # Normalisoidaan ja muutetaan desibeleiksi
-        edc = 10 * np.log10(schroeder / (np.max(schroeder) + 1e-12) + 1e-12)
-        
-        # Etsitään -5dB ja -15dB (T10)
-        idx5 = np.where(edc <= -5)[0][0]
-        idx15 = np.where(edc <= -15)[0][0]
-        
-        rt60 = ((idx15 - idx5) / fs) * 6.0
-        # Huoneen RT60 on yleensä 0.2s - 1.5s välillä
-        return round(rt60, 2) if 0.05 < rt60 < 5.0 else 0.0
-    except:
+        imp = np.asarray(impulse, dtype=float)
+        if imp.size < int(0.1 * fs):
+            return 0.0
+
+        # 1) Aloitus: peak-kohdasta (kuten sinulla)
+        peak_idx = int(np.argmax(np.abs(imp)))
+        x = imp[peak_idx:]
+        if x.size < int(0.05 * fs):
+            return 0.0
+
+        # 2) Energiakäyrä
+        e = x * x
+
+        # 3) Noise floor tailista (viimeiset 15% tai vähintään 50 ms)
+        tail_n = max(int(0.15 * e.size), int(0.05 * fs))
+        tail_n = min(tail_n, e.size)
+        noise_power = float(np.mean(e[-tail_n:]))
+
+        # 4) Schroeder EDC (integroitu energia)
+        E = np.cumsum(e[::-1])[::-1]
+        E0 = float(E[0]) + 1e-18
+
+        # 5) Stop-hetki: missä integroitu energia lähestyy melulattiaa
+        # noise_mult määrittää kuinka “varhain” lopetetaan (20 = konservatiivinen)
+        noise_mult = 20.0
+        stop_candidates = np.where(E <= noise_mult * noise_power)[0]
+        stop_idx = int(stop_candidates[0]) if stop_candidates.size > 0 else (E.size - 1)
+        stop_idx = max(stop_idx, 10)  # ettei mene nollapituudeksi
+
+        t = np.arange(E.size) / fs
+        edc_db = 10.0 * np.log10((E / E0) + 1e-30)
+
+        # 6) Pieni tasoitus EDC:hen (vakauttaa indeksejä)
+        smooth_ms = 10.0
+        win = max(1, int((smooth_ms / 1000.0) * fs))
+        if win > 1:
+            kernel = np.ones(win) / win
+            edc_db = np.convolve(edc_db, kernel, mode="same")
+
+        # Rajataan luotettavalle alueelle
+        t_u = t[:stop_idx + 1]
+        d_u = edc_db[:stop_idx + 1]
+
+        def fit_rt(lo_db, hi_db):
+            # fit d_u ~ a*t + b, kun d_u on välillä [hi_db..lo_db]
+            mask = (d_u <= lo_db) & (d_u >= hi_db)
+            if np.count_nonzero(mask) < 12:
+                return None
+
+            tt = t_u[mask]
+            yy = d_u[mask]
+            A = np.vstack([tt, np.ones_like(tt)]).T
+            a, b = np.linalg.lstsq(A, yy, rcond=None)[0]  # yy = a*t + b
+
+            # R^2
+            yhat = a * tt + b
+            ss_res = float(np.sum((yy - yhat) ** 2))
+            ss_tot = float(np.sum((yy - np.mean(yy)) ** 2)) + 1e-12
+            r2 = 1.0 - ss_res / ss_tot
+
+            if a >= -1e-9:  # ei laske
+                return None
+
+            rt60 = -60.0 / a
+            return rt60, r2
+
+        candidates = []
+        # EDT: 0..-10 dB (sama kaava rt60 = -60/a)
+        r = fit_rt(0.0, -10.0)
+        if r: candidates.append(("EDT",) + r)
+
+        # T20: -5..-25
+        r = fit_rt(-5.0, -25.0)
+        if r: candidates.append(("T20",) + r)
+
+        # T30: -5..-35
+        r = fit_rt(-5.0, -35.0)
+        if r: candidates.append(("T30",) + r)
+
+        if not candidates:
+            return 0.0
+
+        # Preferenssi: T30 > T20 > EDT, mutta vaadi kohtuullinen R^2 jos mahdollista
+        pref = {"T30": 0, "T20": 1, "EDT": 2}
+        candidates.sort(key=lambda x: (pref[x[0]], -x[2]))  # (prefer, best r2)
+
+        # Valitse ensin r2>=0.90 jos löytyy, muuten paras saatavilla
+        chosen = None
+        for c in candidates:
+            name, rt60, r2 = c
+            if r2 >= 0.90:
+                chosen = (rt60, r2, name)
+                break
+        if chosen is None:
+            name, rt60, r2 = candidates[0]
+            chosen = (rt60, r2, name)
+
+        rt60 = float(chosen[0])
+
+        # Järkevyysrajat (voit säätää)
+        if 0.05 < rt60 < 5.0:
+            return round(rt60, 2)
         return 0.0
+
+    except Exception:
+        return 0.0
+    
+
+def _third_oct_centers(f_min=31.5, f_max=8000.0):
+    """IEC-tyyliset 1/3-oktaavikaistakeskukset (riittää tähän)."""
+    centers = []
+    f = float(f_min)
+    step = 2 ** (1/3)  # 1/3 oktaavi
+    while f <= f_max * 1.0001:
+        centers.append(float(f))
+        f *= step
+    return centers
+
+def calculate_rt60_bands(impulse, fs, f_min=31.5, f_max=8000.0, order=4):
+    """
+    Laskee RT60:n 1/3-oktaavikaistoittain:
+      - bandpass (sos) -> suodatettu impulssi
+      - RT60 (käyttää olemassa olevaa calculate_rt60:ää)
+    Palauttaa dict: {center_hz: rt60_s}
+    """
+    try:
+        imp = np.asarray(impulse, dtype=float)
+        if imp.size < int(0.1 * fs):
+            return {}
+
+        nyq = 0.5 * fs
+        centers = _third_oct_centers(f_min, min(f_max, nyq * 0.90))
+        out = {}
+
+        for fc in centers:
+            # 1/3 oktaavin rajat: fc * 2^(±1/6)
+            fl = fc / (2 ** (1/6))
+            fh = fc * (2 ** (1/6))
+            # clamp
+            fl = max(1.0, fl)
+            fh = min(nyq * 0.98, fh)
+            if fh <= fl * 1.05:
+                continue
+
+            sos = scipy.signal.butter(order, [fl/nyq, fh/nyq], btype='bandpass', output='sos')
+            # nollavaiheinen suodatus (vakaa, ei lisää group delaytä)
+            x = scipy.signal.sosfiltfilt(sos, imp)
+            rt = calculate_rt60(x, fs)
+            if 0.05 < rt < 5.0:
+                out[float(round(fc, 2))] = float(rt)
+        return out
+    except Exception:
+        return {}
+
 
 def get_min_phase_impulse(mags_db, n_fft):
     """Luo minimivaiheisen impulssivasteen voimakkuusvasteesta."""
@@ -363,49 +586,224 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # Confidence mask ja heijastusanalyysi skaalautuvalla sigmalla
     conf_mask, reflections, _ = analyze_acoustic_confidence(freq_axis, complex_anal, cfg.fs)
 
+    # --- 5C. COMPARISON MODE (locked 44.1k analysis grid for score/match/report) ---
+    cmp = None
+    analysis_mode = "native"
+    try:
+        if bool(getattr(cfg, "comparison_mode", False)):
+            ref_fs = int(getattr(cfg, "comparison_ref_fs", 44100) or 44100)
+            ref_taps = int(getattr(cfg, "comparison_ref_taps", 65536) or 65536)
+            ref_nfft = ref_taps if (ref_taps % 2 != 0) else (ref_taps + 1)
+            freq_cmp_full = np.linspace(0, ref_fs / 2.0, ref_nfft // 2 + 1)
+
+            # clamp comparison grid to what we can represent with current freq_axis
+            fmax = float(freq_axis[-1]) if freq_axis.size else 0.0
+            if fmax > 0:
+                freq_cmp = freq_cmp_full[freq_cmp_full <= fmax]
+            else:
+                freq_cmp = freq_cmp_full
+
+            # resample analysis magnitude/phase to comparison grid
+            m_cmp_raw = np.interp(freq_cmp, freq_axis, m_anal)
+            p_cmp_rad = np.interp(freq_cmp, freq_axis, p_anal_rad)
+            complex_cmp = 10 ** (m_cmp_raw / 20.0) * np.exp(1j * p_cmp_rad)
+
+            # recompute confidence on reference fs (makes GD-based confidence stable across cfg.fs/taps)
+            conf_cmp, refl_cmp, _ = analyze_acoustic_confidence(freq_cmp, complex_cmp, ref_fs)
+
+            # resample target and compute leveling on comparison grid (for stable offset + match window)
+            target_cmp = np.interp(freq_cmp, freq_axis, target_mags)
+            (
+                target_level_db_cmp,
+                calc_offset_db_cmp,
+                meas_level_db_window_cmp,
+                target_level_db_window_cmp,
+                offset_method_cmp,
+                s_min_cmp,
+                s_max_cmp,
+            ) = compute_leveling(cfg, freq_cmp, m_cmp_raw, target_cmp)
+
+            # resample filter correction curve to comparison grid
+            filt_cmp = np.interp(freq_cmp, freq_axis, gain_db)
+
+            cmp = {
+                "cmp_ref_fs": float(ref_fs),
+                "cmp_ref_taps": float(ref_taps),
+                "cmp_freq_axis": freq_cmp.tolist(),
+                "cmp_target_mags": target_cmp.tolist(),
+                "cmp_measured_mags": (m_cmp_raw - calc_offset_db_cmp).tolist(),
+                "cmp_filter_mags": filt_cmp.tolist(),
+                "cmp_confidence_mask": conf_cmp.tolist(),
+                "cmp_reflections": refl_cmp,
+                "cmp_smart_scan_range": [float(s_min_cmp), float(s_max_cmp)],
+                "cmp_eff_target_db": float(target_level_db_cmp),
+                "cmp_offset_db": float(calc_offset_db_cmp),
+                "cmp_meas_level_db_window": float(meas_level_db_window_cmp),
+                "cmp_target_level_db_window": float(target_level_db_window_cmp),
+                "cmp_offset_method": str(offset_method_cmp),
+                "cmp_avg_confidence": float(np.mean(conf_cmp) * 100.0),
+            }
+            if (
+                isinstance(cmp.get("cmp_freq_axis", None), list)
+                and isinstance(cmp.get("cmp_measured_mags", None), list)
+                and isinstance(cmp.get("cmp_target_mags", None), list)
+                and isinstance(cmp.get("cmp_filter_mags", None), list)
+                and isinstance(cmp.get("cmp_confidence_mask", None), list)
+                and len(cmp["cmp_freq_axis"]) > 16
+                and len(cmp["cmp_freq_axis"]) == len(cmp["cmp_measured_mags"])
+                and len(cmp["cmp_freq_axis"]) == len(cmp["cmp_target_mags"])
+                and len(cmp["cmp_freq_axis"]) == len(cmp["cmp_filter_mags"])
+                and len(cmp["cmp_freq_axis"]) == len(cmp["cmp_confidence_mask"])
+            ):
+                analysis_mode = "comparison"
+    except Exception:
+        cmp = None
+        analysis_mode = "native"
+
+    # --- 5B. A-FDW: käytä luottamusmaskia magnitudin "analyysiversion" tasoituksessa 
+    
+    # - conf_mask ~ 1.0 => tarkempi (enemmän syklejä) => saat enemmän "oikeaa" korjausta
+    # - conf_mask ~ 0.0 => raskaampi tasoitus => vältetään aggressiivinen korjaus epäluotettavassa datassa
+    #
+    # Tämä vaikuttaa suoraan:
+    # - leveling (m_anal)
+    # - mag-korjaus (raw_g)
+    # mutta EI muuta heijastusten/gd-detektiota (se perustuu pääosin vaiheeseen).
+    if getattr(cfg, "enable_afdw", False):
+        # min_cycles pidetään järkevänä (ettei tule "liian terävää" edes huonolla confidence-alueella)
+            base = float(getattr(cfg, "fdw_cycles", 15.0))
+            min_c = max(3.0, base / 3.0)
+            m_anal = apply_adaptive_fdw(
+            freq_axis,
+            m_anal,
+            conf_mask,
+            base_cycles=base,
+            min_cycles=min_c
+        )
+
+
     # --- 6. RT60 & TARGET ---
     m_rt_lin = np.interp(np.linspace(0, cfg.fs/2, 65537), freq_axis, np.interp(freq_axis, f_in, m_in))
-    current_rt60 = calculate_rt60(get_min_phase_impulse(m_rt_lin, 131072), cfg.fs)
+    rt_ir = get_min_phase_impulse(m_rt_lin, 131072)
+    current_rt60 = calculate_rt60(rt_ir, cfg.fs)
+    rt60_bands = calculate_rt60_bands(rt_ir, cfg.fs, f_min=31.5, f_max=8000.0, order=4)
+    # “Yksi luku” kaistoista (hyvä score/reportointiin): mediaani 125–4000 Hz jos löytyy
+    band_avg = 0.0
+    if rt60_bands:
+        ks = np.array(sorted(rt60_bands.keys()), dtype=float)
+        vs = np.array([rt60_bands[k] for k in ks], dtype=float)
+        mid = (ks >= 125.0) & (ks <= 4000.0) & (vs > 0.05) & (vs < 5.0)
+        if np.any(mid):
+            band_avg = float(np.median(vs[mid]))
+        else:
+            band_avg = float(np.median(vs))
     
-    target_mags = interpolate_response(cfg.house_freqs, cfg.house_mags, freq_axis)
+    if cfg.house_freqs is not None and cfg.house_mags is not None and len(cfg.house_freqs) >= 2 and len(cfg.house_mags) >= 2:
+        target_mags = interpolate_response(cfg.house_freqs, cfg.house_mags, freq_axis)
+    else:
+        # fallback: flat 0 dB target
+        target_mags = np.zeros_like(freq_axis, dtype=float)
     if cfg.hpf_settings and cfg.hpf_settings.get('enabled'):
         target_mags = apply_hpf_to_mags(freq_axis, target_mags, cfg.hpf_settings['freq'], cfg.hpf_settings['order'])
     
     if cfg.enable_tdc:
-        target_mags = apply_smart_tdc(freq_axis, target_mags, reflections, current_rt60, cfg.tdc_strength/100.0)
+        # UUSI: TDC saa taajuusriippuvan RT60:n (dict), fallbackaa automaattisesti jos tyhjä
+        rt60_for_tdc = rt60_bands if rt60_bands else current_rt60
+        target_mags = apply_smart_tdc(freq_axis, target_mags, reflections, rt60_for_tdc, cfg.tdc_strength/100.0)
+
+    # --- HPF params (always defined) ---
+    hpf_f = 0.0
+    hpf_order = 0
+    if cfg.hpf_settings and cfg.hpf_settings.get('enabled'):
+        hpf_f = float(cfg.hpf_settings.get('freq', 0.0) or 0.0)
+        hpf_order = int(cfg.hpf_settings.get('order', 0) or 0)
 
     # --- 7. TASONSOVITUS ---
-    target_level_db = 0.0
-    if 'Manual' in str(cfg.lvl_mode):
-        s_min, s_max = float(cfg.lvl_min), float(cfg.lvl_max)
-        mask = (freq_axis >= s_min) & (freq_axis <= s_max)
-        if np.any(mask): target_level_db = np.mean(m_anal[mask])
-        calc_offset_db = target_level_db - cfg.lvl_manual_db
-    else:
-        h_f = cfg.hpf_settings['freq'] if cfg.hpf_settings else 0
-        s_min, s_max = find_stable_level_window(freq_axis, m_anal, target_mags, cfg.lvl_min, cfg.lvl_max, hpf_freq=h_f)
-        
-        mask = (freq_axis >= s_min) & (freq_axis <= s_max)
-        if np.any(mask):
-            target_level_db = np.mean(m_anal[mask])
-            diffs = m_anal[mask] - target_mags[mask]
-            # Käytetään mediaania, se on immuuni yksittäisille piikeille
-            calc_offset_db = np.median(diffs)
+    # Huom: tasosovitus on erotettu omaan moduuliin testattavuuden ja edge-case -robustiuden takia.
+    target_level_db, calc_offset_db, meas_level_db_window, target_level_db_window, offset_method, s_min, s_max = (
+        compute_leveling(cfg, freq_axis, m_anal, target_mags)
+    )
+
 
     # --- 8. KORJAUS ---
     gain_db = np.zeros_like(freq_axis)
     if cfg.enable_mag_correction:
-        raw_g = target_mags - (m_anal - calc_offset_db)
-        sigma_scaling = cfg.fs / 44100.0
-        base_sigma = 60 // (cfg.smoothing_level / 12 if cfg.smoothing_level > 0 else 1)
-        sigma = max(2, int(base_sigma * sigma_scaling))
+        afdw_on = bool(getattr(cfg, "enable_afdw", False))
+        afdw_base = float(getattr(cfg, "fdw_cycles", 15.0))
+        afdw_min = max(3.0, afdw_base / 3.0)
         
-        sm_g = scipy.ndimage.gaussian_filter1d(raw_g, sigma=sigma)
+        raw_g = target_mags - (m_anal - calc_offset_db)
+
+        base_sigma = 60 // (cfg.smoothing_level / 12 if cfg.smoothing_level > 0 else 1)
+
+        # Raw_g smoothing:
+        # - legacy: sigma in bins scales directly with fs (can over-smooth at high fs)
+        # - df_smoothing: keep smoothing width constant in Hz (reference: 44.1k/65536 behavior)
+        df_mode = bool(getattr(cfg, "df_smoothing", False))
+        if df_mode:
+            # Reference bin width ~ 44100/65536 Hz; match the old "base_sigma bins" at ref
+            df_ref = 44100.0 / 65536.0
+            sigma_hz = float(base_sigma) * df_ref
+            # Convert Hz -> bins for current axis
+            sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=sigma_hz, fallback_bins=max(2.0, float(base_sigma)))
+            sm_g = scipy.ndimage.gaussian_filter1d(raw_g, sigma=float(sigma_bins))
+        else:
+            sigma_scaling = cfg.fs / 44100.0
+            sigma = max(2, int(base_sigma * sigma_scaling))
+            sm_g = scipy.ndimage.gaussian_filter1d(raw_g, sigma=sigma)
+
         final_g = raw_g - (raw_g - sm_g) * (cfg.reg_strength / 100.0)
         
+        # --- 8B. A-FDW suoraan korjauskäyrään ---
+        # Tasoittaa final_g adaptiivisesti confidence-maskin mukaan:
+        # - matala confidence => enemmän "syklejä" => pehmeämpi korjaus
+        # - korkea confidence => vähemmän tasoitusta => tarkempi korjaus
+        if afdw_on:
+            final_g = apply_adaptive_fdw(
+                freq_axis,
+                final_g,
+                conf_mask,
+                base_cycles=afdw_base,
+                min_cycles=afdw_min
+            )
         mask_c = (freq_axis >= (0 if cfg.hpf_settings else cfg.mag_c_min)) & (freq_axis <= cfg.mag_c_max)
-        eff_conf = np.where(freq_axis < 100, np.maximum(conf_mask, 0.6), conf_mask)
-        gain_db[mask_c] = [soft_clip_boost(g, cfg.max_boost_db) for g in (final_g * eff_conf)[mask_c]]
+        # Kun A-FDW on päällä, ei kerrota final_g:ta eff_conf:lla,
+        # koska A-FDW jo tekee "varovaisuuden" muotoon (tasoitus).
+        # Tämä välttää tuplavarovaisuuden (muoto pehmenee + amplitudi vaimenee).
+        if bool(getattr(cfg, "enable_afdw", False)):
+            gain_apply = final_g.copy()
+        else:
+            eff_conf = np.where(freq_axis < 100, np.maximum(conf_mask, 0.6), conf_mask)
+            gain_apply = (final_g * eff_conf).copy()
+
+        # --- 8C. Low-bass CUT allowance (täsmäfix 32 Hz -tyyppisille moodeille) ---
+        # < low_hz: sallitaan VAIN vaimennus (ei boostia),
+        # ja käytetään tarvittaessa "vahvempaa" leikkausta (min(final_g, raw_g)),
+        # jotta regularisointi / confidence ei nollaa selviä huonemoodipiikkejä.
+        low_hz = float(getattr(cfg, "low_bass_cut_hz", 40.0))
+        low_mask = mask_c & (freq_axis > 0) & (freq_axis <= low_hz)
+        if np.any(low_mask):
+            low_cut = np.minimum(final_g[low_mask], raw_g[low_mask])  # valitse negatiivisempi (vahvempi cut)
+            low_cut = np.minimum(low_cut, 0.0)                       # ei koskaan boostia
+            gain_apply[low_mask] = low_cut
+
+        # --- 8D. Max cut + max boost (pehmeä) ---
+        max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))  # default: sallitaan kohtuullinen leikkaus
+        tmp = np.zeros_like(gain_db, dtype=float)
+        tmp[mask_c] = gain_apply[mask_c]
+        tmp = soft_clip_gain(tmp, cfg.max_boost_db, max_cut_db)
+        gain_db[mask_c] = tmp[mask_c]
+
+        # --- 8E. Slope/oktaavi -rajoitin (gain-käyrän “jyrkkyys”) ---
+        # Huom: tehdään ennen exc_prot:ia ja ajetaan exc_prot lopuksi uudelleen,
+        # jotta slope-limitointi ei voi “vuotaa” boostia suojavyöhykkeille.
+        max_slope = float(getattr(cfg, "max_slope_db_per_oct", 12.0))  # 0 = pois
+        if max_slope > 0:
+            # Rajoitetaan vain korjausalueella
+            g2 = gain_db.copy()
+            g2 = limit_slope_per_octave(freq_axis, g2, max_db_per_oct=max_slope)
+            # Pidetään ulkopuoli koskemattomana
+            gain_db[mask_c] = g2[mask_c]
         
         f_start = max(cfg.mag_c_max - cfg.trans_width, cfg.mag_c_min)
         
@@ -436,15 +834,118 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             
             logger.info(f"Exc Prot: Full protection < {f_start}Hz, Soft fade up to {f_end:.1f}Hz.")
 
+        # --- HPF params (always defined) ---
+        hpf_f = 0.0
+        if cfg.hpf_settings and cfg.hpf_settings.get('enabled'):
+            hpf_f = float(cfg.hpf_settings.get('freq', 0.0) or 0.0)
+
+        # --- HPF policy: täysi stop + silkkinen fade (asym-safe) ---
+        if hpf_f > 0:
+                hpf_end = hpf_f * 1.41  # ~1/2 oktaavia
+
+                # 1) Täysi stoppi HPF:n alapuolella
+                below = freq_axis < hpf_f
+                gain_db[below] = 0.0
+
+                # 2) Pehmeä häivytys HPF -> HPF*1.41 (0..1)
+                trans = (freq_axis >= hpf_f) & (freq_axis <= hpf_end)
+                if np.any(trans):
+                    fade = (freq_axis[trans] - hpf_f) / (hpf_end - hpf_f)
+                    gain_db[trans] *= fade
+        
+        # --- 8F. Final safety clamp (max boost / max cut) ---
+        # Varmistetaan että mikään myöhempi operaatio (fade/slope/exc_prot) ei ylitä rajoja.
+        max_cut_db = float(getattr(cfg, "max_cut_db", 15.0))
+        max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
+        gain_db = np.minimum(gain_db, float(cfg.max_boost_db))
+        gain_db = np.maximum(gain_db, -max_cut_db)
+
     # --- 9. VAIHEEN GENERONTI ---
     theo_xo = calculate_theoretical_phase(freq_axis, cfg.crossovers, 
                                         cfg.hpf_settings['freq'] if cfg.hpf_settings else None,
                                         (cfg.hpf_settings['order']*6) if cfg.hpf_settings else None)
-    
-    total_mag = 10**((gain_db + cfg.global_gain_db) / 20.0)
+    # --- 9A. HPF magnitude into FIR (enabled-check) ---
+    if cfg.hpf_settings and cfg.hpf_settings.get('enabled'):
+        hpf_f = float(cfg.hpf_settings.get('freq', 0.0) or 0.0)
+        hpf_order = int(cfg.hpf_settings.get('order', 0) or 0)
+        if hpf_f > 0 and hpf_order > 0:
+            # apply_hpf_to_mags adds attenuation in dB
+            hpf_db = apply_hpf_to_mags(freq_axis, np.zeros_like(freq_axis), hpf_f, hpf_order)
+            gain_db = gain_db + hpf_db
+
+    # --- 9B. CLIP PREVENTION & HEADROOM (MOVED UP, so it affects the actual FIR) ---
+    current_peak_gain = float(np.max(gain_db + cfg.global_gain_db))
+    auto_headroom_db = 0.0
+    if current_peak_gain > 0:
+        auto_headroom_db = -current_peak_gain - 0.1
+        logger.info(f"Clip Prevention: Applied {auto_headroom_db:.2f} dB headroom.")
+
+    final_gain_total = gain_db + cfg.global_gain_db + auto_headroom_db
+    total_mag = 10**(final_gain_total / 20.0)
     min_p = calculate_minimum_phase(total_mag)
     
-    if 'Min' in cfg.filter_type_str: final_phase = min_p
+    
+        # --- 9B. Confidence-ohjattu vaihekohdistus (excess phase) ---
+    # Mitattu vaihe (p_rad_interp) on TOF-poistettu kohdassa 4.
+    # Korjataan vain excess-osuus (mitattu - teoreettinen), jotta:
+    # - conf hyvä => voidaan lähestyä täyttä vaihe-inversiota (-p)
+    # - conf huono => pysytään lähellä -theo_xo (turvallisempi)
+    #
+    # phase_limit = yläraja taajuudelle, johon vaihekorjausta tehdään.
+    try:
+        # Siloitetaan conf_mask vähän, ettei painokerroin vaihtele “sahalaitana”
+        conf_s = scipy.ndimage.gaussian_filter1d(conf_mask.astype(float), sigma=2)
+        conf_s = np.clip(conf_s, 0.0, 1.0)
+    except Exception:
+        conf_s = np.clip(conf_mask.astype(float), 0.0, 1.0)
+
+    phase_lim_hz = float(getattr(cfg, "phase_limit", 1000.0))
+    phase_mask = (freq_axis > 0) & (freq_axis <= phase_lim_hz)
+
+    # Excess phase = mitattu - teoreettinen
+    # (theo_xo on jo unwrapattu funktiossa, p_rad_interp on unwrapattu remove_time_of_flight:ssä)
+    excess_phase = (p_rad_interp - theo_xo)
+
+    # Painotus: vain maskin sisällä, muualla 0
+    phase_weight = np.zeros_like(freq_axis, dtype=float)
+    # --- 1.1 Pro: C1-jatkuva smoothstep-bassominimi vaihepainoon ---
+    # Tavoite: tukea basson vaihekorjausta, vaikka conf olisi huoneen takia matala,
+    # mutta tehdä se täysin pehmeästi (ei kulmia / derivaatan hyppyjä).
+    #
+    # 20 Hz  -> 0.35
+    # 100 Hz -> 0.20
+    # 200 Hz -> 0.00
+    f0, w0 = 20.0, 0.30
+    f1, w1 = 100.0, 0.20
+    f2, w2 = 200.0, 0.00
+
+    def smoothstep01(x):
+        x = np.clip(x, 0.0, 1.0)
+        return x*x*(3.0 - 2.0*x)  # C1 continuous
+
+    bass_band = phase_mask & (freq_axis >= f0) & (freq_axis <= f2)
+    f = freq_axis[bass_band]
+    w = np.empty_like(f, dtype=float)
+
+    # Segmentti 1: f0..f1 (w0 -> w1) smoothstepillä
+    seg1 = f <= f1
+    x1 = (f[seg1] - f0) / (f1 - f0)
+    s1 = smoothstep01(x1)
+    w[seg1] = w0 + (w1 - w0) * s1
+
+    # Segmentti 2: f1..f2 (w1 -> w2) smoothstepillä
+    seg2 = ~seg1
+    x2 = (f[seg2] - f1) / (f2 - f1)
+    s2 = smoothstep01(x2)
+    w[seg2] = w1 + (w2 - w1) * s2
+
+    phase_weight[bass_band] = np.maximum(phase_weight[bass_band], w)
+
+    # Lisäkorjaus (rad): -excess * weight
+    extra_phase = -excess_phase * phase_weight
+
+    if 'Min' in cfg.filter_type_str:
+        final_phase = min_p
     elif 'Mixed' in cfg.filter_type_str:
         # Lasketaan dynaaminen siirtymäalue oktaaveina (n. 1.0 oktaavia)
         # f_start = f_split / 1.41, f_end = f_split * 1.41
@@ -467,10 +968,13 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         # Yhdistetään vaiheet: 
         # Lows: -theo_xo (Linear Phase correction for crossovers)
         # Highs: min_p (Minimum Phase for natural transient response)
-        final_phase = (1 - sm_mask) * (-theo_xo) + sm_mask * min_p
+        low_phase = (-theo_xo) + extra_phase
+        final_phase = (1 - sm_mask) * low_phase + sm_mask * min_p
         
         logger.info(f"Mixed Phase blend: Transition centered at {f_center}Hz over 1.0 octave.")
-    else: final_phase = -theo_xo
+    else:
+        # Linear/Asym: -theo_xo + confidence-ohjattu excess-phase korjaus
+        final_phase = (-theo_xo) + extra_phase
 
     raw_imp = scipy.fft.irfft(total_mag * np.exp(1j * final_phase), n=n_fft)
     
@@ -531,31 +1035,12 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     impulse *= window
     impulse -= np.mean(impulse) # DC-poisto
     
-    
-    # --- 9. CLIP PREVENTION & HEADROOM (UUSI OSIO) ---
-    # Lasketaan suodattimen suurin mahdollinen vahvistus (Boost + Global Gain)
-    current_peak_gain = np.max(gain_db + cfg.global_gain_db)
-    
-    # Automaattinen headroom: Jos suodin korostaa, vaimennetaan kokonaistasoa
-    # vastaavasti, jotta huippu on tasan 0 dB (tai -0.1 dB varmuuden vuoksi).
-    auto_headroom_db = 0.0
-    if current_peak_gain > 0:
-        auto_headroom_db = -current_peak_gain - 0.1
-        logger.info(f"Clip Prevention: Applied {auto_headroom_db:.2f} dB headroom.")
-
-    # Lasketaan lopullinen magnitudivaste sisältäen suojavaran
-    final_gain_total = gain_db + cfg.global_gain_db + auto_headroom_db
-    total_mag = 10**(final_gain_total / 20.0)
-    
-    # Jatka vaiheen generointiin kuten ennen, mutta käytä total_mag
-    min_p = calculate_minimum_phase(total_mag)
-    
-    
     # --- 11. STATS & RETURN ---
     max_peak = np.max(np.abs(impulse))
     if cfg.do_normalize and max_peak > 0: impulse *= (0.89 / max_peak)
 
     stats = {
+        'analysis_mode': analysis_mode,
         'freq_axis': freq_axis.tolist(),
         'target_mags': target_mags.tolist(),
         'measured_mags': (m_anal - calc_offset_db).tolist(),
@@ -565,7 +1050,12 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'smart_scan_range': [float(s_min), float(s_max)],
         'eff_target_db': float(target_level_db),
         'offset_db': float(calc_offset_db),
+        'meas_level_db_window': float(meas_level_db_window),
+        'target_level_db_window': float(target_level_db_window),
+        'offset_method': str(offset_method),
         'rt60_val': float(current_rt60),
+        'rt60_band_avg': float(band_avg),
+        'rt60_bands': rt60_bands,        
         'avg_confidence': float(np.mean(conf_mask)*100),
         'delay_samples': float((delay_slope * cfg.fs) / (2 * np.pi)) if 'delay_slope' in locals() else 0.0,
         'peak_before_norm': float(20*np.log10(max_peak + 1e-12)),
@@ -573,4 +1063,11 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'peak_gain_db': float(current_peak_gain),
         'final_max_db': float(np.max(final_gain_total))
     }
+
+    # attach comparison-mode stats (if any)
+    if isinstance(cmp, dict) and cmp:
+        stats.update(cmp)
+        if stats.get('analysis_mode') != "comparison":
+            stats['analysis_mode'] = "native"
+
     return impulse, stats
