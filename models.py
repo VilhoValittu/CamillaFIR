@@ -17,6 +17,7 @@ class FilterConfig:
     max_boost_db: float = 5.0       # Suurin sallittu korostus    
     max_cut_db: float = 15.0        # Suurin sallittu vaimennus (negatiivinen gain, dB)
     phase_limit: float = 1000.0     # Vaihekorjauksen yläraja
+    phase_safe_2058: bool = False   # 2058-safe: ei huoneen vaihekorjausta (vain -theo_xo / minphase)
     enable_mag_correction: bool = True # Onko magnitudikorjaus päällä
     
     # --- 3. TASOITUS JA FDW ---
@@ -40,6 +41,7 @@ class FilterConfig:
     ir_window_ms_left: float = 10  # Vasemman puolen aikaikkuna (Left / Pre-ringing)
     mixed_split_freq: float = 300.0 # Mixed Phase -suodattimen jakotaajuus
     trans_width: float = 100.0      # Siirtymäalueen leveys ylärajalla
+   
 
     # --- 5. RAKENTEELLISET ASETUKSET (HPF, XO, TARGET) ---
     hpf_settings: Optional[Dict] = None  # Ylipäästösuotimen asetukset (enabled, freq, order)
