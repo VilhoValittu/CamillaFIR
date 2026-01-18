@@ -10,7 +10,26 @@ from datetime import datetime
 # Tuodaan tarvittavat funktiot DSP-moduulista
 from camillafir_dsp import apply_smoothing_std, psychoacoustic_smoothing, calculate_rt60
 
-#--- Plot v.2.7.3
+#--- Plot v.2.7.4
+def _resource_path(rel_path: str) -> str:
+    """
+    Resource path that works both in dev and PyInstaller (onedir/onefile).
+    - In PyInstaller: sys._MEIPASS points to extracted / bundled base.
+    - In dev: use directory of this file.
+    """
+    if hasattr(sys, "_MEIPASS"):
+        base = sys._MEIPASS  # type: ignore[attr-defined]
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, rel_path)
+
+def _plotly_js_path() -> str | None:
+    """
+    Returns absolute path to local Plotly JS if present, else None.
+    """
+    p = _resource_path(os.path.join("assets", "plotly.min.js"))
+    return p if os.path.isfile(p) else None
+
 
 def smooth_complex(freqs, spec, oct_frac=1.0):
     """Tasoittaa kompleksisen vasteen Real ja Imag osat erikseen vaiheen säilyttämiseksi."""
@@ -500,9 +519,17 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
 
         fig.update_layout(height=1600, width=1750, template="plotly_white", title_text=f"{title} Analysis")
         
-        js_mode = 'cdn' if create_full_html else 'require'
-        
+        # Use local Plotly JS when generating full HTML (offline-safe).
+        # If local JS is missing, fall back to CDN.
+        if create_full_html:
+            local_js = _plotly_js_path()
+            js_mode = local_js if local_js else "cdn"
+        else:
+            # Embedded mode: keep legacy behavior
+            js_mode = "require"
+
         return fig.to_html(include_plotlyjs=js_mode, full_html=create_full_html)
+
         
     except Exception as e: return f"Visual Engine Error: {str(e)}"
         
@@ -541,4 +568,3 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
         print(f"Virhe visualisoinnissa ({title}): {e}")
         return b""
     
-
