@@ -186,13 +186,63 @@
         "guide_ai_title": "🧠 Acoustic Intelligence",
         "guide_ai_body": "**Acoustic Intelligence** (v2.6.2) analyzes room acoustics automatically.\n- **Confidence:** Aim for >85%. Low values suggest high background noise.\n- **Events:** Distinguishes between standing waves (Resonance) and bounces (Reflection).",
         "guide_summary_title": "📝 How to read Summary.txt",
-        "guide_summary_body": "- **Error (ms):** How long a frequency rings. >300ms is a critical room mode.\n- **Distance (m):** Path length of a reflection (e.g. 13m = back wall bounce).\n- **Markers:** Specifically targeted frequencies for acoustic cleaning."
+        "guide_summary_body": "- **Error (ms):** How long a frequency rings. >300ms is a critical room mode.\n- **Distance (m):** Path length of a reflection (e.g. 13m = back wall bounce).\n- **Markers:** Specifically targeted frequencies for acoustic cleaning.",
+        "auto_taps_title": "🧮 Auto-taps (Multi-rate)",
+        "auto_taps_body": "When **Generate All Rates** is enabled, the tap count is automatically scaled so the filter **time length stays constant**.",
+        "auto_taps_ref": "**Reference:** 44.1 kHz → 65 536 taps",
+        "df_smoothing_label": "Frequency correction consistency (A/B)",
+        "df_smoothing_help": "When enabled, the frequency correction smoothing keeps a constant width in Hz regardless of sample rate or tap count. This makes the correction behavior more consistent across different sample rates and often reduces over-smoothing at high fs/tap combinations. A/B test by toggling this option and re-generating the filters.",
+        "badge_experimental": "(experimental)",
+        "comparison_mode": "Comparison mode (lock Summary scoring grid)",
+        "comparison_mode_help": "Locks Target Match & Acoustic Score analysis to a fixed 44.1 kHz / 65536 grid, so scores stay comparable when changing fs/taps.",
+        "low_bass_cut_hz": "Low-bass boost lock (Hz)",
+        "low_bass_cut_hz_help": "Below this frequency, the filter will never boost — cuts only. This is not a filter and does not affect phase.",
+
+        "exc_prot_title": "Excursion Protection (Driver Safety)",
+        "exc_prot_help_ui": "Dynamic protection that limits bass boost based on measurement and target. Prevents excessive driver excursion.",
+        "exc_freq_help_ui": "Frequency below which protection becomes more aggressive.",
+
+        "low_bass_cut_hint": "⚠️ Note: Boost lock is a policy (no boost below the limit). Excursion Protection is a safety system.",
+        "exc_prot_hint": "⚠️ Note: Excursion Protection is not the same as boost lock. Protection reacts dynamically to the measurement.",
+
+        "guide_low_bass_cut_title": "🧱 Guide: Low-bass boost lock",
+        "guide_low_bass_cut_body": "**Boost lock** is a correction-policy limiter.\n\n- Prevents the FIR filter from boosting infra-bass.\n- No added latency and no phase impact.\n- Useful for room modes and bass-reflex systems.\n\n**Tip:** Set slightly above the usable low-frequency limit of your system.",
+
+        "guide_exc_prot_title": "🛡️ Guide: Excursion Protection",
+        "guide_exc_prot_body": "**Excursion Protection** is a safety mechanism.\n\n- Reacts dynamically to measurement and target.\n- May reduce boost or enforce cuts.\n- Designed to protect the driver from over-excursion.\n\nThis does not replace an HPF, but complements it."
+
+
+
     },
     
     "fi": {
+        "low_bass_cut_hz": "Low-bass boost -esto (Hz)",
+        "low_bass_cut_hz_help": "Alle tämän taajuuden suodin ei koskaan tee boostia – vain leikkaus sallitaan. Tämä ei ole suodin eikä vaikuta vaiheeseen.",
+
+        "exc_prot_title": "Elementin suojaus (Excursion Protection)",
+        "exc_prot_help_ui": "Dynaaminen suojaus, joka rajoittaa basson boostia mittauksen ja tavoitteen perusteella. Suojaa kaiutinelementtiä yliohjaukselta.",
+        "exc_freq_help_ui": "Taajuus, jonka alapuolella suojaus aktivoituu voimakkaimmin.",
+
+        "low_bass_cut_hint": "⚠️ Huom: Boost-esto on sääntö (ei boostia alle rajan). Excursion Protection on turvamekanismi.",
+        "exc_prot_hint": "⚠️ Huom: Excursion Protection ei ole sama kuin boost-esto. Suojaus reagoi dynaamisesti mittaukseen.",
+
+        "guide_low_bass_cut_title": "🧱 Guide: Low-bass boost -esto",
+        "guide_low_bass_cut_body": "**Boost-esto** on korjauslogiikan rajoitin.\n\n- Estää FIR-suodinta nostamasta infraa (esim. 20–40 Hz).\n- Ei lisää viivettä eikä vaikuta vaiheeseen.\n- Hyödyllinen huonemodeihin ja refleksikaiuttimille.\n\n**Vinkki:** Aseta arvo hieman järjestelmän todellisen hyötyalueen yläpuolelle.",
+
+        "guide_exc_prot_title": "🛡️ Guide: Excursion Protection",
+        "guide_exc_prot_body": "**Excursion Protection** on turvamekanismi.\n\n- Reagoi mittaukseen ja tavoitekäyrään.\n- Voi rajoittaa boostia tai pakottaa leikkausta.\n- Tarkoitettu estämään elementin yliohjaus.\n\nTämä ei korvaa HPF-suodinta, mutta toimii sen rinnalla.",
+
+        "comparison_mode": "Vertailutila (lukitse Summary-pisteytys)",
+        "comparison_mode_help": "Lukitsee Target Match & Acoustic Score -analyysin kiinteään 44,1 kHz / 65536 -tilaaan, jolloin pisteet pysyvät vertailukelpoisina vaikka fs/taps vaihtuu.",
+        "badge_experimental": "(kokeellinen)",
+        "df_smoothing_label": "Taajuuskorjauksen tarkkuuden vakiointi (A/B)",
+        "df_smoothing_help": "Kun päällä, taajuuskorjauksen tasoitus pidetään samanlevyisenä hertseissä riippumatta näytetaajuudesta tai taps-määrästä. Tämä tekee korjauksesta johdonmukaisemman eri sample rate -asetuksilla ja vähentää ylisiloitusta korkeilla fs/taps-yhdistelmillä. A/B-testaa kytkemällä päälle tai pois ja generoimalla suotimet uudelleen.",
+        "auto_taps_title": "🧮 Auto-taps (Multi-rate)",
+        "auto_taps_body": "Kun **Luo kaikki taajuudet** / **Generate All Rates** on päällä, taps-määrä skaalataan automaattisesti niin, että suotimen **aikapituus pysyy vakiona**.",
+        "auto_taps_ref": "**Referenssi:** 44.1 kHz → 65 536 taps",
         "lvl_mode": "Tila",
         "lvl_mode_auto": "Smart Scan (Automaattinen optimointi)",
-        "lvl_mode_manual": "Manuaalinen ikkuna",
+        "lvl_mode_manual": "Manuaali",
         "lvl_min": "Alaraja (Hz)",
         "lvl_max": "Yläraja (Hz)",
         "lvl_target_db": "Tavoitetaso (dB)",
@@ -296,7 +346,7 @@
         "max_freq": "Korjaus Max (Hz)",
         "reg_strength": "Regularisointi (dB)",
         "reg_help": "Estää kapeiden kuoppien ylikorjaamisen. 30-50dB suositeltu.",
-        "lvl_mode": "Tason täsmäys",
+        "lvl_mode": "Tason määritys",
         "lvl_mode_help": "Miten suodin sovitetaan mittauksen tasoon.",
         "lvl_auto": "Automaattinen",
         "lvl_man": "Manuaalinen dB",
@@ -307,7 +357,7 @@
         "algo_median": "Mediaani",
         "lvl_min": "Alue Min (Hz)",
         "lvl_max": "Alue Max (Hz)",
-        "lvl_help": "Taajuusalue tason täsmäykseen.",
+        "lvl_help": "Taajuusalue tason määritykseen.",
         "norm_opt": "Normalisointi",
         "enable_norm": "Normalisoi -1.0 dB",
         "norm_help": "Varmistaa ettei suotimen huippu ylitä -1.0 dBFS.",
