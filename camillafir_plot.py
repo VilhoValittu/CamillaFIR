@@ -77,12 +77,22 @@ def format_summary_content(settings, l_stats, r_stats):
     # Nämä voivat tulla settingsistä tai puuttua (jos UI ei vielä aseta).
     max_cut_db = float(settings.get('max_cut_db', 15.0) or 15.0)
     max_slope = float(settings.get('max_slope_db_per_oct', 12.0) or 12.0)
+    # optional (new): separate boost/cut slope; if missing, fall back to legacy
+    max_slope_boost = float(settings.get('max_slope_boost_db_per_oct', 0.0) or 0.0) or max_slope
+    max_slope_cut   = float(settings.get('max_slope_cut_db_per_oct', 0.0) or 0.0) or max_slope
     low_bass_cut_hz = float(settings.get('low_bass_cut_hz', 40.0) or 40.0)
-    lines.append(
-        f"Max cut: -{max_cut_db:.1f} dB | "
-        f"Max slope: {max_slope:.1f} dB/oct | "
-        f"Low-bass cut: <{low_bass_cut_hz:.1f} Hz (cuts only)"
-    )
+    if max_slope_boost != max_slope_cut:
+        lines.append(
+            f"Max cut: -{max_cut_db:.1f} dB | "
+            f"Slope: boost {max_slope_boost:.1f} / cut {max_slope_cut:.1f} dB/oct | "
+            f"Low-bass cut: <{low_bass_cut_hz:.1f} Hz (cuts only)"
+        )
+    else:
+        lines.append(
+            f"Max cut: -{max_cut_db:.1f} dB | "
+            f"Max slope: {max_slope:.1f} dB/oct | "
+            f"Low-bass cut: <{low_bass_cut_hz:.1f} Hz (cuts only)"
+        )
 
 
     # ---- Helpers ----
