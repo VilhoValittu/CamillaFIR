@@ -1,17 +1,115 @@
 import numpy as np
 import scipy.signal
 import scipy.fft
+import math
 import scipy.ndimage
 import logging
 logger = logging.getLogger("CamillaFIR.dsp")
 from models import FilterConfig
 from camillafir_leveling import compute_leveling
-#CamillaFIR DSP Engine v1.0.6
+#CamillaFIR DSP Engine v1.0.7
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
 #1.04 All features works at different configurations
 #1.05 Multiplier changes
 #1.06 added no phase correction mode (2058-safe)
+
+def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto_headroom_db=0.0, logger_obj=None):
+    """
+    Lightweight stage checkpoint for debugging gain evolution.
+    Records boost/cut peaks and bin counts inside correction mask.
+    """
+    try:
+        out = {
+            "stage": str(stage_name),
+            "boost_peak_db": 0.0,
+            "cut_peak_db": 0.0,
+            "boost_bins": 0,
+            "cut_bins": 0,
+            "net_boost_peak_db": 0.0
+        }
+        if arr_db is None or mask_c is None or not np.any(mask_c):
+            return out
+        v = np.asarray(arr_db, dtype=float)
+        m = np.asarray(mask_c, dtype=bool)
+        vv = v[m]
+        out["boost_peak_db"] = float(np.max(vv)) if vv.size else 0.0
+        out["cut_peak_db"] = float(np.min(vv)) if vv.size else 0.0
+        out["boost_bins"] = int(np.sum(vv > 1e-6))
+        out["cut_bins"] = int(np.sum(vv < -1e-6))
+        out["net_boost_peak_db"] = float(out["boost_peak_db"] + float(global_gain_db) + float(auto_headroom_db))
+        if logger_obj is not None:
+            logger_obj.info(
+                f"StageProbe[{out['stage']}]: "
+                f"boost_peak={out['boost_peak_db']:.2f} dB, cut_peak={out['cut_peak_db']:.2f} dB, "
+                f"boost_bins={out['boost_bins']}, cut_bins={out['cut_bins']}, "
+                f"net_boost_peak={out['net_boost_peak_db']:.2f} dB"
+            )
+        return out
+    except Exception:
+        return {
+            "stage": str(stage_name),
+            "boost_peak_db": 0.0,
+            "cut_peak_db": 0.0,
+            "boost_bins": 0,
+            "cut_bins": 0,
+            "net_boost_peak_db": 0.0
+        }
+
+def limit_slope_per_octave_asym(freq_axis, gain_db, max_db_per_oct_boost, max_db_per_oct_cut):
+    """
+    Asymmetric slope limiter in dB/oct:
+      - 'boost' slope limit applies when the curve rises (dg > 0)
+      - 'cut' slope limit applies when the curve falls (dg < 0)
+
+    This protects small boost candidates from being flattened to 0 by a too-tight symmetric limiter.
+    Backward compatible usage: set both limits equal to old max_slope_db_per_oct.
+    """
+    f = np.asarray(freq_axis, dtype=float)
+    g = np.asarray(gain_db, dtype=float).copy()
+
+    b = float(max_db_per_oct_boost or 0.0)
+    c = float(max_db_per_oct_cut or 0.0)
+    if b <= 0 and c <= 0:
+        return g
+
+    # Work only on valid positive freqs (avoid log2(0))
+    idx = np.where(f > 0.0)[0]
+    if idx.size < 2:
+        return g
+
+    lf = np.log2(f[idx])
+
+    def _limit_step(prev_val, cur_val, dx_oct):
+        if dx_oct <= 0:
+            return cur_val
+        dg = cur_val - prev_val
+        lim = (b if dg > 0 else c) * dx_oct
+        # if one side is disabled, treat it as "infinite"
+        if (dg > 0 and b <= 0) or (dg < 0 and c <= 0):
+            return cur_val
+        if dg > lim:
+            return prev_val + lim
+        if dg < -lim:
+            return prev_val - lim
+        return cur_val
+
+    # Forward pass
+    for k in range(1, idx.size):
+        i = idx[k]
+        j = idx[k - 1]
+        dx = float(lf[k] - lf[k - 1])
+        g[i] = _limit_step(g[j], g[i], dx)
+
+    # Backward pass (enforce constraint both directions)
+    for k in range(idx.size - 2, -1, -1):
+        i = idx[k]
+        j = idx[k + 1]
+        dx = float(lf[k + 1] - lf[k])
+        g[i] = _limit_step(g[j], g[i], dx)
+    return g
+
+
 
 def apply_smart_tdc(
     freq_axis,
@@ -808,6 +906,8 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             sm_g = scipy.ndimage.gaussian_filter1d(raw_g, sigma=sigma)
 
         final_g = raw_g - (raw_g - sm_g) * (cfg.reg_strength / 100.0)
+        # Stage probes container (per channel/run)
+        stage_probes = {}
         
         # --- 8B. A-FDW suoraan korjauskäyrään ---
         # Tasoittaa final_g adaptiivisesti confidence-maskin mukaan:
@@ -831,6 +931,19 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             eff_conf = np.where(freq_axis < 100, np.maximum(conf_mask, 0.6), conf_mask)
             gain_apply = (final_g * eff_conf).copy()
 
+        # --- CHECKPOINT 1: after_gain_apply (before slope/fade/exc/limits) ---
+        try:
+            _tmp_after_apply = np.zeros_like(gain_db, dtype=float)
+            _tmp_after_apply[mask_c] = gain_apply[mask_c]
+            stage_probes["after_gain_apply"] = _stage_probe(
+                "after_gain_apply", freq_axis, _tmp_after_apply, mask_c,
+                global_gain_db=float(getattr(cfg, "global_gain_db", 0.0) or 0.0),
+                auto_headroom_db=0.0,
+                logger_obj=logger
+            )
+        except Exception:
+            pass
+
         # --- 8C. Low-bass CUT allowance (täsmäfix 32 Hz -tyyppisille moodeille) ---
         # < low_hz: sallitaan VAIN vaimennus (ei boostia),
         # ja käytetään tarvittaessa "vahvempaa" leikkausta (min(final_g, raw_g)),
@@ -842,23 +955,167 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             low_cut = np.minimum(low_cut, 0.0)                       # ei koskaan boostia
             gain_apply[low_mask] = low_cut
 
+        # --- CHECKPOINT 2: after_lowbass_policy ---
+        try:
+            _tmp_after_low = np.zeros_like(gain_db, dtype=float)
+            _tmp_after_low[mask_c] = gain_apply[mask_c]
+            stage_probes["after_lowbass_policy"] = _stage_probe(
+                "after_lowbass_policy", freq_axis, _tmp_after_low, mask_c,
+                global_gain_db=float(getattr(cfg, "global_gain_db", 0.0) or 0.0),
+                auto_headroom_db=0.0,
+                logger_obj=logger
+            )
+        except Exception:
+            pass
+
+        # --- SLOPE LIMIT (if present in your pipeline) ---
+        # NOTE: This patch assumes you have a section that modifies gain_apply or tmp via slope limiting.
+        # If your slope limiting modifies a different array, place the probe right after that modification.
+
+
         # --- 8D. Max cut + max boost (pehmeä) ---
         max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))  # default: sallitaan kohtuullinen leikkaus
+
+        # --- 8D-a. Diagnostic: config snapshot (once per run path) ---
+        try:
+            logger.info(
+                "Diagnostic: "
+                f"max_boost_db={float(getattr(cfg,'max_boost_db',0.0) or 0.0):.2f} dB, "
+                f"max_cut_db={float(max_cut_db):.2f} dB, "
+                f"low_bass_cut_hz={float(low_hz):.1f} Hz, "
+                f"exc_prot={'ON' if bool(getattr(cfg,'exc_prot',False)) else 'OFF'}, "
+                f"exc_freq={float(getattr(cfg,'exc_freq',0.0) or 0.0):.1f} Hz, "
+                f"do_normalize={'ON' if bool(getattr(cfg,'do_normalize',False)) else 'OFF'}, "
+                f"global_gain_db={float(getattr(cfg,'global_gain_db',0.0) or 0.0):.2f} dB, "
+                f"max_slope_db_per_oct={float(getattr(cfg,'max_slope_db_per_oct',0.0) or 0.0):.1f}"
+            )
+        except Exception:
+            pass
+
+        # Pre-clamp diagnostics (what the algorithm "wanted" to do before soft clip)
+        try:
+            _cand = np.zeros_like(gain_db, dtype=float)
+            _cand[mask_c] = gain_apply[mask_c]
+            boost_cand_peak = float(np.max(_cand[mask_c])) if np.any(mask_c) else 0.0
+            cut_cand_peak = float(np.min(_cand[mask_c])) if np.any(mask_c) else 0.0
+            n_boost_cand = int(np.sum((_cand > 1e-6) & mask_c))
+            n_boost_cand_low = int(np.sum((_cand > 1e-6) & mask_c & (freq_axis <= low_hz)))
+            if bool(getattr(cfg, "exc_prot", False)):
+                exc_f = float(getattr(cfg, "exc_freq", 0.0) or 0.0)
+                n_boost_cand_exc = int(np.sum((_cand > 1e-6) & mask_c & (freq_axis < exc_f)))
+            else:
+                n_boost_cand_exc = 0
+        except Exception:
+            boost_cand_peak, cut_cand_peak = 0.0, 0.0
+            n_boost_cand, n_boost_cand_low, n_boost_cand_exc = 0, 0, 0
         tmp = np.zeros_like(gain_db, dtype=float)
         tmp[mask_c] = gain_apply[mask_c]
+
+        # --- CHECKPOINT 3: pre_softclip (this is the input to soft_clip_gain) ---
+        try:
+            stage_probes["pre_softclip"] = _stage_probe(
+                "pre_softclip", freq_axis, tmp, mask_c,
+                global_gain_db=float(getattr(cfg, "global_gain_db", 0.0) or 0.0),
+                auto_headroom_db=0.0,
+                logger_obj=logger
+            )
+        except Exception:
+            pass
+
+
+        # --- 8D-b. Clamp diagnostics: SOFT CLIP stage (what got limited here?) ---
+        try:
+            _pre_soft = tmp.copy()
+            _max_boost = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
+            _max_cut = float(max_cut_db)
+
+            # How much candidate exceeded limits before soft clip?
+            if np.any(mask_c):
+                over_boost = float(np.max(_pre_soft[mask_c] - _max_boost)) if _max_boost > 0 else float(np.max(_pre_soft[mask_c]))
+                over_boost = max(0.0, over_boost)
+                over_cut = float(np.max((-_pre_soft[mask_c]) - _max_cut))
+                over_cut = max(0.0, over_cut)
+            else:
+                over_boost, over_cut = 0.0, 0.0
+        except Exception:
+            _pre_soft = tmp
+            over_boost, over_cut = 0.0, 0.0
+
         tmp = soft_clip_gain(tmp, cfg.max_boost_db, max_cut_db)
+
+        try:
+            _post_soft = tmp
+            if np.any(mask_c):
+                softclip_boost_bins = int(np.sum((_pre_soft[mask_c] > (_max_boost + 1e-9)) & (_post_soft[mask_c] <= (_max_boost + 1e-9))))
+                softclip_cut_bins   = int(np.sum((_pre_soft[mask_c] < (-_max_cut - 1e-9)) & (_post_soft[mask_c] >= (-_max_cut - 1e-9))))
+            else:
+                softclip_boost_bins, softclip_cut_bins = 0, 0
+            logger.info(
+                "Clamp: soft_clip "
+                f"(max_boost={_max_boost:.2f} dB, max_cut={_max_cut:.2f} dB) -> "
+                f"boost_clipped_bins={softclip_boost_bins}, cut_clipped_bins={softclip_cut_bins}, "
+                f"worst_over_boost={over_boost:.2f} dB, worst_over_cut={over_cut:.2f} dB"
+            )
+        except Exception:
+            softclip_boost_bins, softclip_cut_bins = 0, 0
+            over_boost, over_cut = 0.0, 0.0
+
+
+        # --- CHECKPOINT 4: post_softclip ---
+        try:
+            stage_probes["post_softclip"] = _stage_probe(
+                "post_softclip", freq_axis, tmp, mask_c,
+                global_gain_db=float(getattr(cfg, "global_gain_db", 0.0) or 0.0),
+                auto_headroom_db=0.0,
+                logger_obj=logger
+            )
+        except Exception:
+            pass
+
+
         gain_db[mask_c] = tmp[mask_c]
 
         # --- 8E. Slope/oktaavi -rajoitin (gain-käyrän “jyrkkyys”) ---
         # Huom: tehdään ennen exc_prot:ia ja ajetaan exc_prot lopuksi uudelleen,
         # jotta slope-limitointi ei voi “vuotaa” boostia suojavyöhykkeille.
-        max_slope = float(getattr(cfg, "max_slope_db_per_oct", 12.0))  # 0 = pois
-        if max_slope > 0:
-            # Rajoitetaan vain korjausalueella
+        max_slope = float(getattr(cfg, "max_slope_db_per_oct", 24.0) or 0.0)  # legacy (symmetric)
+        # NEW: separate limits for boost/cut; <=0 inherits legacy max_slope
+        max_slope_boost = float(getattr(cfg, "max_slope_boost_db_per_oct", 0.0) or 0.0)
+        max_slope_cut   = float(getattr(cfg, "max_slope_cut_db_per_oct", 0.0) or 0.0)
+        if max_slope_boost <= 0.0:
+            max_slope_boost = max_slope
+        if max_slope_cut <= 0.0:
+            max_slope_cut = max_slope
+
+        # Only run if any slope limiting is enabled
+        if max_slope > 0 or max_slope_boost > 0 or max_slope_cut > 0:
+            # Rajoitetaan vain korjausalueella, mutta pidetään ulkopuoli koskemattomana
             g2 = gain_db.copy()
-            g2 = limit_slope_per_octave(freq_axis, g2, max_db_per_oct=max_slope)
-            # Pidetään ulkopuoli koskemattomana
+            try:
+                # If equal, keep old behavior (bit-for-bit close) using symmetric limiter
+                if max_slope_boost == max_slope_cut and max_slope_boost > 0:
+                    g2 = limit_slope_per_octave(freq_axis, g2, max_db_per_oct=float(max_slope_boost))
+                else:
+                    g2 = limit_slope_per_octave_asym(
+                        freq_axis,
+                        g2,
+                        max_db_per_oct_boost=float(max_slope_boost),
+                        max_db_per_oct_cut=float(max_slope_cut),
+                    )
+            except Exception:
+                # Never break the pipeline due to slope limiting
+                pass
             gain_db[mask_c] = g2[mask_c]
+
+            try:
+                logger.info(
+                    "Slope limit: "
+                    f"boost={float(max_slope_boost):.1f} dB/oct | "
+                    f"cut={float(max_slope_cut):.1f} dB/oct "
+                    f"(legacy max_slope_db_per_oct={float(max_slope):.1f})"
+                )
+            except Exception:
+                pass
         
         f_start = max(cfg.mag_c_max - cfg.trans_width, cfg.mag_c_min)
         
@@ -907,13 +1164,101 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 if np.any(trans):
                     fade = (freq_axis[trans] - hpf_f) / (hpf_end - hpf_f)
                     gain_db[trans] *= fade
+
+        # --- CHECKPOINT 5: after_fade (place right AFTER your fade/transition operations) ---
+        # If your fade is applied on gain_db, this is correct. If it is applied on another array, move accordingly.
+        try:
+            stage_probes["after_fade"] = _stage_probe(
+                "after_fade", freq_axis, gain_db, mask_c,
+                global_gain_db=float(getattr(cfg, "global_gain_db", 0.0) or 0.0),
+                auto_headroom_db=0.0,
+                logger_obj=logger
+            )
+        except Exception:
+            pass
+
+        # --- CHECKPOINT 6: after_slope (place right AFTER your slope-limit operation) ---
+        # IMPORTANT: If slope-limit happens earlier than fade in your code, move this probe accordingly.
+        # This stays here as a fallback; you should move it to the actual slope-limit section if different.
+        try:
+            if "after_slope" not in stage_probes:
+                stage_probes["after_slope"] = _stage_probe(
+                    "after_slope", freq_axis, gain_db, mask_c,
+                    global_gain_db=float(getattr(cfg, "global_gain_db", 0.0) or 0.0),
+                    auto_headroom_db=0.0,
+                    logger_obj=logger
+                )
+        except Exception:
+            pass
+
         
         # --- 8F. Final safety clamp (max boost / max cut) ---
         # Varmistetaan että mikään myöhempi operaatio (fade/slope/exc_prot) ei ylitä rajoja.
         max_cut_db = float(getattr(cfg, "max_cut_db", 15.0))
         max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
-        gain_db = np.minimum(gain_db, float(cfg.max_boost_db))
+
+
+        # --- CHECKPOINT 7: post_hardclamp ---
+        try:
+            stage_probes["post_hardclamp"] = _stage_probe(
+                "post_hardclamp", freq_axis, gain_db, mask_c,
+                global_gain_db=float(getattr(cfg, "global_gain_db", 0.0) or 0.0),
+                auto_headroom_db=0.0,
+                logger_obj=logger
+            )
+        except Exception:
+            pass
+
+        # --- 8F-b. Clamp diagnostics: FINAL HARD CLAMP stage ---
+        try:
+            _pre_hard = gain_db.copy()
+            _max_boost2 = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
+            _max_cut2 = float(max_cut_db)
+        except Exception:
+            _pre_hard = gain_db
+            _max_boost2, _max_cut2 = 0.0, float(max_cut_db)
+
+        gain_db = np.minimum(gain_db, float(getattr(cfg, "max_boost_db", 0.0) or 0.0))
         gain_db = np.maximum(gain_db, -max_cut_db)
+
+        try:
+            if np.any(mask_c):
+                hardclamp_boost_bins = int(np.sum((_pre_hard[mask_c] > (_max_boost2 + 1e-9)) & (gain_db[mask_c] <= (_max_boost2 + 1e-9))))
+                hardclamp_cut_bins   = int(np.sum((_pre_hard[mask_c] < (-_max_cut2 - 1e-9)) & (gain_db[mask_c] >= (-_max_cut2 - 1e-9))))
+                hard_over_boost = max(0.0, float(np.max(_pre_hard[mask_c] - _max_boost2)))
+                hard_over_cut   = max(0.0, float(np.max((-_pre_hard[mask_c]) - _max_cut2)))
+            else:
+                hardclamp_boost_bins, hardclamp_cut_bins = 0, 0
+                hard_over_boost, hard_over_cut = 0.0, 0.0
+            logger.info(
+                "Clamp: hard_clamp "
+                f"(max_boost={_max_boost2:.2f} dB, max_cut={_max_cut2:.2f} dB) -> "
+                f"boost_clipped_bins={hardclamp_boost_bins}, cut_clipped_bins={hardclamp_cut_bins}, "
+                f"worst_over_boost={hard_over_boost:.2f} dB, worst_over_cut={hard_over_cut:.2f} dB"
+            )
+        except Exception:
+            hardclamp_boost_bins, hardclamp_cut_bins = 0, 0
+            hard_over_boost, hard_over_cut = 0.0, 0.0
+
+        # --- 8F-a. Diagnostic: post-clamp boost/cut summary ---
+        try:
+            if np.any(mask_c):
+                boost_peak_db = float(np.max(gain_db[mask_c]))
+                cut_peak_db = float(np.min(gain_db[mask_c]))
+                n_boost = int(np.sum((gain_db > 1e-6) & mask_c))
+            else:
+                boost_peak_db, cut_peak_db, n_boost = 0.0, 0.0, 0
+            logger.info(
+                "Diagnostic: "
+                f"boost_peak={boost_peak_db:.2f} dB, cut_peak={cut_peak_db:.2f} dB, "
+                f"boost_bins={n_boost}, "
+                f"boost_candidate_peak={float(boost_cand_peak):.2f} dB, "
+                f"boost_candidate_bins={int(n_boost_cand)}, "
+                f"boost_candidate_bins_lowbass={int(n_boost_cand_low)}, "
+                f"boost_candidate_bins_excprot={int(n_boost_cand_exc)}"
+            )
+        except Exception:
+            boost_peak_db, cut_peak_db, n_boost = 0.0, 0.0, 0
 
     # --- 9. VAIHEEN GENERONTI ---
                 # --- THEORETICAL PHASE (single source of truth) ---
@@ -956,19 +1301,35 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 hpf_db = apply_hpf_to_mags(freq_axis, np.zeros_like(freq_axis), hpf_f, hpf_order)
                 gain_db = gain_db + hpf_db
 
-    # --- 9B. CLIP PREVENTION & HEADROOM (MOVED UP, so it affects the actual FIR) ---
+    # --- 9B. CLIP PREVENTION & HEADROOM ---
+    # NOTE:
+    # - If normalization is OFF, we do NOT auto-lower the whole response.
+    #   (Otherwise users will observe "no boosts" + global -1..-2 dB drop.)
+    # - If normalization is ON, we apply a small headroom so the FIR does not clip.
     current_peak_gain = float(np.max(gain_db + cfg.global_gain_db))
     auto_headroom_db = 0.0
-    if current_peak_gain > 0:
+
+    if bool(getattr(cfg, "do_normalize", False)) and current_peak_gain > 0.0:
         auto_headroom_db = -current_peak_gain - 0.1
-        logger.info(f"Clip Prevention: Applied {auto_headroom_db:.2f} dB headroom.")
+        logger.info(
+            f"Clip Prevention (Normalize ON): peak={current_peak_gain:.2f} dB -> headroom={auto_headroom_db:.2f} dB"
+        )
+    else:
+        # Keep behavior transparent in logs.
+        if current_peak_gain > 0.0:
+            logger.info(
+                f"Clip Prevention: OFF (Normalize OFF). peak would be {current_peak_gain:.2f} dB"
+            )
+        else:
+            logger.info("Clip Prevention: no positive peak gain detected")
 
     final_gain_total = gain_db + cfg.global_gain_db + auto_headroom_db
     total_mag = 10**(final_gain_total / 20.0)
     min_p = calculate_minimum_phase(total_mag)
 
     # --- 9C. PHASE LOGIC (single entry point) ---
-    theo_xo = calculate_theoretical_phase(freq_axis, cfg.crossovers)
+    # IMPORTANT: do NOT recompute theo_xo here without HPF/crossover context.
+    # `theo_xo` above is the single source of truth (and already includes HPF if enabled).
 
     if bool(getattr(cfg, "phase_safe_2058", False)):
         # === 2058-SAFE PHASE MODE ===
@@ -1159,10 +1520,120 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'avg_confidence': float(np.mean(conf_mask)*100),
         'delay_samples': float((delay_slope * cfg.fs) / (2 * np.pi)) if 'delay_slope' in locals() else 0.0,
         'peak_before_norm': float(20*np.log10(max_peak + 1e-12)),
+        'do_normalize': bool(getattr(cfg, 'do_normalize', False)),
         'auto_headroom_db': float(auto_headroom_db),
         'peak_gain_db': float(current_peak_gain),
-        'final_max_db': float(np.max(final_gain_total))
+        'final_max_db': float(np.max(final_gain_total)),
+
+        # Diagnostics for user-visible Summary / troubleshooting
+        'max_boost_db': float(getattr(cfg, 'max_boost_db', 0.0) or 0.0),
+        'max_cut_db': float(abs(float(getattr(cfg, 'max_cut_db', 15.0) or 15.0))),
+        'low_bass_cut_hz': float(getattr(cfg, 'low_bass_cut_hz', 40.0) or 40.0),
+        'exc_prot': bool(getattr(cfg, 'exc_prot', False)),
+        'exc_freq': float(getattr(cfg, 'exc_freq', 0.0) or 0.0),
+        'max_slope_db_per_oct': float(getattr(cfg, 'max_slope_db_per_oct', 0.0) or 0.0),
+        # NEW: expose effective asymmetric slope limits for Summary/debug
+        'max_slope_boost_db_per_oct': float(getattr(cfg, 'max_slope_boost_db_per_oct', 0.0) or 0.0),
+        'max_slope_cut_db_per_oct': float(getattr(cfg, 'max_slope_cut_db_per_oct', 0.0) or 0.0),
+
+        # Post-clamp peaks & counts in correction band
+        'boost_peak_db': float(locals().get('boost_peak_db', 0.0)),
+        'cut_peak_db': float(locals().get('cut_peak_db', 0.0)),
+        'boost_bins': int(locals().get('n_boost', 0)),
+        'boost_candidate_peak_db': float(locals().get('boost_cand_peak', 0.0)),
+        'boost_candidate_bins': int(locals().get('n_boost_cand', 0)),
+        'boost_candidate_bins_lowbass': int(locals().get('n_boost_cand_low', 0)),
+        'boost_candidate_bins_excprot': int(locals().get('n_boost_cand_exc', 0))
     }
+
+
+    # Attach stage probes (for Summary + debugging)
+    try:
+        # ensure JSON-serializable plain dicts
+        stats["stage_probes"] = {k: dict(v) for k, v in stage_probes.items()} if isinstance(stage_probes, dict) else {}
+    except Exception:
+        stats["stage_probes"] = {}
+
+    # --- Clamp summary into stats (for Summary.txt) ---
+    try:
+        stats['softclip_boost_bins'] = int(locals().get('softclip_boost_bins', 0))
+        stats['softclip_cut_bins']   = int(locals().get('softclip_cut_bins', 0))
+        stats['softclip_worst_over_boost_db'] = float(locals().get('over_boost', 0.0))
+        stats['softclip_worst_over_cut_db']   = float(locals().get('over_cut', 0.0))
+
+        stats['hardclamp_boost_bins'] = int(locals().get('hardclamp_boost_bins', 0))
+        stats['hardclamp_cut_bins']   = int(locals().get('hardclamp_cut_bins', 0))
+        stats['hardclamp_worst_over_boost_db'] = float(locals().get('hard_over_boost', 0.0))
+        stats['hardclamp_worst_over_cut_db']   = float(locals().get('hard_over_cut', 0.0))
+
+        stats['clamp_summary'] = (
+            f"soft_clip: boost={stats['softclip_boost_bins']} cut={stats['softclip_cut_bins']} "
+            f"(worst_over_boost={stats['softclip_worst_over_boost_db']:.2f} dB, worst_over_cut={stats['softclip_worst_over_cut_db']:.2f} dB); "
+            f"hard_clamp: boost={stats['hardclamp_boost_bins']} cut={stats['hardclamp_cut_bins']} "
+            f"(worst_over_boost={stats['hardclamp_worst_over_boost_db']:.2f} dB, worst_over_cut={stats['hardclamp_worst_over_cut_db']:.2f} dB)"
+        )
+    except Exception:
+        stats['clamp_summary'] = "n/a"
+
+
+    # --- BOOST BLOCKED REASONS (human-readable) ---
+    try:
+        max_boost_db_cfg = float(getattr(cfg, 'max_boost_db', 0.0) or 0.0)
+        low_hz_cfg = float(getattr(cfg, 'low_bass_cut_hz', 40.0) or 40.0)
+        exc_on = bool(getattr(cfg, 'exc_prot', False))
+        exc_f_cfg = float(getattr(cfg, 'exc_freq', 0.0) or 0.0)
+        do_norm = bool(getattr(cfg, 'do_normalize', False))
+        g_global = float(getattr(cfg, 'global_gain_db', 0.0) or 0.0)
+
+        boost_bins_post = int(stats.get('boost_bins', 0) or 0)
+        boost_bins_cand = int(stats.get('boost_candidate_bins', 0) or 0)
+        boost_bins_cand_low = int(stats.get('boost_candidate_bins_lowbass', 0) or 0)
+        boost_bins_cand_exc = int(stats.get('boost_candidate_bins_excprot', 0) or 0)
+
+        boost_peak_post = float(stats.get('boost_peak_db', 0.0) or 0.0)
+        net_boost_peak = boost_peak_post + g_global + float(stats.get('auto_headroom_db', 0.0) or 0.0)
+        stats['net_boost_peak_db'] = float(net_boost_peak)
+
+        reasons = []
+
+        # 0) Absolute: max boost disabled
+        if max_boost_db_cfg <= 0.0:
+            reasons.append("max_boost_db <= 0 (boost disabled)")
+
+        # 1) No boost candidates at all
+        if boost_bins_cand == 0 and boost_bins_post == 0:
+            reasons.append("no boost candidates (algorithm produced only cuts in correction band)")
+
+        # 2) Candidates existed but none survived post-clamp
+        if boost_bins_cand > 0 and boost_bins_post == 0:
+            # All candidates in special restricted regions?
+            if boost_bins_cand_low == boost_bins_cand and low_hz_cfg > 0:
+                reasons.append(f"all boost candidates were <= low_bass_cut_hz ({low_hz_cfg:.1f} Hz) where cuts-only policy applies")
+            if exc_on and exc_f_cfg > 0 and boost_bins_cand_exc == boost_bins_cand:
+                reasons.append(f"all boost candidates were < exc_freq ({exc_f_cfg:.1f} Hz) while exc_prot is ON")
+            if not reasons:
+                reasons.append("boost candidates existed but were removed by limits/safety clamp (check max_boost_db, slope limits, exc/low-bass policies)")
+
+        # 3) Some candidates survived but got reduced
+        if boost_bins_cand > 0 and boost_bins_post > 0 and boost_bins_post < boost_bins_cand:
+            if boost_bins_cand_low > 0:
+                reasons.append(f"some boost candidates were in low-bass restricted region (<= {low_hz_cfg:.1f} Hz)")
+            if exc_on and boost_bins_cand_exc > 0 and exc_f_cfg > 0:
+                reasons.append(f"some boost candidates were in exc_prot region (< {exc_f_cfg:.1f} Hz)")
+            reasons.append("some boost candidates were reduced by limits/safety clamp")
+
+        # 4) Net peak is not positive (user-perceived 'no boosts' even if shape has boosts)
+        # This is the classic case when global gain/headroom pushes everything <= 0 dB.
+        if boost_bins_post > 0 and net_boost_peak <= 0.0:
+            reasons.append(
+                f"net boost peak <= 0.00 dB after global gain/headroom (net_peak={net_boost_peak:.2f} dB, normalize={'ON' if do_norm else 'OFF'})"
+            )
+
+        # Final text
+        stats['boost_blocked_reason'] = "; ".join(dict.fromkeys(reasons)) if reasons else "no blocking detected"
+    except Exception:
+        stats['boost_blocked_reason'] = "diagnostic unavailable (exception)"
+
 
     # attach comparison-mode stats (if any)
     if isinstance(cmp, dict) and cmp:
