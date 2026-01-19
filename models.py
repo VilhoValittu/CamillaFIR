@@ -26,6 +26,11 @@ class FilterConfig:
     fdw_cycles: float = 15.0        # FDW (Frequency Dependent Windowing) syklit
     reg_strength: float = 30.0      # Regularisointi (dB), estää jyrkät korjaukset
     max_slope_db_per_oct: float = 12.0  # Max muutos dB per oktaavi (0 = pois)
+    # UUSI: erilliset slope-rajat boostille ja cutille.
+    # <= 0 => perii max_slope_db_per_oct (backward compatible).
+    # Idea: boostit vaativat usein loivemman/lievemmän rajoituksen kuin cutit.
+    max_slope_boost_db_per_oct: float = 0.0
+    max_slope_cut_db_per_oct: float = 0.0
     df_smoothing: bool = False      # Raw_g gaussian smoothing: keep constant Hz width across fs/taps
     
     # --- 3B. COMPARISON MODE (locked analysis grid for scoring/reporting) ---
