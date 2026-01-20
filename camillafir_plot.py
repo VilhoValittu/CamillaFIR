@@ -1,8 +1,11 @@
+import os
+import sys
 import io, scipy.signal, scipy.fft, scipy.ndimage
 import numpy as np
 import matplotlib
 matplotlib.use('Agg') 
 import copy
+import math
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -10,7 +13,8 @@ from datetime import datetime
 # Tuodaan tarvittavat funktiot DSP-moduulista
 from camillafir_dsp import apply_smoothing_std, psychoacoustic_smoothing, calculate_rt60
 
-#--- Plot v.2.7.4
+# Version 1.1.7
+
 def _resource_path(rel_path: str) -> str:
     """
     Resource path that works both in dev and PyInstaller (onedir/onefile).
@@ -82,17 +86,64 @@ def format_summary_content(settings, l_stats, r_stats):
     max_slope_cut   = float(settings.get('max_slope_cut_db_per_oct', 0.0) or 0.0) or max_slope
     low_bass_cut_hz = float(settings.get('low_bass_cut_hz', 40.0) or 40.0)
     if max_slope_boost != max_slope_cut:
-        lines.append(
-            f"Max cut: -{max_cut_db:.1f} dB | "
-            f"Slope: boost {max_slope_boost:.1f} / cut {max_slope_cut:.1f} dB/oct | "
-            f"Low-bass cut: <{low_bass_cut_hz:.1f} Hz (cuts only)"
+
+        if abs(max_slope_boost - max_slope_cut) > 1e-9:
+            lines.append(
+                f"Max cut: -{max_cut_db:.1f} dB | "
+                f"Slope: boost {max_slope_boost:.1f} / cut {max_slope_cut:.1f} dB/oct | "
+                f"Low-bass cut: <{low_bass_cut_hz:.1f} Hz (cuts only)"
+            )
+        else:
+            lines.append(
+                f"Max cut: -{max_cut_db:.1f} dB | "
+                f"Max slope: {max_slope:.1f} dB/oct | "
+                f"Low-bass cut: <{low_bass_cut_hz:.1f} Hz (cuts only)"
+            )
+
+
+    # --- A-FDW debug: active + effective BW range ---
+    def _bw_frac(bw_oct: float) -> str:
+        # represent ~1/N if close
+        try:
+            if bw_oct <= 0:
+                return "-"
+            n = int(round(1.0 / float(bw_oct)))
+            if n <= 0:
+                return "-"
+            # show only for sensible small denominators
+            if n in (3, 6, 12, 24, 48):
+                return f"~1/{n}"
+            return f"~1/{n}"
+        except Exception:
+            return "-"
+
+    def _afdw_line(side: str, st: dict) -> str:
+        st = st or {}
+        active = bool(st.get("afdw_active", False))
+        if not active:
+            # fall back to settings toggle if stats missing
+            active = bool((settings or {}).get("enable_afdw", False))
+        if not active:
+            return f"{side} A-FDW active: NO"
+
+        mn = st.get("afdw_bw_min_oct", None)
+        me = st.get("afdw_bw_mean_oct", None)
+        mx = st.get("afdw_bw_max_oct", None)
+        fmn = st.get("afdw_bw_min_hz", None)
+        fmx = st.get("afdw_bw_max_hz", None)
+        if mn is None or me is None or mx is None:
+            return f"{side} A-FDW active: YES (effective BW not available)"
+
+        return (
+            f"{side} A-FDW active: YES | "
+            f"BW(min/mean/max)={float(mn):.4f}/{float(me):.4f}/{float(mx):.4f} oct "
+            f"({ _bw_frac(float(mn)) } / { _bw_frac(float(me)) } / { _bw_frac(float(mx)) }) | "
+            f"min@{float(fmn or 0.0):.0f}Hz max@{float(fmx or 0.0):.0f}Hz"
         )
-    else:
-        lines.append(
-            f"Max cut: -{max_cut_db:.1f} dB | "
-            f"Max slope: {max_slope:.1f} dB/oct | "
-            f"Low-bass cut: <{low_bass_cut_hz:.1f} Hz (cuts only)"
-        )
+
+    lines.append("\n--- A-FDW Debug (effective bandwidth) ---")
+    lines.append(_afdw_line("Left", l_stats))
+    lines.append(_afdw_line("Right", r_stats))
 
 
     # ---- Helpers ----
@@ -402,8 +453,12 @@ def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 655
     if c_cmp is not None:
         out["cmp_confidence_mask"] = np.clip(c_cmp, 0.0, 1.0).tolist()
         out["cmp_avg_confidence"] = float(np.mean(np.clip(c_cmp, 0.0, 1.0)) * 100.0)
-
-    out["cmp_offset_db"] = float(cmp_offset_db)
+        # A-FDW BW to comparison grid (for BW panel / overlays)
+    bw = out.get("afdw_bw_oct", None)
+    bw_cmp = _interp(bw) if bw is not None and np.asarray(bw).shape == f.shape else None
+    if bw_cmp is not None:
+        out["cmp_afdw_bw_oct"] = np.clip(bw_cmp, 1.0/48.0, 1.0/3.0).tolist()
+        out["cmp_offset_db"] = float(cmp_offset_db)
 
     # Keep scan range in Hz (same numbers), but provide cmp_ key so legacy code can use it.
     if "smart_scan_range" in out and isinstance(out["smart_scan_range"], (list, tuple)) and len(out["smart_scan_range"]) == 2:
@@ -474,8 +529,17 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
         filt_vis = np.interp(f_vis, f_lin, filt_db)
 
         # --- PIIRTO ---
-        fig = make_subplots(rows=5, cols=1, vertical_spacing=0.05, 
-                            subplot_titles=("<b>Magnitude & Alignment</b>", "<b>Phase</b>", "<b>Group Delay</b>", "<b>Filter (dB)</b>", "<b>Step Response</b>"))
+        fig = make_subplots(
+            rows=6, cols=1, vertical_spacing=0.045,
+            subplot_titles=(
+                "<b>Magnitude & Alignment</b>",
+                "<b>Phase</b>",
+                "<b>Group Delay</b>",
+                "<b>Filter (dB)</b>",
+                "<b>Step Response</b>",
+                "<b>A-FDW Effective BW (oct)</b>",
+            )
+        )
 
         # Smart Scan Range
         if target_stats and 'smart_scan_range' in target_stats:
@@ -517,17 +581,90 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
         step_resp /= (np.max(np.abs(step_resp)) + 1e-12)
         time_axis_ms = (np.arange(len(filt_ir)) / fs) * 1000.0
         fig.add_trace(go.Scatter(x=time_axis_ms[:int(fs*0.05)], y=step_resp[:int(fs*0.05)], name="Step Resp", line=dict(color='yellow')), row=5, col=1)
+        fig.update_xaxes(matches=None, row=5, col=1)
+        
+       
+# --- A-FDW BW panel (row 6) ---
+        bw_vis = None
+        bw_dbg = ""
+
+        mode = "native"
+        if target_stats:
+            mode = str(target_stats.get("analysis_mode", "native")).lower()
+
+        try:
+            if target_stats:
+                if mode == "comparison":
+                    fx_raw = target_stats.get("cmp_freq_axis")
+                    bw_raw = target_stats.get("cmp_afdw_bw_oct")
+                else:
+                    fx_raw = target_stats.get("freq_axis")
+                    bw_raw = target_stats.get("afdw_bw_oct")
+
+                if fx_raw is not None and bw_raw is not None:
+                    fx = np.asarray(fx_raw, dtype=float)
+                    bw = np.asarray(bw_raw, dtype=float)
+
+                    if fx.size == bw.size and fx.size > 16:
+                        bw_vis = np.interp(f_vis, fx, bw)
+                        bw_vis = np.clip(bw_vis, 1.0/48.0, 1.0/3.0)
+                        bw_vis_smooth = scipy.ndimage.gaussian_filter1d(bw_vis, sigma=5.0)
+                        fig.add_trace(
+                            go.Scatter(
+                                x=f_vis,
+                                y=bw_vis_smooth,
+                                mode="lines",
+                                fill="tozeroy",
+                                opacity=0.6,
+                                line=dict(width=2),
+                                showlegend=False,
+                                name="A-FDW BW",
+                            ),
+                            row=6, col=1
+                        )
+                    else:
+                        bw_dbg = f"shape mismatch: fx={fx.size} bw={bw.size}"
+                else:
+                    bw_dbg = "missing afdw bw data"
+            else:
+                bw_dbg = "target_stats is None"
+        except Exception as e:
+            bw_dbg = f"{type(e).__name__}: {e}"
+
+        if bw_vis is None:
+            fig.add_annotation(
+                text=f"No A-FDW BW data ({bw_dbg})",
+                x=0.5,
+                y=0.5,
+                showarrow=False,
+                row=6,
+                col=1
+            )
+
 
         # Asetukset
         t_vals = [2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
-        for r in range(1, 5):
+        for r in (1, 2, 3, 4, 6):
+            fig.update_xaxes(matches="x", row=r, col=1)
             fig.update_xaxes(type="log", range=[np.log10(2), np.log10(20000)], tickvals=t_vals, row=r, col=1)
+
 
         fig.update_yaxes(range=[avg_t-20, avg_t+20], row=1, col=1)
         fig.update_yaxes(range=[-180, 180], row=2, col=1)
         fig.update_yaxes(range=[-15, 10], row=4, col=1)
+        # Y-axis for A-FDW BW panel
+        if bw_vis is not None and len(bw_vis) > 0:
+            bw_lo = max(1.0/48.0, float(np.min(bw_vis)) * 0.9)
+            bw_hi = min(1.0/3.0,  float(np.max(bw_vis)) * 1.1)
+            if bw_hi - bw_lo < 1e-6:
+                bw_lo, bw_hi = (1.0/48.0, 1.0/3.0)
+            fig.update_yaxes(range=[bw_lo, bw_hi], row=6, col=1) 
+        else:
+            fig.update_yaxes(range=[1.0/48.0, 1.0/3.0], row=6, col=1)
 
-        fig.update_layout(height=1600, width=1750, template="plotly_white", title_text=f"{title} Analysis")
+        fig.update_yaxes(title_text="oct", row=6, col=1)
+
+        fig.update_layout(height=1780, width=1750, template="plotly_white", title_text=f"{title} Analysis")
         
         # Use local Plotly JS when generating full HTML (offline-safe).
         # If local JS is missing, fall back to CDN.

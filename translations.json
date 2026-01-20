@@ -1,5 +1,13 @@
 {
     "en": {
+        "max_cut_db": "Max cut (dB)",
+        "max_cut_db_help": "Limits maximum attenuation depth (e.g. -15 dB).",
+        "max_slope_db_per_oct": "Max slope (dB/oct)",
+        "max_slope_db_per_oct_help": "Limits how steep the correction curve can change per octave. 0 = off.",
+        "max_slope_boost_db_per_oct": "Max slope (boost) (dB/oct)",
+        "max_slope_boost_db_per_oct_help": "Optional: separate slope limit for positive gain. 0 = inherit Max slope.",
+        "max_slope_cut_db_per_oct": "Max slope (cut) (dB/oct)",
+        "max_slope_cut_db_per_oct_help": "Optional: separate slope limit for negative gain. 0 = inherit Max slope.",
         "tdc_max_reduction_db": "TDC Max Reduction (dB)",
         "tdc_max_reduction_db_help": "Safety brake for Temporal Decay Control. Caps the total TDC target reduction per frequency, preventing deep stacked notches when multiple resonances overlap. Typical: 6–12 dB.",
         "tdc_slope_db_per_oct": "TDC Slope Limit (dB/oct)",
@@ -73,7 +81,7 @@
         "upload_r": "Measurement R (.txt)",
         "path_l": "OR Local Path L",
         "path_r": "OR Local Path R",
-        "path_help": "Paste full path (e.g. C:\\Audio\\L.txt).",
+        "path_help": "Paste full path (e.g. C:\\Audio\\L.txt) Don't have remove quete marks.",
         "ph_l": "Select Left .txt",
         "ph_r": "Select Right .txt",
         "fs": "Base Sample Rate",
@@ -89,8 +97,10 @@
         "mixed_freq_help": "Frequency splitting Linear (low) and Minimum (high) phase.",
         "gain": "Gain (dB)",
         "gain_help": "Global output volume adjustment.",
-        "smooth_type": "Smoothing",
-        "smooth_help": "Standard uses fixed octave bands. Psychoacoustic mimics human hearing perception.",
+        "smooth_type": "Smoothing type",
+        "smooth_help": "Defines how measurement data is smoothed before correction. Not visible in curves.",
+        "smoothing_level": "Smoothing resolution (1/N octave)",
+        "smoothing_level_help": "Controls resolution for measurement processing and correction curve stability. Shown in curves. Higher = more detailed but more aggressive.",
         "smooth_std": "Standard 1/48",
         "smooth_psy": "Psychoacoustic",
         "fdw": "FDW Cycles",
@@ -219,18 +229,34 @@
         "tdc_preset_safe": "Safe",
         "tdc_preset_normal": "Normal",
         "tdc_preset_aggressive": "Aggressive",
-        "tdc_preset_help": "Quick presets for Temporal Decay Control. Safe limits corrections conservatively, Normal is balanced, and Aggressive allows stronger decay-based target shaping."
+        "tdc_preset_help": "Quick presets for Temporal Decay Control. Safe limits corrections conservatively, Normal is balanced, and Aggressive allows stronger decay-based target shaping.",
+        "hc_harman4": "Harman curve (+4 dB bass)",
+        "hc_harman10": "Harman curve (+10 dB sub-heavy)",
+        "hc_studio_tilt": "Studio reference (−1 dB / octave tilt)",
+        "hc_nearfield": "Nearfield / desk listening",
+        "hc_hifi_loudness": "Classic Hi-Fi loudness",
+        "hc_speech": "Speech / broadcast clarity"
 
 
     },
     
     "fi": {
+        "max_cut_db": "Max leikkaus (dB)",
+        "max_cut_db_help": "Rajoittaa leikkauksen syvyyttä (esim. -15 dB maksimi).",
+        "max_slope_db_per_oct": "Max jyrkkyys (dB/okt)",
+        "max_slope_db_per_oct_help": "Rajoittaa korjauskäyrän jyrkkyyttä per oktaavi. 0 = pois.",
+        "max_slope_boost_db_per_oct": "Max jyrkkyys (boost) (dB/okt)",
+        "max_slope_boost_db_per_oct_help": "Erillinen jyrkkyysraja korostuksille. 0 = perii Max jyrkkyys -arvon.",
+        "max_slope_cut_db_per_oct": "Max jyrkkyys (cut) (dB/okt)",
+        "max_slope_cut_db_per_oct_help": "Erillinen jyrkkyysraja vaimennuksille. 0 = perii Max jyrkkyys -arvon.",
+
         "tdc_max_reduction_db": "TDC max-vaimennus (dB)",
         "tdc_max_reduction_db_help": "TDC:n turvaraja. Rajoittaa TDC:n kokonaisvaimennuksen per taajuus, ettei lähekkäiset resonanssit kasaannu liian syväksi kuopaksi. Tyypillinen: 6–12 dB.",
         "tdc_slope_db_per_oct": "TDC kaltevuusraja (dB/oktaavi)",
         "tdc_slope_db_per_oct_help": "Valinnainen rajoitin TDC-vaimennuskäyrän muutokselle (dB per oktaavi). Tekee muutoksista loivempia ja ennustettavia. 0 = pois.",
         "phase_safe_2058": "2058 aka TUPE-moodi",
-        "phase_safe_2058_help" : "2.7.0 moodi : poistaa huoneen vaihekorjauksen kokonaan.",
+        "phase_safe_2058_help" : "2.7.0 moodi : Poistaa huoneen vaiheen korjauksen (confidence / FDW / excess-phase). Käyttää vain teoreettista jakosuotimen vaihetta (-theo_xo) ja minimivaihetta silloin kun mahdollista. Suositellaan, jos vaihe tai ryhmäviive näyttää piikkimäiseltä tai askelvaste soi.",
+
         "low_bass_cut_hz": "Low-bass boost -esto (Hz)",
         "low_bass_cut_hz_help": "Alle tämän taajuuden suodin ei koskaan tee boostia – vain leikkaus sallitaan. Tämä ei ole suodin eikä vaikuta vaiheeseen.",
 
@@ -320,7 +346,7 @@
         "upload_r": "Mittaus R (.txt)",
         "path_l": "TAI paikallinen polku L",
         "path_r": "TAI paikallinen polku R",
-        "path_help": "Liitä koko polku (esim. C:\\Audio\\L.txt).",
+        "path_help": "Liitä koko polku (esim. C:\\Audio\\L.txt). Heittomerkkejä ei tarvitse poistaa",
         "ph_l": "Valitse vasen .txt",
         "ph_r": "Valitse oikea .txt",
         "fs": "Näytetaajuus (Hz)",
@@ -337,8 +363,10 @@
         "mixed_freq_help": "Taajuus, joka jakaa Linear (basso) ja Minimum (diskantti) vaiheet.",
         "gain": "Vahvistus (dB)",
         "gain_help": "Yleinen ulostulotason säätö.",
-        "smooth_type": "Tasoitus",
-        "smooth_help": "Standardi käyttää kiinteitä oktaavikaistoja. Psykoakustinen jäljittelee kuuloa.",
+        "smooth_type": "Tasoitustyyppi",
+        "smooth_help": "Määrittää miten mittausdata tasoitetaan ennen korjausta. Ei näy käyrissä",
+        "smoothing_level": "Tasoitusresoluutio (1/N oktaavi)",
+        "smoothing_level_help": "Ohjaa mittauksen ja korjauskäyrän resoluutiota. Suurempi arvo = tarkempi mutta aggressiivisempi. Näkyy käyrissä.",
         "smooth_std": "Standardi 1/48",
         "smooth_psy": "Psykoakustinen",
         "fdw": "FDW-syklit",
@@ -405,7 +433,7 @@
         "xo_title": "Jakosuotimien linearisointi",
         "xo_1": "Jakosuodin 1", "xo_2": "Jakosuodin 2", "xo_3": "Jakosuodin 3", "xo_4": "Jakosuodin 4", "xo_5": "Jakosuodin 5",
         "filter_smooth": "Filtterin tasoitus",
-        "lvl_algo_help": "Mediaani on suositeltu (hylkää piikit/kuopat).",
+        "lvl_algo_help": "Mediaani on suositeltu (hylkää piikit/kuopat paremmin).",
         "fmt_help": "Filtterin formaatti",
         "fmt_wav": "WAV (.wav)", "fmt_bin": "Raaka binääri (.bin)", "fmt_txt": "Teksti (.txt)",
         "sigmastudio_help": "Käyttö SigmaStudion kanssa:",
@@ -444,6 +472,12 @@
         "tdc_preset_safe": "Turvallinen",
         "tdc_preset_normal": "Normaali",
         "tdc_preset_aggressive": "Aggressiivinen",
-        "tdc_preset_help": "Pikavalinnat Temporal Decay Controlille. Turvallinen rajoittaa korjaukset varovasti, Normaali on tasapainoinen ja Aggressiivinen sallii voimakkaamman jälkikaiuntaan perustuvan muokkauksen."
+        "tdc_preset_help": "Pikavalinnat Temporal Decay Controlille. Turvallinen rajoittaa korjaukset varovasti, Normaali on tasapainoinen ja Aggressiivinen sallii voimakkaamman jälkikaiuntaan perustuvan muokkauksen.",
+        "hc_harman4": "Harman curve (+4 dB bass)",
+        "hc_harman10": "Harman curve (+10 dB sub-heavy)",
+        "hc_studio_tilt": "Studio reference (−1 dB / octave tilt)",
+        "hc_nearfield": "Nearfield / desk listening",
+        "hc_hifi_loudness": "Classic Hi-Fi loudness",
+        "hc_speech": "Speech / broadcast clarity"
     }
 }

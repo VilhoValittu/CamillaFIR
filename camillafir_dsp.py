@@ -13,7 +13,50 @@ from camillafir_leveling import compute_leveling
 #1.04 All features works at different configurations
 #1.05 Multiplier changes
 #1.06 added no phase correction mode (2058-safe)
+#1.07 TDC improvements and bugfixes
 
+def limit_slope_per_octave_asym(freq_axis, gain_db, max_db_per_oct_boost, max_db_per_oct_cut):
+    """
+    Asymmetric slope limiter in dB/oct:
+      - boost limit applies when curve rises (dg > 0)
+      - cut limit applies when curve falls (dg < 0)
+    <= 0 on either side disables that side.
+    """
+    f = np.asarray(freq_axis, dtype=float)
+    g = np.asarray(gain_db, dtype=float).copy()
+    b = float(max_db_per_oct_boost or 0.0)
+    c = float(max_db_per_oct_cut or 0.0)
+    if b <= 0 and c <= 0:
+        return g
+    idx = np.where(f > 0.0)[0]
+    if idx.size < 2:
+        return g
+    lf = np.log2(f[idx])
+
+    def _limit_step(prev_val, cur_val, dx_oct):
+        if dx_oct <= 0:
+            return cur_val
+        dg = cur_val - prev_val
+        if dg > 0 and b <= 0:
+            return cur_val
+        if dg < 0 and c <= 0:
+            return cur_val
+        lim = (b if dg > 0 else c) * dx_oct
+        if dg > lim:
+            return prev_val + lim
+        if dg < -lim:
+            return prev_val - lim
+        return cur_val
+
+    for k in range(1, idx.size):
+        i = idx[k]; j = idx[k - 1]
+        dx = float(lf[k] - lf[k - 1])
+        g[i] = _limit_step(g[j], g[i], dx)
+    for k in range(idx.size - 2, -1, -1):
+        i = idx[k]; j = idx[k + 1]
+        dx = float(lf[k + 1] - lf[k])
+        g[i] = _limit_step(g[j], g[i], dx)
+    return g
 def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto_headroom_db=0.0, logger_obj=None):
     """
     Lightweight stage checkpoint for debugging gain evolution.
@@ -310,21 +353,87 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
     Korkea luottamus = enemmän syklejä (tarkempi korjaus).
     Matala luottamus = vähemmän syklejä (raskaampi tasoitus).
     """
-    # Lasketaan taajuuskohtainen syylimäärä confidence_maskin perusteella
-    adaptive_cycles = min_cycles + (confidence_mask * (base_cycles - min_cycles))
-    oct_widths = 2.0 / np.maximum(adaptive_cycles, 1.0)
-    
-    smoothed_mags = np.copy(mags)
-    
-    # Tehdään tasoitus usealla eri tarkkuudella ja yhdistetään ne maskin avulla
-    # Tämä on nopeampi ja vakaampi tapa kuin taajuuskohtainen silmukka
-    for bw in [1/3, 1/6, 1/12, 1/24, 1/48]:
-        sm, _ = apply_smoothing_std(freqs, mags, np.zeros_like(mags), bw)
-        # Valitaan tälle taajuudelle sopiva tasoitusleveys
-        mask = (oct_widths >= bw * 0.7) & (oct_widths < bw * 1.5)
-        smoothed_mags[mask] = sm[mask]
-    
-    return smoothed_mags
+    f = np.asarray(freqs, dtype=float)
+    m = np.asarray(mags, dtype=float)
+    c = np.asarray(confidence_mask, dtype=float) if confidence_mask is not None else None
+
+    if f.size < 8 or m.size != f.size:
+        return np.copy(mags)
+
+    # Confidence clamp (robustness)
+    if c is None or c.size != f.size:
+        c = np.ones_like(f)
+    c = np.clip(c, 0.0, 1.0)
+
+    # Target cycles & octave widths (continuous)
+    base_cycles = float(base_cycles)
+    min_cycles = float(min_cycles)
+    if base_cycles < 1.0: base_cycles = 1.0
+    if min_cycles < 1.0: min_cycles = 1.0
+    if min_cycles > base_cycles:
+        min_cycles, base_cycles = base_cycles, min_cycles
+
+    adaptive_cycles = min_cycles + (c * (base_cycles - min_cycles))
+    oct_widths = 2.0 / np.maximum(adaptive_cycles, 1.0)  # larger => heavier smoothing
+
+    # Fixed set of octave widths to blend between (ascending for searchsorted)
+    bw_list = np.array([1/48, 1/24, 1/12, 1/6, 1/3], dtype=float)
+
+    # Precompute smoothed curves for each BW (fast: only 5 passes)
+    sm_stack = []
+    dummy = np.zeros_like(m)
+    for bw in bw_list:
+        sm, _ = apply_smoothing_std(f, m, dummy, float(bw))
+        sm_stack.append(sm)
+    sm_stack = np.vstack(sm_stack)  # shape: (K, N)
+
+    # Clamp target widths to available range
+    t = np.clip(oct_widths, bw_list[0], bw_list[-1])
+
+    # Find neighbors in bw_list: bw_lo <= t <= bw_hi
+    # hi in [1..K-1], lo = hi-1
+    hi = np.searchsorted(bw_list, t, side='right')
+    hi = np.clip(hi, 1, len(bw_list) - 1)
+    lo = hi - 1
+
+    bw_lo = bw_list[lo]
+    bw_hi = bw_list[hi]
+    denom = (bw_hi - bw_lo)
+    denom = np.where(denom <= 1e-12, 1.0, denom)
+    alpha = (t - bw_lo) / denom
+    alpha = np.clip(alpha, 0.0, 1.0)
+
+    # Gather per-bin values from the two neighbor curves
+    idx = np.arange(f.size)
+    sm_lo = sm_stack[lo, idx]
+    sm_hi = sm_stack[hi, idx]
+
+    # Linear blend
+    out = (1.0 - alpha) * sm_lo + alpha * sm_hi
+
+
+    # --- DEBUG: effective BW statistics (log once) ---
+    try:
+        if not hasattr(apply_adaptive_fdw, "_dbg_printed"):
+            apply_adaptive_fdw._dbg_printed = True
+
+            bw_min = float(np.min(t))
+            bw_max = float(np.max(t))
+            bw_mean = float(np.mean(t))
+
+            f_min_bw = float(f[np.argmin(t)])
+            f_max_bw = float(f[np.argmax(t)])
+
+            logger.info(
+                "A-FDW effective BW: "
+                f"min={bw_min:.4f} oct @ {f_min_bw:.0f} Hz, "
+                f"mean={bw_mean:.4f} oct, "
+                f"max={bw_max:.4f} oct @ {f_max_bw:.0f} Hz"
+            )
+    except Exception:
+        pass
+
+    return out
 
 def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
     """Vakioitu oktaavitasoitus logaritmisella näytteistyksellä."""
@@ -694,8 +803,8 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     freq_axis = np.linspace(0, cfg.fs/2.0, n_fft // 2 + 1)
     
     # --- 3. TASOITUS (Skaalautuva resoluutio) ---
-    oct_frac = 1.0 / float(cfg.smoothing_level) if cfg.smoothing_level > 0 else 1/12.0
-    is_psy = 'Psy' in str(cfg.smoothing_type).lower()
+    oct_frac = 1.0 / float(cfg.smoothing_level) if cfg.smoothing_level > 0 else 1/24.0
+    is_psy = 'psy' in str(cfg.smoothing_type).lower()
     
     # Magnituditasoitus
     m_smooth, _ = apply_smoothing_std(f_in, m_in, np.zeros_like(m_in), oct_frac * (1.5 if is_psy else 1.0))
@@ -910,10 +1019,33 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         stage_probes = {}
         
         # --- 8B. A-FDW suoraan korjauskäyrään ---
+        # Debug/telemetry: effective BW (oct) per frequency (continuous)
+        afdw_bw_oct = None
+        afdw_bw_min_oct = afdw_bw_mean_oct = afdw_bw_max_oct = None
+        afdw_bw_min_hz = afdw_bw_max_hz = None
+
+        
         # Tasoittaa final_g adaptiivisesti confidence-maskin mukaan:
         # - matala confidence => enemmän "syklejä" => pehmeämpi korjaus
         # - korkea confidence => vähemmän tasoitusta => tarkempi korjaus
         if afdw_on:
+            try:
+                c = np.clip(conf_mask, 0.0, 1.0)
+                adaptive_cycles = float(afdw_min) + (c * (float(afdw_base) - float(afdw_min)))
+                bw = 2.0 / np.maximum(adaptive_cycles, 1.0)
+                # clamp to same range used by the continuous blender
+                bw = np.clip(bw, 1.0/48.0, 1.0/3.0)
+                afdw_bw_oct = bw
+                afdw_bw_min_oct = float(np.min(bw))
+                afdw_bw_mean_oct = float(np.mean(bw))
+                afdw_bw_max_oct = float(np.max(bw))
+                bw_min_idx = np.where(bw == np.min(bw))[0]
+                bw_max_idx = np.where(bw == np.max(bw))[0]
+                afdw_bw_min_hz = float(freq_axis[int(bw_min_idx[len(bw_min_idx)//2])])
+                afdw_bw_max_hz = float(freq_axis[int(bw_max_idx[len(bw_max_idx)//2])])
+            except Exception:
+                pass
+
             final_g = apply_adaptive_fdw(
                 freq_axis,
                 final_g,
@@ -1507,6 +1639,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'measured_mags': (m_anal - calc_offset_db).tolist(),
         'filter_mags': gain_db.tolist(),
         'confidence_mask': conf_mask.tolist(),
+        'afdw_active': bool(afdw_on),
         'reflections': reflections,
         'smart_scan_range': [float(s_min), float(s_max)],
         'eff_target_db': float(target_level_db),
@@ -1532,6 +1665,8 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'exc_prot': bool(getattr(cfg, 'exc_prot', False)),
         'exc_freq': float(getattr(cfg, 'exc_freq', 0.0) or 0.0),
         'max_slope_db_per_oct': float(getattr(cfg, 'max_slope_db_per_oct', 0.0) or 0.0),
+        'max_slope_boost_db_per_oct': float(getattr(cfg, 'max_slope_boost_db_per_oct', 0.0) or 0.0),
+        'max_slope_cut_db_per_oct': float(getattr(cfg, 'max_slope_cut_db_per_oct', 0.0) or 0.0),
         # NEW: expose effective asymmetric slope limits for Summary/debug
         'max_slope_boost_db_per_oct': float(getattr(cfg, 'max_slope_boost_db_per_oct', 0.0) or 0.0),
         'max_slope_cut_db_per_oct': float(getattr(cfg, 'max_slope_cut_db_per_oct', 0.0) or 0.0),
@@ -1546,6 +1681,18 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'boost_candidate_bins_excprot': int(locals().get('n_boost_cand_exc', 0))
     }
 
+
+    # Attach A-FDW effective BW data if available
+    try:
+        if bool(afdw_on) and (afdw_bw_oct is not None):
+            stats['afdw_bw_oct'] = np.asarray(afdw_bw_oct, dtype=float).tolist()
+            stats['afdw_bw_min_oct'] = float(afdw_bw_min_oct) if afdw_bw_min_oct is not None else None
+            stats['afdw_bw_mean_oct'] = float(afdw_bw_mean_oct) if afdw_bw_mean_oct is not None else None
+            stats['afdw_bw_max_oct'] = float(afdw_bw_max_oct) if afdw_bw_max_oct is not None else None
+            stats['afdw_bw_min_hz'] = float(afdw_bw_min_hz) if afdw_bw_min_hz is not None else None
+            stats['afdw_bw_max_hz'] = float(afdw_bw_max_hz) if afdw_bw_max_hz is not None else None
+    except Exception:
+        pass
 
     # Attach stage probes (for Summary + debugging)
     try:

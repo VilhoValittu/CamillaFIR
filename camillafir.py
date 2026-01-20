@@ -31,7 +31,7 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.7.6"    #kaikki toimii edition
+VERSION = "v2.7.7"    #kaikki toimii edition
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
@@ -42,7 +42,8 @@ def scale_taps_with_fs(
     base_taps: int = 65536,
     allowed_taps=(
         512, 1024, 2048, 4096, 8192, 16384,
-        32768, 65536, 131072, 262144, 524288
+        32768, 65536, 131072, 262144, 524288,
+        1048576
    ),
 ) -> int:
     """Scale FIR taps with sample rate so that filter *time length* stays constant.
@@ -294,18 +295,70 @@ def apply_tdc_preset(name: str):
 
 
 def get_house_curve_by_name(name):
-    freqs = np.array([20.0, 25.0, 31.5, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0, 160.0, 200.0, 250.0, 400.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0, 20000.0])
+    freqs = np.array([
+        20.0, 25.0, 31.5, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0,
+        160.0, 200.0, 250.0, 400.0, 1000.0, 2000.0, 4000.0,
+        8000.0, 16000.0, 20000.0
+    ])
+
+    # --- Harman variants ---
     if 'Harman8' in name or '+8dB' in name:
-        mags = np.array([8.0, 7.9, 7.8, 7.6, 7.3, 6.9, 6.3, 5.5, 4.5, 3.4, 1.4, 0.0, -0.5, -1.0, -1.8, -2.8, -4.0, -5.5, -6.0])
+        mags = np.array([8.0, 7.9, 7.8, 7.6, 7.3, 6.9, 6.3, 5.5, 4.5,
+                         3.4, 1.4, 0.0, -0.5, -1.0, -1.8, -2.8,
+                         -4.0, -5.5, -6.0])
+
+    elif 'Harman4' in name or '+4dB' in name:
+        mags = np.array([4.0, 3.9, 3.8, 3.6, 3.3, 2.9, 2.3, 1.5, 0.8,
+                         0.2, 0.0, 0.0, -0.3, -0.6, -1.2, -2.0,
+                         -3.0, -4.5, -5.0])
+
+    elif 'Harman10' in name or 'SubHeavy' in name:
+        mags = np.array([10.0, 9.8, 9.5, 9.0, 8.2, 7.2, 6.0, 4.8, 3.5,
+                         2.2, 0.8, 0.0, -0.5, -1.0, -1.8, -2.8,
+                         -4.0, -5.5, -6.0])
+
+    # --- Research / reference ---
     elif 'Toole' in name:
         freqs = np.array([20, 63, 100, 200, 400, 1000, 2000, 4000, 10000, 20000])
         mags = np.array([2.5, 2.0, 1.5, 1.0, 0.5, 0.0, -1.0, -2.0, -4.0, -6.0])
-    elif 'Flat' in name: mags = np.zeros_like(freqs)
+
+    elif 'Studio' in name or 'Tilt' in name:
+        mags = np.array([3.0, 2.6, 2.2, 1.8, 1.4, 1.0, 0.6, 0.2, 0.0,
+                         -0.4, -0.8, -1.2, -1.8, -2.4, -3.0, -3.8,
+                         -4.8, -6.0, -6.5])
+
+    # --- Listening use cases ---
+    elif 'Nearfield' in name or 'Desk' in name:
+        mags = np.array([2.5, 2.4, 2.2, 2.0, 1.8, 1.4, 1.0, 0.6, 0.2,
+                         0.0, 0.0, 0.0, -0.2, -0.5, -1.0, -1.8,
+                         -3.0, -4.5, -5.0])
+
+    elif 'HiFi' in name or 'Loudness' in name:
+        mags = np.array([6.0, 5.8, 5.5, 5.0, 4.3, 3.5, 2.6, 1.8, 1.0,
+                         0.4, 0.0, -0.2, -0.6, -1.0, -1.6, -2.6,
+                         -3.6, -5.0, -5.5])
+
+    elif 'Speech' in name or 'Broadcast' in name:
+        mags = np.array([-2.0, -1.8, -1.5, -1.2, -1.0, -0.6, -0.2, 0.4, 1.0,
+                         1.5, 1.8, 2.0, 2.0, 1.0, 0.0, -1.5,
+                         -3.5, -6.0, -8.0])
+
+    # --- Cinema / special ---
     elif 'Cinema' in name:
         freqs = np.array([20, 2000, 4000, 8000, 16000, 20000])
         mags = np.array([0.0, 0.0, -3.0, -9.0, -15.0, -18.0])
-    else: mags = np.array([6.0, 5.9, 5.8, 5.6, 5.3, 4.9, 4.3, 3.5, 2.5, 1.4, 0.4, 0.0, -0.5, -1.0, -1.8, -2.8, -4.0, -5.5, -6.0])
+
+    elif 'Flat' in name:
+        mags = np.zeros_like(freqs)
+
+    # --- Default fallback ---
+    else:
+        mags = np.array([6.0, 5.9, 5.8, 5.6, 5.3, 4.9, 4.3, 3.5, 2.5,
+                         1.4, 0.4, 0.0, -0.5, -1.0, -1.8, -2.8,
+                         -4.0, -5.5, -6.0])
+
     return freqs, mags
+
 
 def load_target_curve(file_content):
     """Lukee tavoitekäyrän tekstitiedostosta ja varmistaa järjestyksen."""
@@ -378,6 +431,8 @@ def load_config():
         'enable_afdw': True,      # Adaptiivinen FDW oletuksena päälle
         'max_cut_db': 15.0,              # max vaimennus (dB)
         'max_slope_db_per_oct': 24.0,    # max jyrkkyys (dB/okt), 0 = pois
+        'max_slope_boost_db_per_oct': 0.0,
+        'max_slope_cut_db_per_oct': 0.0,
         'df_smoothing': False,
         'comparison_mode': True,         # LOCK score/match analysis to 44.1k reference grid
         'tdc_max_reduction_db': 9.0,
@@ -426,7 +481,21 @@ def main():
     put_markdown(f"### {t('subtitle')}")
     put_guide_section(); put_markdown("---")
     d = load_config(); get_val = lambda k, def_v: d.get(k, def_v)
-    hc_opts = [t('hc_harman'), t('hc_harman8'), t('hc_toole'), t('hc_bk'), t('hc_flat'), t('hc_cinema'), t('hc_mode_upload')]
+    hc_opts = [
+    t('hc_harman'),        # nykyinen default (+6dB)
+    t('hc_harman8'),
+    t('hc_harman4'),
+    t('hc_harman10'),
+    t('hc_studio_tilt'),
+    t('hc_nearfield'),
+    t('hc_hifi_loudness'),
+    t('hc_speech'),
+    t('hc_toole'),
+    t('hc_bk'),
+    t('hc_flat'),
+    t('hc_cinema'),
+    t('hc_mode_upload'),
+]
     fs_opts = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]; taps_opts = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]; slope_opts = [6, 12, 18, 24, 36, 48]
     
 #--- #1 Tiedostot
@@ -472,11 +541,17 @@ def main():
         
         put_input('gain', label=t('gain'), type=FLOAT, value=get_val('gain', 0.0), help_text=t('gain_help')),
         
-        put_select('lvl_algo', label="Algo", options=['Median', 'Average'], value=get_val('lvl_algo', 'Median')),
-        put_select('smoothing_type', label=t('smooth_type'), options=[
-            {'label': t('smooth_std'), 'value': 'Standard'},
-            {'label': t('smooth_psy'), 'value': 'Psychoacoustic'}
-            ], value='Psychoacoustic', help_text=t('smooth_help')),
+        put_select('lvl_algo', label="Algo", options=['Median', 'Average'], value=get_val('lvl_algo', 'Median'), help_text=t('lvl_algo_help')),
+        put_select(
+                    'smoothing_type',
+                    label=t('smooth_type'),
+                    options=[
+                        {'label': t('smooth_std'), 'value': 'Standard'},
+                        {'label': t('smooth_psy'), 'value': 'Psychoacoustic'}
+                    ],
+                    value=get_val('smoothing_type', 'Psychoacoustic'),
+                    help_text=t('smooth_help')
+                    ),
         # Rivi 3: Tilan valinta ja tavoitetaso (jaettu kahteen osaan luettavuuden vuoksi)
         # Level match range (help_text tulee oikeaan paikkaan suoraan kenttien alle)
         put_row([
@@ -530,23 +605,37 @@ def main():
         ]),
         put_input('max_boost', label=t('max_boost'), type=FLOAT, value=get_val('max_boost', 5.0), help_text=t('max_boost_help')),
         put_row([
-            put_input('max_cut_db', label="Max cut (dB)", type=FLOAT, value=get_val('max_cut_db', 15.0),
-                      help_text="Rajoittaa vaimennuksen syvyyttä (esim. -15 dB maksimi)."),
-            put_input('max_slope_db_per_oct', label="Max slope (dB/oct)", type=FLOAT, value=get_val('max_slope_db_per_oct', 12.0),
-                      help_text="Rajoittaa gain-käyrän jyrkkyyttä per oktaavi. 0 = pois.")
+            put_input('max_cut_db', label=t('max_cut_db'), type=FLOAT, value=get_val('max_cut_db', 15.0),
+                      help_text=t('max_cut_db_help')),
+            put_input('max_slope_db_per_oct', label=t('max_slope_db_per_oct'), type=FLOAT, value=get_val('max_slope_db_per_oct', 12.0),
+                      help_text=t('max_slope_db_per_oct_help'))
         ]),
+        put_row([
+            put_input('max_slope_boost_db_per_oct', label=t('max_slope_boost_db_per_oct'), type=FLOAT,
+                      value=get_val('max_slope_boost_db_per_oct', 0.0),
+                      help_text=t('max_slope_boost_db_per_oct_help')),
+            put_input('max_slope_cut_db_per_oct', label=t('max_slope_cut_db_per_oct'), type=FLOAT,
+                      value=get_val('max_slope_cut_db_per_oct', 0.0),
+                      help_text=t('max_slope_cut_db_per_oct_help'))
+         ]),
+        
         put_input('trans_width', type=NUMBER, label="1/1 Transition Width (Hz)", value=100, help_text=t('trans_width')),
         put_markdown("---"),
-        put_select(('smoothing_level'), label=t('filter_smooth'),
-                   options=[
-            {'label': '1/1 Octave', 'value': 1},
-            {'label': '1/3 Octave', 'value': 3},
-            {'label': '1/6 Octave', 'value': 6},
-            {'label': '1/12 Octave (Standard)', 'value': 12},
-            {'label': '1/24 Octave (Fine)', 'value': 24},
-            {'label': '1/48 Octave (Ultra)', 'value': 48},
-            {'label': '1/96 Octave (HC)', 'value': 96},
-            ], value=12,),
+        put_select(
+                    'smoothing_level',
+                    label=t('smoothing_level'),
+                    options=[
+                        {'label': '1/1 Octave', 'value': 1},
+                        {'label': '1/3 Octave', 'value': 3},
+                        {'label': '1/6 Octave', 'value': 6},
+                        {'label': '1/12 Octave (Standard)', 'value': 12},
+                        {'label': '1/24 Octave (Fine)', 'value': 24},
+                        {'label': '1/48 Octave (Ultra)', 'value': 48},
+                        {'label': '1/96 Octave (HC)', 'value': 96},
+                    ],
+                    value=get_val('smoothing_level', 12),
+                    help_text=t('smoothing_level_help'),
+                ),
               
         
         put_input('phase_limit', label=t('phase_limit'), type=FLOAT, value=get_val('phase_limit', 1000.0), help_text=t('phase_limit_help')),
@@ -762,7 +851,8 @@ put_markdown("---"),
 def _collect_ui_data():
     p_keys = [
         'fs', 'taps', 'filter_type', 'mixed_freq', 'gain', 'hc_mode',
-        'mag_c_min', 'mag_c_max', 'max_boost', 'max_cut_db', 'max_slope_db_per_oct', 'phase_limit', 'phase_safe_2058', 'mag_correct',
+        'mag_c_min', 'mag_c_max', 'max_boost', 'max_cut_db', 'max_slope_db_per_oct',
+        'max_slope_boost_db_per_oct', 'max_slope_cut_db_per_oct', 'phase_limit', 'phase_safe_2058', 'mag_correct',
         'lvl_mode', 'reg_strength', 'normalize_opt', 'align_opt',
         'stereo_link', 'exc_prot', 'exc_freq', 'low_bass_cut_hz', 'hpf_enable', 'hpf_freq',
         'hpf_slope', 'multi_rate_opt', 'ir_window', 'ir_window_left',
@@ -772,7 +862,12 @@ def _collect_ui_data():
         'tdc_slope_db_per_oct', 'enable_afdw', 'df_smoothing', 'comparison_mode'
     ]
 
-    data = {k: pin[k] for k in p_keys}
+    data = {}
+    for k in p_keys:
+        try:
+            data[k] = pin[k]
+        except Exception:
+            data[k] = None
 
     for k in ['mag_correct', 'normalize_opt', 'align_opt', 'multi_rate_opt', 'stereo_link', 'exc_prot', 'hpf_enable', 'df_smoothing', 'comparison_mode']:
         try:
@@ -786,6 +881,8 @@ def _collect_ui_data():
         data[f'xo{i}_s'] = pin[f'xo{i}_s']
         data['max_cut_db'] = abs(float(data.get('max_cut_db', 15.0) or 15.0))
         data['max_slope_db_per_oct'] = max(0.0, float(data.get('max_slope_db_per_oct', 24.0) or 24.0))
+        data['max_slope_boost_db_per_oct'] = max(0.0, float(data.get('max_slope_boost_db_per_oct', 0.0) or 0.0))
+        data['max_slope_cut_db_per_oct'] = max(0.0, float(data.get('max_slope_cut_db_per_oct', 0.0) or 0.0))        
         data['lvl_manual_db'] = float(data.get('lvl_manual_db', 75.0) or 75.0)
 
     return data
@@ -871,9 +968,11 @@ def _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m):
         max_boost_db=data['max_boost'],
         max_cut_db=data.get('max_cut_db', 15.0),
         max_slope_db_per_oct=data.get('max_slope_db_per_oct', 24.0),
+        max_slope_boost_db_per_oct=data.get('max_slope_boost_db_per_oct', 0.0),
+        max_slope_cut_db_per_oct=data.get('max_slope_cut_db_per_oct', 0.0),
         phase_limit=data['phase_limit'],
         phase_safe_2058=bool(data.get('phase_safe_2058', False)),
-        enable_mag_correction=bool(data['mag_correct']),
+        enable_mag_correction=bool(data.get('mag_correct', True)),
         lvl_mode=data['lvl_mode'],
         reg_strength=float(data.get('reg_strength', 30.0)),
         do_normalize=bool(data['normalize_opt']),
