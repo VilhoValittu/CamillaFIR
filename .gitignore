@@ -1,0 +1,9 @@
+__pycache__/
+*.exe
+*.wav
+*.bin
+dist/
+build/
+.env
+test.py
+*.spec
