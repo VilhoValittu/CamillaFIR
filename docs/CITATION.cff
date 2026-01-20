@@ -4,4 +4,7 @@ message: "If you use CamillaFIR in research or publications, please cite it."
 authors:
   - family-names: Valittu
     given-names: Vilho
-version: 2.7.3
+version: 2.7.7
+license: MIT
+repository-code: "https://github.com/VilhoValittu/CamillaFIR"
+url: "https://github.com/VilhoValittu/CamillaFIR"

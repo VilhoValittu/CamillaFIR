@@ -1,19 +1,17 @@
-
 # CamillaFIR: A Time-Domain–First FIR Room Correction Framework
-## Academic DSP Rationale and Mathematical Foundations
+## Academic DSP Rationale and Mathematical Foundations (v2.7.7)
 
 ### Abstract
 CamillaFIR is a room-correction DSP framework that prioritizes **time-domain correctness**
-before frequency-domain equalization. Unlike traditional equalization-centric systems,
+before frequency-domain equalization. Unlike traditional EQ-centric systems,
 CamillaFIR explicitly separates *propagation delay*, *excess phase*, and *room-induced energy
-storage*, applying different mathematical treatments to each. This document formalizes
-the DSP principles, equations, and justifications behind the system.
+storage*, applying different mathematical treatments to each.
 
 ---
 
-## 1. Signal Model
+## 1. Signal model
 
-Let the measured frequency response of a loudspeaker-room system be:
+Let the measured loudspeaker-room frequency response be
 
 \[
 H_m(f) = H_s(f)\,H_r(f)\,e^{-j 2\pi f \tau}
@@ -22,204 +20,212 @@ H_m(f) = H_s(f)\,H_r(f)\,e^{-j 2\pi f \tau}
 where:
 - \(H_s(f)\) is the loudspeaker + crossover response,
 - \(H_r(f)\) is the room response,
-- \(\tau\) is the acoustic Time of Flight (TOF).
+- \(\tau\) is the acoustic time of flight (TOF).
 
-Conventional systems attempt to invert \(H_m(f)\) directly.
-CamillaFIR instead **explicitly removes** the linear phase term
-associated with \(\tau\).
-
----
-
-## 2. Time-of-Flight (TOF) Removal
-
-The unwrapped phase \(\phi(f)\) of \(H_m(f)\) is approximated by:
-
-\[
-\phi(f) \approx -2\pi f \tau + \phi_e(f)
-\]
-
-where \(\phi_e(f)\) is the excess phase.
-
-A linear regression is performed over a stable frequency band
-(typically 1–10 kHz):
-
-\[
-\tau = -\frac{1}{2\pi} \frac{d\phi(f)}{df}
-\]
-
-The corrected response becomes:
-
-\[
-H_c(f) = H_m(f)\,e^{j2\pi f \tau}
-\]
-
-This ensures that subsequent phase processing targets **distortion**,
-not distance.
+A direct inversion of \(H_m\) implicitly mixes distance, excess phase, and room decay.
+CamillaFIR instead removes TOF first and treats the remaining terms with bounded, physically
+meaningful operations.
 
 ---
 
-## 3. Confidence Mask Estimation
+## 2. Time-of-Flight (TOF) removal
 
-Each frequency bin is assigned a confidence value \(C(f) \in [0,1]\),
-derived from:
-- phase variance,
-- reflection dominance,
-- decay stability.
-
-Conceptually:
+The unwrapped phase \(\phi(f)\) of \(H_m(f)\) is approximated by
 
 \[
-C(f) = \exp\left(-\alpha \sigma_\phi^2(f) - \beta E_r(f)\right)
+\phi(f) \approx -2\pi f\,\tau + \phi_e(f)
 \]
 
-where \(\sigma_\phi^2\) is local phase variance and \(E_r\) reflected energy.
-This mask governs all downstream DSP aggressiveness.
+where \(\phi_e(f)\) is the excess phase. Over a stable band, \(\tau\) can be estimated by a
+linear fit of phase slope:
+
+\[
+\tau = -\frac{1}{2\pi}\,\frac{d\phi(f)}{df}
+\]
+
+The corrected response is
+
+\[
+H_c(f) = H_m(f)\,e^{j 2\pi f\tau}
+\]
+
+This ensures subsequent phase processing targets **distortion**, not distance.
 
 ---
 
-## 4. Frequency-Dependent Windowing (FDW)
+## 3. Confidence masking
 
-The effective time window length is:
+Each frequency bin gets a reliability score \(C(f)\in[0,1]\), derived from phase stability,
+reflection dominance, and decay behavior. A conceptual form is
+
+\[
+C(f) = \exp\left(-\alpha\,\sigma_\phi^2(f) - \beta\,E_r(f)\right)
+\]
+
+where \(\sigma_\phi^2\) is local phase variance and \(E_r\) is reflected energy.
+This mask controls downstream aggressiveness (windowing, smoothing, and correction strength).
+
+---
+
+## 4. Frequency-dependent windowing (FDW) and adaptive FDW
+
+FDW controls the time window length as a function of frequency. A practical parameterization is
 
 \[
 N(f) = N_{\min} + C(f)\,(N_{\max}-N_{\min})
 \]
 
-Higher confidence yields longer windows (higher resolution),
-lower confidence yields shorter windows (smoothing).
+High confidence yields longer windows (higher resolution); low confidence yields shorter windows
+(more smoothing). This prevents inverting stochastic interference patterns.
 
-This prevents inversion of stochastic interference patterns.
-
----
-
-## 5. Magnitude Correction with Regularization
-
-The target magnitude is \(T(f)\).
-Raw correction gain:
-
-\[
-G_{\text{raw}}(f) = T(f) - |H_c(f)|
-\]
-
-Regularization limits correction depth:
-
-\[
-G(f) = \frac{G_{\text{raw}}(f)}{1 + \left(\frac{|G_{\text{raw}}(f)|}{R(f)}\right)^2}
-\]
-
-where \(R(f)\) increases with frequency to avoid high-Q treble correction.
+CamillaFIR’s adaptive FDW reports the **effective bandwidth** range (min/mean/max) that results
+from confidence-weighted windowing.
 
 ---
 
-## 6. Slope Limiting
+## 5. Magnitude correction with regularization
 
-To avoid non-physical correction shapes, gain slope is constrained:
+Let \(T(f)\) be the target magnitude (in dB) and \(|H_c(f)|\) the corrected measurement magnitude.
+Raw correction gain (dB):
 
 \[
-\left| \frac{dG(f)}{d\log_2 f} \right| \le S_{\max}
+G_{raw}(f) = T(f) - |H_c(f)|
 \]
 
-This is enforced by forward and backward passes in log-frequency space.
+Regularization limits correction depth (especially for deep nulls). One stable form is a
+soft saturation:
+
+\[
+G(f) = \frac{G_{raw}(f)}{1 + \left(\frac{|G_{raw}(f)|}{R(f)}\right)^2}
+\]
+
+where \(R(f)\) is the regularization strength in dB.
 
 ---
 
-## 7. Phase Reconstruction Strategies
+## 6. Slope limiting (symmetric and asymmetric)
 
-### 7.1 Minimum Phase
-Given magnitude spectrum \(M(f)\), minimum phase is computed via the
-Hilbert transform:
+To avoid non-physical correction shapes, gain slope is constrained in log-frequency space:
 
 \[
-\phi_{\min}(f) = -\mathcal{H}\{\ln M(f)\}
+\left|\frac{dG(f)}{d\log_2 f}\right| \le S_{\max}
 \]
 
-This guarantees causality and zero pre-ringing.
+Implementation uses forward and backward passes over \(\log_2 f\) to enforce the bound.
 
-### 7.2 Linear Phase
-Linear phase correction directly inverts \(\phi_e(f)\):
+### 6.1 Independent boost/cut slope limits
+
+A key stability improvement is using different bounds for rising vs falling segments:
 
 \[
-H_{\text{lin}}(f) = e^{-j \phi_e(f)}
+\frac{dG}{d\log_2 f} \le S_{\max}^{(+)} \quad (\text{boost / rising})
+\]
+\[
+\frac{dG}{d\log_2 f} \ge -S_{\max}^{(-)} \quad (\text{cut / falling})
 \]
 
-### 7.3 Mixed Phase
-A linear-phase FIR crossover \(W(f)\) blends both:
+This prevents small boosts from being flattened by an overly strict symmetric limiter, while
+keeping cuts controlled.
+
+---
+
+## 7. Phase reconstruction strategies
+
+### 7.1 Minimum phase
+Given a magnitude spectrum \(M(f)\), minimum phase can be computed via the Hilbert transform:
 
 \[
-H(f) = W(f)\,H_{\text{lin}}(f) + [1-W(f)]\,H_{\min}(f)
+\phi_{min}(f) = -\mathcal{H}\{\ln M(f)\}
 \]
 
-Magnitude unity is preserved by construction.
-
-### 7.4 Asymmetric Linear Phase
-The impulse response is windowed asymmetrically:
+### 7.2 Linear phase
+Linear-phase correction inverts the estimated excess phase:
 
 \[
-w(n) =
-\begin{cases}
-w_L(n), & n < 0 \\
-w_R(n), & n \ge 0
-\end{cases}
+H_{lin}(f) = e^{-j\,\phi_e(f)}
 \]
 
-with \(w_L \ll w_R\), suppressing audible pre-ringing.
+### 7.3 Mixed phase
+A frequency-domain weighting \(W(f)\) blends linear and minimum phase:
+
+\[
+H_{phase}(f) = W(f)\,H_{lin}(f) + [1-W(f)]\,H_{min}(f)
+\]
+
+### 7.4 Asymmetric linear phase
+Asymmetric linear phase applies an asymmetric time window to reduce audible pre-ringing:
+
+\[
+w(n)=\begin{cases}w_L(n), & n<0\\ w_R(n), & n\ge 0\end{cases}\quad\text{with } w_L\ll w_R
+\]
 
 ---
 
 ## 8. Temporal Decay Control (TDC)
 
-Room modes represent excessive energy storage.
-Let the modal decay envelope be:
+Room modes are energy-storage phenomena. A simplified modal impulse envelope is
 
 \[
-h(t) = e^{-t/\tau_r}
+h(t)=e^{-t/\tau_r}
 \]
 
-TDC injects an inverse-decay kernel:
+TDC injects an inverse-decay component to shorten the tail:
 
 \[
-h_{\text{tdc}}(t) = -k\,e^{-t/\tau_r}
+h_{tdc}(t)=-k\,e^{-t/\tau_r}
 \]
 
-Such that the combined impulse shortens decay time
-without reducing steady-state SPL.
+### 8.1 Safety brakes for predictability
+TDC in CamillaFIR is bounded by:
+- a **hard cap** on total reduction per frequency bin, \(R_{tdc,max}\) (dB)
+- an **optional slope limit** on the reduction curve (dB/oct) to avoid narrow, stacked notches
 
-This is fundamentally **time-domain control**, not EQ.
+Conceptually, the accumulated reduction curve \(D(f)\) is constrained by
+
+\[
+0 \le D(f) \le R_{tdc,max}
+\]
+
+and optionally
+
+\[
+\left|\frac{dD(f)}{d\log_2 f}\right| \le S_{tdc}
+\]
 
 ---
 
-## 9. FIR Synthesis
+## 9. DF smoothing (constant-Hz smoothing across sample rates)
 
-The final complex correction spectrum is:
+When analysis grids (fs/taps) change, octave-based smoothing changes its effective width in Hz.
+DF smoothing targets a roughly constant width in **Hz** by setting the smoothing kernel width
+in bins proportional to the analysis frequency resolution.
+
+If FFT bin spacing is \(\Delta f = \frac{f_s}{N}\), a constant-Hz kernel \(\sigma_{Hz}\) maps to
 
 \[
-H_{\text{corr}}(f) = 10^{G(f)/20} \cdot H_{\text{phase}}(f)
+\sigma_{bins} \approx \frac{\sigma_{Hz}}{\Delta f} = \sigma_{Hz}\,\frac{N}{f_s}
 \]
 
-IFFT yields the FIR impulse response, followed by
-normalization and optional multi-rate scaling.
+This makes “detail level” comparable across sample rates.
 
 ---
 
-## 10. Perceptual Scoring
+## 10. FIR synthesis
 
-Deviation is measured as confidence-weighted RMS:
+The final complex correction spectrum is
 
 \[
-\text{RMS} = \sqrt{\frac{\sum C(f)\,\Delta^2(f)}{\sum C(f)}}
+H_{corr}(f) = 10^{G(f)/20}\,H_{phase}(f)
 \]
 
-Mapped to perceptual percentage via a sigmoid function.
+IFFT yields the FIR impulse response, followed by optional normalization and export.
 
 ---
 
-## 11. Design Philosophy Summary
+## 11. Stability summary
 
-CamillaFIR:
-- Corrects **only what is physically correctable**
-- Avoids inversion of noise and reflections
-- Treats room modes as time problems, not EQ problems
-- Uses FIR mathematics consistently across all domains
-
-This is why the system remains stable, natural,
-and perceptually transparent.
+CamillaFIR is stable because it:
+- avoids inverting low-confidence data
+- bounds gain (boost/cut), slope, and phase correction bandwidth
+- treats TOF, excess phase, and decay as separate problems
+- provides reproducible scoring via an optional fixed analysis grid
