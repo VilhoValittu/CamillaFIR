@@ -1,6 +1,6 @@
 # CamillaFIR 
 
-Please update to version 2.7.7 (20.01.2026). Fixed many comma mistakes = now everything really works!
+# Please update to version 2.7.7 (20.01.2026). Fixed many comma mistakes = now everything really works!
 
 **Time-domain–first FIR room correction (CamillaDSP-focused)**
 
