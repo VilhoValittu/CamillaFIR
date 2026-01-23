@@ -1,6 +1,17 @@
 # CamillaFIR 
 
-# Please update to version 2.7.7 (20.01.2026). Fixed many comma mistakes = now everything really works!
+## What’s new in v2.7.8
+
+- **Stereo-linked auto-leveling (TXT-compatible default)**  
+  SmartScan level window and gain are computed from a shared L/R reference and applied identically to both channels.  
+  This removes channel-dependent gain drift while preserving automatic delay alignment.
+
+- **Correction-band visualization**  
+  The active magnitude correction range (`mag_c_min … mag_c_max`) is shaded in plots, making it immediately obvious where correction is applied.
+
+- **Reliability / confidence shading**  
+  Low-confidence frequency regions are visually highlighted in plots to explain why some areas are protected or only lightly corrected.
+
 
 **Time-domain–first FIR room correction (CamillaDSP-focused)**
 
