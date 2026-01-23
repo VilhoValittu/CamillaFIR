@@ -13,7 +13,7 @@ from datetime import datetime
 # Tuodaan tarvittavat funktiot DSP-moduulista
 from camillafir_dsp import apply_smoothing_std, psychoacoustic_smoothing, calculate_rt60
 
-# Version 1.1.7
+# Version 1.1.8
 
 def _resource_path(rel_path: str) -> str:
     """
@@ -50,6 +50,155 @@ def calculate_clean_gd(freqs, complex_resp):
     gd_ms = -np.gradient(phase_rad) / (2 * np.pi * df) * 1000.0
     gd_ms = np.nan_to_num(gd_ms, nan=0.0, posinf=0.0, neginf=0.0)
     return scipy.ndimage.gaussian_filter1d(gd_ms, sigma=8)
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    try:
+        return float(max(lo, min(hi, float(x))))
+    except Exception:
+        return float(lo)
+
+def calc_acoustic_score(conf_pct: float, match_pct: float, rt60_s: float | None = None, rt60_rel: float | None = None) -> float:
+    """
+    Combine confidence + target match into one 0..100 score.
+    Weighting: 60% match, 40% confidence.
+    (Module-level so UI code can call it.)
+    Acoustic Score v2:
+      - Base: 55% match + 35% confidence
+      - Bonus: up to +15 points for fast decay (low RT60), BUT weighted by RT60 reliability
+
+    RT60 bonus:
+      rt_bonus = 15 * clamp((0.35 - rt60) / 0.25, 0..1)
+      rt_bonus_eff = rt_bonus * rt60_rel
+
+    Notes:
+      - WAV/IR path should tag rt60_rel ~ 1.0
+      - TXT/REW FR path should tag rt60_rel ~ 0.25 (proxy / less trustworthy)
+    """
+
+    conf = _clamp(conf_pct, 0.0, 100.0)
+    match = _clamp(match_pct, 0.0, 100.0)
+
+    # Base score (keeps match dominant but not equal)
+    base = 0.55 * match + 0.35 * conf
+
+    # RT60 bonus (optional + reliability-weighted)
+    rt_bonus_eff = 0.0
+    try:
+        if rt60_s is not None:
+            rt60 = float(rt60_s)
+            if rt60 > 0:
+                rel = 1.0 if rt60_rel is None else _clamp(float(rt60_rel), 0.0, 1.0)
+                rt_bonus = 15.0 * _clamp((0.35 - rt60) / 0.25, 0.0, 1.0)
+                rt_bonus_eff = rt_bonus * rel
+    except Exception:
+        rt_bonus_eff = 0.0
+
+    return _clamp(base + rt_bonus_eff, 0.0, 100.0)
+
+# Backward-compat aliases (older callers use underscore names)
+_calc_acoustic_score = calc_acoustic_score
+
+
+
+
+def calc_ai_summary_from_stats(stats: dict) -> dict:
+    """
+    Single source of truth for UI + Summary:
+      - confidence (%)
+      - target match (%), rms (dB)
+      - acoustic score (/100)
+    Uses the exact same basis as format_summary_content().
+    """
+    stats = stats or {}
+    conf = float(stats.get('cmp_avg_confidence', stats.get('avg_confidence', 0.0)) or 0.0)
+    rms, match = calc_target_match_from_stats(stats)
+    if match is None:
+        return {"conf": conf, "rms": None, "match": None, "score": None}
+    # RT60 bonus: reliability-weighted (tagged by camillafir.py)
+    rt60 = stats.get("rt60_val", None)
+    rt_rel = stats.get("rt60_reliability", None)
+    score = calc_acoustic_score(conf, float(match), rt60_s=rt60, rt60_rel=rt_rel)
+    return {
+        "conf": conf,
+        "rms": float(rms) if rms is not None else None,
+        "match": float(match),
+        "score": score,
+        "rt60": float(rt60) if rt60 is not None else None,
+        "rt60_rel": float(rt_rel) if rt_rel is not None else None,
+    }
+
+def _calc_target_match(stats):
+    """
+    Palauttaa (rms_db, match_pct) tai (None, None) jos ei dataa.
+    Sama logiikka kuin Summary.txt:ssä.
+    """
+    def _as_np(stats, key):
+        v = stats.get(key, None)
+        if v is None:
+            return None
+        try:
+            return np.asarray(v, dtype=float)
+        except Exception:
+            return None
+
+    def _pick(stats, base_key: str):
+        if not stats:
+            return base_key
+        mode = str(stats.get("analysis_mode", "native") or "native").lower()
+        if mode == "comparison":
+            ck = "cmp_" + base_key
+            if ck in stats and stats.get(ck) is not None:
+                return ck
+        return base_key
+
+    f = _as_np(stats, _pick(stats, 'freq_axis'))
+    t = _as_np(stats, _pick(stats, 'target_mags'))
+    m = _as_np(stats, _pick(stats, 'measured_mags'))
+    c = _as_np(stats, _pick(stats, 'confidence_mask'))
+
+    if f is None or t is None or m is None:
+        return None, None
+
+    rng = stats.get(_pick(stats, 'smart_scan_range'), None)
+    if isinstance(rng, (list, tuple)) and len(rng) == 2:
+        fmin, fmax = float(rng[0]), float(rng[1])
+    else:
+        fmin, fmax = 200.0, 5000.0
+
+    mask = (f >= fmin) & (f <= fmax)
+    if np.count_nonzero(mask) < 10:
+        return None, None
+
+    diff = (m - t)[mask]
+
+    if c is not None and c.shape == f.shape:
+        w = np.clip(c[mask], 0.0, 1.0)
+        w = np.maximum(w, 0.05)
+        rms = float(np.sqrt(np.sum(w * diff * diff) / np.sum(w)))
+    else:
+        rms = float(np.sqrt(np.mean(diff * diff)))
+
+    m50 = 3.2
+    s = 0.9
+    match_pct = 100.0 / (1.0 + np.exp((rms - m50) / s))
+    match_pct = float(np.clip(match_pct, 0.0, 100.0))
+    if rms <= 0.4:
+        match_pct = 99.0
+
+    return rms, match_pct
+
+def calc_target_match_from_stats(stats: dict):
+    """
+    Public wrapper for target-match calculation.
+    Returns (rms_db, match_pct) or (None, None) if insufficient data.
+    """
+    try:
+        return _calc_target_match(stats or {})
+    except Exception:
+        return None, None
+
+
+
 
 def format_summary_content(settings, l_stats, r_stats):
     """Luo Summary.txt sisältäen RT60, confidence, target match ja acoustic score."""
@@ -196,62 +345,24 @@ def format_summary_content(settings, l_stats, r_stats):
             out.append(f"{k:.0f}Hz:{float(val):.2f}s")
         return " | ".join(out) if out else "-"
 
-    def _calc_target_match(stats):
+    
+
+    def _calc_acoustic_score(conf_pct, match_pct, rt60_s=None, rt60_reliability=None):
         """
-        Palauttaa (rms_db, match_pct) tai (None, None) jos ei dataa.
-        match_pct = 100 - 10*rms_db, clamp 0..100 (helppo ja intuitiivinen)
+        Local wrapper for legacy Summary.txt.
+        Delegates to module-level calc_acoustic_score (v2).
         """
-        f = _as_np(stats, _pick(stats, 'freq_axis'))
-        t = _as_np(stats, _pick(stats, 'target_mags'))
-        m = _as_np(stats, _pick(stats, 'measured_mags'))
-        c = _as_np(stats, _pick(stats, 'confidence_mask'))
-
-        if f is None or t is None or m is None:
-            return None, None
-
-        # Käytä smart_scan_range jos löytyy, muuten järkevä oletus
-        rng = stats.get(_pick(stats, 'smart_scan_range')) if ('smart_scan_range' in stats or 'cmp_smart_scan_range' in stats) else None
-        if isinstance(rng, (list, tuple)) and len(rng) == 2:
-            fmin, fmax = float(rng[0]), float(rng[1])
-        else:
-            fmin, fmax = 200.0, 5000.0
-
-        mask = (f >= fmin) & (f <= fmax)
-        if np.count_nonzero(mask) < 10:
-            return None, None
-
-        diff = (m - t)[mask]
-
-        # Painota confidence:lla kevyesti (ettei heikko alue dominoi)
-        if c is not None and c.shape == f.shape:
-            w = np.clip(c[mask], 0.0, 1.0)
-            # estä nollapainot (numeriikka)
-            w = np.maximum(w, 0.05)
-            rms = float(np.sqrt(np.sum(w * diff * diff) / np.sum(w)))
-        else:
-            rms = float(np.sqrt(np.mean(diff * diff)))
-
-        # Fiksumpi match-muunnos RMS(dB) -> prosentti:
-        # Sigmoidi: pehmeä pudotus, realistisempi kuuntelun kannalta.
-        m = 3.2   # dB @ 50%
-        s = 0.9   # jyrkkyys (pienempi = jyrkempi)
-        match_pct = 100.0 / (1.0 + np.exp((rms - m) / s))
-        match_pct = float(np.clip(match_pct, 0.0, 100.0))
-        if rms <= 0.4:
-            match_pct = 99.0
-
-        return rms, match_pct
-
-    def _calc_acoustic_score(conf_pct, match_pct):
-        """
-        Yhdistää confidence + target match yhdeksi pisteeksi 0..100.
-        Painotus: 60% match, 40% confidence (match on "kuultava", confidence kertoo riskistä).
-        """
-        conf_pct = float(np.clip(conf_pct, 0.0, 100.0))
-        match_pct = float(np.clip(match_pct, 0.0, 100.0))
-        score = 0.60 * match_pct + 0.40 * conf_pct
-        return float(np.clip(score, 0.0, 100.0))
-
+        try:
+            return globals()["calc_acoustic_score"](
+                float(conf_pct),
+                float(match_pct),
+                rt60_s=rt60_s,
+                rt60_rel=rt60_reliability
+            )
+        except Exception:
+            conf_pct = float(np.clip(float(conf_pct), 0.0, 100.0))
+            match_pct = float(np.clip(float(match_pct), 0.0, 100.0))
+            return float(np.clip(0.60 * match_pct + 0.40 * conf_pct, 0.0, 100.0))
     # --- RT60 + Confidence ---
     l_rt, l_band_avg = _band_rt60_line(l_stats)
     r_rt, r_band_avg = _band_rt60_line(r_stats)
@@ -303,12 +414,20 @@ def format_summary_content(settings, l_stats, r_stats):
     # --- Acoustic Score ---
     lines.append("\n--- Acoustic Score ---")
     if (l_match is not None):
-        l_score = _calc_acoustic_score(l_conf, l_match)
+        l_score = _calc_acoustic_score(
+            l_conf, l_match,
+            (l_stats or {}).get("rt60_val", None),
+            (l_stats or {}).get("rt60_reliability", None)
+        )
         lines.append(f"Left Acoustic Score:  {l_score:.1f}/100")
     else:
         lines.append("Left Acoustic Score:  (insufficient data)")
     if (r_match is not None):
-        r_score = _calc_acoustic_score(r_conf, r_match)
+        r_score = _calc_acoustic_score(
+            r_conf, r_match,
+            (r_stats or {}).get("rt60_val", None),
+            (r_stats or {}).get("rt60_reliability", None)
+        )
         lines.append(f"Right Acoustic Score: {r_score:.1f}/100")
     else:
         lines.append("Right Acoustic Score: (insufficient data)")
@@ -548,6 +667,22 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
                           x0=s_min, x1=s_max,
                           y0=avg_t-40, y1=avg_t+40,
                           fillcolor="rgba(200, 200, 200, 0.15)", layer="below", line_width=0, row=1, col=1)
+        # Correction band (mag correction active range)
+        if target_stats:
+            try:
+                cmin = float(target_stats.get('mag_c_min', 0.0) or 0.0)
+                cmax = float(target_stats.get('mag_c_max', 0.0) or 0.0)
+                if np.isfinite(cmin) and np.isfinite(cmax) and cmin > 0 and cmax > cmin:
+                    fig.add_shape(
+                        type="rect", xref="x", yref="y",
+                        x0=cmin, x1=cmax,
+                        y0=avg_t-40, y1=avg_t+40,
+                        fillcolor="rgba(80, 140, 255, 0.08)", layer="below", line_width=0,
+                        row=1, col=1
+                    )
+            except Exception:
+                pass
+
 
         # Confidence
         if target_stats and 'confidence_mask' in target_stats:
@@ -556,6 +691,42 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
             conf_line = (avg_t - 15) + (c_mask * 10)
             fig.add_trace(go.Scatter(x=c_freqs, y=conf_line, name='Confidence', 
                                      line=dict(color='magenta', width=1), opacity=0.3, hoverinfo='skip'), row=1, col=1)
+            # Shade "unreliable" regions (low confidence). This is a *visual cue* only.
+            # Threshold is intentionally conservative to avoid over-shading.
+            try:
+                thr = 0.35
+                bad = np.asarray(c_mask, dtype=float) < float(thr)
+                if bad.size == c_freqs.size and bad.size > 8:
+                    in_seg = False
+                    seg_start = None
+                    for fx, is_bad in zip(c_freqs, bad):
+                        if is_bad and not in_seg:
+                            in_seg = True
+                            seg_start = float(fx)
+                        elif (not is_bad) and in_seg:
+                            in_seg = False
+                            seg_end = float(fx)
+                            if seg_start is not None and seg_end > seg_start:
+                                fig.add_shape(
+                                    type="rect", xref="x", yref="y",
+                                    x0=seg_start, x1=seg_end,
+                                    y0=avg_t-40, y1=avg_t+40,
+                                    fillcolor="rgba(255, 0, 0, 0.06)", layer="below", line_width=0,
+                                    row=1, col=1
+                                )
+                    if in_seg and seg_start is not None:
+                        seg_end = float(c_freqs[-1])
+                        if seg_end > seg_start:
+                            fig.add_shape(
+                                type="rect", xref="x", yref="y",
+                                x0=seg_start, x1=seg_end,
+                                y0=avg_t-40, y1=avg_t+40,
+                                fillcolor="rgba(255, 0, 0, 0.06)", layer="below", line_width=0,
+                                row=1, col=1
+                            )
+            except Exception:
+                pass
+
 
         # A. MITATTU (Käytetään optimoitua f_vis dataa)
         fig.add_trace(go.Scatter(x=f_vis, y=m_vis, name='Measured', 
@@ -575,6 +746,24 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
         fig.add_trace(go.Scatter(x=f_vis, y=ph_vis, name="Phase", line=dict(color='orange'), showlegend=False), row=2, col=1)
         fig.add_trace(go.Scatter(x=f_vis, y=gd_vis, name="Group Delay", line=dict(color='orange'), showlegend=False), row=3, col=1)
         fig.add_trace(go.Scatter(x=f_vis, y=filt_vis, name="Filter dB", line=dict(color='red', width=1.2), showlegend=False), row=4, col=1)
+    
+
+        # Mirror correction band hint on the filter panel as well
+        if target_stats:
+            try:
+                cmin = float(target_stats.get('mag_c_min', 0.0) or 0.0)
+                cmax = float(target_stats.get('mag_c_max', 0.0) or 0.0)
+                if np.isfinite(cmin) and np.isfinite(cmax) and cmin > 0 and cmax > cmin:
+                    fig.add_shape(
+                        type="rect", xref="x", yref="y",
+                        x0=cmin, x1=cmax,
+                        y0=-15, y1=10,
+                        fillcolor="rgba(80, 140, 255, 0.06)", layer="below", line_width=0,
+                        row=4, col=1
+                    )
+            except Exception:
+                pass
+
         
         # Step Response
         step_resp = np.cumsum(filt_ir)

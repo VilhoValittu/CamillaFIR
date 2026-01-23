@@ -8,3 +8,4 @@ build/
 test.py
 *.spec
 *.code-workspace
+*.zip

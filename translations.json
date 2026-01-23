@@ -1,5 +1,9 @@
 {
     "en": {
+        "input_files_title": "Input files (.txt / .wav)",
+        "input_files_help": "Load measurements from local files or uploads.<br><b>.txt</b> = REW frequency response export (FR). <b>.wav</b> = impulse response (IR) which will be converted to FR using the IR window settings.",
+        "preferred_import_mode": "Preferred import mode",
+        "preferred_import_mode_help": "Usually auto-detected from the file extension. Use this only if you need to force parsing.",
         "max_cut_db": "Max cut (dB)",
         "max_cut_db_help": "Limits maximum attenuation depth (e.g. -15 dB).",
         "max_slope_db_per_oct": "Max slope (dB/oct)",
@@ -77,8 +81,8 @@
         "title": "CamillaFIR",
         "subtitle": "By VilhoValittu & GeminiPro",
         "grp_settings": "Settings & Files",
-        "upload_l": "Measurement L (.txt)",
-        "upload_r": "Measurement R (.txt)",
+        "upload_l": "Measurement L (.txt/.wav)",
+        "upload_r": "Measurement R (.txt/.wav)",
         "path_l": "OR Local Path L",
         "path_r": "OR Local Path R",
         "path_help": "Paste full path (e.g. C:\\Audio\\L.txt) Don't have remove quete marks.",
@@ -139,8 +143,8 @@
         "enable_norm": "Normalize to -1.0 dB",
         "norm_help": "Ensures filter peak does not exceed -1.0 dBFS.",
         "stereo_link": "Stereo Link",
-        "enable_link": "Stereo Link (Preserve Balance)",
-        "link_help": "Applies same gain offset to both channels to keep stereo image.",
+        "enable_link": "Stereo Link (Preserve Balance) Strongly Recommended",
+        "link_help": "Applies same gain offset to both channels to keep stereo image. Strongly recommended to keep enabled",
         "align_opt": "Time Alignment",
         "enable_align": "Auto-Align L/R",
         "align_help": "Aligns impulse peaks of L and R channels.",
@@ -235,12 +239,23 @@
         "hc_studio_tilt": "Studio reference (−1 dB / octave tilt)",
         "hc_nearfield": "Nearfield / desk listening",
         "hc_hifi_loudness": "Classic Hi-Fi loudness",
-        "hc_speech": "Speech / broadcast clarity"
+        "hc_speech": "Speech / broadcast clarity",
+        "wav_recommended_info": "It is recommended to import the loudspeaker measurement data in WAV format (Mono, float32, Normalise & Place t=0 (256) ) for best phase and TDC accuracy.",
+        "bass_first_max_hz_help": "This frequency defines up to which point TDC considers the response reliable, allowing the bass to be actively corrected toward the target.",
+        "bass_first_title": "Bass-first AI (room modes)",
+        "bass_first_enable_label": "Enable Bass-first AI (do not smooth room modes away)",
+        "bass_first_enable_help": "Makes low-frequency room modes more visible to the correction and cuts them intentionally, instead of smoothing them away as unreliable measurement.",
+        "bass_first_max_hz_label": "Bass-first mode max (Hz)"
+
 
 
     },
     
     "fi": {
+        "input_files_title": "Mittaustiedostot (.txt / .wav)",
+        "input_files_help": "Lataa mittaukset tiedostosta tai uploadilla.<br><b>.txt</b> = REW:n taajuusvasteen vienti (FR). <b>.wav</b> = impulssivaste (IR), joka muunnetaan taajuusvasteeksi IR-ikkuna-asetuksilla.",
+        "preferred_import_mode": "Tulkinta (WAV / TXT)",
+        "preferred_import_mode_help": "Yleensä tunnistetaan automaattisesti tiedostopäätteestä. Käytä tätä vain, jos haluat pakottaa tulkinnan.",
         "max_cut_db": "Max leikkaus (dB)",
         "max_cut_db_help": "Rajoittaa leikkauksen syvyyttä (esim. -15 dB maksimi).",
         "max_slope_db_per_oct": "Max jyrkkyys (dB/okt)",
@@ -342,8 +357,8 @@
         "title": "CamillaFIR",
         "subtitle": "VilhoValittu & GeminiPro",
         "grp_settings": "Asetukset & Tiedostot",
-        "upload_l": "Mittaus L (.txt)",
-        "upload_r": "Mittaus R (.txt)",
+        "upload_l": "Mittaus L (.txt/.wav)",
+        "upload_r": "Mittaus R (.txt/.wav)",
         "path_l": "TAI paikallinen polku L",
         "path_r": "TAI paikallinen polku R",
         "path_help": "Liitä koko polku (esim. C:\\Audio\\L.txt). Heittomerkkejä ei tarvitse poistaa",
@@ -405,8 +420,8 @@
         "enable_norm": "Normalisoi -1.0 dB",
         "norm_help": "Varmistaa ettei suotimen huippu ylitä -1.0 dBFS.",
         "stereo_link": "Stereo Link",
-        "enable_link": "Linkitä kanavat (Säilytä balanssi)",
-        "link_help": "Käyttää samaa vahvistusta molempiin kanaviin stereokuvan säilyttämiseksi.",
+        "enable_link": "Linkitä kanavat (Säilytä balanssi) vahvasti suositeltu pitää päällä",
+        "link_help": "Käyttää samaa vahvistusta molempiin kanaviin stereokuvan säilyttämiseksi. Vahvasti suositeltu pitää päällä",
         "align_opt": "Aikaviive",
         "enable_align": "Automaattinen ajoitus L/R",
         "align_help": "Kohdistaa impulssihuiput molemmissa kanavissa.",
@@ -478,6 +493,13 @@
         "hc_studio_tilt": "Studio reference (−1 dB / octave tilt)",
         "hc_nearfield": "Nearfield / desk listening",
         "hc_hifi_loudness": "Classic Hi-Fi loudness",
-        "hc_speech": "Speech / broadcast clarity"
+        "hc_speech": "Speech / broadcast clarity",
+        "wav_recommended_info": "Suositellaan tuomaan kaiuttimen mittausdata .wav-muodossa! (Mono, float32, Normalise & Place t=0 (256) ) (paras vaihe- ja TDC-tarkkuus).",
+        "bass_first_title": "Bass-first AI (huonemoodit)",
+        "bass_first_enable_label": "Ota Bass-first AI käyttöön (älä silota huonemodeja pois)",
+        "bass_first_enable_help": "Tekee matalataajuiset huonemoodit näkyvämmiksi korjaukselle ja leikkaa ne tietoisesti sen sijaan, että ne silotettaisiin pois epäluotettavana mittauksena.",
+        "bass_first_max_hz_label": "Bass-first -alueen yläraja (Hz)",
+        "bass_first_max_hz_help": "Tämä taajuus määrittää mihin asti TDC pitää kaikkea \"luotettevana\" eli ns. lanaa basson vastaamaan targettia."
+
     }
 }

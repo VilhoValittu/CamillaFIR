@@ -139,6 +139,62 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
 
     mode = str(getattr(cfg, "lvl_mode", "Auto"))
 
+    # ---------- Forced window / offset (Stereo-link support) ----------
+    # If the caller provides a fixed window and/or offset, respect it.
+    # This is used to ensure identical leveling between L/R channels.
+    forced_window = getattr(cfg, "lvl_force_window", None)
+    forced_offset = getattr(cfg, "lvl_force_offset_db", None)
+    if forced_window is not None or forced_offset is not None:
+        try:
+            if forced_window is not None:
+                fw0, fw1 = forced_window
+                ss_min = _to_float(fw0, s_min)
+                ss_max = _to_float(fw1, s_max)
+                if (ss_min <= 0) or (ss_max <= 0) or (ss_min >= ss_max):
+                    ss_min, ss_max = s_min, s_max
+                ss_min = max(s_min, ss_min)
+                ss_max = min(s_max, ss_max)
+            else:
+                ss_min, ss_max = s_min, s_max
+
+            mask = (freq_axis >= ss_min) & (freq_axis <= ss_max)
+            if np.any(mask):
+                meas_level_db_window = float(np.median(m_anal[mask]))
+                target_level_db_window = float(np.median(target_mags[mask]))
+            else:
+                meas_level_db_window = 0.0
+                target_level_db_window = 0.0
+
+            if forced_offset is not None:
+                calc_offset_db = _to_float(forced_offset, 0.0)
+                offset_method = "ForcedOffset"
+            else:
+                # If only window is forced, compute a deterministic offset from that.
+                if np.any(mask):
+                    calc_offset_db = float(np.median(m_anal[mask] - target_mags[mask]))
+                    offset_method = "ForcedWindowMedian"
+                else:
+                    calc_offset_db = 0.0
+                    offset_method = "ForcedWindowNoMask"
+
+            target_level_db = float(manual_target_db)
+            if not np.isfinite(calc_offset_db):
+                calc_offset_db = 0.0
+
+            return (
+                float(target_level_db),
+                float(calc_offset_db),
+                float(meas_level_db_window),
+                float(target_level_db_window),
+                str(offset_method),
+                float(ss_min),
+                float(ss_max),
+            )
+        except Exception:
+            # If anything goes sideways, fall back to normal logic below.
+            pass
+
+
     # ---------- Manual ----------
     if "Manual" in mode:
         mask = (freq_axis >= s_min) & (freq_axis <= s_max)

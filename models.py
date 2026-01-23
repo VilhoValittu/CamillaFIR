@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
 @dataclass
 class FilterConfig:
@@ -48,6 +48,13 @@ class FilterConfig:
     ir_window_ms_left: float = 10  # Vasemman puolen aikaikkuna (Left / Pre-ringing)
     mixed_split_freq: float = 300.0 # Mixed Phase -suodattimen jakotaajuus
     trans_width: float = 100.0      # Siirtymäalueen leveys ylärajalla
+    bass_first_ai: bool = False
+    bass_first_mode_max_hz: float = 200.0
+    bass_first_smooth_floor_lo: float = 0.75
+    bass_first_smooth_floor_hi: float = 0.35
+    bass_first_k_mode_cut: float = 0.6
+    bass_first_k_mode_boost: float = 0.9
+
    
 
     # --- 5. RAKENTEELLISET ASETUKSET (HPF, XO, TARGET) ---
@@ -62,7 +69,10 @@ class FilterConfig:
     lvl_manual_db: float = 75.0     # Manuaalinen tavoitetaso
     lvl_min: float = 200.0          # Tasonsovituksen hakualueen alku
     lvl_max: float = 3000.0         # Tasonsovituksen hakualueen loppu
-    
+    stereo_link: bool = False
+    lvl_force_window: Optional[Tuple[float, float]] = None
+    lvl_force_offset_db: Optional[float] = None
+
     # --- 7. SUOJAUKSET JA OPTIMOINNIT ---
     do_normalize: bool = False       # Normalisointi -1 dBFS tasoon
     exc_prot: bool = False          # Ekskursiosuojaus (basson suojelu)

@@ -20,7 +20,7 @@ import camillafir_dsp as dsp
 import camillafir_plot as plots
 import models
 from models import FilterConfig
-
+#from camillafir_rew_api import *
 print("USING models.py      =", models.__file__)
 print("USING camillafir_dsp =", dsp.__file__)
 print("USING camillafir_plot=", plots.__file__)
@@ -31,10 +31,13 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.7.7"    #kaikki toimii edition
+VERSION = "v2.7.8"    #added .wav support
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
+
+
+
 
 def scale_taps_with_fs(
     fs: int,
@@ -105,7 +108,7 @@ def parse_measurements_from_path(path):
     """Lukee mittausdatan paikallisesta tiedostopolusta (REW .txt export) robustisti."""
     try:
         if not path: return None, None, None
-        
+
         # 1. Siivotaan polku (poistetaan lainausmerkit ja välilyönnit)
         p = path.strip().strip('"').strip("'")
         
@@ -113,7 +116,30 @@ def parse_measurements_from_path(path):
             logger.error(f"Tiedostoa ei löydy: {p}")
             return None, None, None
             
-        # 2. Avataan tiedosto
+        # WAV import: if local path ends with .wav -> parse IR wav to FR
+        ext = os.path.splitext(p)[1].lower()
+        if ext == ".wav":
+            # Use UI IR windows + smoothing for WAV parsing
+            try:
+                pre_ms = float(getattr(pin, "ir_window_ms_left", None) or pin.get("ir_window_ms_left") or 50.0)
+            except Exception:
+                pre_ms = 50.0
+            try:
+                post_ms = float(getattr(pin, "ir_window_ms", None) or pin.get("ir_window_ms") or 500.0)
+            except Exception:
+                post_ms = 500.0
+            try:
+                sl = int(getattr(pin, "smoothing_level", None) or pin.get("smoothing_level") or 0)
+            except Exception:
+                sl = 0
+            return parse_measurements_from_wav_path(
+                p,
+                pre_ms=pre_ms,
+                post_ms=post_ms,
+                smoothing_level=sl
+            )
+
+        # 2. Avataan tiedosto (TXT)
         with open(p, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.readlines()
 
@@ -161,6 +187,262 @@ def parse_measurements_from_path(path):
 
     except Exception as e:
         logger.error(f"Kriittinen virhe polun luvussa ({path}): {e}")
+        return None, None, None
+    
+def _wav_to_float(sig: np.ndarray) -> np.ndarray:
+    """
+    Convert WAV PCM/float arrays into float32 [-1..1] approx.
+    Handles int16/int32/float32/float64.
+    """
+    x = np.asarray(sig)
+    if x.dtype.kind == "f":
+        return x.astype(np.float32, copy=False)
+    # PCM
+    if x.dtype == np.int16:
+        return (x.astype(np.float32) / 32768.0)
+    if x.dtype == np.int32:
+        # int32 WAV often uses full scale; map to [-1..1]
+        return (x.astype(np.float32) / 2147483648.0)
+    # fallback
+    return x.astype(np.float32)
+
+
+
+def _octave_smooth_loggrid(freqs: np.ndarray, mags_db: np.ndarray, smoothing_level: int) -> np.ndarray:
+    """
+    Apply ~1/N-oct smoothing on a uniform log2 frequency grid, then resample back.
+    smoothing_level = N (e.g. 12 -> 1/12 octave).
+    """
+    try:
+        f = np.asarray(freqs, dtype=float)
+        m = np.asarray(mags_db, dtype=float)
+        if f.size < 8 or m.size != f.size:
+            return m
+
+        N = int(smoothing_level)
+        if N <= 0:
+            return m
+
+        # valid positive freqs only
+        mask = f > 0
+        if np.count_nonzero(mask) < 8:
+            return m
+
+        f2 = f[mask]
+        m2 = m[mask]
+
+        logf = np.log2(f2)
+        # choose a reasonably fine grid in octaves
+        step = 1.0 / 96.0  # 1/96 oct grid
+        g0, g1 = float(logf[0]), float(logf[-1])
+        if g1 <= g0 + step:
+            return m
+
+        grid = np.arange(g0, g1 + step, step, dtype=float)
+        # interpolate mags onto log grid
+        mg = np.interp(grid, logf, m2)
+
+        # Gaussian smoothing with FWHM = 1/N oct -> sigma = fwhm/2.355
+        fwhm_oct = 1.0 / float(N)
+        sigma_oct = fwhm_oct / 2.355
+        sigma_pts = max(1.0, sigma_oct / step)
+
+        # build gaussian kernel
+        half = int(max(3, round(4.0 * sigma_pts)))
+        x = np.arange(-half, half + 1, dtype=float)
+        k = np.exp(-0.5 * (x / sigma_pts) ** 2)
+        k /= np.sum(k)
+
+        mg_s = np.convolve(mg, k, mode="same")
+        # resample back to original freqs
+        m2_s = np.interp(logf, grid, mg_s)
+
+        out = m.copy()
+        out[mask] = m2_s
+        return out
+    except Exception:
+        return np.asarray(mags_db, dtype=float)
+
+def _ir_wav_to_freq_response(
+    fs: int,
+    x: np.ndarray,
+    *,
+    pre_ms: float = 5.0,
+    post_ms: float = 500.0,
+    smoothing_level: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Convert impulse response WAV (time domain) to (freq, mag_db, phase_deg).
+    - Finds peak, windows around it: [peak-pre_ms .. peak+post_ms]
+    - Applies Hann window to reduce FFT leakage.
+    """
+    fs_i = int(fs) if fs else 0
+    if fs_i <= 0:
+        raise ValueError("Invalid WAV sample rate.")
+
+    sig = np.asarray(x, dtype=np.float32).copy()
+    if sig.size < 64:
+        raise ValueError("WAV too short.")
+
+    # DC removal (helps phase stability)
+    sig -= float(np.mean(sig))
+
+    # Find impulse peak
+    peak = int(np.argmax(np.abs(sig)))
+
+    pre_s = int(round((float(pre_ms) / 1000.0) * fs_i))
+    post_s = int(round((float(post_ms) / 1000.0) * fs_i))
+    pre_s = max(pre_s, 0)
+    post_s = max(post_s, 64)
+
+    i0 = max(0, peak - pre_s)
+    i1 = min(sig.size, peak + post_s)
+    seg = sig[i0:i1]
+    if seg.size < 64:
+        # fallback: use full signal
+        seg = sig
+
+    # Window to reduce leakage
+    try:
+        w = np.hanning(seg.size).astype(np.float32)
+        seg = seg * w
+    except Exception:
+        pass
+
+    seg -= np.linspace(seg[0], seg[-1], seg.size, dtype=np.float32)
+    # FFT
+    spec = np.fft.rfft(seg)
+    freqs = np.fft.rfftfreq(seg.size, d=1.0 / float(fs_i))
+    mag = np.abs(spec)
+    mag_db = 20.0 * np.log10(np.maximum(mag, 1e-12))
+
+    # Phase unwrap (critical for stable GD/phase plots and confidence logic)
+    phase_rad = np.unwrap(np.angle(spec))
+    phase_deg = np.rad2deg(phase_rad)
+
+    # Apply octave smoothing to magnitude if requested (match TXT pipeline behavior)
+    if smoothing_level is not None:
+        try:
+            sl = int(smoothing_level)
+            if sl > 0:
+                mag_db = _octave_smooth_loggrid(freqs, mag_db, sl)
+        except Exception:
+            pass
+    
+        hf = freqs > min(0.45 * fs_i, 18000.0)
+        phase_deg[hf] = phase_deg[np.where(~hf)[0][-1]]
+
+    return freqs.astype(float), mag_db.astype(float), phase_deg.astype(float)
+
+    """
+    Parse REW IR WAV export -> frequency response arrays.
+    Returns freqs (Hz), mags (dB), phases (deg).
+    """
+def parse_measurements_from_wav_bytes(
+    file_content: bytes,
+    *,
+    channel_index: int = 0,
+    pre_ms: float = 5.0,
+    post_ms: float = 500.0,
+    smoothing_level: int | None = None,
+):
+    """
+    Parse REW IR WAV export -> frequency response arrays.
+    Returns freqs (Hz), mags (dB), phases (deg).
+    """
+    try:
+        bio = io.BytesIO(file_content)
+        fs, sig = scipy.io.wavfile.read(bio)
+        sig = _wav_to_float(sig)
+
+        if sig.ndim == 2:
+            ch = int(channel_index)
+            ch = 0 if ch < 0 else ch
+            ch = (sig.shape[1] - 1) if ch >= sig.shape[1] else ch
+            sig = sig[:, ch]
+
+        f, m, p = _ir_wav_to_freq_response(
+            int(fs),
+            sig,
+            pre_ms=float(pre_ms),
+            post_ms=float(post_ms),
+            smoothing_level=smoothing_level,
+        )
+        return f, m, p
+    except Exception as e:
+        logger.error(f"WAV parse failed: {e}")
+        return None, None, None
+
+
+def parse_measurements_from_wav_path(
+    path: str,
+    *,
+    channel_index: int = 0,
+    pre_ms: float = 5.0,
+    post_ms: float = 500.0,
+    smoothing_level: int | None = None,
+):
+    """
+    Parse local IR WAV path -> frequency response arrays.
+    """
+    try:
+        fs, sig = scipy.io.wavfile.read(path)
+        sig = _wav_to_float(sig)
+        if sig.ndim == 2:
+            ch = int(channel_index)
+            ch = 0 if ch < 0 else ch
+            ch = (sig.shape[1] - 1) if ch >= sig.shape[1] else ch
+            sig = sig[:, ch]
+
+        f, m, p = _ir_wav_to_freq_response(
+            int(fs),
+            sig,
+            pre_ms=float(pre_ms),
+            post_ms=float(post_ms),
+            smoothing_level=smoothing_level,
+        )
+        return f, m, p
+    except Exception as e:
+        logger.error(f"WAV path parse failed ({path}): {e}")
+        return None, None, None
+
+
+
+def parse_measurements_from_upload(
+    file_dict,
+    *,
+    channel_index: int = 0,
+    pre_ms: float = 5.0,
+    post_ms: float = 500.0,
+    smoothing_level: int | None = None,
+):
+    try:
+        if not file_dict:
+            return None, None, None
+        name = str(file_dict.get("filename", "") or "")
+        content = file_dict.get("content", None)
+        if content is None:
+            return None, None, None
+        ext = os.path.splitext(name)[1].lower()
+        if ext == ".wav":
+            return parse_measurements_from_wav_bytes(
+                content,
+                channel_index=channel_index,
+                pre_ms=pre_ms,
+                post_ms=post_ms,
+                smoothing_level=smoothing_level,
+            )
+        # fallback: try wav by header "RIFF"
+        if isinstance(content, (bytes, bytearray)) and len(content) >= 4 and content[:4] == b"RIFF":
+            return parse_measurements_from_wav_bytes(
+                content,
+                channel_index=channel_index,
+                pre_ms=pre_ms,
+                post_ms=post_ms,
+                smoothing_level=smoothing_level,
+            )
+        return parse_measurements_from_bytes(content)
+    except Exception:
         return None, None, None
 
 
@@ -415,21 +697,25 @@ def load_config():
         'lvl_mode': 'Auto', 'lvl_algo': 'Median', 
         'lvl_manual_db': 75.0, 'lvl_min': 300.0, 'lvl_max': 3000.0,
         'normalize_opt': False, 'align_opt': True, 'multi_rate_opt': False,
-        'reg_strength': 30.0, 'stereo_link': False, 
+        'reg_strength': 30.0, 'stereo_link': True, 
         'exc_prot': True, 'exc_freq': 20.0, 
         'low_bass_cut_hz': 40.0,    # alle tämän taajuuden sallitaan vain leikkaus (ei boostia)
         'hpf_enable': False, 'hpf_freq': 20.0, 'hpf_slope': 24,
         'local_path_l': '', 'local_path_r': '',
+        'input_source': 'file',             # 'file' | 'rew_api'
+        'rew_api_base_url': 'http://127.0.0.1:4735',
+        'rew_meas_left': '',
+        'rew_meas_right': '',
         'xo1_f': None, 'xo1_s': 12, 'xo2_f': None, 'xo2_s': 12,
         'xo3_f': None, 'xo3_s': 12, 'xo4_f': None, 'xo4_s': 12, 'xo5_f': None, 'xo5_s': 12,
-        'mixed_freq': 300.0, 'phase_limit': 1000.0,
+        'mixed_freq': 300.0, 'phase_limit': 600.0,
         'phase_safe_2058': False, # TUPE-mode
         'ir_window': 500.0,       # Oikea ikkuna (Right)
         'ir_window_left': 50.0,  # Vasen ikkuna (Left) - UUSI
         'enable_tdc': True,       # TDC oletuksena päälle
         'tdc_strength': 50.0,     # TDC voimakkuus 50%
         'enable_afdw': True,      # Adaptiivinen FDW oletuksena päälle
-        'max_cut_db': 15.0,              # max vaimennus (dB)
+        'max_cut_db': 30.0,              # max vaimennus (dB)
         'max_slope_db_per_oct': 24.0,    # max jyrkkyys (dB/okt), 0 = pois
         'max_slope_boost_db_per_oct': 0.0,
         'max_slope_cut_db_per_oct': 0.0,
@@ -437,6 +723,8 @@ def load_config():
         'comparison_mode': True,         # LOCK score/match analysis to 44.1k reference grid
         'tdc_max_reduction_db': 9.0,
         'tdc_slope_db_per_oct': 6.0,
+        "bass_first_ai": True,
+        "bass_first_mode_max_hz": 200.0,
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -502,9 +790,18 @@ def main():
     
     tab_files = [
         put_markdown(f"### 📂 {t('tab_files')}"),
-        put_file_upload('file_l', label=t('upload_l'), accept='.txt'), 
+        put_markdown("---"),
+        put_markdown(t('wav_recommended_info')),
+        put_markdown("---"),
+        put_markdown(f"### 🧾 {t('input_files_title')}"),
+        put_html(
+            f"<div style='opacity:0.75; font-size:13px; margin-top:-6px;'>"
+            f"{t('input_files_help')}"
+            f"</div>"
+        ),
+        put_file_upload('file_l', label=t('upload_l'), accept='.txt,.wav'), 
         put_input('local_path_l', label=t('path_l'), value=get_val('local_path_l', ''), help_text=t('path_help')),
-        put_file_upload('file_r', label=t('upload_r'), accept='.txt'), 
+        put_file_upload('file_r', label=t('upload_r'), accept='.txt,.wav'), 
         put_input('local_path_r', label=t('path_r'), value=get_val('local_path_r', ''), help_text=t('path_help')),
         put_select('fmt', label=t('fmt'), options=['WAV', 'TXT'], value=get_val('fmt', 'WAV'), help_text=t('fmt_help')),
         put_radio('layout', label=t('layout'), options=[t('layout_mono'), t('layout_stereo')], value=get_val('layout', t('layout_stereo')), inline=True),
@@ -605,7 +902,7 @@ def main():
         ]),
         put_input('max_boost', label=t('max_boost'), type=FLOAT, value=get_val('max_boost', 5.0), help_text=t('max_boost_help')),
         put_row([
-            put_input('max_cut_db', label=t('max_cut_db'), type=FLOAT, value=get_val('max_cut_db', 15.0),
+            put_input('max_cut_db', label=t('max_cut_db'), type=FLOAT, value=get_val('max_cut_db', 30.0),
                       help_text=t('max_cut_db_help')),
             put_input('max_slope_db_per_oct', label=t('max_slope_db_per_oct'), type=FLOAT, value=get_val('max_slope_db_per_oct', 12.0),
                       help_text=t('max_slope_db_per_oct_help'))
@@ -713,7 +1010,23 @@ def main():
                 help_text=t('tdc_slope_db_per_oct_help')
             ),
         ]),
-        put_markdown("---"),
+        
+            put_markdown(f"#### 🧠 {t('bass_first_title')}"),
+            put_checkbox(
+                'bass_first_ai',
+                options=[{'label': t('bass_first_enable_label'), 'value': True}],
+                value=[True] if get_val('bass_first_ai', False) else [],
+                help_text=t('bass_first_enable_help')
+            ),
+            put_input(
+                'bass_first_mode_max_hz',
+                label=t('bass_first_max_hz_label'),
+                type=FLOAT,
+                value=float(get_val('bass_first_mode_max_hz', 200.0) or 200.0),
+                help_text=t('bass_first_max_hz_help')
+            ),
+            
+put_markdown("---"),
 
         put_checkbox('df_smoothing', options=[{'label': f"{t('df_smoothing_label')} {t('badge_experimental')}", 'value': True}],
              value=[True] if get_val('df_smoothing', False) else [],
@@ -819,6 +1132,8 @@ put_markdown("---"),
     pin_on_change('lvl_mode', onchange=update_lvl_ui)
     pin_on_change('lvl_min', onchange=update_lvl_ui)
     pin_on_change('lvl_max', onchange=update_lvl_ui)
+
+
     update_lvl_ui()
 
 
@@ -851,7 +1166,7 @@ put_markdown("---"),
 def _collect_ui_data():
     p_keys = [
         'fs', 'taps', 'filter_type', 'mixed_freq', 'gain', 'hc_mode',
-        'mag_c_min', 'mag_c_max', 'max_boost', 'max_cut_db', 'max_slope_db_per_oct',
+        'mag_c_min', 'mag_c_max', 'input_source', 'rew_api_base_url', 'rew_meas_left', 'rew_meas_right', 'max_boost', 'max_cut_db', 'max_slope_db_per_oct',
         'max_slope_boost_db_per_oct', 'max_slope_cut_db_per_oct', 'phase_limit', 'phase_safe_2058', 'mag_correct',
         'lvl_mode', 'reg_strength', 'normalize_opt', 'align_opt',
         'stereo_link', 'exc_prot', 'exc_freq', 'low_bass_cut_hz', 'hpf_enable', 'hpf_freq',
@@ -859,7 +1174,7 @@ def _collect_ui_data():
         'local_path_l', 'local_path_r', 'fmt', 'lvl_manual_db',
         'lvl_min', 'lvl_max', 'lvl_algo', 'smoothing_type', 'fdw_cycles',
         'trans_width', 'smoothing_level', 'enable_tdc', 'tdc_strength', 'tdc_max_reduction_db',
-        'tdc_slope_db_per_oct', 'enable_afdw', 'df_smoothing', 'comparison_mode'
+        'tdc_slope_db_per_oct', 'enable_afdw', 'df_smoothing', 'comparison_mode', 'bass_first_ai', 'bass_first_mode_max_hz'
     ]
 
     data = {}
@@ -869,7 +1184,7 @@ def _collect_ui_data():
         except Exception:
             data[k] = None
 
-    for k in ['mag_correct', 'normalize_opt', 'align_opt', 'multi_rate_opt', 'stereo_link', 'exc_prot', 'hpf_enable', 'df_smoothing', 'comparison_mode']:
+    for k in ['mag_correct', 'normalize_opt', 'align_opt', 'multi_rate_opt', 'stereo_link', 'exc_prot', 'hpf_enable', 'df_smoothing', 'comparison_mode', 'bass_first_ai']:
         try:
             if isinstance(data.get(k, None), list):
                 data[k] = bool(data[k])
@@ -898,15 +1213,121 @@ def _log_df_smoothing_toggle():
 
 
 def _load_measurements(data):
-    f_l, m_l, p_l = parse_measurements_from_path(data['local_path_l']) if data['local_path_l'] else (None, None, None)
-    f_r, m_r, p_r = parse_measurements_from_path(data['local_path_r']) if data['local_path_r'] else (None, None, None)
+    # --- REW (API) FIRST: if selected, skip file parsing entirely ---
+    if str(data.get('input_source') or 'file') == 'rew_api':
+        try:
+            from camillafir_rew_api import RewApiClient, RewMeasurementMeta
+        except Exception as e:
+            raise RuntimeError(f"Missing camillafir_rew_api.py: {e}")
 
-    if f_l is None and pin.file_l:
-        f_l, m_l, p_l = parse_measurements_from_bytes(pin.file_l['content'])
-    if f_r is None and pin.file_r:
-        f_r, m_r, p_r = parse_measurements_from_bytes(pin.file_r['content'])
+        base_url = str(data.get('rew_api_base_url') or "http://127.0.0.1:4735")
+        left_id  = str(data.get('rew_meas_left') or "")
+        right_id = str(data.get('rew_meas_right') or "")
+
+        if not left_id or not right_id:
+            # keep same return-contract as file path: (f_l,m_l,p_l,f_r,m_r,p_r)
+            return None, None, None, None, None, None
+
+        client = RewApiClient(base_url=base_url)
+        if not client.ping():
+            raise RuntimeError("REW API not reachable. Open REW and enable API.")
+
+        client.discover_operation_ids()
+
+        # Fetch only FR for now (freq/mag/phase). Keep it symmetric with txt/wav pipeline.
+        mL = RewMeasurementMeta(id=left_id, name="Left")
+        mR = RewMeasurementMeta(id=right_id, name="Right")
+
+        # --- Fetch FR explicitly via discovered operationId ---
+        if not client.op_get_fr:
+            raise RuntimeError("REW API: FR operation not found in OpenAPI spec.")
+
+                # --- Use robust client parser (handles dict-indexed arrays "1","2",... etc.) ---
+        fr_obj_L = client.get_frequency_response(left_id)
+        fr_obj_R = client.get_frequency_response(right_id)
+
+        if fr_obj_L is None or fr_obj_R is None:
+            raise RuntimeError(
+                f"REW did not return usable FR data. L={left_id}, R={right_id}"
+            )
+
+        f_l = np.asarray(fr_obj_L.freqs_hz, dtype=float)
+        m_l = np.asarray(fr_obj_L.mag_db, dtype=float)
+        p_l = np.asarray(fr_obj_L.phase_rad, dtype=float) if fr_obj_L.phase_rad is not None else np.zeros_like(m_l)
+
+        f_r = np.asarray(fr_obj_R.freqs_hz, dtype=float)
+        m_r = np.asarray(fr_obj_R.mag_db, dtype=float)
+        p_r = np.asarray(fr_obj_R.phase_rad, dtype=float) if fr_obj_R.phase_rad is not None else np.zeros_like(m_r)
+
+        return f_l, m_l, p_l, f_r, m_r, p_r
+
+
+
+    # UI-driven IR windows (ms) + smoothing for WAV parsing
+    try:
+        pre_ms = float(data.get("ir_window_left", 50.0) or 50.0)
+    except Exception:
+        pre_ms = 50.0
+    ...
+
+    # UI-driven IR windows (ms) + smoothing for WAV parsing
+    try:
+        pre_ms = float(data.get("ir_window_left", 50.0) or 50.0)
+    except Exception:
+        pre_ms = 50.0
+    try:
+        post_ms = float(data.get("ir_window", 500.0) or 500.0)
+    except Exception:
+        post_ms = 500.0
+    try:
+        sl = int(data.get("smoothing_level", 0) or 0)
+    except Exception:
+        sl = 0
+
+    # First: local paths (can be .txt or .wav; parse_measurements_from_path handles both)
+    f_l, m_l, p_l = parse_measurements_from_path(data["local_path_l"]) if data.get("local_path_l") else (None, None, None)
+    f_r, m_r, p_r = parse_measurements_from_path(data["local_path_r"]) if data.get("local_path_r") else (None, None, None)
+
+    # Then: upload priority (WAV wins; then fallback)
+    # LEFT
+    if pin.file_l and str(pin.file_l.get("filename", "")).lower().endswith(".wav"):
+        f_l, m_l, p_l = parse_measurements_from_upload(
+            pin.file_l,
+            channel_index=0,
+            pre_ms=pre_ms,
+            post_ms=post_ms,
+            smoothing_level=sl,
+        )
+    elif f_l is None and pin.file_l:
+        # TXT upload fallback (or unknown ext)
+        f_l, m_l, p_l = parse_measurements_from_upload(
+            pin.file_l,
+            channel_index=0,
+            pre_ms=pre_ms,
+            post_ms=post_ms,
+            smoothing_level=sl,
+        )
+
+    # RIGHT
+    if pin.file_r and str(pin.file_r.get("filename", "")).lower().endswith(".wav"):
+        f_r, m_r, p_r = parse_measurements_from_upload(
+            pin.file_r,
+            channel_index=0,
+            pre_ms=pre_ms,
+            post_ms=post_ms,
+            smoothing_level=sl,
+        )
+    elif f_r is None and pin.file_r:
+        f_r, m_r, p_r = parse_measurements_from_upload(
+            pin.file_r,
+            channel_index=0,
+            pre_ms=pre_ms,
+            post_ms=post_ms,
+            smoothing_level=sl,
+        )
 
     return f_l, m_l, p_l, f_r, m_r, p_r
+
 
 
 def _load_house_curve(data):
@@ -953,7 +1374,103 @@ def _filter_type_short(filter_type):
         return "Mixed"
     return "Linear"
 
+def process_run():
+    try:
+        # 1) Kerää UI-data (sis. REW-valinnat)
+        data = _collect_ui_data()
+        save_config(data)
 
+        update_status("Reading measurements…")
+
+        # 2) Lataa mittaukset (FILES tai REW)
+        f_l, m_l, p_l, f_r, m_r, p_r = _load_measurements(data)
+        if f_l is None or f_r is None:
+            toast("Left / Right measurement missing!", color="error", duration=3)
+            return
+
+        # 3) House curve
+        hc_f, hc_m, hc_source = _load_house_curve(data)
+
+        # 4) XO + HPF
+        xos, hpf = _build_xos_hpf(data)
+
+        # 5) DF smoothing log
+        df_on = _log_df_smoothing_toggle()
+
+        # 6) Sample rates
+        if bool(data.get('multi_rate_opt')):
+            fs_list = [44100, 48000, 88200, 96000, 176400, 192000]
+        else:
+            fs_list = [int(data.get('fs') or 44100)]
+
+        put_processbar('bar')
+        set_processbar('bar', 0.05)
+
+        # 7) Aja DSP jokaiselle fs:lle
+        results = []
+        for i, fs_v in enumerate(fs_list):
+            taps_v = scale_taps_with_fs(fs_v, base_taps=int(data.get('taps', 65536)))
+
+            cfg = _build_filter_config(
+                fs_v=fs_v,
+                taps_v=taps_v,
+                data=data,
+                xos=xos,
+                hpf=hpf,
+                hc_f=hc_f,
+                hc_m=hc_m
+            )
+            logging.Logger.info(f"Building filter @ {fs_v} Hz, {taps_v} taps, Type={_filter_type_short(cfg.filter_type_str)}")
+            
+            # Pass measurement source to DSP helpers (Bass-first AI tuning).
+            # WAV (IR-derived) phase/GD can be noisier than REW FR export / API, so we tag it.
+            try:
+                src = str(data.get('input_source', 'file') or 'file')
+            except Exception:
+                src = 'file'
+            is_wav = False
+            if src == 'file':
+                try:
+                    lp_l = str(data.get('local_path_l', '') or '').lower()
+                    lp_r = str(data.get('local_path_r', '') or '').lower()
+                except Exception:
+                    lp_l, lp_r = '', ''
+                try:
+                    up_l = str(pin.file_l.get('filename', '') or '').lower() if getattr(pin, 'file_l', None) else ''
+                    up_r = str(pin.file_r.get('filename', '') or '').lower() if getattr(pin, 'file_r', None) else ''
+                except Exception:
+                    up_l, up_r = '', ''
+                is_wav = (lp_l.endswith('.wav') or lp_r.endswith('.wav') or up_l.endswith('.wav') or up_r.endswith('.wav') or str(data.get('fmt','')).upper() == 'WAV')
+            try:
+                setattr(cfg, "is_wav_source", bool(is_wav))
+            except Exception:
+                pass
+
+            _log_df_smoothing_for_fs(cfg, fs_v, df_on)
+
+            update_status(f"Building filter @ {fs_v//1000} kHz…")
+            set_processbar('bar', 0.1 + 0.8 * (i / max(1, len(fs_list))))
+
+            # DSP call (sinun nykyinen moottori)
+            res = dsp.build_filter(
+                cfg,
+                f_l, m_l, p_l,
+                f_r, m_r, p_r
+            )
+            results.append((fs_v, res))
+
+        set_processbar('bar', 1.0)
+        update_status("Done ✔")
+
+        # 8) Plotit / ZIP / Summary (käyttää sinun olemassa olevaa logiikkaa)
+        plots.render_all(results)
+
+    except Exception as e:
+        logger.exception("PROCESS RUN FAILED")
+        toast(str(e), color="error", duration=5)
+
+
+#filtterin teko
 def _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m):
     return FilterConfig(
         fs=fs_v,
@@ -966,7 +1483,7 @@ def _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m):
         mag_c_min=data['mag_c_min'],
         mag_c_max=data['mag_c_max'],
         max_boost_db=data['max_boost'],
-        max_cut_db=data.get('max_cut_db', 15.0),
+        max_cut_db=data.get('max_cut_db', 30.0),
         max_slope_db_per_oct=data.get('max_slope_db_per_oct', 24.0),
         max_slope_boost_db_per_oct=data.get('max_slope_boost_db_per_oct', 0.0),
         max_slope_cut_db_per_oct=data.get('max_slope_cut_db_per_oct', 0.0),
@@ -992,12 +1509,19 @@ def _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m):
         lvl_min=data['lvl_min'],
         lvl_max=data['lvl_max'],
         lvl_algo=data['lvl_algo'],
+        stereo_link=bool(data.get('stereo_link', False)),
         smoothing_level=int(pin.smoothing_level),
         crossovers=xos,
         hpf_settings=hpf,
         house_freqs=hc_f,
         house_mags=hc_m,
-        trans_width=data.get('trans_width', 100.0)
+        trans_width=data.get('trans_width', 100.0),
+        bass_first_ai=bool(data.get('bass_first_ai', False)),
+        bass_first_mode_max_hz=float(data.get('bass_first_mode_max_hz') or 200.0),
+        bass_first_smooth_floor_lo=float(data.get('bass_first_smooth_floor_lo') or 0.75),
+        bass_first_smooth_floor_hi=float(data.get('bass_first_smooth_floor_hi') or 0.35),
+        bass_first_k_mode_cut=float(data.get('bass_first_k_mode_cut') or 0.6),
+        bass_first_k_mode_boost=float(data.get('bass_first_k_mode_boost') or 0.9),
     )
 
 
@@ -1141,6 +1665,40 @@ def _append_acoustic_events(summary_content, l_st, r_st):
                 nbp = float(p.get("net_boost_peak_db", 0.0) or 0.0)
                 summary_content += f"{stage:<22} {bpk:>8.2f} {cpk:>8.2f} {bb:>10d} {cb:>8d} {nbp:>11.2f}\n"
 
+            summary_content += f"\n=== BASS-FIRST AI ({side}) ===\n"
+            summary_content += f"Bass-first AI active: {'YES' if bool(st.get('bass_first_ai', False)) else 'NO'}\n"
+
+            # --- Mode peak (robust formatting; fixes lost 'n/a' line) ---
+            pk_hz = st.get('bass_first_mode_peak_hz', None)
+            pk_sc = st.get('bass_first_mode_peak_score', None)
+            if (pk_hz is not None) and (pk_sc is not None):
+                summary_content += f"Mode peak: {float(pk_hz):.1f} Hz (score {float(pk_sc):.2f})\n"
+            else:
+                summary_content += "Mode peak: n/a\n"
+
+            summary_content += f"Smoothing conf floor applied: {'YES' if bool(st.get('bass_first_conf_floor_applied', False)) else 'NO'}\n"
+
+            # --- BF debug stats (if present) ---
+            rm_max = st.get('bass_first_roommode_max_20_200', None)
+            rel_mean = st.get('bass_first_rel_mean_20_200', None)
+            rel_min = st.get('bass_first_rel_min_20_200', None)
+            floor_applied = bool(st.get('bass_first_conf_floor_applied', False))
+            if (rm_max is not None) or (rel_mean is not None) or (rel_min is not None):
+                summary_content += (
+                    f"BF masks (20–200): "
+                    f"roommode_max={float(rm_max or 0.0):.3f}, "
+                    f"rel_mean={float(rel_mean or 0.0):.3f}, "
+                    f"rel_min={float(rel_min or 0.0):.3f}, "
+                    f"conf_floor_applied={'YES' if floor_applied else 'NO'}\n"
+                )
+
+            # --- Optional source tag (only if caller stored it in stats) ---
+            # e.g. st["bass_first_source"] = "WAV" or "TXT/REW"
+            src = st.get("bass_first_source", None)
+            if isinstance(src, str) and src.strip():
+                summary_content += f"BassFirst source: {src.strip()}\n"
+
+
  
 
     return summary_content
@@ -1205,46 +1763,24 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
 
         put_success(t('done_msg'))
 
-        l_score_orig = calculate_score(l_st_f, is_predicted=False)
-        l_score_pred = calculate_score(l_st_f, is_predicted=True)
-        r_score_orig = calculate_score(r_st_f, is_predicted=False)
-        r_score_pred = calculate_score(r_st_f, is_predicted=True)
+        # --- Acoustic Intelligence UI (single source of truth: SAME as Summary.txt) ---
+        # No separate "measured vs filtered" logic in UI. We display the Summary-based result.
+        l_ai = plots.calc_ai_summary_from_stats(l_st_f)
+        r_ai = plots.calc_ai_summary_from_stats(r_st_f)
 
-        avg_orig = (l_score_orig + r_score_orig) / 2
-        avg_pred = (l_score_pred + r_score_pred) / 2
-        improvement = avg_pred - avg_orig
+        l_score = float(l_ai.get("score") or 0.0)
+        r_score = float(r_ai.get("score") or 0.0)
+        avg_pred = (l_score + r_score) / 2.0
+        avg_orig = avg_pred
+        improvement = 0.0
 
-        l_match = calculate_target_match(l_st_f)
-        r_match = calculate_target_match(r_st_f)
-        avg_match = (l_match + r_match) / 2
+        l_match = l_ai.get("match")
+        r_match = r_ai.get("match")
+        if (l_match is None) or (r_match is None):
+            avg_match = 0.0
+        else:
+            avg_match = (float(l_match) + float(r_match)) / 2.0
 
-        score_color = "#4CAF50" if avg_pred > 75 else "#FFC107" if avg_pred > 50 else "#F44336"
-        match_color = "#4bafff"
-
-        put_row([
-            put_html(f"""
-                <div style="background: #1e1e1e; padding: 25px; border-radius: 15px; border: 1px solid #333; margin-bottom: 20px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 15px; margin-bottom: 15px;">
-                        <div>
-                            <h2 style="margin:0; color: {score_color};">Acoustic Score: {avg_pred:.0f}%</h2>
-                            <p style="margin:5px 0 0 0; color: #888;">Improvement: <b style="color:#4CAF50;">+{improvement:.0f}%</b></p>
-                        </div>
-                        <div style="text-align: right; color: #666;">
-                            Measured: {avg_orig:.0f}% | Filtered: {avg_pred:.0f}%
-                        </div>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <h3 style="margin:0; color: {match_color};">Target Curve Match: {avg_match:.0f}%</h3>
-                            <p style="margin:5px 0 0 0; color: #888;">Precision of the FIR correction</p>
-                        </div>
-                        <div style="width: 200px; background: #333; height: 10px; border-radius: 5px;">
-                            <div style="width: {avg_match}%; background: {match_color}; height: 10px; border-radius: 5px;"></div>
-                        </div>
-                    </div>
-                </div>
-            """)
-        ])
 
         put_table([
             ['Speaker', 'L', 'R'],
@@ -1257,8 +1793,8 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             ['Estimated RT60', f"{l_st_f.get('rt60_val', 0):.2f} s", f"{r_st_f.get('rt60_val', 0):.2f} s"]
         ])
 
-        put_markdown(f"### ?? {t('rep_header')}")
-        with put_collapse("?? DSP info"):
+        put_markdown(f"###  {t('rep_header')}")
+        with put_collapse(" DSP info"):
             put_markdown(dedent(f"""
             - **Lenght:** {data['taps']} taps ({data['taps']/data['fs']*1000:.1f} ms)
             - **Resolution:** {data['fs']/data['taps']:.2f} Hz
@@ -1269,81 +1805,44 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             - **Smoothing:** {data['lvl_algo']}
             """))
 
-        event_cols = []
-        for side, st in [("Left", l_st_f), ("Right", r_st_f)]:
-            mode = str((st or {}).get('analysis_mode', 'native') or 'native').lower()
-            if mode == "comparison":
-                events = st.get('cmp_reflections') or []
-            else:
-                mode = str((st or {}).get('analysis_mode', 'native') or 'native').lower()
-            if mode == "comparison":
-                events = st.get('cmp_reflections') or st.get('reflections') or []
-            else:
-                events = st.get('reflections') or []
-            table_rows = [['Type', 'Freq', 'Impact', 'Dist']]
-
-            for ev in events:
-                gd_error = float(ev.get('gd_error', 0) or 0)
-                ev_type = str(ev.get('type', 'Event') or 'Event')
-                ev_freq = float(ev.get('freq', 0) or 0)
-                ev_dist = float(ev.get('dist', 0) or 0)
-                impact = "High" if gd_error > 5 else "Medium"
-                color = "#ff4b4b" if ev_type == "Resonance" else "#4bafff"
-                table_rows.append([
-                    put_text(ev_type).style(f'color: {color}; font-weight: bold'),
-                    f"{ev_freq} Hz",
-                    put_text(impact).style(f'color: {"#ff4b4b" if impact=="High" else "#ccc"}'),
-                    f"{ev_dist} m"
-                ])
-
-            event_cols.append(put_scope(f'ev_{side}', [
-                put_markdown(f"#### {side} Channel"),
-                put_table(table_rows) if events else put_text("No significant reflections detected.")
-            ]))
-
-        put_collapse("?? Detailed Acoustic Intelligence Analysis", [
-            put_row(event_cols),
-            put_markdown("---"),
-            put_markdown(f"""
-            **Analysis Summary:**
-            * **Improvement:** The filter improves accuracy by **{improvement:.0f}** percentage points.
-            * **Resonances:** Identified as peaks in Group Delay. These cause bass "boominess".
-            * **Reflections:** Delayed arrivals that smear the stereo image and clarity.
-            """)
-        ])
-
         put_tabs([
             {'title': 'Left Channel', 'content': put_html(plots.generate_prediction_plot(f_l, m_l, p_l, l_imp_f, data['fs'], "Left", None, l_st_f, data['mixed_freq'], "low", create_full_html=False))},
             {'title': 'Right Channel', 'content': put_html(plots.generate_prediction_plot(f_r, m_r, p_r, r_imp_f, data['fs'], "Right", None, r_st_f, data['mixed_freq'], "low", create_full_html=False))}
         ])
-        put_file(fname, zip_buffer.getvalue(), label="?? DOWNLOAD FILTER ZIP")
+        put_file(fname, zip_buffer.getvalue(), label=" DOWNLOAD FILTER ZIP")
 
 
 def process_run():
+    # 1) UI -> data dict (new unified collector)
     data = _collect_ui_data()
     save_config(data)
 
-    logger.info(f"UI: phase_safe_2058 = {bool(data.get('phase_safe_2058', False))}")
-
-    df_on = _log_df_smoothing_toggle()
-
+    # 2) Measurements (file OR REW API) via the new loader
     f_l, m_l, p_l, f_r, m_r, p_r = _load_measurements(data)
-
     if f_l is None or f_r is None:
-        toast("Measurements missing! Check paths or upload files.", color='red')
+        toast("Mittaustiedostot / REW valinnat puuttuvat!", color='red')
         return
 
+    # 3) Target / house curve
     hc_f, hc_m, hc_source = _load_house_curve(data)
-    print(f"Loaded Target Curve from: {hc_source}, Points: {len(hc_f) if hc_f is not None else 0}")
+
+    # 4) XO + HPF
+    xos, hpf = _build_xos_hpf(data)
+
+    # 5) (Optional) DF smoothing log
+    df_on = _log_df_smoothing_toggle()
+
+    # 6) Sample rates list
+    target_rates = (
+        [44100, 48000, 88200, 96000, 176400, 192000]
+        if bool(data.get('multi_rate_opt'))
+        else [int(data.get('fs') or 44100)]
+    )
 
     put_processbar('bar')
     put_scope('status_area')
     update_status(t('stat_reading'))
     set_processbar('bar', 0.2)
-
-    xos, hpf = _build_xos_hpf(data)
-
-    target_rates = [44100, 48000, 88200, 96000, 176400, 192000] if data['multi_rate_opt'] else [data['fs']]
     zip_buffer = io.BytesIO()
     ts = datetime.now().strftime('%d%m%y_%H%M')
     file_ts = datetime.now().strftime('%H%M_%d%m%y')
@@ -1363,27 +1862,145 @@ def process_run():
 
             cfg = _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m)
 
+
+            # Tag measurement source for DSP (bass-first AI tuning).
+            # WAV/IR-derived responses often have noisier phase/GD derivatives than REW exports.
+            try:
+                src = str(data.get('input_source', 'file') or 'file')
+            except Exception:
+                src = 'file'
+            is_wav = False
+            if src == 'file':
+                try:
+                    lp_l = str(data.get('local_path_l', '') or '').lower()
+                    lp_r = str(data.get('local_path_r', '') or '').lower()
+                except Exception:
+                    lp_l, lp_r = '', ''
+                try:
+                    up_l = str(pin.file_l.get('filename', '') or '').lower() if getattr(pin, 'file_l', None) else ''
+                    up_r = str(pin.file_r.get('filename', '') or '').lower() if getattr(pin, 'file_r', None) else ''
+                except Exception:
+                    up_l, up_r = '', ''
+                is_wav = (lp_l.endswith('.wav') or lp_r.endswith('.wav') or up_l.endswith('.wav') or up_r.endswith('.wav') or str(data.get('fmt','')).upper() == 'WAV')
+            try:
+                setattr(cfg, "is_wav_source", bool(is_wav))
+            except Exception:
+                pass
+
             _log_df_smoothing_for_fs(cfg, fs_v, df_on)
 
             l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, cfg)
             r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, cfg)
 
+            if bool(data.get('stereo_link', False)):
+                try:
+                    from camillafir_leveling import compute_leveling
+
+                    if isinstance(l_st, dict) and isinstance(r_st, dict):
+                        fx_l = np.asarray(l_st.get('freq_axis') or [], dtype=float)
+                        fx_r = np.asarray(r_st.get('freq_axis') or [], dtype=float)
+                        if fx_l.size > 32 and fx_l.size == fx_r.size and np.allclose(fx_l, fx_r, rtol=0, atol=1e-9):
+                            # reconstruct m_anal (A-FDW already applied inside DSP):
+                            mL = np.asarray(l_st.get('measured_mags') or [], dtype=float) + float(l_st.get('offset_db', 0.0) or 0.0)
+                            mR = np.asarray(r_st.get('measured_mags') or [], dtype=float) + float(r_st.get('offset_db', 0.0) or 0.0)
+                            tgt = np.asarray(l_st.get('target_mags') or [], dtype=float)
+                            if mL.size == fx_l.size and mR.size == fx_l.size and tgt.size == fx_l.size:
+                                m_avg = 0.5 * (mL + mR)
+
+                                (
+                                    _tl,
+                                    off,
+                                    _mlw,
+                                    _tlw,
+                                    _meth,
+                                    smin,
+                                    smax,
+                                ) = compute_leveling(cfg, fx_l, m_avg, tgt)
+
+                                # Force identical window+offset for both channels
+                                cfg.stereo_link = True
+                                cfg.lvl_force_window = (float(smin), float(smax))
+                                cfg.lvl_force_offset_db = float(off)
+
+                                # Regenerate with forced leveling
+                                l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, cfg)
+                                r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, cfg)
+
+                                # Tag method in stats for visibility
+                                if isinstance(l_st, dict):
+                                    l_st['offset_method'] = str(l_st.get('offset_method') or '') + " (StereoLink)"
+                                if isinstance(r_st, dict):
+                                    r_st['offset_method'] = str(r_st.get('offset_method') or '') + " (StereoLink)"
+                except Exception as e:
+                    logger.warning(f"Stereo link leveling failed (continuing without link): {e}")
+
+
+            # ------------------------------------------------------------------
+            # RT60 reliability tagging for scoring:
+            # - WAV/IR path: RT60 is IR-derived => higher reliability
+            # - TXT/REW FR path: RT60 is proxy/estimate => lower reliability
+            # This is used by the new Acoustic Score formula (bonus is weighted).
+            # ------------------------------------------------------------------
+            try:
+                rt_rel = 1.0 if bool(is_wav) else 0.25
+                rt_src = "WAV" if bool(is_wav) else "TXT/REW"
+                if isinstance(l_st, dict):
+                    l_st["rt60_reliability"] = float(rt_rel)
+                    l_st["rt60_source"] = rt_src
+                if isinstance(r_st, dict):
+                    r_st["rt60_reliability"] = float(rt_rel)
+                    r_st["rt60_source"] = rt_src
+            except Exception:
+                pass
+
+
+            l_st = _ensure_scoring_keys(l_st, f_l, m_l, hc_f, hc_m)
+            r_st = _ensure_scoring_keys(r_st, f_r, m_r, hc_f, hc_m)
+            # Build comparison grid per sample-rate (needed for correct UI scoring with WAV)
+            if bool(data.get("comparison_mode", False)):
+                try:
+                    l_st = plots._make_comparison_stats(l_st, int(fs_v), int(taps_v))
+                    r_st = plots._make_comparison_stats(r_st, int(fs_v), int(taps_v))
+                except Exception as e:
+                    logger.warning(f"Comparison-mode stats failed: {e}")
+
+            # ------------------------------------------------------------------
+            # Time alignment
+            #
+            # TXT-compatible behavior: if generate_filter() produced explicit
+            # delay estimates (delay_samples), prefer those for alignment.
+            # This avoids the "peak-pick" method drifting when the main impulse
+            # peak is not stable (common with heavy LF energy / long tails).
+            #
+            # If delay_samples are missing, fall back to the legacy peak-pick.
+            # ------------------------------------------------------------------
             if data['align_opt']:
-                d_s = np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp))
+                d_s = None
+
+                # Prefer delay_samples (TXT-compatible)
+                try:
+                    dl = l_st.get('delay_samples', None) if isinstance(l_st, dict) else None
+                    dr = r_st.get('delay_samples', None) if isinstance(r_st, dict) else None
+                    if dl is not None and dr is not None:
+                        dl_i = int(round(float(dl)))
+                        dr_i = int(round(float(dr)))
+                        d_s = dl_i - dr_i
+                except Exception:
+                    d_s = None
+
+                # Fallback: align by impulse peak
+                if d_s is None:
+                    d_s = int(np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp)))
+
                 if d_s > 0:
                     r_imp = np.roll(r_imp, d_s)
-                else:
+                elif d_s < 0:
                     l_imp = np.roll(l_imp, -d_s)
 
             if fs_v == data['fs']:
                 l_st_f, r_st_f, l_imp_f, r_imp_f = l_st, r_st, l_imp, r_imp
 
-            if bool(data.get("comparison_mode", False)):
-                try:
-                    l_st_f = plots._make_comparison_stats(l_st_f, 44100, 65536)
-                    r_st_f = plots._make_comparison_stats(r_st_f, 44100, 65536)
-                except Exception as e:
-                    logger.warning(f"Comparison-mode UI stats failed: {e}")
+            
 
             if 'delay_samples' in l_st and 'delay_samples' in r_st:
                 diff_samples = r_st['delay_samples'] - l_st['delay_samples']
@@ -1424,7 +2041,30 @@ def process_run():
     except Exception:
         save_msg = "Tallennus epäonnistui."
 
+
+    # --- Ensure UI has stats even if fs selection didn't hit (e.g. WAV/local path quirks) ---
+    if l_st_f is None:
+        l_st_f = l_st
+    if r_st_f is None:
+        r_st_f = r_st
+    if l_imp_f is None:
+        l_imp_f = l_imp
+    if r_imp_f is None:
+        r_imp_f = r_imp
+
+    # --- Ensure UI scoring has filter_mags (so Measured != Filtered) ---
+    try:
+        fs_sel = int(data.get('fs') or 44100)
+    except Exception:
+        fs_sel = 44100
+    _inject_filter_mags_for_ui(l_st_f, l_imp_f, fs_sel)
+    _inject_filter_mags_for_ui(r_st_f, r_imp_f, fs_sel)
+
+    logger.info(f"UI stats mode L/R: {l_st_f.get('analysis_mode')}/{r_st_f.get('analysis_mode')} | "
+                f"len cmp f/m/t = {len(l_st_f.get('cmp_freq_axis',[]))}/{len(l_st_f.get('cmp_measured_mags',[]))}/{len(l_st_f.get('cmp_target_mags',[]))}")
+
     _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f, r_st_f, fname, zip_buffer)
+
 #snipet
 def generate_raspberry_yaml(fs, ft_short, file_ts, master_gain_db=0.0):
     import textwrap
@@ -1556,22 +2196,99 @@ def _pick_cmp(stats, key):
     return stats.get(key)
 
 
+def _ensure_scoring_keys(st, f_in, m_in, hc_f, hc_m):
+    """
+    Ensure UI scoring keys exist in stats dict (WAV/TXT safe).
+    - freq_axis, measured_mags, target_mags, confidence_mask
+    """
+    try:
+        if st is None:
+            return st
+
+        f = np.asarray(f_in or [], dtype=float)
+        m = np.asarray(m_in or [], dtype=float)
+        if f.size > 1 and m.size > 1:
+            if st.get("freq_axis") is None:
+                st["freq_axis"] = f
+            if st.get("measured_mags") is None:
+                st["measured_mags"] = m
+
+        # target mags (fallback from house curve if missing)
+        if st.get("target_mags") is None:
+            try:
+                hf = np.asarray(hc_f or [], dtype=float)
+                hm = np.asarray(hc_m or [], dtype=float)
+                if f.size > 1 and hf.size > 1 and hm.size > 1:
+                    st["target_mags"] = np.interp(f, hf, hm)
+            except Exception:
+                pass
+
+        # confidence mask (fallback to ones if missing)
+        if st.get("confidence_mask") is None:
+            if f.size > 1:
+                st["confidence_mask"] = np.ones_like(f, dtype=float)
+        return st
+    except Exception:
+        return st
+
+_HOUSE_FREQS = np.array([
+    20.0, 25.0, 31.5, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0, 160.0,
+    200.0, 250.0, 400.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0, 20000.0
+], dtype=float)
+
+def _resample_to_freq_axis(freqs_dst: np.ndarray, arr: np.ndarray, freqs_src: np.ndarray) -> np.ndarray:
+    """Safe 1D interpolation in log-frequency domain."""
+    if arr.size == 0 or freqs_src.size == 0 or freqs_dst.size == 0:
+        return arr
+    # clip to valid region
+    f1 = np.maximum(freqs_src.astype(float), 1.0)
+    f2 = np.maximum(freqs_dst.astype(float), 1.0)
+    lf1 = np.log10(f1)
+    lf2 = np.log10(f2)
+    # Ensure monotonic source
+    order = np.argsort(lf1)
+    lf1 = lf1[order]
+    a1 = arr.astype(float)[order]
+    return np.interp(lf2, lf1, a1, left=a1[0], right=a1[-1])
+
 
 def calculate_target_match(st):
     """Laskee kuinka hyvin korjattu vaste seuraa tavoitekäyrää (0-100%)."""
     if not st:
         return 0.0
 
-    meas = np.asarray(_ui_pick(st, 'measured_mags') or [], dtype=float)
+    freqs = np.asarray(_ui_pick(st, 'freq_axis') or [], dtype=float)
+    meas  = np.asarray(_ui_pick(st, 'measured_mags') or [], dtype=float)
     target = np.asarray(_ui_pick(st, 'target_mags') or [], dtype=float)
-    filt = np.asarray(_ui_pick(st, 'filter_mags') or [], dtype=float)
+    filt  = np.asarray(_ui_pick(st, 'filter_mags') or [], dtype=float)
 
-    if meas.size == 0 or target.size == 0 or filt.size == 0:
+    if freqs.size == 0 or meas.size == 0 or target.size == 0:
         return 0.0
 
-    # Varmista samat pituudet
-    n = min(meas.size, target.size, filt.size)
-    meas, target, filt = meas[:n], target[:n], filt[:n]
+    # WAV-polulla filter_mags voi puuttua -> tulkitaan 0 dB korjaukseksi
+    if filt.size == 0:
+        filt = np.zeros_like(meas, dtype=float)
+    # If filter mags are missing (common in some UI paths), treat as 0 dB correction
+    if filt.size == 0:
+        filt = np.zeros_like(meas, dtype=float)
+
+    # If WAV measurement: measured/target are dense FFT grid, but filter may be on 19-point house grid.
+    # Resample target/filter to the measurement freq_axis when shapes differ.
+    if target.size != freqs.size:
+        # common case: target on house grid
+        if target.size == _HOUSE_FREQS.size:
+            target = _resample_to_freq_axis(freqs, target, _HOUSE_FREQS)
+        else:
+            # last resort: truncate
+            n = min(freqs.size, meas.size, target.size)
+            freqs, meas, target = freqs[:n], meas[:n], target[:n]
+
+    if filt.size != freqs.size:
+        if filt.size == _HOUSE_FREQS.size:
+            filt = _resample_to_freq_axis(freqs, filt, _HOUSE_FREQS)
+        else:
+            n = min(freqs.size, meas.size, filt.size, target.size)
+            freqs, meas, target, filt = freqs[:n], meas[:n], target[:n], filt[:n]
 
     # RMS virhe (dB) korjatusta vasteesta
     diff = (meas + filt) - target
@@ -1586,35 +2303,139 @@ def calculate_target_match(st):
     return float(np.clip(match_pct, 0.0, 100.0))
 
 
+
+def _avg_confidence_pct(st: dict) -> float:
+    """
+    UI helper: returns average confidence in percent.
+    Supports comparison-mode keys (cmp_avg_confidence / cmp_confidence_mask).
+    """
+    if not st:
+        return 0.0
+    mode = str(st.get("analysis_mode", "native")).lower()
+    if mode == "comparison":
+        v = st.get("cmp_avg_confidence", None)
+        if v is not None:
+            try:
+                return float(v)
+            except Exception:
+                pass
+        cm = np.asarray(st.get("cmp_confidence_mask", []) or [], dtype=float)
+        if cm.size:
+            return float(np.mean(cm) * 100.0)
+        return 0.0
+    # native
+    v = st.get("avg_confidence", None)
+    if v is not None:
+        try:
+            return float(v)
+        except Exception:
+            pass
+    cm = np.asarray(st.get("confidence_mask", []) or [], dtype=float)
+    if cm.size:
+        return float(np.mean(cm) * 100.0)
+    return 0.0
+
+
+def calculate_target_match_unfiltered(st: dict) -> float:
+    """
+    Target match for *unfiltered* response (measured vs target).
+    Uses the same sigmoid mapping as calculate_target_match().
+    """
+    if not st:
+        return 0.0
+    meas = np.asarray(_ui_pick(st, 'measured_mags') or [], dtype=float)
+    target = np.asarray(_ui_pick(st, 'target_mags') or [], dtype=float)
+    if meas.size == 0 or target.size == 0:
+        return 0.0
+    n = min(meas.size, target.size)
+    meas, target = meas[:n], target[:n]
+    diff = meas - target
+    rms = float(np.sqrt(np.mean(diff * diff)))
+    m0 = 3.2
+    s0 = 0.9
+    match_pct = 100.0 / (1.0 + np.exp((rms - m0) / s0))
+    if rms <= 0.4:
+        match_pct = 99.0
+    return float(np.clip(match_pct, 0.0, 100.0))
+
+def _inject_filter_mags_for_ui(st: dict, filt_ir, fs: int):
+    """Ensure st has filter_mags on the same freq_axis as measured, so UI can score 'Filtered' correctly.
+
+    Some pipelines didn't store filter_mags into stats; then UI 'Measured' and 'Filtered' collapse to the same value.
+    This computes |FFT(filter_ir)| and interpolates it to st['freq_axis'] (or cmp_freq_axis if in comparison mode),
+    storing it as (cmp_)filter_mags in dB.
+    """
+    try:
+        if st is None or filt_ir is None:
+            return
+        mode = str(st.get("analysis_mode", "native") or "native").lower()
+        key_f = "cmp_freq_axis" if mode == "comparison" else "freq_axis"
+        key_g = "cmp_filter_mags" if mode == "comparison" else "filter_mags"
+
+        if st.get(key_g) is not None:
+            return
+
+        f_axis = np.asarray(st.get(key_f, []) or [], dtype=float)
+        if f_axis.size < 4:
+            return
+
+        ir = np.asarray(filt_ir, dtype=float).flatten()
+        if ir.size < 8:
+            return
+
+        fs_i = int(fs) if fs else 0
+        if fs_i <= 0:
+            return
+
+        h = np.fft.rfft(ir)
+        f_fft = np.fft.rfftfreq(ir.size, d=1.0 / fs_i)
+        g_db = 20.0 * np.log10(np.maximum(np.abs(h), 1e-12))
+
+        f_min = float(np.min(f_fft))
+        f_max = float(np.max(f_fft))
+        f_q = np.clip(f_axis, f_min, f_max)
+        st[key_g] = np.interp(f_q, f_fft, g_db).tolist()
+    except Exception:
+        return
+
+
 def calculate_score(st, is_predicted=False):
+    """UI score (0..99) for Measured / Filtered.
+
+    Note: this is *not* the same as Target Curve Match.
+    It combines:
+      - target match (sigmoid RMS mapping)
+      - acoustic confidence
+      - optional RT60 room-quality bonus/penalty (scaled by reliability)
+    """
     if not st:
         return 0.0
 
     conf = float(st.get('cmp_avg_confidence', st.get('avg_confidence', 0.0)) or 0.0)
     conf = float(np.clip(conf, 0.0, 100.0))
 
-    # Match korjatulle tai alkuperäiselle sen mukaan mitä UI tarvitsee:
-    # - is_predicted=False -> "Measured"
-    # - is_predicted=True  -> "Filtered"
     meas = np.asarray(_ui_pick(st, 'measured_mags') or [], dtype=float)
     target = np.asarray(_ui_pick(st, 'target_mags') or [], dtype=float)
     filt = np.asarray(_ui_pick(st, 'filter_mags') or [], dtype=float)
 
     if meas.size == 0 or target.size == 0:
-        return max(15.0, min(99.0, conf))
+        return float(np.clip(conf, 0.0, 99.0))
 
-    n = min(meas.size, target.size, filt.size if filt.size else meas.size)
+    n = min(meas.size, target.size)
     meas, target = meas[:n], target[:n]
-    filt = filt[:n] if filt.size else np.zeros(n, dtype=float)
 
     if is_predicted:
+        if filt.size >= n:
+            filt = filt[:n]
+        elif filt.size > 0:
+            filt = np.pad(filt, (0, n - filt.size), mode='edge')
+        else:
+            filt = np.zeros(n, dtype=float)
         diff = (meas + filt) - target
     else:
         diff = meas - target
 
     rms = float(np.sqrt(np.mean(diff * diff)))
-
-    # Sigmoid-match kuten Summary
     m0 = 3.2
     s0 = 0.9
     match_pct = 100.0 / (1.0 + np.exp((rms - m0) / s0))
@@ -1622,19 +2443,32 @@ def calculate_score(st, is_predicted=False):
         match_pct = 99.0
     match_pct = float(np.clip(match_pct, 0.0, 100.0))
 
-    # Acoustic Score = 60% match + 40% confidence
-    score = 0.60 * match_pct + 0.40 * conf
+    base = 0.55 * match_pct + 0.35 * conf  # 0..90
 
-    # Rangaistukset (pidä sun nykyinen logiikka)
-    rt60 = float(st.get('rt60_val', 0.4) or 0.4)
-    rt_penalty = min(30.0, max(0.0, (rt60 - 0.4) * 25.0)) if rt60 > 0 else 0.0
+    rt_bonus = 0.0
+    try:
+        rt = float(st.get('rt60_val', None)) if st.get('rt60_val', None) is not None else None
+    except Exception:
+        rt = None
+    try:
+        rel = float(st.get('rt60_reliability', 0.0) or 0.0)
+    except Exception:
+        rel = 0.0
+    rel = float(np.clip(rel, 0.0, 1.0))
+
+    if rt is not None and rt > 0:
+        if rt <= 0.35:
+            rt_bonus = ((0.35 - rt) / 0.25) * 15.0
+        elif rt >= 0.55:
+            rt_bonus = -min(15.0, ((rt - 0.55) / 0.35) * 15.0)
+        rt_bonus *= rel
 
     events = st.get('cmp_reflections', st.get('reflections', [])) or []
     penalty_mult = 0.5 if is_predicted else 1.0
-    event_penalty = min(40.0, (len(events) * 4.0) * penalty_mult)
+    event_penalty = min(8.0, float(len(events)) * 1.0) * penalty_mult
 
-    final_score = score - rt_penalty - event_penalty
-    return float(max(15.0, min(99.0, final_score)))
+    score = base + rt_bonus - event_penalty
+    return float(np.clip(score, 0.0, 99.0))
 
 
 if __name__ == '__main__':

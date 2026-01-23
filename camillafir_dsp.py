@@ -4,59 +4,19 @@ import scipy.fft
 import math
 import scipy.ndimage
 import logging
+import camillafir_bassfirst as bf
 logger = logging.getLogger("CamillaFIR.dsp")
 from models import FilterConfig
 from camillafir_leveling import compute_leveling
-#CamillaFIR DSP Engine v1.0.7
+#CamillaFIR DSP Engine v1.0.8
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
 #1.04 All features works at different configurations
 #1.05 Multiplier changes
 #1.06 added no phase correction mode (2058-safe)
 #1.07 TDC improvements and bugfixes
+#1.08 Bugfixes for bass-first and TDC
 
-def limit_slope_per_octave_asym(freq_axis, gain_db, max_db_per_oct_boost, max_db_per_oct_cut):
-    """
-    Asymmetric slope limiter in dB/oct:
-      - boost limit applies when curve rises (dg > 0)
-      - cut limit applies when curve falls (dg < 0)
-    <= 0 on either side disables that side.
-    """
-    f = np.asarray(freq_axis, dtype=float)
-    g = np.asarray(gain_db, dtype=float).copy()
-    b = float(max_db_per_oct_boost or 0.0)
-    c = float(max_db_per_oct_cut or 0.0)
-    if b <= 0 and c <= 0:
-        return g
-    idx = np.where(f > 0.0)[0]
-    if idx.size < 2:
-        return g
-    lf = np.log2(f[idx])
-
-    def _limit_step(prev_val, cur_val, dx_oct):
-        if dx_oct <= 0:
-            return cur_val
-        dg = cur_val - prev_val
-        if dg > 0 and b <= 0:
-            return cur_val
-        if dg < 0 and c <= 0:
-            return cur_val
-        lim = (b if dg > 0 else c) * dx_oct
-        if dg > lim:
-            return prev_val + lim
-        if dg < -lim:
-            return prev_val - lim
-        return cur_val
-
-    for k in range(1, idx.size):
-        i = idx[k]; j = idx[k - 1]
-        dx = float(lf[k] - lf[k - 1])
-        g[i] = _limit_step(g[j], g[i], dx)
-    for k in range(idx.size - 2, -1, -1):
-        i = idx[k]; j = idx[k + 1]
-        dx = float(lf[k + 1] - lf[k])
-        g[i] = _limit_step(g[j], g[i], dx)
-    return g
 def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto_headroom_db=0.0, logger_obj=None):
     """
     Lightweight stage checkpoint for debugging gain evolution.
@@ -820,6 +780,11 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     p_rad_raw = np.deg2rad(np.interp(freq_axis, f_in, p_in))
     p_rad_interp, delay_slope = remove_time_of_flight(freq_axis, p_rad_raw)
 
+    # Raw measurement as complex FR (TOF removed) for features that need phase/GD.
+    # NOTE: This is intentionally "raw" (not smoothing-analysis), to match Bass-first intent.
+    # (Magnitude is dB -> linear amplitude.)
+    complex_meas = 10**(m_interp/20.0) * np.exp(1j * p_rad_interp)
+
     # --- 5. ANALYYSI (Skaalattu luottamusmaski) ---
     m_anal = np.interp(freq_axis, f_in, m_smooth)
     p_anal_rad = np.deg2rad(np.interp(freq_axis, f_in, p_smooth))
@@ -1028,6 +993,46 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         # Tasoittaa final_g adaptiivisesti confidence-maskin mukaan:
         # - matala confidence => enemmän "syklejä" => pehmeämpi korjaus
         # - korkea confidence => vähemmän tasoitusta => tarkempi korjaus
+        # --- 8B0. Bass-first AI masks (optional) ---
+        use_bassfirst = bool(getattr(cfg, "bass_first_ai", False))
+        bf_room_mode = None
+        bf_rel = None
+        bf_conf_for_smoothing = None
+
+        if use_bassfirst:
+            try:
+                # Tarvitaan raakamitta akselille + vaihe (unwrap) + gd_diff
+                # Huom: tässä vaiheessa freq_axis on olemassa ja complex_meas on tehty aiemmin analyysissä.
+                # Käytetään samaa perusdataa kuin analyze_acoustic_confidence: phase unwrap + gd
+                ph_u = np.unwrap(np.angle(complex_meas))
+                df = np.gradient(freq_axis) + 1e-12
+                gd_ms_local = (-np.gradient(ph_u) / (2*np.pi*df)) * 1000.0
+
+                # Sama gd_diff -idea kuin analyze_acoustic_confidence (sigma_bins/Hz ei ole kriittinen tässä)
+                gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms_local, sigma=20)
+                gd_diff_local = np.abs(gd_ms_local - gd_smooth)
+
+                # m_interp pitäisi olla se "raw measured mags" interpattuna freq_axis:lle
+                # Jos tässä kohtaa käytössä on eri nimi, käytä sitä (yleensä m_interp / meas_interp tms.)
+                bf_rel, bf_room_mode, _ = bf.build_bassfirst_masks(
+                    freq_axis=freq_axis,
+                    m_raw_db=m_interp,
+                    phase_rad_unwrapped=ph_u,
+                    gd_ms=gd_ms_local,
+                    gd_diff=gd_diff_local,
+                    is_wav_source=bool(getattr(cfg, "is_wav_source", False)),
+                    mode_f2=float(getattr(cfg, "bass_first_mode_max_hz", 200.0) or 200.0)
+                )
+                bf_conf_for_smoothing = bf.fuse_conf_for_smoothing(
+                    freq_axis=freq_axis,
+                    reliability_mask=bf_rel,
+                    bass_floor_lo=float(getattr(cfg, "bass_first_smooth_floor_lo", 0.75) or 0.75),
+                    bass_floor_hi=float(getattr(cfg, "bass_first_smooth_floor_hi", 0.35) or 0.35),
+                )
+            except Exception:
+                bf_rel = bf_room_mode = bf_conf_for_smoothing = None
+
+        
         if afdw_on:
             try:
                 c = np.clip(conf_mask, 0.0, 1.0)
@@ -1049,7 +1054,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             final_g = apply_adaptive_fdw(
                 freq_axis,
                 final_g,
-                conf_mask,
+                (bf_conf_for_smoothing if (use_bassfirst and bf_conf_for_smoothing is not None) else conf_mask),
                 base_cycles=afdw_base,
                 min_cycles=afdw_min
             )
@@ -1057,6 +1062,16 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         # Kun A-FDW on päällä, ei kerrota final_g:ta eff_conf:lla,
         # koska A-FDW jo tekee "varovaisuuden" muotoon (tasoitus).
         # Tämä välttää tuplavarovaisuuden (muoto pehmenee + amplitudi vaimenee).
+        # --- 8B1. Bass-first gain modulation (room modes) ---
+        if use_bassfirst and bf_room_mode is not None:
+            try:
+                final_g = bf.modulate_gain_bassfirst(
+                    final_g, bf_room_mode,
+                    k_mode_cut=float(getattr(cfg, "bass_first_k_mode_cut", 0.6) or 0.6),
+                    k_mode_boost=float(getattr(cfg, "bass_first_k_mode_boost", 0.9) or 0.9),
+                )
+            except Exception:
+                pass
         if bool(getattr(cfg, "enable_afdw", False)):
             gain_apply = final_g.copy()
         else:
@@ -1635,6 +1650,9 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     stats = {
         'analysis_mode': analysis_mode,
         'freq_axis': freq_axis.tolist(),
+        # User-visible correction band (for plots / diagnostics)
+        'mag_c_min': float(getattr(cfg, 'mag_c_min', 0.0) or 0.0),
+        'mag_c_max': float(getattr(cfg, 'mag_c_max', 0.0) or 0.0),
         'target_mags': target_mags.tolist(),
         'measured_mags': (m_anal - calc_offset_db).tolist(),
         'filter_mags': gain_db.tolist(),
@@ -1667,9 +1685,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'max_slope_db_per_oct': float(getattr(cfg, 'max_slope_db_per_oct', 0.0) or 0.0),
         'max_slope_boost_db_per_oct': float(getattr(cfg, 'max_slope_boost_db_per_oct', 0.0) or 0.0),
         'max_slope_cut_db_per_oct': float(getattr(cfg, 'max_slope_cut_db_per_oct', 0.0) or 0.0),
-        # NEW: expose effective asymmetric slope limits for Summary/debug
-        'max_slope_boost_db_per_oct': float(getattr(cfg, 'max_slope_boost_db_per_oct', 0.0) or 0.0),
-        'max_slope_cut_db_per_oct': float(getattr(cfg, 'max_slope_cut_db_per_oct', 0.0) or 0.0),
+        
 
         # Post-clamp peaks & counts in correction band
         'boost_peak_db': float(locals().get('boost_peak_db', 0.0)),
@@ -1678,7 +1694,89 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'boost_candidate_peak_db': float(locals().get('boost_cand_peak', 0.0)),
         'boost_candidate_bins': int(locals().get('n_boost_cand', 0)),
         'boost_candidate_bins_lowbass': int(locals().get('n_boost_cand_low', 0)),
-        'boost_candidate_bins_excprot': int(locals().get('n_boost_cand_exc', 0))
+        'boost_candidate_bins_excprot': int(locals().get('n_boost_cand_exc', 0)),
+
+                # --- Bass-first AI markers (for Summary/debug) ---
+        'bass_first_ai': bool(locals().get('use_bassfirst', False)),
+        'bass_first_mode_peak_hz': (
+            float(freq_axis[int(np.argmax(bf_room_mode))])
+            if (bool(locals().get('use_bassfirst', False))
+                and (locals().get('bf_room_mode', None) is not None)
+                and len(locals().get('bf_room_mode')) > 0)
+            else None
+        ),
+        'bass_first_mode_peak_score': (
+            float(np.max(bf_room_mode))
+            if (bool(locals().get('use_bassfirst', False))
+                and (locals().get('bf_room_mode', None) is not None)
+                and len(locals().get('bf_room_mode')) > 0)
+            else None
+        ),
+        'bass_first_conf_floor_applied': (
+            bool(
+                bool(locals().get('use_bassfirst', False))
+                and (locals().get('bf_conf_for_smoothing', None) is not None)
+                and (locals().get('bf_rel', None) is not None)
+                and np.any(np.asarray(bf_conf_for_smoothing) > (np.asarray(bf_rel) + 1e-6))
+            )
+            if (locals().get('bf_conf_for_smoothing', None) is not None and locals().get('bf_rel', None) is not None)
+            else False
+        ),
+
+
+            # Extra BF debug (Summary-friendly, 20–200 Hz)
+            'bass_first_rel_mean_20_200': (
+                float(np.mean(np.asarray(bf_rel)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
+                if (bool(locals().get('use_bassfirst', False))
+                    and (locals().get('bf_rel', None) is not None)
+                    and np.any((freq_axis >= 20.0) & (freq_axis <= 200.0)))
+                else None
+            ),
+            'bass_first_rel_min_20_200': (
+                float(np.min(np.asarray(bf_rel)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
+                if (bool(locals().get('use_bassfirst', False))
+                    and (locals().get('bf_rel', None) is not None)
+                    and np.any((freq_axis >= 20.0) & (freq_axis <= 200.0)))
+                else None
+            ),
+            'bass_first_roommode_max_20_200': (
+                float(np.max(np.asarray(bf_room_mode)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
+                if (bool(locals().get('use_bassfirst', False))
+                    and (locals().get('bf_room_mode', None) is not None)
+                    and np.any((freq_axis >= 20.0) & (freq_axis <= 200.0)))
+                else None
+            ),
+
+
+        # --- Bass-first AI debug stats (20–200 Hz) ---
+        'bass_first_rel_mean_20_200': (
+            float(np.mean(np.asarray(bf_rel)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
+            if (
+                bool(locals().get('use_bassfirst', False))
+                and (locals().get('bf_rel', None) is not None)
+                and np.any((freq_axis >= 20.0) & (freq_axis <= 200.0))
+            )
+            else None
+        ),
+        'bass_first_rel_min_20_200': (
+            float(np.min(np.asarray(bf_rel)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
+            if (
+                bool(locals().get('use_bassfirst', False))
+                and (locals().get('bf_rel', None) is not None)
+                and np.any((freq_axis >= 20.0) & (freq_axis <= 200.0))
+            )
+            else None
+        ),
+        'bass_first_roommode_max_20_200': (
+            float(np.max(np.asarray(bf_room_mode)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
+            if (
+                bool(locals().get('use_bassfirst', False))
+                and (locals().get('bf_room_mode', None) is not None)
+                and np.any((freq_axis >= 20.0) & (freq_axis <= 200.0))
+            )
+            else None
+        ),
+
     }
 
 
