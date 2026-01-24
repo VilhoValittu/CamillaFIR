@@ -601,6 +601,21 @@ def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 655
     if c_cmp is not None:
         out["cmp_avg_confidence"] = float(np.mean(np.clip(c_cmp, 0.0, 1.0)) * 100.0)
 
+
+    # --- Preserve effective target level from DSP ---
+    # Comparison re-alignment must NOT erase the actual target level.
+    if "eff_target_db" in stats and stats.get("eff_target_db") is not None:
+        try:
+            v = float(stats.get("eff_target_db"))
+            if np.isfinite(v):
+                out["eff_target_db"] = v
+                out["cmp_eff_target_db"] = v
+        except Exception:
+            pass
+
+    if "target_level_db_window" in stats:
+        out["cmp_target_level_db_window"] = stats.get("target_level_db_window")
+
     return out
 
 def format_summary_content(settings, l_stats, r_stats):
