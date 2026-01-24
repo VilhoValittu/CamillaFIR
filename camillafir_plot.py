@@ -220,6 +220,20 @@ def format_summary_content(settings, l_stats, r_stats):
         if 'file' not in str(k):
             lines.append(f"{k}: {v}")
 
+    # --- Temporal Decay Control (TDC) ---
+    try:
+        tdc_enabled = bool(settings.get("enable_tdc", False))
+        lines.append("\n--- Temporal Decay Control (TDC) ---")
+        lines.append(f"TDC enabled: {'YES' if tdc_enabled else 'NO'}")
+        if tdc_enabled:
+            lines.append(f"TDC strength: {float(settings.get('tdc_strength', 0)):.0f} %")
+            lines.append(f"TDC max reduction: {float(settings.get('tdc_max_reduction_db', 0)):.1f} dB")
+            slope = float(settings.get('tdc_slope_db_per_oct', 0))
+            if slope > 0:
+                lines.append(f"TDC slope limit: {slope:.1f} dB/oct")
+    except Exception:
+        pass
+
     lines.append("\n--- Acoustic Intelligence (v2.6.3) ---")
     lines.append(f"Analysis mode L: {str((l_stats or {}).get('analysis_mode','native'))} | R: {str((r_stats or {}).get('analysis_mode','native'))}")
     if (l_stats or {}).get('analysis_mode','native') == 'comparison':
@@ -665,7 +679,7 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
             s_min, s_max = target_stats['smart_scan_range']
             fig.add_shape(type="rect", xref="x", yref="y",
                           x0=s_min, x1=s_max,
-                          y0=avg_t-40, y1=avg_t+40,
+                          y0=avg_t-40, y1=avg_t+60,
                           fillcolor="rgba(200, 200, 200, 0.15)", layer="below", line_width=0, row=1, col=1)
         # Correction band (mag correction active range)
         if target_stats:
@@ -676,7 +690,7 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
                     fig.add_shape(
                         type="rect", xref="x", yref="y",
                         x0=cmin, x1=cmax,
-                        y0=avg_t-40, y1=avg_t+40,
+                        y0=avg_t-40, y1=avg_t+60,
                         fillcolor="rgba(80, 140, 255, 0.08)", layer="below", line_width=0,
                         row=1, col=1
                     )
@@ -710,7 +724,7 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
                                 fig.add_shape(
                                     type="rect", xref="x", yref="y",
                                     x0=seg_start, x1=seg_end,
-                                    y0=avg_t-40, y1=avg_t+40,
+                                    y0=avg_t-40, y1=avg_t+60,
                                     fillcolor="rgba(255, 0, 0, 0.06)", layer="below", line_width=0,
                                     row=1, col=1
                                 )
@@ -720,7 +734,7 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
                             fig.add_shape(
                                 type="rect", xref="x", yref="y",
                                 x0=seg_start, x1=seg_end,
-                                y0=avg_t-40, y1=avg_t+40,
+                                y0=avg_t-40, y1=avg_t+60,
                                 fillcolor="rgba(255, 0, 0, 0.06)", layer="below", line_width=0,
                                 row=1, col=1
                             )
@@ -838,9 +852,9 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
             fig.update_xaxes(type="log", range=[np.log10(2), np.log10(20000)], tickvals=t_vals, row=r, col=1)
 
 
-        fig.update_yaxes(range=[avg_t-20, avg_t+20], row=1, col=1)
+        fig.update_yaxes(range=[avg_t-20, avg_t+30], row=1, col=1)
         fig.update_yaxes(range=[-180, 180], row=2, col=1)
-        fig.update_yaxes(range=[-15, 10], row=4, col=1)
+        fig.update_yaxes(range=[-30, 12], row=4, col=1)
         # Y-axis for A-FDW BW panel
         if bw_vis is not None and len(bw_vis) > 0:
             bw_lo = max(1.0/48.0, float(np.min(bw_vis)) * 0.9)
@@ -853,7 +867,15 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
 
         fig.update_yaxes(title_text="oct", row=6, col=1)
 
-        fig.update_layout(height=1780, width=1750, template="plotly_white", title_text=f"{title} Analysis")
+        fig.update_layout(
+            height=1780,
+            width=1750,
+            template="plotly_white",
+            title_text=f"{title} Analysis",
+            # Keep UI state stable across redraws (doesn't stop doubleclick by itself,
+            # but prevents other "reset weirdness" when page re-renders)
+            uirevision="keep"
+        )
         
         # Use local Plotly JS when generating full HTML (offline-safe).
         # If local JS is missing, fall back to CDN.
@@ -864,7 +886,17 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
             # Embedded mode: keep legacy behavior
             js_mode = "require"
 
-        return fig.to_html(include_plotlyjs=js_mode, full_html=create_full_html)
+        # Plotly UI config:
+        # - Disable double-click autoscale/reset (it breaks with matched log axes)
+        # - Keep scroll-zoom enabled for easier navigation
+        config = {
+            "responsive": True,
+            "scrollZoom": True,
+            "displaylogo": False,
+            "doubleClick": False
+        }
+
+        return fig.to_html(include_plotlyjs=js_mode, full_html=create_full_html, config=config)
 
         
     except Exception as e: return f"Visual Engine Error: {str(e)}"

@@ -35,6 +35,7 @@ VERSION = "v2.7.8"    #added .wav support
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
+FORCE_SINGLE_PLOT_FS_HZ = 48000
 
 
 
@@ -1462,8 +1463,24 @@ def process_run():
         set_processbar('bar', 1.0)
         update_status("Done ✔")
 
-        # 8) Plotit / ZIP / Summary (käyttää sinun olemassa olevaa logiikkaa)
-        plots.render_all(results)
+        # 8) Plotit / ZIP / Summary
+        # Policy: when multi-rate is enabled, export only one plot/fs bundle to ZIP.
+        # (Forced ON: no UI selection)
+        results_export = results
+        try:
+            mr_on = bool(data.get('multi_rate_opt'))
+        except Exception:
+            mr_on = False
+
+        if mr_on and isinstance(results, list) and len(results) > 0:
+            target_fs = int(FORCE_SINGLE_PLOT_FS_HZ)
+            picked = [(fs, res) for (fs, res) in results if int(fs) == target_fs]
+            if not picked:
+                # Fallback: if target fs isn't present for any reason, keep first result
+                picked = [results[0]]
+            results_export = picked
+
+        plots.render_all(results_export)
 
     except Exception as e:
         logger.exception("PROCESS RUN FAILED")
@@ -1472,6 +1489,13 @@ def process_run():
 
 #filtterin teko
 def _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m):
+    # Source hint for analysis heuristics (Bass-first reliability masking)
+    # WAV/IR-derived measurements tend to have noisier phase unwrap/jitter than REW text/API.
+    try:
+        is_wav_src = str(data.get('fmt', 'TXT') or 'TXT').strip().upper() == 'WAV'
+    except Exception:
+        is_wav_src = False
+
     return FilterConfig(
         fs=fs_v,
         num_taps=taps_v,
@@ -1682,13 +1706,17 @@ def _append_acoustic_events(summary_content, l_st, r_st):
             rm_max = st.get('bass_first_roommode_max_20_200', None)
             rel_mean = st.get('bass_first_rel_mean_20_200', None)
             rel_min = st.get('bass_first_rel_min_20_200', None)
+            conf_eff_mean = st.get('bass_first_conf_eff_mean_20_200', None)
+            conf_eff_min = st.get('bass_first_conf_eff_min_20_200', None)
             floor_applied = bool(st.get('bass_first_conf_floor_applied', False))
-            if (rm_max is not None) or (rel_mean is not None) or (rel_min is not None):
+            if (rm_max is not None) or (rel_mean is not None) or (rel_min is not None) or (conf_eff_mean is not None):
                 summary_content += (
                     f"BF masks (20–200): "
                     f"roommode_max={float(rm_max or 0.0):.3f}, "
-                    f"rel_mean={float(rel_mean or 0.0):.3f}, "
-                    f"rel_min={float(rel_min or 0.0):.3f}, "
+                    f"rel_mean(raw)={float(rel_mean or 0.0):.3f}, "
+                    f"rel_min(raw)={float(rel_min or 0.0):.3f}, "
+                    f"conf_eff_mean={float(conf_eff_mean or 0.0):.3f}, "
+                    f"conf_eff_min={float(conf_eff_min or 0.0):.3f}, "
                     f"conf_floor_applied={'YES' if floor_applied else 'NO'}\n"
                 )
 
@@ -1719,6 +1747,8 @@ def _write_fs_outputs(
     p_r,
     r_imp,
     r_st,
+    *,
+    write_dashboards: bool = True,
 ):
     sum_name = f"Summary_{ft_short}_{fs_v}Hz.txt"
     l_dash_name = f"L_Dashboard_{ft_short}_{fs_v}Hz.html"
@@ -1736,12 +1766,18 @@ def _write_fs_outputs(
         summary_content += f"Gain Diff: {res['gain_diff_db']} dB\n"
 
     zf.writestr(sum_name, summary_content)
-    zf.writestr(l_dash_name, plots.generate_prediction_plot(
-        f_l, m_l, p_l, l_imp, fs_v, "Left", None, l_st, data['mixed_freq'], "low"
-    ))
-    zf.writestr(r_dash_name, plots.generate_prediction_plot(
-        f_r, m_r, p_r, r_imp, fs_v, "Right", None, r_st, data['mixed_freq'], "low"
-    ))
+
+    # Policy: when Auto-taps (Multi-rate) is enabled, the ZIP can be huge due to
+    # per-rate HTML dashboards. We keep WAV/CFG/YML for every rate, but store
+    # only ONE dashboard pair into the ZIP (forced, no UI choice).
+    if bool(write_dashboards):
+        zf.writestr(l_dash_name, plots.generate_prediction_plot(
+            f_l, m_l, p_l, l_imp, fs_v, "Left", None, l_st, data['mixed_freq'], "low"
+        ))
+        zf.writestr(r_dash_name, plots.generate_prediction_plot(
+            f_r, m_r, p_r, r_imp, fs_v, "Right", None, r_st, data['mixed_freq'], "low"
+        ))
+
     hlc_cfg = generate_hlc_config(fs_v, ft_short, file_ts)
     zf.writestr(f"Config_{ft_short}_{fs_v}Hz.cfg", hlc_cfg)
     yaml_content = generate_raspberry_yaml(
@@ -1790,7 +1826,19 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
              f"{r_st_f.get('smart_scan_range', [0,0])[0]:.0f}-{r_st_f.get('smart_scan_range', [0,0])[1]:.0f} Hz"],
             ['Offset to Meas.', f"{l_st_f.get('offset_db', 0):.1f} dB", f"{r_st_f.get('offset_db', 0):.1f} dB"],
             ['Acoustic Confidence', f"{l_st_f.get('avg_confidence', 0):.1f}%", f"{r_st_f.get('avg_confidence', 0):.1f}%"],
-            ['Estimated RT60', f"{l_st_f.get('rt60_val', 0):.2f} s", f"{r_st_f.get('rt60_val', 0):.2f} s"]
+            ['Estimated RT60', f"{l_st_f.get('rt60_val', 0):.2f} s", f"{r_st_f.get('rt60_val', 0):.2f} s"],
+            ['TDC (Temporal Decay Control)',
+             (
+                 f"ON ({float(data.get('tdc_strength', 0)):.0f}%, "
+                 f"−{float(data.get('tdc_max_reduction_db', 0)):.1f} dB)"
+                 if bool(data.get('enable_tdc', False)) else "OFF"
+             ),
+             (
+                 f"ON ({float(data.get('tdc_strength', 0)):.0f}%, "
+                 f"−{float(data.get('tdc_max_reduction_db', 0)):.1f} dB)"
+                 if bool(data.get('enable_tdc', False)) else "OFF"
+             )
+            ]
         ])
 
         put_markdown(f"###  {t('rep_header')}")
@@ -1838,6 +1886,12 @@ def process_run():
         if bool(data.get('multi_rate_opt'))
         else [int(data.get('fs') or 44100)]
     )
+
+    # Forced policy: when multi-rate is enabled, include dashboards only for ONE fs.
+    multi_rate_on = bool(data.get('multi_rate_opt'))
+    dash_fs = int(FORCE_SINGLE_PLOT_FS_HZ) if multi_rate_on else int(data.get('fs') or 44100)
+    if multi_rate_on and dash_fs not in target_rates:
+        dash_fs = int(target_rates[0])
 
     put_processbar('bar')
     put_scope('status_area')
@@ -1997,7 +2051,8 @@ def process_run():
                 elif d_s < 0:
                     l_imp = np.roll(l_imp, -d_s)
 
-            if fs_v == data['fs']:
+            # UI "results" view: show the same fs as the (single) dashboard fs in multi-rate.
+            if fs_v == dash_fs:
                 l_st_f, r_st_f, l_imp_f, r_imp_f = l_st, r_st, l_imp, r_imp
 
             
@@ -2031,6 +2086,7 @@ def process_run():
                 p_r,
                 r_imp,
                 r_st,
+                write_dashboards=(not multi_rate_on) or (int(fs_v) == int(dash_fs))
             )
 
     fname = f"CamillaFIR_{ft_short}_{ts}.zip"
