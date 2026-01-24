@@ -951,6 +951,42 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         compute_leveling(cfg, freq_axis, m_anal, target_mags)
     )
 
+    # --- 7B. Keep comparison-mode target/leveling consistent after target shaping (HPF/TDC/etc.) ---
+    # NOTE: comparison grid is built earlier for confidence stability, but target_mags is shaped later.
+    # Without this, plots in comparison mode may show the *pre-shaping* target curve.
+    try:
+        if isinstance(cmp, dict) and analysis_mode == "comparison":
+            freq_cmp = np.asarray(cmp.get("cmp_freq_axis", []) or [], dtype=float)
+            if freq_cmp.size > 8:
+                # reconstruct raw cmp measured (before offset) from stored arrays
+                m_cmp_meas = np.asarray(cmp.get("cmp_measured_mags", []) or [], dtype=float)
+                off_cmp_prev = float(cmp.get("cmp_offset_db", 0.0) or 0.0)
+                m_cmp_raw = m_cmp_meas + off_cmp_prev
+
+                # resample the *final* target curve to comparison grid
+                target_cmp = np.interp(freq_cmp, freq_axis, target_mags)
+
+                (
+                    target_level_db_cmp,
+                    calc_offset_db_cmp,
+                    meas_level_db_window_cmp,
+                    target_level_db_window_cmp,
+                    offset_method_cmp,
+                    s_min_cmp,
+                    s_max_cmp,
+                ) = compute_leveling(cfg, freq_cmp, m_cmp_raw, target_cmp)
+
+                # update comparison dict so plots/report reflect final target shaping
+                cmp["cmp_target_mags"] = target_cmp.tolist()
+                cmp["cmp_eff_target_db"] = float(target_level_db_cmp)
+                cmp["cmp_offset_db"] = float(calc_offset_db_cmp)
+                cmp["cmp_measured_mags"] = (m_cmp_raw - calc_offset_db_cmp).tolist()
+                cmp["cmp_smart_scan_range"] = [float(s_min_cmp), float(s_max_cmp)]
+                cmp["cmp_meas_level_db_window"] = float(meas_level_db_window_cmp)
+                cmp["cmp_target_level_db_window"] = float(target_level_db_window_cmp)
+                cmp["cmp_offset_method"] = str(offset_method_cmp)
+    except Exception:
+        pass
 
     # --- 8. KORJAUS ---
     gain_db = np.zeros_like(freq_axis)
@@ -1696,59 +1732,48 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'boost_candidate_bins_lowbass': int(locals().get('n_boost_cand_low', 0)),
         'boost_candidate_bins_excprot': int(locals().get('n_boost_cand_exc', 0)),
 
-                # --- Bass-first AI markers (for Summary/debug) ---
+        # --- Bass-first AI markers (for Summary/debug) ---
         'bass_first_ai': bool(locals().get('use_bassfirst', False)),
+
         'bass_first_mode_peak_hz': (
-            float(freq_axis[int(np.argmax(bf_room_mode))])
-            if (bool(locals().get('use_bassfirst', False))
+            float(freq_axis[int(np.argmax(np.asarray(bf_room_mode)))])
+            if (
+                bool(locals().get('use_bassfirst', False))
                 and (locals().get('bf_room_mode', None) is not None)
-                and len(locals().get('bf_room_mode')) > 0)
+                and len(np.asarray(bf_room_mode)) > 0
+            )
             else None
         ),
+
         'bass_first_mode_peak_score': (
-            float(np.max(bf_room_mode))
-            if (bool(locals().get('use_bassfirst', False))
+            float(np.max(np.asarray(bf_room_mode)))
+            if (
+                bool(locals().get('use_bassfirst', False))
                 and (locals().get('bf_room_mode', None) is not None)
-                and len(locals().get('bf_room_mode')) > 0)
+                and len(np.asarray(bf_room_mode)) > 0
+            )
             else None
         ),
+
+        # True if confidence floor (or any uplift) was applied vs raw reliability
         'bass_first_conf_floor_applied': (
             bool(
                 bool(locals().get('use_bassfirst', False))
                 and (locals().get('bf_conf_for_smoothing', None) is not None)
                 and (locals().get('bf_rel', None) is not None)
-                and np.any(np.asarray(bf_conf_for_smoothing) > (np.asarray(bf_rel) + 1e-6))
+                and np.any(
+                    np.asarray(bf_conf_for_smoothing) > (np.asarray(bf_rel) + 1e-6)
+                )
             )
-            if (locals().get('bf_conf_for_smoothing', None) is not None and locals().get('bf_rel', None) is not None)
+            if (
+                locals().get('bf_conf_for_smoothing', None) is not None
+                and locals().get('bf_rel', None) is not None
+            )
             else False
         ),
 
-
-            # Extra BF debug (Summary-friendly, 20–200 Hz)
-            'bass_first_rel_mean_20_200': (
-                float(np.mean(np.asarray(bf_rel)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
-                if (bool(locals().get('use_bassfirst', False))
-                    and (locals().get('bf_rel', None) is not None)
-                    and np.any((freq_axis >= 20.0) & (freq_axis <= 200.0)))
-                else None
-            ),
-            'bass_first_rel_min_20_200': (
-                float(np.min(np.asarray(bf_rel)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
-                if (bool(locals().get('use_bassfirst', False))
-                    and (locals().get('bf_rel', None) is not None)
-                    and np.any((freq_axis >= 20.0) & (freq_axis <= 200.0)))
-                else None
-            ),
-            'bass_first_roommode_max_20_200': (
-                float(np.max(np.asarray(bf_room_mode)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
-                if (bool(locals().get('use_bassfirst', False))
-                    and (locals().get('bf_room_mode', None) is not None)
-                    and np.any((freq_axis >= 20.0) & (freq_axis <= 200.0)))
-                else None
-            ),
-
-
-        # --- Bass-first AI debug stats (20–200 Hz) ---
+        # --- BF debug stats (Summary-friendly, 20–200 Hz) ---
+        # Raw reliability (0..1)
         'bass_first_rel_mean_20_200': (
             float(np.mean(np.asarray(bf_rel)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
             if (
@@ -1758,6 +1783,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             )
             else None
         ),
+
         'bass_first_rel_min_20_200': (
             float(np.min(np.asarray(bf_rel)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
             if (
@@ -1767,6 +1793,29 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             )
             else None
         ),
+
+        # Effective confidence used by A-FDW smoothing (after floor fuse)
+        'bass_first_conf_eff_mean_20_200': (
+            float(np.mean(np.asarray(bf_conf_for_smoothing)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
+            if (
+                bool(locals().get('use_bassfirst', False))
+                and (locals().get('bf_conf_for_smoothing', None) is not None)
+                and np.any((freq_axis >= 20.0) & (freq_axis <= 200.0))
+            )
+            else None
+        ),
+
+        'bass_first_conf_eff_min_20_200': (
+            float(np.min(np.asarray(bf_conf_for_smoothing)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
+            if (
+                bool(locals().get('use_bassfirst', False))
+                and (locals().get('bf_conf_for_smoothing', None) is not None)
+                and np.any((freq_axis >= 20.0) & (freq_axis <= 200.0))
+            )
+            else None
+        ),
+
+        # Room-mode mask strength (0..1)
         'bass_first_roommode_max_20_200': (
             float(np.max(np.asarray(bf_room_mode)[(freq_axis >= 20.0) & (freq_axis <= 200.0)]))
             if (

@@ -54,6 +54,9 @@ class FilterConfig:
     bass_first_smooth_floor_hi: float = 0.35
     bass_first_k_mode_cut: float = 0.6
     bass_first_k_mode_boost: float = 0.9
+    # Input/source hint for analysis heuristics (affects Bass-first reliability masking)
+    # True when the measurement data comes from WAV/IR-derived response rather than REW text/API.
+    is_wav_source: bool = False
 
    
 
