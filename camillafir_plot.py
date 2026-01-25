@@ -86,7 +86,7 @@ def _plotly_js_path() -> str | None:
 
 
 def smooth_complex(freqs, spec, oct_frac=1.0):
-    """Tasoittaa kompleksisen vasteen Real ja Imag osat erikseen vaiheen säilyttämiseksi."""
+    """Smooths the real and imaginary parts of complex response separately to preserve phase."""
     real_parts = np.nan_to_num(np.real(spec))
     imag_parts = np.nan_to_num(np.imag(spec))
     real_s, _ = apply_smoothing_std(freqs, real_parts, np.zeros_like(freqs), oct_frac)
@@ -94,7 +94,7 @@ def smooth_complex(freqs, spec, oct_frac=1.0):
     return real_s + 1j * imag_s
 
 def calculate_clean_gd(freqs, complex_resp):
-    """Laskee ryhmäviiveen (ms) tasoitetusta kompleksisesta vasteesta."""
+    """Calculates group delay (ms) from smoothed complex response."""
     phase_rad = np.unwrap(np.angle(complex_resp))
     df = np.gradient(freqs) + 1e-12
     gd_ms = -np.gradient(phase_rad) / (2 * np.pi * df) * 1000.0
@@ -251,7 +251,7 @@ def calc_target_match_from_stats(stats: dict):
 
 
 def format_summary_content(settings, l_stats, r_stats):
-    """Luo Summary.txt sisältäen RT60, confidence, target match ja acoustic score."""
+    """Creates Summary.txt containing RT60, confidence, target match, and acoustic score."""
     from datetime import datetime
     import numpy as np
 
@@ -291,7 +291,7 @@ def format_summary_content(settings, l_stats, r_stats):
     if (r_stats or {}).get('analysis_mode','native') == 'comparison':
         lines.append(f"Comparison grid (R): fs={float(r_stats.get('cmp_ref_fs', 0) or 0):.0f} taps={float(r_stats.get('cmp_ref_taps', 0) or 0):.0f}")
     # --- Correction guards (reporting) ---
-    # Nämä voivat tulla settingsistä tai puuttua (jos UI ei vielä aseta).
+    # These can come from settings or be missing (if UI hasn't set them yet).
     max_cut_db = float(settings.get('max_cut_db', 15.0) or 15.0)
     max_slope = float(settings.get('max_slope_db_per_oct', 12.0) or 12.0)
     # optional (new): separate boost/cut slope; if missing, fall back to legacy
@@ -390,19 +390,19 @@ def format_summary_content(settings, l_stats, r_stats):
     def _fmt_bands(bands):
         if not bands:
             return "-"
-        # näytä muutama tuttu kaista
+        # show some familiar bands
         picks = [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0]
         keys = [float(k) for k in bands.keys()]
         out = []
         for p in picks:
             k = min(keys, key=lambda x: abs(x - p))
-            # bands avaimet voi olla float tai str -> hae molemmat
+            # bands keys can be float or str -> try both
             if k in bands:
                 val = bands[k]
             elif str(k) in bands:
                 val = bands[str(k)]
             else:
-                # fallback: hae lähin oikea avain stringeinäkin
+                # fallback: find closest key including string keys
                 kk = min(bands.keys(), key=lambda x: abs(float(x) - p))
                 val = bands[kk]
                 k = float(kk)
@@ -729,7 +729,7 @@ def generate_prediction_plot(
         p_lin = np.interp(f_lin, orig_freqs, orig_phases)
         total_spec = 10**(m_lin_clean/20.0) * np.exp(1j * np.deg2rad(p_lin)) * h_filt
         
-        # Lasketaan muut käyrät (Heavy)
+        # Calculate other curves (Heavy)
         p_sm = psychoacoustic_smoothing(f_lin, 20*np.log10(np.abs(total_spec)+1e-12))
         spec_sm = smooth_complex(f_lin, total_spec, 3.0)
         ph_sm = (np.rad2deg(np.angle(spec_sm)) + 180) % 360 - 180
@@ -870,17 +870,17 @@ def generate_prediction_plot(
                 pass
 
 
-        # A. MITATTU (Käytetään optimoitua f_vis dataa)
+        # A. MEASURED (Using optimized f_vis data)
         fig.add_trace(go.Scatter(x=f_vis, y=m_vis, name='Measured', 
                                  line=dict(color='rgba(0,0,255,0.4)', width=1.5)), row=1, col=1)
 
-        # B. TARGET (Alkuperäinen kevyt data + avg_t korjaus)
+        # B. TARGET (Original light data + avg_t correction)
         if target_stats and 'target_mags' in target_stats:
             t_mags = _maybe_shift_to_abs(target_stats.get('target_mags', []), avg_t)
             fig.add_trace(go.Scatter(x=target_stats['freq_axis'], y=t_mags,
                                      name='Target', line=dict(color='green', dash='dash', width=2.0)), row=1, col=1)
 
-        # C. ENNUSTETTU (Käytetään optimoitua f_vis dataa)
+        # C. PREDICTED (Using optimized f_vis data)
         fig.add_trace(go.Scatter(x=f_vis, y=p_vis, name='Predicted', 
                                  line=dict(color='orange', width=1.5)), row=1, col=1)
 

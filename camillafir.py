@@ -79,8 +79,8 @@ def update_taps_auto_info(_=None):
     UI helper: show Auto-taps mapping when multi-rate is enabled.
     Uses reference 44.1kHz -> 65536 taps (constant time-length).
     """
-    # put_checkbox() -> pin['multi_rate_opt'] on lista valituista arvoista:
-    # [] = off, [True] = on (tässä projektissa)
+    # put_checkbox() -> pin['multi_rate_opt'] is a list of selected values:
+    # [] = off, [True] = on (in this project)
     try:
         mr = bool(pin['multi_rate_opt'])
     except Exception:
@@ -89,7 +89,7 @@ def update_taps_auto_info(_=None):
     for scope_name in ('taps_auto_info_scope_files', 'taps_auto_info_scope_basic'):
         with use_scope(scope_name, clear=True):
             if not mr:
-                # Näytä jotain myös OFF-tilassa, jotta käyttäjä näkee että UI oikeasti päivittyy
+                # Show something in OFF mode too, so user sees the UI actually updates
                 put_markdown(f"_{t('auto_taps_title')}: OFF_")
                 continue
 
@@ -105,7 +105,7 @@ def update_taps_auto_info(_=None):
 
 
 def get_resource_path(relative_path):
-    """ Palauttaa polun resurssiin, oli se EXE-paketin sisällä tai kehityskoneella. """
+    """Returns the path to a resource, whether inside an EXE package or in development."""
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
@@ -117,11 +117,11 @@ def parse_measurements_from_path(path):
     try:
         if not path: return None, None, None
 
-        # 1. Siivotaan polku (poistetaan lainausmerkit ja välilyönnit)
+        # 1. Clean up path (remove quotes and spaces)
         p = path.strip().strip('"').strip("'")
         
         if not os.path.exists(p):
-            logger.error(f"Tiedostoa ei löydy: {p}")
+            logger.error(f"File not found: {p}")
             return None, None, None
             
         # WAV import: if local path ends with .wav -> parse IR wav to FR
@@ -156,20 +156,20 @@ def parse_measurements_from_path(path):
         for line in lines:
             line = line.strip()
             
-            # Ohitetaan kommentit ja tyhjät
+            # Skip comments and empty lines
             if not line or line.startswith(('*', '#', ';')):
                 continue
             
-            # Ohitetaan rivit, jotka eivät ala numerolla
+            # Skip lines that don't start with a digit
             if not line[0].isdigit() and line[0] != '-':
                 continue
 
-            # --- ÄLYKÄS EROTTIMEN TUNNISTUS ---
-            # Jos rivillä on sekä piste että pilkku (esim. "0.36, 41.8"), pilkku on erotin -> vaihdetaan väliksi
+            # --- SMART SEPARATOR DETECTION ---
+            # If line has both period and comma (e.g. "0.36, 41.8"), comma is separator -> replace with space
             if ',' in line and '.' in line:
                 line = line.replace(',', ' ')
             else:
-                # Jos rivillä on vain pilkkuja, ne ovat todennäköisesti desimaaleja (Suomi) -> vaihdetaan pisteeksi
+                # If line has only commas, they are likely decimals (European format) -> replace with period
                 line = line.replace(',', '.')
             # ----------------------------------
 
@@ -500,9 +500,9 @@ def update_status(msg):
         put_text(msg).style('font-weight: bold; color: #4CAF50; margin-bottom: 10px;')
 
 def parse_measurements_from_bytes(file_content):
-    """Lukee mittausdatan (REW export) tavuista robustisti."""
+    """Reads measurement data (REW export) from bytes robustly."""
     try:
-        # Dekoodataan tavut tekstiksi
+        # Decode bytes to text
         content_str = file_content.decode('utf-8', errors='ignore')
         lines = content_str.split('\n')
         
@@ -510,18 +510,18 @@ def parse_measurements_from_bytes(file_content):
         
         for line in lines:
             line = line.strip()
-            # Ohitetaan tyhjät rivit ja kommentit (* tai #)
+            # Skip empty lines and comments (* or #)
             if not line or line.startswith(('*', '#')):
                 continue
             
-            # Yritetään tunnistaa onko rivi dataa (alkaa numerolla)
+            # Try to identify if line is data (starts with digit)
             if not line[0].isdigit() and line[0] != '-':
                 continue
                 
-            # Korvataan pilkku pisteellä (Suomi-yhteensopivuus)
+            # Replace comma with period (European format compatibility)
             line = line.replace(',', '.')
             
-            # Pilkotaan välilyöntien/tabulaattorien perusteella
+            # Split by spaces/tabs
             parts = line.split()
             
             if len(parts) >= 3:
@@ -545,7 +545,7 @@ def parse_measurements_from_bytes(file_content):
         print(f"Error parsing file: {e}")
         return None, None, None
 
-# clear() voi olla output.clear, mutta use_scope(clear=True) hoitaa sen
+# clear() can be output.clear, but use_scope(clear=True) handles it
 
 def update_lvl_ui(_=None):
     def _p(name, default=None):
@@ -566,7 +566,7 @@ def update_lvl_ui(_=None):
             pin_update('lvl_min', value=vmin)
             pin_update('lvl_max', value=vmax)
         
-        # lvl_manual_db: näytä AINA, mutta Auto-tilassa harmaana + ei-interaktiivinen
+        # lvl_manual_db: show ALWAYS, but grayed out + non-interactive in Auto mode
         with use_scope('lvl_manual_scope', clear=True):
             w = put_input(
                 'lvl_manual_db',
@@ -774,23 +774,23 @@ def get_house_curve_by_name(name):
 
 
 def load_target_curve(file_content):
-    """Lukee tavoitekäyrän tekstitiedostosta ja varmistaa järjestyksen."""
+    """Reads target curve from text file and ensures correct ordering."""
     try:
         content_str = file_content.decode('utf-8')
         lines = content_str.split('\n')
         freqs, mags = [], []
         for line in lines:
-            # Poistetaan kommentit ja tyhjät
+            # Remove comments and empty lines
             line = line.split('#')[0].strip()
             if not line: continue
             
-            # Tuetaan pilkkua ja pistettä, sekä tabulaattoria ja välilyöntiä
+            # Support comma and period, as well as tabs and spaces
             parts = line.replace(',', '.').split()
             if len(parts) >= 2:
                 try:
                     f = float(parts[0])
                     m = float(parts[1])
-                    # Estetään nollataajuudet ja negatiiviset taajuudet
+                    # Prevent zero and negative frequencies
                     if f > 0:
                         freqs.append(f)
                         mags.append(m)
@@ -800,15 +800,15 @@ def load_target_curve(file_content):
         if len(freqs) < 2:
             return None, None
 
-        # --- TÄRKEÄ KORJAUS: LAJITTELU ---
-        # Varmistetaan, että taajuudet ovat nousevassa järjestyksessä.
-        # Jos eivät ole, np.interp tekee "sahalaitaa" tai monttuja.
+        # --- IMPORTANT FIX: SORTING ---
+        # Ensure frequencies are in ascending order.
+        # If not, np.interp creates "sawtooth" or lumpy curves.
         freqs = np.array(freqs)
         mags = np.array(mags)
         if np.mean(mags) > 30:
             mags -= np.mean(mags)
 
-        # Lajittelu taajuuden mukaan (tärkeää interpoloinnille)
+        # Sort by frequency (important for interpolation)
         sort_idx = np.argsort(freqs)
         
         return freqs[sort_idx], mags[sort_idx]
@@ -830,7 +830,7 @@ def load_config():
         'normalize_opt': False, 'align_opt': True, 'multi_rate_opt': False,
         'reg_strength': 30.0, 'stereo_link': True, 
         'exc_prot': True, 'exc_freq': 20.0, 
-        'low_bass_cut_hz': 40.0,    # alle tämän taajuuden sallitaan vain leikkaus (ei boostia)
+        'low_bass_cut_hz': 40.0,    # below this frequency only cuts allowed (no boosts)
         'hpf_enable': False, 'hpf_freq': 20.0, 'hpf_slope': 24,
         'local_path_l': '', 'local_path_r': '',
         'input_source': 'file',             # 'file' | 'rew_api'
@@ -841,13 +841,13 @@ def load_config():
         'xo3_f': None, 'xo3_s': 12, 'xo4_f': None, 'xo4_s': 12, 'xo5_f': None, 'xo5_s': 12,
         'mixed_freq': 300.0, 'phase_limit': 600.0,
         'phase_safe_2058': False, # TUPE-mode
-        'ir_window': 500.0,       # Oikea ikkuna (Right)
-        'ir_window_left': 50.0,  # Vasen ikkuna (Left) - UUSI
-        'enable_tdc': True,       # TDC oletuksena päälle
-        'tdc_strength': 50.0,     # TDC voimakkuus 50%
-        'enable_afdw': True,      # Adaptiivinen FDW oletuksena päälle
-        'max_cut_db': 30.0,              # max vaimennus (dB)
-        'max_slope_db_per_oct': 24.0,    # max jyrkkyys (dB/okt), 0 = pois
+        'ir_window': 500.0,       # Right window
+        'ir_window_left': 50.0,  # Left window - NEW
+        'enable_tdc': True,       # TDC enabled by default
+        'tdc_strength': 50.0,     # TDC strength 50%
+        'enable_afdw': True,      # Adaptive FDW enabled by default
+        'max_cut_db': 30.0,              # max attenuation (dB)
+        'max_slope_db_per_oct': 24.0,    # max steepness (dB/oct), 0 = off
         'max_slope_boost_db_per_oct': 0.0,
         'max_slope_cut_db_per_oct': 0.0,
         'df_smoothing': False,
@@ -874,7 +874,7 @@ def save_config(data):
     except: pass
 
 def put_guide_section():
-    # Tämä lista ohjaa, mitä oppaita näytetään ja missä järjestyksessä
+    # This list controls which guides are shown and in what order
     guides = [
         ('guide_taps', t('guide_taps_title')),
         ('guide_ft', t('guide_ft_title')),
@@ -917,7 +917,7 @@ def main():
     ]
     fs_opts = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]; taps_opts = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]; slope_opts = [6, 12, 18, 24, 36, 48]
     
-#--- #1 Tiedostot
+#--- #1 Files
     
     tab_files = [
         put_markdown(f"### 📂 {t('tab_files')}"),
@@ -944,22 +944,22 @@ def main():
         put_scope('taps_auto_info_scope_files'),
     ]
     
-#--- #2 Perusasetukset
+#--- #2 Basic Settings
 
     tab_basic = [
         put_markdown(f"### ⚙️ {t('tab_basic')}"),
         
-        # Rivi 1: Näytteenottotaajuus ja Tapit          
+        # Row 1: Sample rate and Taps
         put_row([
             put_select('fs', label=t('fs'), options=fs_opts, value=get_val('fs', 44100), help_text=t('fs_help')), 
             put_select('taps', label=t('taps'), options=taps_opts, value=get_val('taps', 65536), help_text=t('taps_help'))
         ]),
 
 
-        # Auto-taps info (näkyy vain kun multi_rate_opt päällä)
+        # Auto-taps info (shown only when multi_rate_opt enabled)
         put_scope('taps_auto_info_scope_basic'),
         
-        # Rivi 2: Suodintyyppi ja Mixed-taajuus
+        # Row 2: Filter type and Mixed frequency
         put_row([
             put_radio('filter_type', label=t('filter_type'), 
                     options=[t('ft_linear'), t('ft_min'), t('ft_mixed'), t('ft_asymmetric')], 
@@ -980,26 +980,26 @@ def main():
                     value=get_val('smoothing_type', 'Psychoacoustic'),
                     help_text=t('smooth_help')
                     ),
-        # Rivi 3: Tilan valinta ja tavoitetaso (jaettu kahteen osaan luettavuuden vuoksi)
-        # Level match range (help_text tulee oikeaan paikkaan suoraan kenttien alle)
+        # Row 3: Mode selection and target level (split into two parts for readability)
+        # Level match range (help_text goes to the right place directly under fields)
         put_row([
             put_input(
                 'lvl_min',
                 label=t('lvl_min'),
                 type=FLOAT,
                 value=get_val('lvl_min', 500.0),
-                help_text=t('lvl_min_help_auto')  # default Auto-tila
+                help_text=t('lvl_min_help_auto')  # default Auto mode
             ),
             put_input(
                 'lvl_max',
                 label=t('lvl_max'),
                 type=FLOAT,
                 value=get_val('lvl_max', 2000.0),
-                help_text=t('lvl_max_help_auto')  # default Auto-tila
+                help_text=t('lvl_max_help_auto')  # default Auto mode
             ),
         ]),
 
-        # lvl_mode + lvl_manual_db (näytetään aina, mutta Auto-tilassa lukittu)
+        # lvl_mode + lvl_manual_db (shown always, but locked in Auto mode)
         put_row([
             put_select(
                 'lvl_mode',
@@ -1082,18 +1082,18 @@ def main():
         ),
         
     ]
-#--- #4 Edistyneet
+#--- #4 Advanced
     tab_adv = [
         put_markdown(f"### 🛠️ {t('tab_adv')}"),
         
-        put_markdown("#### ⏱️ Asymmetric Linear -ikkunointi"),
+        put_markdown("#### ⏱️ Asymmetric Linear - windowing"),
         put_row([
             put_input('ir_window_left', label="Left Window (ms)", type=FLOAT, value=get_val('ir_window_left', 100.0), help_text=t('ir_matala')),
             put_input('ir_window', label="Right Window (ms)", type=FLOAT, value=get_val('ir_window', 500.0), help_text=t('ir_korkea'))
         ]),
         put_markdown("---"),
 
-        # Afdw
+        # A-FDW
         put_checkbox('enable_afdw', options=[{'label': t('enable_afdw'), 'value': True}], 
              value=[True] if get_val('enable_afdw', True) else [], help_text=t('afdw_help')),
         put_row([
@@ -1258,7 +1258,7 @@ put_markdown("---"),
         ] for i in range(1, 6)])
     ]
 
-    # Piirretään välilehdet
+    # Draw tabs
     put_tabs([
         {'title': t('tab_files'), 'content': tab_files}, 
         {'title': t('tab_basic'), 'content': tab_basic}, 
@@ -1283,7 +1283,7 @@ put_markdown("---"),
     put_markdown("---")
 
     
-    # Napin päivitys: Täysin puhdas teksti ilman taustaa tai kehyksiä
+    # Button update: Completely clean text without background or border
     put_button("🚀 START", onclick=process_run).style("""
         width: 100%; 
         margin-top: 30px; 
@@ -2356,7 +2356,7 @@ def _resample_to_freq_axis(freqs_dst: np.ndarray, arr: np.ndarray, freqs_src: np
 
 
 def calculate_target_match(st):
-    """Laskee kuinka hyvin korjattu vaste seuraa tavoitekäyrää (0-100%)."""
+    """Calculates how well the corrected response follows the target curve (0-100%)."""
     if not st:
         return 0.0
 

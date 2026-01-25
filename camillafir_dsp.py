@@ -134,9 +134,9 @@ def apply_smart_tdc(
     adjusted_target = np.copy(target_mags)
     tdc_reduction_db = np.zeros_like(adjusted_target)
 
-    # rt60_info voi olla:
-    #  - float (vanha käytös)
-    #  - dict: {center_hz: rt60_s, ...} (uusi: kaistoittain)
+    # rt60_info can be:
+    #  - float (old usage)
+    #  - dict: {center_hz: rt60_s, ...} (new: per-band)
     def rt60_at(freq_hz: float) -> float:
         # fallback
         default = 0.4
@@ -149,7 +149,7 @@ def apply_smart_tdc(
             r = np.array([rt60_info[k] for k in c], dtype=float)
             mask = (c > 0) & (r > 0.05) & (r < 5.0)
             if np.count_nonzero(mask) < 2:
-                # jos ei tarpeeksi kaistoja, yritä esim. mediaani
+                # if not enough bands, try e.g. median
                 vv = float(np.median(r[mask])) if np.count_nonzero(mask) else 0.0
                 return vv if vv > 0.1 else default
             c = c[mask]; r = r[mask]
@@ -162,7 +162,7 @@ def apply_smart_tdc(
         # FIXED: Changed 'error_ms' to 'gd_error' to match analyze_acoustic_confidence
         error_ms = rev['gd_error'] 
         ref_rt60 = rt60_at(f_res)
-        # HERKEMPI KYNNYS: Reagoidaan jo 80% kohdalla keskimääräisestä RT60:stä
+        # SENSITIVE THRESHOLD: React at 80% of average RT60
         excess_ratio = error_ms / (ref_rt60 * 1000.0 + 1e-12)
         
         if excess_ratio > 0.8: 
@@ -175,7 +175,7 @@ def apply_smart_tdc(
             kernel = np.exp(-0.5 * (dist / bw)**2)
             
             reduction_db = dynamic_mult * 4.0
-            # Kerätään vaikutus erilliseen käyrään (estää "stacking surprise" -notchit)
+            # Accumulate effect in separate curve (prevents "stacking surprise" notches)
             tdc_reduction_db += (kernel * reduction_db)
             
     # --- Safety brakes ---
@@ -199,11 +199,11 @@ def apply_smart_tdc(
     return adjusted_target
 
 def apply_hpf_to_mags(freqs, mags, cutoff, order):
-    """Soveltaa Butterworth-ylipäästösuodatusta magnitudivasteeseen (dB)."""
+    """Applies Butterworth high-pass filter to magnitude response (dB)."""
     if cutoff <= 0 or order <= 0:
         return mags
     f = np.asarray(freqs, dtype=float)
-    # Vältä DC-binin (0 Hz) ääretön vaimennus stats/plot -puolella
+    # Avoid infinite attenuation at DC bin (0 Hz) in stats/plot
     if f.size > 1 and f[0] == 0.0:
         f = f.copy()
         f[0] = f[1] if f[1] > 0 else 1e-6
@@ -214,13 +214,13 @@ def apply_hpf_to_mags(freqs, mags, cutoff, order):
     return mags + attenuation
 
 def soft_clip_boost(gain_db, max_boost):
-    """Pehmentää korostukset tanh-funktiolla, jotta max_boost ei ylity rajusti."""
+    """Softly clips boosts using tanh function to prevent exceeding max_boost abruptly."""
     if gain_db <= 0: return gain_db
     return max_boost * np.tanh(gain_db / max_boost)
 
 def soft_clip_gain(gain_db, max_boost_db, max_cut_db):
     """
-    Pehmeä rajoitin sekä boostille että cutille.
+    Soft limiter for both boost and cut.
     - boost: +max_boost_db * tanh(g/max_boost_db)
     - cut:   -max_cut_db  * tanh(|g|/max_cut_db)
     """
@@ -240,8 +240,8 @@ def soft_clip_gain(gain_db, max_boost_db, max_cut_db):
 
 def limit_slope_per_octave(freq_axis, gain_db, max_db_per_oct=12.0):
     """
-    Rajoittaa gain-käyrän muutoksen (dB) per oktaavi (log2(f)).
-    Tekee forward+backward passin, jotta rajoitus toteutuu molempiin suuntiin.
+    Limit gain curve change (dB) per octave (log2(f)).
+    Performs forward+backward pass to enforce limit in both directions.
     """
     f = np.asarray(freq_axis, dtype=float)
     g = np.asarray(gain_db, dtype=float).copy()
@@ -249,14 +249,14 @@ def limit_slope_per_octave(freq_axis, gain_db, max_db_per_oct=12.0):
     if max_db_per_oct <= 0:
         return g
 
-    # Käytetään vain f>0 alueella (f=0 kohdalla log2 ei toimi)
+    # Only use f>0 region (log2 doesn't work at f=0)
     idx = np.where(f > 0)[0]
     if idx.size < 3:
         return g
 
     ii = idx
     x = np.log2(f[ii])
-    # Forward: rajoita nousu/lasku edelliseen nähden
+    # Forward: limit rise/fall relative to previous
     for k in range(1, ii.size):
         dx = x[k] - x[k-1]
         if dx <= 1e-12:
@@ -284,7 +284,7 @@ def limit_slope_per_octave(freq_axis, gain_db, max_db_per_oct=12.0):
 
 
 def calculate_minimum_phase(mags_lin_fft):
-    """Laskee minimivaiheen Hilbert-muunnoksella. 1e-10 suojaus estää NaN-virheet."""
+    """Calculates minimum phase using Hilbert transform. 1e-10 protection prevents NaN errors."""
     n_fft = (len(mags_lin_fft) - 1) * 2
     ln_mag = np.log(np.maximum(np.abs(mags_lin_fft), 1e-10))
     full_ln_mag = np.concatenate((ln_mag, ln_mag[-2:0:-1]))
@@ -293,13 +293,13 @@ def calculate_minimum_phase(mags_lin_fft):
     return min_phase_rad[:len(mags_lin_fft)]
 
 def psychoacoustic_smoothing(freqs, mags, oct_bw=1/3.0):
-    """Yhdistää raskaan ja kevyen tasoituksen parhaan visualisoinnin saamiseksi."""
+    """Combines heavy and light smoothing to achieve optimal visualization."""
     mags_heavy, _ = apply_smoothing_std(freqs, mags, np.zeros_like(mags), oct_bw)
     mags_light, _ = apply_smoothing_std(freqs, mags, np.zeros_like(mags), 1/12.0)
     return np.maximum(mags_heavy, mags_light)
 
 def apply_fdw_smoothing(freqs, phases, cycles):
-    """Soveltaa taajuusriippuvaista ikkunointia (FDW) vaiheelle."""
+    """Apply frequency-dependent windowing (FDW) to phase."""
     safe_cycles = max(cycles, 1.0)
     phase_u = np.unwrap(np.deg2rad(phases))
     oct_width = 2.0 / safe_cycles
@@ -309,9 +309,9 @@ def apply_fdw_smoothing(freqs, phases, cycles):
 
 def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycles=5.0):
     """
-    Sovelletaan adaptiivista magnitudin tasoitusta luottamuksen perusteella.
-    Korkea luottamus = enemmän syklejä (tarkempi korjaus).
-    Matala luottamus = vähemmän syklejä (raskaampi tasoitus).
+    Apply adaptive magnitude smoothing based on confidence.
+    High confidence = more cycles (sharper correction).
+    Low confidence = fewer cycles (heavier smoothing).
     """
     f = np.asarray(freqs, dtype=float)
     m = np.asarray(mags, dtype=float)
@@ -396,7 +396,7 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
     return out
 
 def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
-    """Vakioitu oktaavitasoitus logaritmisella näytteistyksellä."""
+    """Standardized octave smoothing with logarithmic sampling."""
     if octave_fraction <= 0: return mags, phases
     f_min = max(freqs[0], 1.0)
     f_max = freqs[-1]
@@ -413,7 +413,7 @@ def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
     log_phases = np.interp(log_freqs, freqs, phase_unwrap)
     
     window_size = int(points_per_octave * octave_fraction)
-    window_size = max(window_size, 1) # Varmistetaan vähintään 1
+    window_size = max(window_size, 1) # Ensure at least 1
     window = np.ones(window_size) / window_size
     
     pad_len = window_size // 2
@@ -430,17 +430,17 @@ def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
     return np.interp(freqs, log_freqs, sm_mags), np.rad2deg(np.interp(freqs, log_freqs, sm_phases))
 
 def calculate_theoretical_phase(freq_axis, crossovers, hpf_freq=None, hpf_slope=None):
-    """Laskee jakosuotimien ja ylipäästön (HPF) aiheuttaman teoreettisen vaihesiirron."""
+    """Calculates theoretical phase shift caused by crossovers and high-pass filter (HPF)."""
     total_phase_rad = np.zeros_like(freq_axis)
     
-    # 1. Lisätään HPF:n vaihevaikutus analogisella Butterworth-mallilla
+    # 1. Add HPF phase effect using analog Butterworth model
     if hpf_freq and hpf_slope and hpf_freq > 0:
         hpf_order = int(hpf_slope / 6)
         b, a = scipy.signal.butter(hpf_order, 2 * np.pi * hpf_freq, btype='high', analog=True)
         w, h = scipy.signal.freqs(b, a, worN=2 * np.pi * freq_axis)
         total_phase_rad += np.unwrap(np.angle(h))
 
-    # 2. Lisätään jakosuotimien vaihe
+    # 2. Add crossover filter phase
     for xo in crossovers:
         if xo.get('freq') is None: continue
         order = xo.get('order', int(xo.get('slope', 12) / 6))
@@ -451,19 +451,19 @@ def calculate_theoretical_phase(freq_axis, crossovers, hpf_freq=None, hpf_slope=
     return total_phase_rad
 
 def interpolate_response(input_freqs, input_values, target_freqs):
-    """Interpoloi vasteen lineaarisesti kohdetaajuuksille."""
+    """Interpolate response linearly to target frequencies."""
     return np.interp(target_freqs, input_freqs, input_values)
 
 def _sigma_bins_from_hz(freq_axis, sigma_hz: float, fallback_bins: float = 3.0) -> float:
     """
-    Muunna tasoituksen leveys (Hz) gaussian_filter1d:n sigma-arvoksi (binneissä).
-    freq_axis oletetaan nousevaksi ja melko tasaväliseksi.
+    Convert smoothing width (Hz) to gaussian_filter1d sigma value (in bins).
+    freq_axis is assumed to be increasing and roughly evenly spaced.
     """
     try:
         f = np.asarray(freq_axis, dtype=float)
         if f.size < 4:
             return float(fallback_bins)
-        # Käytä mediaania, robusti pieneen epätasaisuuteen
+        # Use median, robust to small irregularities
         df = np.median(np.diff(f))
         if not np.isfinite(df) or df <= 0:
             return float(fallback_bins)
@@ -476,17 +476,17 @@ def _sigma_bins_from_hz(freq_axis, sigma_hz: float, fallback_bins: float = 3.0) 
 
 
 def calculate_group_delay(freqs, phases_deg):
-    """Laskee ryhmäviiveen (ms) vaiheen gradientista."""
+    """Calculates group delay (ms) from phase gradient."""
     phase_rad = np.unwrap(np.deg2rad(phases_deg))
     d_phi_d_f = np.gradient(phase_rad, freqs)
     gd_ms = -d_phi_d_f / (2 * np.pi) * 1000.0
-    # Tasoitus "Hz-leveydellä", ei binneillä -> pysyy samana fs/taps muuttuessa
+    # Smoothing in "Hz width", not bins -> stays same across fs/taps changes
     sigma_bins = _sigma_bins_from_hz(freqs, sigma_hz=2.0, fallback_bins=3.0)
     return scipy.ndimage.gaussian_filter1d(gd_ms, sigma=sigma_bins)
 
 
 def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=300):
-    """Yhdistää Linear Phase basson ja Minimum Phase diskantin."""
+    """Combines Linear Phase bass with Minimum Phase treble."""
     ntaps = len(ir_lin)
     fir_lp = scipy.signal.firwin(2047, split_freq, fs=fs, pass_zero=True, window='blackman')
     fir_hp = -fir_lp
@@ -502,20 +502,20 @@ def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=300):
     return filt_bass + filt_treble
 
 def remove_time_of_flight(freq_axis, phase_rad):
-    """Etsii ja poistaa linear phase slopen (viiveen) mittauksesta."""
+    """Find and remove linear phase slope (delay) from measurement."""
     mask = (freq_axis >= 1000) & (freq_axis <= 10000)
     if not np.any(mask): return phase_rad, 0.0
     poly = np.polyfit(freq_axis[mask], phase_rad[mask], 1)
     return phase_rad - (poly[0] * freq_axis), poly[0]
 
 def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
-    """Analysoi akustisen luottamuksen skaalautuvalla resoluutiolla."""
+    """Analyze acoustic confidence with scalable resolution."""
     phase_rad = np.unwrap(np.angle(complex_meas))
     df = np.gradient(freq_axis) + 1e-12
     gd_s = -np.gradient(phase_rad) / (2 * np.pi * df)
     gd_ms = gd_s * 1000.0
     
-    # Tasoitus vakio Hz-leveydellä (vastaa aiempaa ~44.1k/65536-taps käyttäytymistä)
+    # Smoothing at constant Hz width (matches previous ~44.1k/65536-taps behavior)
     # 44.1k & ~65537 FFT-bins -> df ~0.67 Hz -> sigma_bins=10 ~ 6.7 Hz
     sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=6.7, fallback_bins=10.0)
     gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms, sigma=sigma_bins)
@@ -524,16 +524,16 @@ def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
     # Luottamusmaski
     threshold_ms = 2.5
     confidence_mask = 1.0 / (1.0 + np.exp(1.5 * (gd_diff - threshold_ms)))
-    # Varmistetaan, että `peaks` on aina määritelty (turvaa mahdollisia refaktorointeja vastaan)
+    # Ensure `peaks` is always defined (protects against potential refactoring)
     peaks = np.array([], dtype=int)
 
     reflection_nodes = []
     valid_idx = np.where(freq_axis > 20)[0] 
     
     if len(valid_idx) > 0:
-        # 2. PIIKKIEN ETSINTÄ (Herkkyyden lisäys)
-        # Lasketaan korkeusvaatimus 3.0 -> 2.0, jotta pienemmätkin moodit löytyvät
-        # Lyhennetään distance 50 -> 30, jotta lähekkäiset resonanssit tunnistetaan
+        # 2. PEAK DETECTION (Increased sensitivity)
+        # Lowered height threshold 3.0 -> 2.0 to find smaller modes
+        # Shortened distance 50 -> 30 to detect nearby resonances
         peaks, props = scipy.signal.find_peaks(gd_diff[valid_idx], height=2.0, distance=100)
     
     raw_nodes = []
@@ -546,7 +546,7 @@ def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
             'type': "Resonance" if freq_axis[idx] < 200 else "Reflection"
         })
     
-    # POIMITAAN VAIN 15 VOIMAKKAINTA (estää pisteytyksen romahtamisen)
+    # KEEP ONLY 15 STRONGEST (prevents score collapse)
     reflection_nodes = sorted(raw_nodes, key=lambda x: x['gd_error'], reverse=True)[:15]
             
     return confidence_mask, reflection_nodes, gd_ms
@@ -554,59 +554,59 @@ def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
 
 def calculate_rt60(impulse, fs):
     """
-    Robustimpi RT60-estimaatti:
+    More robust RT60 estimate:
     - Schroeder EDC
-    - noise floor -rajaus
+    - noise floor limiting
     - EDT, T20, T30 + fallback
-    - laatukriteeri (R^2)
-    Palauttaa float (sekunteina), muuten 0.0
+    - quality criterion (R^2)
+    Returns float (seconds), otherwise 0.0
     """
     try:
         imp = np.asarray(impulse, dtype=float)
         if imp.size < int(0.1 * fs):
             return 0.0
 
-        # 1) Aloitus: peak-kohdasta (kuten sinulla)
+        # 1) Start: from peak location (like yours)
         peak_idx = int(np.argmax(np.abs(imp)))
         x = imp[peak_idx:]
         if x.size < int(0.05 * fs):
             return 0.0
 
-        # 2) Energiakäyrä
+        # 2) Energy curve
         e = x * x
 
-        # 3) Noise floor tailista (viimeiset 15% tai vähintään 50 ms)
+        # 3) Noise floor from tail (last 15% or at least 50 ms)
         tail_n = max(int(0.15 * e.size), int(0.05 * fs))
         tail_n = min(tail_n, e.size)
         noise_power = float(np.mean(e[-tail_n:]))
 
-        # 4) Schroeder EDC (integroitu energia)
+        # 4) Schroeder EDC (integrated energy)
         E = np.cumsum(e[::-1])[::-1]
         E0 = float(E[0]) + 1e-18
 
-        # 5) Stop-hetki: missä integroitu energia lähestyy melulattiaa
-        # noise_mult määrittää kuinka “varhain” lopetetaan (20 = konservatiivinen)
+        # 5) Stop point: where integrated energy approaches noise floor
+        # noise_mult determines how "early" to stop (20 = conservative)
         noise_mult = 20.0
         stop_candidates = np.where(E <= noise_mult * noise_power)[0]
         stop_idx = int(stop_candidates[0]) if stop_candidates.size > 0 else (E.size - 1)
-        stop_idx = max(stop_idx, 10)  # ettei mene nollapituudeksi
+        stop_idx = max(stop_idx, 10)  # don't let it go to zero length
 
         t = np.arange(E.size) / fs
         edc_db = 10.0 * np.log10((E / E0) + 1e-30)
 
-        # 6) Pieni tasoitus EDC:hen (vakauttaa indeksejä)
+        # 6) Light smoothing to EDC (stabilizes indices)
         smooth_ms = 10.0
         win = max(1, int((smooth_ms / 1000.0) * fs))
         if win > 1:
             kernel = np.ones(win) / win
             edc_db = np.convolve(edc_db, kernel, mode="same")
 
-        # Rajataan luotettavalle alueelle
+        # Limit to reliable area
         t_u = t[:stop_idx + 1]
         d_u = edc_db[:stop_idx + 1]
 
         def fit_rt(lo_db, hi_db):
-            # fit d_u ~ a*t + b, kun d_u on välillä [hi_db..lo_db]
+            # fit d_u ~ a*t + b, when d_u is in range [hi_db..lo_db]
             mask = (d_u <= lo_db) & (d_u >= hi_db)
             if np.count_nonzero(mask) < 12:
                 return None
@@ -622,14 +622,14 @@ def calculate_rt60(impulse, fs):
             ss_tot = float(np.sum((yy - np.mean(yy)) ** 2)) + 1e-12
             r2 = 1.0 - ss_res / ss_tot
 
-            if a >= -1e-9:  # ei laske
+            if a >= -1e-9:  # not descending
                 return None
 
             rt60 = -60.0 / a
             return rt60, r2
 
         candidates = []
-        # EDT: 0..-10 dB (sama kaava rt60 = -60/a)
+        # EDT: 0..-10 dB (same formula rt60 = -60/a)
         r = fit_rt(0.0, -10.0)
         if r: candidates.append(("EDT",) + r)
 
@@ -644,11 +644,11 @@ def calculate_rt60(impulse, fs):
         if not candidates:
             return 0.0
 
-        # Preferenssi: T30 > T20 > EDT, mutta vaadi kohtuullinen R^2 jos mahdollista
+        # Preference: T30 > T20 > EDT, but require reasonable R^2 if possible
         pref = {"T30": 0, "T20": 1, "EDT": 2}
         candidates.sort(key=lambda x: (pref[x[0]], -x[2]))  # (prefer, best r2)
 
-        # Valitse ensin r2>=0.90 jos löytyy, muuten paras saatavilla
+        # Choose r2>=0.90 first if found, otherwise best available
         chosen = None
         for c in candidates:
             name, rt60, r2 = c
@@ -661,7 +661,7 @@ def calculate_rt60(impulse, fs):
 
         rt60 = float(chosen[0])
 
-        # Järkevyysrajat (voit säätää)
+        # Sanity limits (you can adjust)
         if 0.05 < rt60 < 5.0:
             return round(rt60, 2)
         return 0.0
@@ -671,10 +671,10 @@ def calculate_rt60(impulse, fs):
     
 
 def _third_oct_centers(f_min=31.5, f_max=8000.0):
-    """IEC-tyyliset 1/3-oktaavikaistakeskukset (riittää tähän)."""
+    """IEC-style 1/3-octave band centers (sufficient for this purpose)."""
     centers = []
     f = float(f_min)
-    step = 2 ** (1/3)  # 1/3 oktaavi
+    step = 2 ** (1/3)  # 1/3 octave
     while f <= f_max * 1.0001:
         centers.append(float(f))
         f *= step
@@ -682,10 +682,10 @@ def _third_oct_centers(f_min=31.5, f_max=8000.0):
 
 def calculate_rt60_bands(impulse, fs, f_min=31.5, f_max=8000.0, order=4):
     """
-    Laskee RT60:n 1/3-oktaavikaistoittain:
-      - bandpass (sos) -> suodatettu impulssi
-      - RT60 (käyttää olemassa olevaa calculate_rt60:ää)
-    Palauttaa dict: {center_hz: rt60_s}
+    Calculate RT60 in 1/3-octave bands:
+      - bandpass (sos) -> filtered impulse
+      - RT60 (uses existing calculate_rt60)
+    Returns dict: {center_hz: rt60_s}
     """
     try:
         imp = np.asarray(impulse, dtype=float)
@@ -697,7 +697,7 @@ def calculate_rt60_bands(impulse, fs, f_min=31.5, f_max=8000.0, order=4):
         out = {}
 
         for fc in centers:
-            # 1/3 oktaavin rajat: fc * 2^(±1/6)
+            # 1/3 octave limits: fc * 2^(±1/6)
             fl = fc / (2 ** (1/6))
             fh = fc * (2 ** (1/6))
             # clamp
@@ -707,7 +707,7 @@ def calculate_rt60_bands(impulse, fs, f_min=31.5, f_max=8000.0, order=4):
                 continue
 
             sos = scipy.signal.butter(order, [fl/nyq, fh/nyq], btype='bandpass', output='sos')
-            # nollavaiheinen suodatus (vakaa, ei lisää group delaytä)
+            # zero-phase filtering (stable, doesn't add group delay)
             x = scipy.signal.sosfiltfilt(sos, imp)
             rt = calculate_rt60(x, fs)
             if 0.05 < rt < 5.0:
@@ -718,12 +718,12 @@ def calculate_rt60_bands(impulse, fs, f_min=31.5, f_max=8000.0, order=4):
 
 
 def get_min_phase_impulse(mags_db, n_fft):
-    """Luo minimivaiheisen impulssivasteen voimakkuusvasteesta."""
+    """Create minimum-phase impulse response from magnitude response."""
     # Muunnetaan dB -> lineaarinen ja luodaan symmetrinen spektri
     amp = 10**(mags_db / 20.0)
     # Hilbert-muunnos vaatii logaritmi-amplitudin
     l_amp = np.log(amp + 1e-12)
-    # Lasketaan minimivaihe käyttämällä FFT:tä ja Hilbertin periaatetta
+    # Calculate minimum phase using FFT and Hilbert principle
     h = scipy.fft.ifft(l_amp)
     n = len(h)
     window = np.zeros(n)
@@ -751,27 +751,27 @@ from models import FilterConfig
 
 logger = logging.getLogger("CamillaFIR.dsp")
 
-#----- FILTTERI
+#----- FILTER
 
 def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
-    # --- 1. DATAN TASAUS ---
+    # --- 1. DATA ALIGNMENT ---
     min_len = min(len(freqs), len(meas_mags), len(raw_phases))
     f_in, m_in, p_in = freqs[:min_len], meas_mags[:min_len], raw_phases[:min_len]
 
-    # --- 2. AKSELIT ---
+    # --- 2. AXES ---
     n_fft = cfg.num_taps if cfg.num_taps % 2 != 0 else cfg.num_taps + 1
     freq_axis = np.linspace(0, cfg.fs/2.0, n_fft // 2 + 1)
     
-    # --- 3. TASOITUS (Skaalautuva resoluutio) ---
+    # --- 3. SMOOTHING (Scalable resolution) ---
     oct_frac = 1.0 / float(cfg.smoothing_level) if cfg.smoothing_level > 0 else 1/24.0
     is_psy = 'psy' in str(cfg.smoothing_type).lower()
     
     # Magnituditasoitus
     m_smooth, _ = apply_smoothing_std(f_in, m_in, np.zeros_like(m_in), oct_frac * (1.5 if is_psy else 1.0))
     
-    # KORJAUS: Dynaaminen vaihetasoitus näytetaajuuden mukaan
-    # Korkeilla taajuuksilla (>96kHz) interpolointi luo vaiheeseen "kulmia", 
-    # jotka siistitään raskaammalla (1/12 oct) tasoituksella.
+    # FIX: Dynamic phase smoothing based on sample rate
+    # At high sample rates (>96kHz) interpolation creates "corners" in phase,
+    # which are cleaned with heavier (1/12 oct) smoothing.
     p_smooth_oct = 1/12.0 if cfg.fs > 96000 else 1/24.0
     p_smooth, _ = apply_smoothing_std(f_in, p_in, np.zeros_like(p_in), p_smooth_oct)
 
@@ -870,17 +870,17 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         cmp = None
         analysis_mode = "native"
 
-    # --- 5B. A-FDW: käytä luottamusmaskia magnitudin "analyysiversion" tasoituksessa 
-    
-    # - conf_mask ~ 1.0 => tarkempi (enemmän syklejä) => saat enemmän "oikeaa" korjausta
-    # - conf_mask ~ 0.0 => raskaampi tasoitus => vältetään aggressiivinen korjaus epäluotettavassa datassa
+    # --- 5B. A-FDW: use confidence mask for magnitude "analysis version" smoothing
+    # 
+    # - conf_mask ~ 1.0 => sharper (more cycles) => get more "true" correction
+    # - conf_mask ~ 0.0 => heavier smoothing => avoid aggressive correction in unreliable data
     #
-    # Tämä vaikuttaa suoraan:
+    # This affects directly:
     # - leveling (m_anal)
-    # - mag-korjaus (raw_g)
-    # mutta EI muuta heijastusten/gd-detektiota (se perustuu pääosin vaiheeseen).
+    # - mag correction (raw_g)
+    # but does NOT change reflection/gd detection (based mainly on phase).
     if getattr(cfg, "enable_afdw", False):
-        # min_cycles pidetään järkevänä (ettei tule "liian terävää" edes huonolla confidence-alueella)
+        # min_cycles kept reasonable (avoid "too sharp" even in poor confidence areas)
             base = float(getattr(cfg, "fdw_cycles", 15.0))
             min_c = max(3.0, base / 3.0)
             m_anal = apply_adaptive_fdw(
@@ -897,7 +897,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     rt_ir = get_min_phase_impulse(m_rt_lin, 131072)
     current_rt60 = calculate_rt60(rt_ir, cfg.fs)
     rt60_bands = calculate_rt60_bands(rt_ir, cfg.fs, f_min=31.5, f_max=8000.0, order=4)
-    # “Yksi luku” kaistoista (hyvä score/reportointiin): mediaani 125–4000 Hz jos löytyy
+    # "One number" of bands (good for scoring/reporting): median 125–4000 Hz if found
     band_avg = 0.0
     if rt60_bands:
         ks = np.array(sorted(rt60_bands.keys()), dtype=float)
@@ -917,7 +917,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         target_mags = apply_hpf_to_mags(freq_axis, target_mags, cfg.hpf_settings['freq'], cfg.hpf_settings['order'])
     
     if cfg.enable_tdc:
-        # UUSI: TDC saa taajuusriippuvan RT60:n (dict), fallbackaa automaattisesti jos tyhjä
+        # NEW: TDC receives frequency-dependent RT60 (dict), auto-fallback if empty
         rt60_for_tdc = rt60_bands if rt60_bands else current_rt60
         # Safety brakes: cap total TDC reduction and keep it smooth (avoid deep, stacked notches)
         # Configurable TDC safety brakes for easy A/B testing
@@ -1090,16 +1090,16 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         # Stage probes container (per channel/run)
         stage_probes = {}
         
-        # --- 8B. A-FDW suoraan korjauskäyrään ---
+        # --- 8B. A-FDW directly to correction curve ---
         # Debug/telemetry: effective BW (oct) per frequency (continuous)
         afdw_bw_oct = None
         afdw_bw_min_oct = afdw_bw_mean_oct = afdw_bw_max_oct = None
         afdw_bw_min_hz = afdw_bw_max_hz = None
 
         
-        # Tasoittaa final_g adaptiivisesti confidence-maskin mukaan:
-        # - matala confidence => enemmän "syklejä" => pehmeämpi korjaus
-        # - korkea confidence => vähemmän tasoitusta => tarkempi korjaus
+        # Smooths final_g adaptively based on confidence mask:
+        # - low confidence => more "cycles" => softer correction
+        # - high confidence => less smoothing => sharper correction
         # --- 8B0. Bass-first AI masks (optional) ---
         use_bassfirst = bool(getattr(cfg, "bass_first_ai", False))
         bf_room_mode = None
@@ -1109,18 +1109,18 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         if use_bassfirst:
             try:
                 # Tarvitaan raakamitta akselille + vaihe (unwrap) + gd_diff
-                # Huom: tässä vaiheessa freq_axis on olemassa ja complex_meas on tehty aiemmin analyysissä.
-                # Käytetään samaa perusdataa kuin analyze_acoustic_confidence: phase unwrap + gd
+                # Note: at this point freq_axis exists and complex_meas was built earlier in analysis.
+                # Use same base data as analyze_acoustic_confidence: phase unwrap + gd
                 ph_u = np.unwrap(np.angle(complex_meas))
                 df = np.gradient(freq_axis) + 1e-12
                 gd_ms_local = (-np.gradient(ph_u) / (2*np.pi*df)) * 1000.0
 
-                # Sama gd_diff -idea kuin analyze_acoustic_confidence (sigma_bins/Hz ei ole kriittinen tässä)
+                # Same gd_diff idea as analyze_acoustic_confidence (sigma_bins/Hz not critical here)
                 gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms_local, sigma=20)
                 gd_diff_local = np.abs(gd_ms_local - gd_smooth)
 
-                # m_interp pitäisi olla se "raw measured mags" interpattuna freq_axis:lle
-                # Jos tässä kohtaa käytössä on eri nimi, käytä sitä (yleensä m_interp / meas_interp tms.)
+                # m_interp should be the "raw measured mags" interpolated to freq_axis
+                # If at this point a different name is used, use it (usually m_interp / meas_interp etc.)
                 bf_rel, bf_room_mode, _ = bf.build_bassfirst_masks(
                     freq_axis=freq_axis,
                     m_raw_db=m_interp,
@@ -1166,9 +1166,9 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 min_cycles=afdw_min
             )
         mask_c = (freq_axis >= (0 if cfg.hpf_settings else cfg.mag_c_min)) & (freq_axis <= cfg.mag_c_max)
-        # Kun A-FDW on päällä, ei kerrota final_g:ta eff_conf:lla,
-        # koska A-FDW jo tekee "varovaisuuden" muotoon (tasoitus).
-        # Tämä välttää tuplavarovaisuuden (muoto pehmenee + amplitudi vaimenee).
+        # When A-FDW is ON, don't multiply final_g by eff_conf,
+        # because A-FDW already applies "caution" to shape (smoothing).
+        # This avoids double caution (shape softens + amplitude attenuates).
         # --- 8B1. Bass-first gain modulation (room modes) ---
         if use_bassfirst and bf_room_mode is not None:
             try:
@@ -1198,10 +1198,10 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         except Exception:
             pass
 
-        # --- 8C. Low-bass CUT allowance (täsmäfix 32 Hz -tyyppisille moodeille) ---
-        # < low_hz: sallitaan VAIN vaimennus (ei boostia),
-        # ja käytetään tarvittaessa "vahvempaa" leikkausta (min(final_g, raw_g)),
-        # jotta regularisointi / confidence ei nollaa selviä huonemoodipiikkejä.
+        # --- 8C. Low-bass CUT allowance (targeted fix for 32 Hz-like modes) ---
+        # < low_hz: allow ONLY attenuation (no boost),
+        # and use stronger cuts if needed (min(final_g, raw_g)),
+        # so regularization / confidence doesn't zero out clear room mode peaks.
         low_hz = float(getattr(cfg, "low_bass_cut_hz", 40.0))
         low_mask = mask_c & (freq_axis > 0) & (freq_axis <= low_hz)
         if np.any(low_mask):
@@ -1227,7 +1227,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         # If your slope limiting modifies a different array, place the probe right after that modification.
 
 
-        # --- 8D. Max cut + max boost (pehmeä) ---
+        # --- 8D. Max cut + max boost (soft) ---
         max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))  # default: sallitaan kohtuullinen leikkaus
 
         # --- 8D-a. Diagnostic: config snapshot (once per run path) ---
@@ -1329,9 +1329,9 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
         gain_db[mask_c] = tmp[mask_c]
 
-        # --- 8E. Slope/oktaavi -rajoitin (gain-käyrän “jyrkkyys”) ---
-        # Huom: tehdään ennen exc_prot:ia ja ajetaan exc_prot lopuksi uudelleen,
-        # jotta slope-limitointi ei voi “vuotaa” boostia suojavyöhykkeille.
+        # --- 8E. Slope/octave limiter (gain curve steepness) ---
+        # Note: done before exc_prot and run exc_prot again at the end,
+        # so slope limiting cannot "leak" boost into protection zones.
         max_slope = float(getattr(cfg, "max_slope_db_per_oct", 24.0) or 0.0)  # legacy (symmetric)
         # NEW: separate limits for boost/cut; <=0 inherits legacy max_slope
         max_slope_boost = float(getattr(cfg, "max_slope_boost_db_per_oct", 0.0) or 0.0)
@@ -1343,7 +1343,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
         # Only run if any slope limiting is enabled
         if max_slope > 0 or max_slope_boost > 0 or max_slope_cut > 0:
-            # Rajoitetaan vain korjausalueella, mutta pidetään ulkopuoli koskemattomana
+            # Limit only in correction area, keep outside untouched
             g2 = gain_db.copy()
             try:
                 # If equal, keep old behavior (bit-for-bit close) using symmetric limiter
@@ -1379,23 +1379,23 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         if np.any(f_mask) and fade_len > 0: 
             gain_db[f_mask] *= (cfg.mag_c_max - freq_axis[f_mask]) / fade_len
         if cfg.exc_prot:
-            # Määritetään siirtymäalue (n. 1/2 oktaavia, kerroin 1.41)
+            # Define transition zone (about 1/2 octave, factor 1.41)
             f_start = cfg.exc_freq
             f_end = cfg.exc_freq * 1.41
             
-            # 1. Täysi suojaus f_start alapuolella: Pakotetaan boost nollaan, sallitaan leikkaus
+            # 1. Full protection below f_start: Force boost to zero, allow cuts
             prot_mask = freq_axis < f_start
             gain_db[prot_mask] = np.minimum(gain_db[prot_mask], 0.0)
             
-            # 2. Pehmeä siirtymäalue f_start -> f_end
-            # Tällä alueella sallittu boost kasvaa lineaarisesti 0 dB -> max_boost_db
+            # 2. Soft transition zone f_start -> f_end
+            # In this zone allowed boost rises linearly 0 dB -> max_boost_db
             trans_mask = (freq_axis >= f_start) & (freq_axis <= f_end)
             if np.any(trans_mask):
-                # Lasketaan häivytyskerroin (0.0 -> 1.0)
+                # Calculate fade factor (0.0 -> 1.0)
                 fade = (freq_axis[trans_mask] - f_start) / (f_end - f_start)
-                # Sallittu maksimiboost tällä taajuudella
+                # Maximum allowed boost at this frequency
                 allowed_boost = fade * cfg.max_boost_db
-                # Rajoitetaan boost, mutta pidetään kaikki vaimennukset (leikkaukset)
+                # Limit boost, but keep all attenuations (cuts)
                 gain_db[trans_mask] = np.minimum(gain_db[trans_mask], allowed_boost)
             
             logger.info(f"Exc Prot: Full protection < {f_start}Hz, Soft fade up to {f_end:.1f}Hz.")
@@ -1405,15 +1405,15 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         if cfg.hpf_settings and cfg.hpf_settings.get('enabled'):
             hpf_f = float(cfg.hpf_settings.get('freq', 0.0) or 0.0)
 
-        # --- HPF policy: täysi stop + silkkinen fade (asym-safe) ---
+        # --- HPF policy: full stop + smooth fade (asym-safe) ---
         if hpf_f > 0:
-                hpf_end = hpf_f * 1.41  # ~1/2 oktaavia
+                hpf_end = hpf_f * 1.41  # ~1/2 octave
 
-                # 1) Täysi stoppi HPF:n alapuolella
+                # 1) Full stop below HPF
                 below = freq_axis < hpf_f
                 gain_db[below] = 0.0
 
-                # 2) Pehmeä häivytys HPF -> HPF*1.41 (0..1)
+                # 2) Smooth fade HPF -> HPF*1.41 (0..1)
                 trans = (freq_axis >= hpf_f) & (freq_axis <= hpf_end)
                 if np.any(trans):
                     fade = (freq_axis[trans] - hpf_f) / (hpf_end - hpf_f)
@@ -1447,7 +1447,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
         
         # --- 8F. Final safety clamp (max boost / max cut) ---
-        # Varmistetaan että mikään myöhempi operaatio (fade/slope/exc_prot) ei ylitä rajoja.
+        # Ensure no later operation (fade/slope/exc_prot) exceeds limits.
         max_cut_db = float(getattr(cfg, "max_cut_db", 15.0))
         max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
 
@@ -1514,7 +1514,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         except Exception:
             boost_peak_db, cut_peak_db, n_boost = 0.0, 0.0, 0
 
-    # --- 9. VAIHEEN GENERONTI ---
+    # --- 9. GENERATE PHASE ---
                 # --- THEORETICAL PHASE (single source of truth) ---
         hpf_freq = None
         hpf_slope = None
@@ -1693,45 +1693,45 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     else:
         impulse = np.roll(raw_imp, n_fft // 2)
     
-        # Alustava sijoittelu
+        # Initial placement
     if 'Asym' in cfg.filter_type_str:
         shift = min(int(cfg.ir_window_ms_left * cfg.fs / 1000.0), int(n_fft * 0.4))
         impulse = np.roll(raw_imp, shift)
     elif 'Min' in cfg.filter_type_str: impulse = raw_imp
     else: impulse = np.roll(raw_imp, n_fft // 2)
 
-    # --- 10. KORJATTU IKKUNOINTI (PEAK-CENTRIC) ---
+    # --- 10. CORRECTED WINDOWING (PEAK-CENTRIC) ---
     peak_idx = np.argmax(np.abs(impulse))
     n = len(impulse)
     window = np.zeros(n)
     
-    # Ikkunan rajojen laskenta (Näytteet)
+    # Window boundary calculation (samples)
     s_left = int(cfg.ir_window_ms_left * cfg.fs / 1000.0)
     s_right = int(cfg.ir_window_ms * cfg.fs / 1000.0)
     
-    # Logiikka:
-    # Asym/Min: Käytä käyttäjän antamia arvoja kirjaimellisesti.
-    # Linear/Mixed: Pakota symmetria (ir_window määrää säteen), jotta lineaarinen vaihe säilyy.
+    # Logic:
+    # Asym/Min: Use user values literally.
+    # Linear/Mixed: Force symmetry (ir_window defines radius) to preserve linear phase.
     if not ('Asym' in cfg.filter_type_str or 'Min' in cfg.filter_type_str):
         radius = s_right
         s_left = radius
         s_right = radius
 
-    # Rakennetaan ikkuna piikin ympärille
-    # 1. Vasen puoli (Nousu nollasta ykköseen)
+    # Build window around peak
+    # 1. Left side (rise from zero to one)
     if s_left > 0:
         win_rise = np.sin(np.linspace(0, np.pi/2, s_left + 1))[:-1]**2
         start_idx = peak_idx - s_left
         
-        # Sijoitus puskuriin (varovasti reunojen kanssa)
+        # Place in buffer (carefully with edges)
         if start_idx >= 0:
             window[start_idx : peak_idx] = win_rise
         else:
-            # Jos piikki on liian lähellä alkua, leikataan ikkunan alkupää
+            # If peak is too close to start, cut window beginning
             offset = -start_idx
             window[0 : peak_idx] = win_rise[offset:]
             
-    # 2. Oikea puoli (Lasku ykkösestä nollaan)
+    # 2. Right side (fall from one to zero)
     if s_right > 0:
         win_fall = np.cos(np.linspace(0, np.pi/2, s_right + 1))[1:]**2
         end_idx = peak_idx + 1 + s_right
@@ -1742,13 +1742,13 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             len_available = n - (peak_idx + 1)
             window[peak_idx + 1 : n] = win_fall[:len_available]
             
-    # Piikki on aina 1.0
+    # Peak is always 1.0
     if 0 <= peak_idx < n:
         window[peak_idx] = 1.0
         
-    # Sovelletaan ikkuna (nollaa kaiken datan ikkunan ulkopuolelta)
+    # Apply window (zero everything outside window)
     impulse *= window
-    impulse -= np.mean(impulse) # DC-poisto
+    impulse -= np.mean(impulse) # DC removal
     
     # --- 11. STATS & RETURN ---
     max_peak = np.max(np.abs(impulse))
