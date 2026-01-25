@@ -9,3 +9,6 @@ test.py
 *.spec
 *.code-workspace
 *.zip
+.venv/
+*.bat
+config.json

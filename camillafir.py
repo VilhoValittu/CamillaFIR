@@ -31,8 +31,9 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.7.9"  # fix custom house curve upload (would silently fail)
+VERSION = "v2.8.0"  # fix custom house curve upload (would silently fail)
 
+# v2.8.0: [UI] removed html dashboard export (now PNG only)
 # v2.7.9: [UI] fix custom house curve upload
 # v2.7.8: [IO] fix WAV parsing – phase unwrap
 # v2.7.7: [DSP] fix HF phase handling
@@ -1773,8 +1774,8 @@ def _write_fs_outputs(
     write_dashboards: bool = True,
 ):
     sum_name = f"Summary_{ft_short}_{fs_v}Hz.txt"
-    l_dash_name = f"L_Dashboard_{ft_short}_{fs_v}Hz.html"
-    r_dash_name = f"R_Dashboard_{ft_short}_{fs_v}Hz.html"
+    l_dash_name = f"L_Dashboard_{ft_short}_{fs_v}Hz.png"
+    r_dash_name = f"R_Dashboard_{ft_short}_{fs_v}Hz.png"
 
     summary_content = plots.format_summary_content(data, l_st, r_st)
     # Include explicit house-curve provenance (preset vs upload/local file)
@@ -1796,16 +1797,32 @@ def _write_fs_outputs(
 
     zf.writestr(sum_name, summary_content)
 
-    # Policy: when Auto-taps (Multi-rate) is enabled, the ZIP can be huge due to
-    # per-rate HTML dashboards. We keep WAV/CFG/YML for every rate, but store
-    # only ONE dashboard pair into the ZIP (forced, no UI choice).
+    # Policy: ZIP size control
+    # We store only ONE dashboard pair into the ZIP (forced, no UI choice).
+    # Dashboard format: PNG only (no HTML), so it opens everywhere without Plotly JS.
     if bool(write_dashboards):
-        zf.writestr(l_dash_name, plots.generate_prediction_plot(
-            f_l, m_l, p_l, l_imp, fs_v, "Left", None, l_st, data['mixed_freq'], "low"
-        ))
-        zf.writestr(r_dash_name, plots.generate_prediction_plot(
-            f_r, m_r, p_r, r_imp, fs_v, "Right", None, r_st, data['mixed_freq'], "low"
-        ))
+        html_l, fig_l = plots.generate_prediction_plot(
+            f_l, m_l, p_l, l_imp, fs_v, "Left",
+            None, l_st, data['mixed_freq'], "low",
+            create_full_html=False,
+            return_fig=True
+        )
+        if fig_l is not None:
+            zf.writestr(l_dash_name, plots.plotly_fig_to_png(fig_l, scale=2))
+        else:
+            # keep a clue in the ZIP if plotly rendering failed
+            zf.writestr(l_dash_name.replace(".png", ".txt"), str(html_l))
+
+        html_r, fig_r = plots.generate_prediction_plot(
+            f_r, m_r, p_r, r_imp, fs_v, "Right",
+            None, r_st, data['mixed_freq'], "low",
+            create_full_html=False,
+            return_fig=True
+        )
+        if fig_r is not None:
+            zf.writestr(r_dash_name, plots.plotly_fig_to_png(fig_r, scale=2))
+        else:
+            zf.writestr(r_dash_name.replace(".png", ".txt"), str(html_r))
 
     hlc_cfg = generate_hlc_config(fs_v, ft_short, file_ts)
     zf.writestr(f"Config_{ft_short}_{fs_v}Hz.cfg", hlc_cfg)

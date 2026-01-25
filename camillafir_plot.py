@@ -8,12 +8,14 @@ import copy
 import math
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
+import plotly.io as pio
 from plotly.subplots import make_subplots
 from datetime import datetime
 # Tuodaan tarvittavat funktiot DSP-moduulista
 from camillafir_dsp import apply_smoothing_std, psychoacoustic_smoothing, calculate_rt60
 
-# Version 1.1.9
+# Version 1.2.0
+
 
 def _maybe_shift_to_abs(mags_db, avg_t_db):
     """
@@ -682,7 +684,11 @@ def format_summary_content(settings, l_stats, r_stats):
     return _format_summary_content_legacy(settings, l_stats, r_stats)
 
 
-def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, title, save_filename=None, target_stats=None, mixed_split=None, zoom_hint="", create_full_html=True):
+def generate_prediction_plot(
+    orig_freqs, orig_mags, orig_phases, filt_ir, fs, title,
+    save_filename=None, target_stats=None, mixed_split=None,
+    zoom_hint="", create_full_html=True, return_fig: bool = False
+):
     """Luo optimoidun HTML-dashboardin (Pieni tiedostokoko, korkea resoluutio)."""
     try:
         # 1. LASKENTA (Korkea resoluutio)
@@ -1002,10 +1008,11 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
         # Use local Plotly JS when generating full HTML (offline-safe).
         # If local JS is missing, fall back to CDN.
         if create_full_html:
-            local_js = _plotly_js_path()
-            js_mode = local_js if local_js else "cdn"
+            if _plotly_js_path():
+                js_mode = "plotly.min.js"   # suhteellinen polku
+            else:
+                js_mode = "cdn"
         else:
-            # Embedded mode: keep legacy behavior
             js_mode = "require"
 
         # Plotly UI config:
@@ -1018,11 +1025,34 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
             "doubleClick": False
         }
 
-        return fig.to_html(include_plotlyjs=js_mode, full_html=create_full_html, config=config)
+        html = fig.to_html(
+            include_plotlyjs=js_mode,
+            full_html=create_full_html,
+            config=config
+        )
+        if bool(return_fig):
+            return html, fig
+        return html
 
-        
-    except Exception as e: return f"Visual Engine Error: {str(e)}"
-        
+    except Exception as e:
+        msg = f"Visual Engine Error: {str(e)}"
+        if bool(return_fig):
+            return msg, None
+        return msg
+
+def plotly_fig_to_png(fig, *, scale=2):
+    """
+    Export Plotly figure to PNG bytes (same as HTML modebar download).
+    Uses Plotly 6.x default Kaleido backend.
+    """
+    try:
+        import plotly.io as pio
+        # Plotly 6.x: kaleido is implicit backend
+        return pio.to_image(fig, format="png", scale=int(scale))
+    except Exception as e:
+        raise RuntimeError(
+            f"Plotly PNG export failed: {e}"
+        )
 
 
 def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, title, target_stats=None):
