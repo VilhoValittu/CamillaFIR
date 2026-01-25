@@ -31,7 +31,13 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.7.8"    #added .wav support
+VERSION = "v2.7.9"  # fix custom house curve upload (would silently fail)
+
+# v2.7.9: [UI] fix custom house curve upload
+# v2.7.8: [IO] fix WAV parsing – phase unwrap
+# v2.7.7: [DSP] fix HF phase handling
+# v2.7.6: [IO] fix WAV parsing smoothing
+
 PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
@@ -339,6 +345,13 @@ def _ir_wav_to_freq_response(
     Parse REW IR WAV export -> frequency response arrays.
     Returns freqs (Hz), mags (dB), phases (deg).
     """
+
+try:
+    # New: dedicated IR WAV window+FFT helper (closer to REW .txt export)
+    from camillafir_wav_window import ir_wav_to_freq_response as _wav_ir_to_fr
+except Exception:
+    _wav_ir_to_fr = None
+    
 def parse_measurements_from_wav_bytes(
     file_content: bytes,
     *,
@@ -362,13 +375,22 @@ def parse_measurements_from_wav_bytes(
             ch = (sig.shape[1] - 1) if ch >= sig.shape[1] else ch
             sig = sig[:, ch]
 
-        f, m, p = _ir_wav_to_freq_response(
-            int(fs),
-            sig,
-            pre_ms=float(pre_ms),
-            post_ms=float(post_ms),
-            smoothing_level=smoothing_level,
-        )
+        if _wav_ir_to_fr is not None:
+            f, m, p = _wav_ir_to_fr(
+                int(fs),
+                sig,
+                pre_ms=float(pre_ms),
+                post_ms=float(post_ms),
+                smoothing_level=smoothing_level,
+            )
+        else:
+            f, m, p = _ir_wav_to_freq_response(
+                int(fs),
+                sig,
+                pre_ms=float(pre_ms),
+                post_ms=float(post_ms),
+                smoothing_level=smoothing_level,
+            )
         return f, m, p
     except Exception as e:
         logger.error(f"WAV parse failed: {e}")
@@ -395,13 +417,22 @@ def parse_measurements_from_wav_path(
             ch = (sig.shape[1] - 1) if ch >= sig.shape[1] else ch
             sig = sig[:, ch]
 
-        f, m, p = _ir_wav_to_freq_response(
-            int(fs),
-            sig,
-            pre_ms=float(pre_ms),
-            post_ms=float(post_ms),
-            smoothing_level=smoothing_level,
-        )
+        if _wav_ir_to_fr is not None:
+            f, m, p = _wav_ir_to_fr(
+                int(fs),
+                sig,
+                pre_ms=float(pre_ms),
+                post_ms=float(post_ms),
+                smoothing_level=smoothing_level,
+            )
+        else:
+            f, m, p = _ir_wav_to_freq_response(
+                int(fs),
+                sig,
+                pre_ms=float(pre_ms),
+                post_ms=float(post_ms),
+                smoothing_level=smoothing_level,
+            )
         return f, m, p
     except Exception as e:
         logger.error(f"WAV path parse failed ({path}): {e}")
@@ -544,7 +575,7 @@ def update_lvl_ui(_=None):
                 help_text=(
                     t('lvl_manual_help')
                     if is_manual
-                    else (t('lvl_manual_help') + " (Auto ei käytä tätä arvoa)")
+                    else (t('lvl_manual_help'))
                 )
             )
             if not is_manual:
@@ -576,9 +607,62 @@ def apply_tdc_preset(name: str):
     # small feedback
     toast(f"TDC preset applied: {name}", color="success", duration=1.5)
 
+def _normalize_hc_mode_key(v) -> str:
+    """
+    Convert UI label / legacy saved strings into a stable preset key.
+    This fixes the bug where translated labels caused preset matching to fall back.
+    """
+    try:
+        s = str(v or "")
+    except Exception:
+        s = ""
+
+    # Already a valid key?
+    known = {
+        "Harman6", "Harman8", "Harman4", "Harman10",
+        "Studio", "Nearfield", "HiFi", "Speech",
+        "Toole", "BK", "Flat", "Cinema", "Custom",
+    }
+    if s in known:
+        return s
+
+    # Legacy / label heuristics (robust against language + spacing)
+    n = s.lower().replace(" ", "")
+    # "upload"/"custom" options in various languages (keep simple + safe)
+    if "custom" in n or "lataa" in n or "upload" in n:
+        return "Custom"
+    if "cinema" in n:
+        return "Cinema"
+    if "flat" in n:
+        return "Flat"
+    if "toole" in n:
+        return "Toole"
+    if "speech" in n or "broadcast" in n:
+        return "Speech"
+    if "nearfield" in n or "desk" in n:
+        return "Nearfield"
+    if "hifi" in n or "loudness" in n:
+        return "HiFi"
+    if "studio" in n or "tilt" in n:
+        return "Studio"
+    if "harman" in n:
+        if "+10db" in n or "10db" in n or "subheavy" in n:
+            return "Harman10"
+        if "+8db" in n or "8db" in n:
+            return "Harman8"
+        if "+4db" in n or "4db" in n:
+            return "Harman4"
+        return "Harman6"
+
+    # Safe fallback
+    return "Harman6"
+
 
 def get_house_curve_by_name(name):
-    freqs = np.array([
+
+    # --- Common full-band frequency axis ---
+    full_freqs = np.array([
+        0.0,
         20.0, 25.0, 31.5, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0,
         160.0, 200.0, 250.0, 400.0, 1000.0, 2000.0, 4000.0,
         8000.0, 16000.0, 20000.0
@@ -586,61 +670,106 @@ def get_house_curve_by_name(name):
 
     # --- Harman variants ---
     if 'Harman8' in name or '+8dB' in name:
-        mags = np.array([8.0, 7.9, 7.8, 7.6, 7.3, 6.9, 6.3, 5.5, 4.5,
-                         3.4, 1.4, 0.0, -0.5, -1.0, -1.8, -2.8,
-                         -4.0, -5.5, -6.0])
+        freqs = full_freqs
+        mags = np.array([
+            8.0,
+            8.0, 7.9, 7.8, 7.6, 7.3, 6.9, 6.3, 5.5, 4.5,
+            3.4, 1.4, 0.0, -0.5, -1.0, -1.8, -2.8,
+            -4.0, -5.5, -6.0
+        ])
 
     elif 'Harman4' in name or '+4dB' in name:
-        mags = np.array([4.0, 3.9, 3.8, 3.6, 3.3, 2.9, 2.3, 1.5, 0.8,
-                         0.2, 0.0, 0.0, -0.3, -0.6, -1.2, -2.0,
-                         -3.0, -4.5, -5.0])
+        freqs = full_freqs
+        mags = np.array([
+            4.0,
+            4.0, 3.9, 3.8, 3.6, 3.3, 2.9, 2.3, 1.5, 0.8,
+            0.2, 0.0, 0.0, -0.3, -0.6, -1.2, -2.0,
+            -3.0, -4.5, -5.0
+        ])
 
     elif 'Harman10' in name or 'SubHeavy' in name:
-        mags = np.array([10.0, 9.8, 9.5, 9.0, 8.2, 7.2, 6.0, 4.8, 3.5,
-                         2.2, 0.8, 0.0, -0.5, -1.0, -1.8, -2.8,
-                         -4.0, -5.5, -6.0])
+        freqs = full_freqs
+        mags = np.array([
+            10.0,
+            10.0, 9.8, 9.5, 9.0, 8.2, 7.2, 6.0, 4.8, 3.5,
+            2.2, 0.8, 0.0, -0.5, -1.0, -1.8, -2.8,
+            -4.0, -5.5, -6.0
+        ])
 
     # --- Research / reference ---
     elif 'Toole' in name:
-        freqs = np.array([20, 63, 100, 200, 400, 1000, 2000, 4000, 10000, 20000])
-        mags = np.array([2.5, 2.0, 1.5, 1.0, 0.5, 0.0, -1.0, -2.0, -4.0, -6.0])
+        freqs = np.array([
+            0.0,
+            20.0, 63.0, 100.0, 200.0, 400.0,
+            1000.0, 2000.0, 4000.0, 10000.0, 20000.0
+        ])
+        mags = np.array([
+            2.5,
+            2.5, 2.0, 1.5, 1.0, 0.5,
+            0.0, -1.0, -2.0, -4.0, -6.0
+        ])
 
     elif 'Studio' in name or 'Tilt' in name:
-        mags = np.array([3.0, 2.6, 2.2, 1.8, 1.4, 1.0, 0.6, 0.2, 0.0,
-                         -0.4, -0.8, -1.2, -1.8, -2.4, -3.0, -3.8,
-                         -4.8, -6.0, -6.5])
+        freqs = full_freqs
+        mags = np.array([
+            3.0,
+            3.0, 2.6, 2.2, 1.8, 1.4, 1.0, 0.6, 0.2, 0.0,
+            -0.4, -0.8, -1.2, -1.8, -2.4, -3.0, -3.8,
+            -4.8, -6.0, -6.5
+        ])
 
     # --- Listening use cases ---
     elif 'Nearfield' in name or 'Desk' in name:
-        mags = np.array([2.5, 2.4, 2.2, 2.0, 1.8, 1.4, 1.0, 0.6, 0.2,
-                         0.0, 0.0, 0.0, -0.2, -0.5, -1.0, -1.8,
-                         -3.0, -4.5, -5.0])
+        freqs = full_freqs
+        mags = np.array([
+            2.5,
+            2.5, 2.4, 2.2, 2.0, 1.8, 1.4, 1.0, 0.6, 0.2,
+            0.0, 0.0, 0.0, -0.2, -0.5, -1.0, -1.8,
+            -3.0, -4.5, -5.0
+        ])
 
     elif 'HiFi' in name or 'Loudness' in name:
-        mags = np.array([6.0, 5.8, 5.5, 5.0, 4.3, 3.5, 2.6, 1.8, 1.0,
-                         0.4, 0.0, -0.2, -0.6, -1.0, -1.6, -2.6,
-                         -3.6, -5.0, -5.5])
+        freqs = full_freqs
+        mags = np.array([
+            6.0,
+            6.0, 5.8, 5.5, 5.0, 4.3, 3.5, 2.6, 1.8, 1.0,
+            0.4, 0.0, -0.2, -0.6, -1.0, -1.6, -2.6,
+            -3.6, -5.0, -5.5
+        ])
 
     elif 'Speech' in name or 'Broadcast' in name:
-        mags = np.array([-2.0, -1.8, -1.5, -1.2, -1.0, -0.6, -0.2, 0.4, 1.0,
-                         1.5, 1.8, 2.0, 2.0, 1.0, 0.0, -1.5,
-                         -3.5, -6.0, -8.0])
+        freqs = full_freqs
+        mags = np.array([
+            -2.0,
+            -2.0, -1.8, -1.5, -1.2, -1.0, -0.6, -0.2, 0.4, 1.0,
+            1.5, 1.8, 2.0, 2.0, 1.0, 0.0, -1.5,
+            -3.5, -6.0, -8.0
+        ])
 
     # --- Cinema / special ---
     elif 'Cinema' in name:
-        freqs = np.array([20, 2000, 4000, 8000, 16000, 20000])
-        mags = np.array([0.0, 0.0, -3.0, -9.0, -15.0, -18.0])
+        freqs = np.array([
+            0.0, 20.0, 2000.0, 4000.0, 8000.0, 16000.0, 20000.0
+        ])
+        mags = np.array([
+            0.0, 0.0, 0.0, -3.0, -9.0, -15.0, -18.0
+        ])
 
     elif 'Flat' in name:
+        freqs = full_freqs
         mags = np.zeros_like(freqs)
 
     # --- Default fallback ---
     else:
-        mags = np.array([6.0, 5.9, 5.8, 5.6, 5.3, 4.9, 4.3, 3.5, 2.5,
-                         1.4, 0.4, 0.0, -0.5, -1.0, -1.8, -2.8,
-                         -4.0, -5.5, -6.0])
-
+        freqs = full_freqs
+        mags = np.array([
+            6.0,
+            6.0, 5.9, 5.8, 5.6, 5.3, 4.9, 4.3, 3.5, 2.5,
+            1.4, 0.4, 0.0, -0.5, -1.0, -1.8, -2.8,
+            -4.0, -5.5, -6.0
+        ])
     return freqs, mags
+
 
 
 def load_target_curve(file_content):
@@ -692,7 +821,7 @@ def load_config():
     default_conf = {
         'fmt': 'WAV', 'layout': 'Mono', 'fs': 44100, 'taps': 65536,
         'filter_type': 'Linear Phase', 'gain': 0.0, 
-        'hc_mode': 'Harman (Standard +6dB)', 'mag_correct': True,
+        'hc_mode': 'Harman6', 'mag_correct': True,
         'smoothing_type': 'smooth_psy', 'fdw_cycles': 15.0,
         'mag_c_min': 10.0, 'mag_c_max': 200.0, 'max_boost': 5.0,
         'lvl_mode': 'Auto', 'lvl_algo': 'Median', 
@@ -721,7 +850,7 @@ def load_config():
         'max_slope_boost_db_per_oct': 0.0,
         'max_slope_cut_db_per_oct': 0.0,
         'df_smoothing': False,
-        'comparison_mode': True,         # LOCK score/match analysis to 44.1k reference grid
+        'comparison_mode': False,         # LOCK score/match analysis to 44.1k reference grid
         'tdc_max_reduction_db': 9.0,
         'tdc_slope_db_per_oct': 6.0,
         "bass_first_ai": True,
@@ -771,20 +900,20 @@ def main():
     put_guide_section(); put_markdown("---")
     d = load_config(); get_val = lambda k, def_v: d.get(k, def_v)
     hc_opts = [
-    t('hc_harman'),        # nykyinen default (+6dB)
-    t('hc_harman8'),
-    t('hc_harman4'),
-    t('hc_harman10'),
-    t('hc_studio_tilt'),
-    t('hc_nearfield'),
-    t('hc_hifi_loudness'),
-    t('hc_speech'),
-    t('hc_toole'),
-    t('hc_bk'),
-    t('hc_flat'),
-    t('hc_cinema'),
-    t('hc_mode_upload'),
-]
+        {'label': t('hc_harman'),        'value': 'Harman6'},   # default
+        {'label': t('hc_harman8'),       'value': 'Harman8'},
+        {'label': t('hc_harman4'),       'value': 'Harman4'},
+        {'label': t('hc_harman10'),      'value': 'Harman10'},
+        {'label': t('hc_studio_tilt'),   'value': 'Studio'},
+        {'label': t('hc_nearfield'),     'value': 'Nearfield'},
+        {'label': t('hc_hifi_loudness'), 'value': 'HiFi'},
+        {'label': t('hc_speech'),        'value': 'Speech'},
+        {'label': t('hc_toole'),         'value': 'Toole'},
+        {'label': t('hc_bk'),            'value': 'BK'},
+        {'label': t('hc_flat'),          'value': 'Flat'},
+        {'label': t('hc_cinema'),        'value': 'Cinema'},
+        {'label': t('hc_mode_upload'),   'value': 'Custom'},
+    ]
     fs_opts = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]; taps_opts = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]; slope_opts = [6, 12, 18, 24, 36, 48]
     
 #--- #1 Tiedostot
@@ -890,7 +1019,13 @@ def main():
     
     tab_target = [
         put_markdown(f"### 🎯 {t('tab_target')}"),
-        put_select('hc_mode', label=t('hc_mode'), options=hc_opts, value=get_val('hc_mode', t('hc_harman')), help_text=t('hc_mode_help')),
+        put_select(
+            'hc_mode',
+            label=t('hc_mode'),
+            options=hc_opts,
+            value=_normalize_hc_mode_key(get_val('hc_mode', 'Harman6')),
+            help_text=t('hc_mode_help')
+        ),
         
         
         put_file_upload('hc_custom_file', label=t('hc_custom'), accept='.txt', help_text=t('hc_custom_help')),
@@ -1350,12 +1485,11 @@ def _load_house_curve(data):
             hc_f, hc_m = None, None
 
     if hc_f is None:
-        preset_name = data['hc_mode']
-        if "Custom" in preset_name or "Lataa" in preset_name:
-            preset_name = "Flat"
-
-        hc_f, hc_m = get_house_curve_by_name(preset_name)
-        hc_source = f"Preset ({preset_name})"
+        preset_key = _normalize_hc_mode_key(data.get('hc_mode'))
+        # Custom selection means "use uploaded/local file"; if none present, fall back safely.
+        preset_key = "Flat" if preset_key == "Custom" else preset_key
+        hc_f, hc_m = get_house_curve_by_name(preset_key)
+        hc_source = f"Preset ({preset_key})"
 
     return hc_f, hc_m, hc_source
 
@@ -1374,118 +1508,6 @@ def _filter_type_short(filter_type):
     if "Mixed" in filter_type:
         return "Mixed"
     return "Linear"
-
-def process_run():
-    try:
-        # 1) Kerää UI-data (sis. REW-valinnat)
-        data = _collect_ui_data()
-        save_config(data)
-
-        update_status("Reading measurements…")
-
-        # 2) Lataa mittaukset (FILES tai REW)
-        f_l, m_l, p_l, f_r, m_r, p_r = _load_measurements(data)
-        if f_l is None or f_r is None:
-            toast("Left / Right measurement missing!", color="error", duration=3)
-            return
-
-        # 3) House curve
-        hc_f, hc_m, hc_source = _load_house_curve(data)
-
-        # 4) XO + HPF
-        xos, hpf = _build_xos_hpf(data)
-
-        # 5) DF smoothing log
-        df_on = _log_df_smoothing_toggle()
-
-        # 6) Sample rates
-        if bool(data.get('multi_rate_opt')):
-            fs_list = [44100, 48000, 88200, 96000, 176400, 192000]
-        else:
-            fs_list = [int(data.get('fs') or 44100)]
-
-        put_processbar('bar')
-        set_processbar('bar', 0.05)
-
-        # 7) Aja DSP jokaiselle fs:lle
-        results = []
-        for i, fs_v in enumerate(fs_list):
-            taps_v = scale_taps_with_fs(fs_v, base_taps=int(data.get('taps', 65536)))
-
-            cfg = _build_filter_config(
-                fs_v=fs_v,
-                taps_v=taps_v,
-                data=data,
-                xos=xos,
-                hpf=hpf,
-                hc_f=hc_f,
-                hc_m=hc_m
-            )
-            logging.Logger.info(f"Building filter @ {fs_v} Hz, {taps_v} taps, Type={_filter_type_short(cfg.filter_type_str)}")
-            
-            # Pass measurement source to DSP helpers (Bass-first AI tuning).
-            # WAV (IR-derived) phase/GD can be noisier than REW FR export / API, so we tag it.
-            try:
-                src = str(data.get('input_source', 'file') or 'file')
-            except Exception:
-                src = 'file'
-            is_wav = False
-            if src == 'file':
-                try:
-                    lp_l = str(data.get('local_path_l', '') or '').lower()
-                    lp_r = str(data.get('local_path_r', '') or '').lower()
-                except Exception:
-                    lp_l, lp_r = '', ''
-                try:
-                    up_l = str(pin.file_l.get('filename', '') or '').lower() if getattr(pin, 'file_l', None) else ''
-                    up_r = str(pin.file_r.get('filename', '') or '').lower() if getattr(pin, 'file_r', None) else ''
-                except Exception:
-                    up_l, up_r = '', ''
-                is_wav = (lp_l.endswith('.wav') or lp_r.endswith('.wav') or up_l.endswith('.wav') or up_r.endswith('.wav') or str(data.get('fmt','')).upper() == 'WAV')
-            try:
-                setattr(cfg, "is_wav_source", bool(is_wav))
-            except Exception:
-                pass
-
-            _log_df_smoothing_for_fs(cfg, fs_v, df_on)
-
-            update_status(f"Building filter @ {fs_v//1000} kHz…")
-            set_processbar('bar', 0.1 + 0.8 * (i / max(1, len(fs_list))))
-
-            # DSP call (sinun nykyinen moottori)
-            res = dsp.build_filter(
-                cfg,
-                f_l, m_l, p_l,
-                f_r, m_r, p_r
-            )
-            results.append((fs_v, res))
-
-        set_processbar('bar', 1.0)
-        update_status("Done ✔")
-
-        # 8) Plotit / ZIP / Summary
-        # Policy: when multi-rate is enabled, export only one plot/fs bundle to ZIP.
-        # (Forced ON: no UI selection)
-        results_export = results
-        try:
-            mr_on = bool(data.get('multi_rate_opt'))
-        except Exception:
-            mr_on = False
-
-        if mr_on and isinstance(results, list) and len(results) > 0:
-            target_fs = int(FORCE_SINGLE_PLOT_FS_HZ)
-            picked = [(fs, res) for (fs, res) in results if int(fs) == target_fs]
-            if not picked:
-                # Fallback: if target fs isn't present for any reason, keep first result
-                picked = [results[0]]
-            results_export = picked
-
-        plots.render_all(results_export)
-
-    except Exception as e:
-        logger.exception("PROCESS RUN FAILED")
-        toast(str(e), color="error", duration=5)
-
 
 #filtterin teko
 def _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m):
@@ -1755,6 +1777,13 @@ def _write_fs_outputs(
     r_dash_name = f"R_Dashboard_{ft_short}_{fs_v}Hz.html"
 
     summary_content = plots.format_summary_content(data, l_st, r_st)
+    # Include explicit house-curve provenance (preset vs upload/local file)
+    try:
+        hc_src = str(data.get('hc_source', '') or '').strip()
+        if hc_src:
+            summary_content = f"House curve: {hc_src}\n" + summary_content
+    except Exception:
+        pass
     summary_content = _append_dsp_effective_params(summary_content, data, fs_v)
     summary_content = _append_acoustic_events(summary_content, l_st, r_st)
 
@@ -1848,7 +1877,7 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             - **Resolution:** {data['fs']/data['taps']:.2f} Hz
             - **IR window:** {data['ir_window']} ms
             - **FDW:** {data['fdw_cycles']}
-            - **House curve:** {data['hc_mode']} ({data['mag_c_min']}-{data['mag_c_max']} Hz)
+            - **House curve:** {data['hc_mode']} — {data.get('hc_source', 'Unknown')} ({data['mag_c_min']}-{data['mag_c_max']} Hz)
             - **Filter type:** {data['filter_type']}
             - **Smoothing:** {data['lvl_algo']}
             """))
@@ -1873,7 +1902,8 @@ def process_run():
 
     # 3) Target / house curve
     hc_f, hc_m, hc_source = _load_house_curve(data)
-
+    data['hc_source'] = hc_source
+    logger.info(f"House curve source: {hc_source}")
     # 4) XO + HPF
     xos, hpf = _build_xos_hpf(data)
 

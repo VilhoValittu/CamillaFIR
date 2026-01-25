@@ -13,7 +13,55 @@ from datetime import datetime
 # Tuodaan tarvittavat funktiot DSP-moduulista
 from camillafir_dsp import apply_smoothing_std, psychoacoustic_smoothing, calculate_rt60
 
-# Version 1.1.8
+# Version 1.1.9
+
+def _maybe_shift_to_abs(mags_db, avg_t_db):
+    """
+    target_stats may contain either:
+      A) absolute SPL-like mags already aligned to eff_target_db (preferred, new native path)
+      B) relative mags around ~0 dB that still need +avg_t (older paths)
+
+    Heuristic:
+      - if median looks "small" (< 40 dB), treat as relative and shift by avg_t
+      - otherwise treat as already absolute and return as-is
+    """
+    try:
+        a = np.asarray(mags_db, dtype=float)
+        if a.size == 0:
+            return a
+        med = float(np.nanmedian(a))
+        if np.isfinite(med) and med < 40.0:
+            return a + float(avg_t_db)
+        return a
+    except Exception:
+        return np.asarray(mags_db, dtype=float)
+    
+def _align_meas_to_target_window(freqs_hz, meas_db, targ_db, f_min_hz, f_max_hz):
+    """
+    Force measured & target to overlap in the chosen window.
+    Robust: uses median(meas-target) within window.
+    Returns meas_db shifted by -median(meas-target) (so window overlap is exact).
+    """
+    try:
+        f = np.asarray(freqs_hz, dtype=float)
+        m = np.asarray(meas_db, dtype=float)
+        t = np.asarray(targ_db, dtype=float)
+        if f.size < 16 or m.size != f.size or t.size != f.size:
+            return m
+        f_min = float(f_min_hz); f_max = float(f_max_hz)
+        if not (np.isfinite(f_min) and np.isfinite(f_max) and f_min > 0 and f_max > f_min):
+            return m
+        mask = (f >= f_min) & (f <= f_max) & np.isfinite(m) & np.isfinite(t)
+        if np.count_nonzero(mask) < 20:
+            return m
+        off = float(np.median(m[mask] - t[mask]))
+        if not np.isfinite(off):
+            return m
+        return m - off
+    except Exception:
+        return np.asarray(meas_db, dtype=float)
+
+
 
 def _resource_path(rel_path: str) -> str:
     """
@@ -644,13 +692,29 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
         h_filt = scipy.fft.rfft(filt_ir, n=n_fft)
         
         avg_t = target_stats.get('eff_target_db', 75) if target_stats else 75
-        match_range = target_stats.get('match_range', [500, 2000])
+        # Overlap window MUST follow Smart Scan / Manual range if available
+        if target_stats and 'smart_scan_range' in target_stats:
+            match_range = target_stats.get('smart_scan_range', [500, 2000])
+        else:
+            match_range = target_stats.get('match_range', [500, 2000]) if target_stats else [500, 2000]
+        try:
+            f_win_min = float(match_range[0])
+            f_win_max = float(match_range[1])
+        except Exception:
+            f_win_min, f_win_max = 500.0, 2000.0
 
         # Valmistellaan data lineaarisella akselilla (Heavy)
         if target_stats and 'measured_mags' in target_stats:
-            m_stats = np.array(target_stats['measured_mags'])
-            f_stats = np.array(target_stats['freq_axis'])
-            m_interp = np.interp(f_lin, f_stats, m_stats) + avg_t
+            f_stats = np.asarray(target_stats.get('freq_axis', []), dtype=float)
+            m_stats = _maybe_shift_to_abs(target_stats.get('measured_mags', []), avg_t)
+            t_stats = _maybe_shift_to_abs(target_stats.get('target_mags', []), avg_t) if 'target_mags' in target_stats else None
+
+            m_interp = np.interp(f_lin, f_stats, m_stats)
+            # FORCE overlap in chosen window so different targets remain meaningful
+            if t_stats is not None and np.asarray(t_stats).size == f_stats.size:
+                t_interp = np.interp(f_lin, f_stats, np.asarray(t_stats, dtype=float))
+                m_interp = _align_meas_to_target_window(f_lin, m_interp, t_interp, f_win_min, f_win_max)
+
             m_lin_clean = psychoacoustic_smoothing(f_lin, m_interp)
         else:
             m_raw = np.interp(f_lin, orig_freqs, orig_mags)
@@ -696,6 +760,49 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
                           x0=s_min, x1=s_max,
                           y0=avg_t-40, y1=avg_t+60,
                           fillcolor="rgba(200, 200, 200, 0.15)", layer="below", line_width=0, row=1, col=1)
+
+        # --- Level reference line (Smart Scan / Manual target level) ---
+        # This line shows the level-matching reference that measured & target
+        # are aligned to within the chosen window.
+        try:
+            ref_level = float(avg_t)
+
+            # Determine window text for legend (Smart Scan / Manual)
+            if target_stats and 'smart_scan_range' in target_stats:
+                _r = target_stats.get('smart_scan_range', None)
+            else:
+                _r = target_stats.get('match_range', None)
+
+            if isinstance(_r, (list, tuple)) and len(_r) == 2:
+                win_label = f"{int(round(_r[0]))}–{int(round(_r[1]))} Hz"
+            else:
+                win_label = "level window"
+
+            fig.add_shape(
+                type="line",
+                xref="x", yref="y",
+                x0=2.0, x1=fs / 2.0,
+                y0=ref_level, y1=ref_level,
+                line=dict(color="rgba(0,0,0,0.35)", width=1, dash="dot"),
+                row=1, col=1
+            )
+
+            # Add legend entry for level reference (Plotly shapes don't appear in legend)
+            fig.add_trace(
+                go.Scatter(
+                    x=[None],
+                    y=[None],
+                    mode="lines",
+                    name=f"Level reference ({win_label})",
+                    line=dict(color="rgba(0,0,0,0.35)", width=1, dash="dot"),
+                    hoverinfo="skip",
+                    showlegend=True
+                ),
+                row=1,
+                col=1
+            )
+        except Exception:
+            pass
         # Correction band (mag correction active range)
         if target_stats:
             try:
@@ -763,7 +870,7 @@ def generate_prediction_plot(orig_freqs, orig_mags, orig_phases, filt_ir, fs, ti
 
         # B. TARGET (Alkuperäinen kevyt data + avg_t korjaus)
         if target_stats and 'target_mags' in target_stats:
-            t_mags = np.array(target_stats['target_mags']) + avg_t
+            t_mags = _maybe_shift_to_abs(target_stats.get('target_mags', []), avg_t)
             fig.add_trace(go.Scatter(x=target_stats['freq_axis'], y=t_mags,
                                      name='Target', line=dict(color='green', dash='dash', width=2.0)), row=1, col=1)
 
