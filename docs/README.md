@@ -18,7 +18,7 @@
   - Kaleido and its runtime dependencies are now explicitly included in the PyInstaller build.
   - Ensures PNG export works reliably in standalone executables.
 
-+### Notes
+### Notes
 - No changes to FIR magnitude, phase, leveling, or correction logic.
 - Visualization changes only affect exported artifacts, not DSP behavior.
 
