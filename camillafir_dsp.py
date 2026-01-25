@@ -839,6 +839,8 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 "cmp_ref_taps": float(ref_taps),
                 "cmp_freq_axis": freq_cmp.tolist(),
                 "cmp_target_mags": target_cmp.tolist(),
+                # IMPORTANT: calc_offset_db = median(meas - target)
+                # => aligned measured = meas - calc_offset_db
                 "cmp_measured_mags": (m_cmp_raw - calc_offset_db_cmp).tolist(),
                 "cmp_filter_mags": filt_cmp.tolist(),
                 "cmp_confidence_mask": conf_cmp.tolist(),
@@ -951,6 +953,66 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         compute_leveling(cfg, freq_axis, m_anal, target_mags)
     )
 
+    # --- 7A. Align target level to the SAME leveling window (Smart Scan / Manual) ---
+    # Goal: target curve must "follow" the chosen level window, not float at an arbitrary absolute level.
+    # This makes leveling deterministic and consistent with REW/OCA-style workflows.
+    target_shift_db = 0.0
+    try:
+        f = np.asarray(freq_axis, dtype=float)
+        t = np.asarray(target_mags, dtype=float)
+        if f.size == t.size and f.size > 16 and np.isfinite(float(s_min)) and np.isfinite(float(s_max)):
+            mask_lvl = (f >= float(s_min)) & (f <= float(s_max))
+            if int(np.count_nonzero(mask_lvl)) > 10:
+                tgt_win_mean = float(np.mean(t[mask_lvl]))
+                if np.isfinite(tgt_win_mean) and np.isfinite(float(target_level_db)):
+                    # shift target so that its mean in the leveling window equals target_level_db
+                    target_shift_db = float(target_level_db) - tgt_win_mean
+                    target_mags = t + target_shift_db
+
+                    # Recompute leveling with shifted target so calc_offset_db matches the new absolute target
+                    (
+                        target_level_db,
+                        calc_offset_db,
+                        meas_level_db_window,
+                        target_level_db_window,
+                        offset_method,
+                        s_min,
+                        s_max,
+                    ) = compute_leveling(cfg, f, m_anal, target_mags)
+    except Exception:
+        target_shift_db = 0.0
+
+
+    # Plotly uses st["target_mags"] / st["measured_mags"]. If we shift target in DSP but don't update st,
+    # the "Target & Magnitude" curves can disappear or desync.
+    # --- 7A2. Expose EFFECTIVE target & axis to native UI/plots ---
+    try:
+        if isinstance(st, dict):
+            st["analysis_mode"] = "native"
+            st["freq_axis"] = np.asarray(freq_axis, dtype=float).tolist()
+
+            # --- PLOT REFERENCE FIX ---
+            # Plot everything relative to Smart Scan / Manual leveling window
+            # so target & measured share the SAME 0 dB reference
+
+            measured_aligned = np.asarray(m_anal, dtype=float) - float(calc_offset_db)
+            target_aligned   = np.asarray(target_mags, dtype=float) - float(target_level_db)
+
+            st["measured_mags"] = measured_aligned.tolist()
+            st["target_mags"]   = target_aligned.tolist()
+
+            st["target_shift_db"] = float(target_shift_db)
+
+            # keep alignment metadata consistent
+            st["eff_target_db"] = float(target_level_db)
+            st["target_level_db_window"] = float(target_level_db_window)
+            st["meas_level_db_window"] = float(meas_level_db_window)
+            st["offset_method"] = str(offset_method)
+            st["smart_scan_range"] = [float(s_min), float(s_max)]
+    except Exception:
+        pass
+
+
     # --- 7B. Keep comparison-mode target/leveling consistent after target shaping (HPF/TDC/etc.) ---
     # NOTE: comparison grid is built earlier for confidence stability, but target_mags is shaped later.
     # Without this, plots in comparison mode may show the *pre-shaping* target curve.
@@ -959,13 +1021,14 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             freq_cmp = np.asarray(cmp.get("cmp_freq_axis", []) or [], dtype=float)
             if freq_cmp.size > 8:
                 # reconstruct raw cmp measured (before offset) from stored arrays
-                m_cmp_meas = np.asarray(cmp.get("cmp_measured_mags", []) or [], dtype=float)
-                off_cmp_prev = float(cmp.get("cmp_offset_db", 0.0) or 0.0)
-                m_cmp_raw = m_cmp_meas + off_cmp_prev
+                # reconstruct RAW measured on comparison grid
+                m_cmp_raw = np.interp(freq_cmp, freq_axis, m_anal)
 
-                # resample the *final* target curve to comparison grid
+                # final effective target on comparison grid
                 target_cmp = np.interp(freq_cmp, freq_axis, target_mags)
 
+                # re-run leveling on comparison grid
+                filt_cmp = np.interp(freq_cmp, freq_axis, gain_db)
                 (
                     target_level_db_cmp,
                     calc_offset_db_cmp,
@@ -976,8 +1039,15 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                     s_max_cmp,
                 ) = compute_leveling(cfg, freq_cmp, m_cmp_raw, target_cmp)
 
-                # update comparison dict so plots/report reflect final target shaping
+                # final aligned measured + filter on comparison grid
+                meas_cmp_final = m_cmp_raw - calc_offset_db_cmp
+                filt_cmp = np.interp(freq_cmp, freq_axis, gain_db)
+
+                cmp["analysis_mode"] = "comparison"
                 cmp["cmp_target_mags"] = target_cmp.tolist()
+                cmp["cmp_measured_mags"] = meas_cmp_final.tolist()
+                cmp["cmp_filter_mags"] = filt_cmp.tolist()
+                cmp["cmp_filter_mags"] = filt_cmp.tolist()
                 cmp["cmp_eff_target_db"] = float(target_level_db_cmp)
                 cmp["cmp_offset_db"] = float(calc_offset_db_cmp)
                 cmp["cmp_measured_mags"] = (m_cmp_raw - calc_offset_db_cmp).tolist()
@@ -985,6 +1055,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 cmp["cmp_meas_level_db_window"] = float(meas_level_db_window_cmp)
                 cmp["cmp_target_level_db_window"] = float(target_level_db_window_cmp)
                 cmp["cmp_offset_method"] = str(offset_method_cmp)
+                cmp["cmp_target_shift_db"] = float(target_shift_db)
     except Exception:
         pass
 
