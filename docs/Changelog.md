@@ -6,6 +6,20 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 
 ---
 
+## [2.7.9] – 2026-01-24
+
+### Fixed
+- **Custom house curve upload**
+  - Fixed an issue where user-uploaded house curves could fail to load or apply correctly.
+  - Improves validation and consistency between UI preview and DSP processing.
+
+### Notes
+- No changes to FIR magnitude, phase, or leveling behavior.
+- Safe update focused on UI → DSP data integrity.
+
+---
+
+
 ## [2.7.8] – 2026-01-23
 
 ### Added
