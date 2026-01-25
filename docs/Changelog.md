@@ -5,7 +5,15 @@ All notable changes to **CamillaFIR** are documented in this file.
 The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP behavior and reproducibility.
 
 ---
+## [2.8.0] - 2026-01-24
 
+- **Plot export robustness (ZIP outputs)**
+  - Fixed a broken Plotly PNG export path caused by an invalid `try/except` structure.
+  - ZIP exports now store dashboard plots as static PNG images generated via Plotly’s native Kaleido backend.
+  - Ensures exported plots exactly match the HTML dashboard “Download plot as PNG” output.
+  - Eliminates dependency on `.html` files and local `plotly.min.js` for offline ZIP viewing.
+
+---
 ## [2.7.9] – 2026-01-24
 
 ### Fixed
