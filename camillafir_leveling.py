@@ -138,6 +138,7 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
         s_min, s_max = 500.0, 2000.0
 
     mode = str(getattr(cfg, "lvl_mode", "Auto"))
+    is_manual = ("Manual" in mode)
 
     # ---------- Forced window / offset (Stereo-link support) ----------
     # If the caller provides a fixed window and/or offset, respect it.
@@ -177,7 +178,9 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
                     calc_offset_db = 0.0
                     offset_method = "ForcedWindowNoMask"
 
-            target_level_db = float(manual_target_db)
+            # Manual -> respect user target level. Auto -> follow measured level in the chosen window.
+            target_level_db = float(manual_target_db) if is_manual else float(meas_level_db_window)
+
             if not np.isfinite(calc_offset_db):
                 calc_offset_db = 0.0
 
@@ -279,8 +282,10 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
         target_level_db_window = 0.0
         offset_method = "SmartScanNoMask"
 
-    # Plot/raportti-basis: käytä käyttäjän tavoitetasoa
-    target_level_db = float(manual_target_db)
+    # Plot/raportti-basis:
+    # - Manual: user-defined target SPL
+    # - Auto/SmartScan: follow measured SPL in the chosen stable window
+    target_level_db = float(manual_target_db) if is_manual else float(meas_level_db_window)
 
     # Safety: pakota finitteys
     if not np.isfinite(calc_offset_db):
