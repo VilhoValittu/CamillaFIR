@@ -1,4 +1,4 @@
-# CamillaFIR 
+# CamillaFIR by Vilho Valittu
 
 ## v2.8.0 (current / upcoming)
 
