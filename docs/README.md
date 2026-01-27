@@ -1,4 +1,4 @@
-# CamillaFIR 
+# CamillaFIR by Vilho Valittu
 
 ## v2.8.0 (current / upcoming)
 
@@ -96,10 +96,24 @@ python -m venv venv
 # Linux/macOS:
 #   source venv/bin/activate
 pip install -r requirements.txt
+
+#Linux
+sudo apt update
+sudo apt install -y chromium-browser
+
 python camillafir.py
 ```
 
 The UI opens in your browser (default: `http://localhost:8080`).
+
+## System dependencies (PNG export)
+
+Plotly PNG export uses Kaleido, which requires a Chromium-based browser
+installed on the machine where CamillaFIR runs.
+
+Ubuntu:
+    sudo apt install chromium-browser
+
 
 ---
 
