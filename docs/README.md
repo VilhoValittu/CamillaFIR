@@ -123,6 +123,7 @@ Ubuntu:
 ## Documentation
 
 - 📘 User & technical manual → `docs/Official_Manual.md`
+- 📘 Modes → `docs/Modes.md`
 - 🧠 Why this works → `docs/Why_CamillaFIR_Works.md`
 - 📐 Academic DSP rationale (math) → `docs/Academic_DSP_Explanation.md`
 - 🔁 Stability & reproducibility → `docs/Stability_and_Reproducibility.md`

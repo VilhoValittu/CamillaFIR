@@ -1,5 +1,7 @@
 {
     "en": {
+        "guide_modes_title": "Modes: BASIC vs ADVANCED",
+        "guide_modes_body": "CamillaFIR has two operating modes. **The DSP engine is the same**; modes only change defaults and (in BASIC) apply hard safety limits.\n\n---\n\n## BASIC (recommended)\n**Goal:** predictable results with guard rails.\n\n**What BASIC does (policy):**\n- Applies conservative defaults and **hard clamps** to prevent extreme boost/cut and overly sharp corrections.\n- Keeps the workflow stable for most rooms/systems.\n\n**BASIC defaults (from `camillafir_modes.py`):**\n- Max boost / cut: **+5 dB / −15 dB** (hard clamp up to +6/−15)\n- Correction band: **20–250 Hz** (mag_c_min / mag_c_max)\n- Phase limit: **600 Hz**\n- Smoothing: **Psychoacoustic**, level **12** (≈ 1/12 oct)\n- TDC: **ON** (strength **50%**, max reduction **9 dB**, slope **6 dB/oct**)\n- A-FDW: **ON** (FDW cycles **10**)\n- Bass-first AI: **ON**, mode max **180 Hz**\n- Leveling: **Auto + Median**, **500–2000 Hz**, **Stereo-link ON**\n- Low-bass cuts-only hint: **30 Hz**\n\n---\n\n## ADVANCED (expert)\n**Goal:** fewer constraints; you are responsible for the result.\n\n**What ADVANCED does (policy):**\n- Applies expert defaults and **does not clamp** values by mode policy.\n- Lets you push larger boost/cut and disable slope limiting by default.\n\n**ADVANCED defaults (from `camillafir_modes.py`):**\n- Max boost / cut: **+8 dB / −20 dB**\n- Correction band: **10–200 Hz**\n- Phase limit: **600 Hz**\n- Slope limits: **OFF by default** (0 = off)\n- DF smoothing: **OFF by default**\n- Leveling window: **200–3000 Hz**, **Stereo-link OFF**\n- Low-bass cuts-only hint: **OFF (0 Hz)**\n\n**Tip:** If you want repeatable “set and forget” behavior, keep **BASIC\"",
         "afdw_preset_tight": "Tight (REW/VBA)",
         "afdw_preset_balanced": "Balanced",
         "afdw_preset_safe": "Safe",
@@ -246,19 +248,31 @@
         "hc_nearfield": "Nearfield / desk listening",
         "hc_hifi_loudness": "Classic Hi-Fi loudness",
         "hc_speech": "Speech / broadcast clarity",
-        "wav_recommended_info": "It is recommended to import the loudspeaker measurement data in WAV format (Mono, float32, Normalise & Place t=0 (256) ) for best phase and TDC accuracy.",
+        "wav_recommended_info": "If you import the loudspeaker measurement data in WAV format use : (Mono, float32, Normalise & Place t=0 (256) ) This option is still at beta stage.",
         "bass_first_max_hz_help": "This frequency defines up to which point TDC considers the response reliable, allowing the bass to be actively corrected toward the target.",
         "bass_first_title": "Bass-first AI (room modes)",
         "bass_first_enable_label": "Enable Bass-first AI (do not smooth room modes away)",
         "bass_first_enable_help": "Makes low-frequency room modes more visible to the correction and cuts them intentionally, instead of smoothing them away as unreliable measurement.",
-        "bass_first_max_hz_label": "Bass-first mode max (Hz)"
+        "bass_first_max_hz_label": "Bass-first mode max (Hz)",
+        "mode_label": "Mode",
+        "mode_basic_label": "Basic (recommended)",
+        "mode_advanced_label": "Advanced (expert)",
+        "mode_help": "Basic = guard rails (recommended). Advanced = expert mode (no constraints).",
+        "mode_desc_title": "What this mode does",
+        "mode_basic_desc": "Guard rails ON. Safer defaults and hard limits on boost/cut. Recommended for most systems.",
+        "mode_advanced_desc": "Expert mode. No constraints and no mode clamps. You are responsible for the result.",
+        "mode_apply_defaults_btn": "Apply mode defaults",
+        "mode_apply_defaults_help": "Applies the selected mode’s recommended defaults. This will overwrite your current values.",
+        "mode_defaults_applied_toast": "Mode defaults applied: {mode}"
 
 
 
     },
     
     "fi": {
-        "afdw_preset_tight": "Tiukka (REW/VBA)",
+        "guide_modes_title": "Tilat: BASIC vs ADVANCED",
+        "guide_modes_body": "CamillaFIR:ssä on kaksi toimintatilaa. **DSP-moottori on sama**; tilat muuttavat vain oletuksia ja (BASIC-tilassa) asettavat kovat turvarajat.\n\n---\n\n## BASIC (suositus)\n**Tavoite:** ennustettava lopputulos turvakaiteilla.\n\n**Mitä BASIC tekee (policy):**\n- Asettaa varovaiset oletukset ja **kovat clampit**, jotta boost/cut ja liian terävä korjaus eivät karkaa.\n- Pitää käytöksen vakaana useimmissa huoneissa/järjestelmissä.\n\n**BASIC-oletukset (`camillafir_modes.py`):**\n- Max boost / cut: **+5 dB / −15 dB** (kova clamp max +6/−15)\n- Korjauskaista: **20–250 Hz** (mag_c_min / mag_c_max)\n- Phase limit: **600 Hz**\n- Smoothing: **Psychoacoustic**, taso **12** (≈ 1/12 oktaavi)\n- TDC: **PÄÄLLÄ** (voimakkuus **50%**, max reduktio **9 dB**, slope **6 dB/okt**)\n- A-FDW: **PÄÄLLÄ** (FDW cycles **10**)\n- Bass-first AI: **PÄÄLLÄ**, mode max **180 Hz**\n- Leveling: **Auto + Mediaani**, **500–2000 Hz**, **Stereo-link PÄÄLLÄ**\n- Low-bass cuts-only -vihje: **30 Hz**\n\n---\n\n## ADVANCED (expert)\n**Tavoite:** vähemmän rajoituksia; käyttäjä vastaa lopputuloksesta.\n\n**Mitä ADVANCED tekee (policy):**\n- Asettaa expert-oletukset ja **ei clamppaa** arvoja moodin puolesta.\n- Sallii isommat boost/cut-arvot ja slope-limiterit pois oletuksena.\n\n**ADVANCED-oletukset (`camillafir_modes.py`):**\n- Max boost / cut: **+8 dB / −20 dB**\n- Korjauskaista: **10–200 Hz**\n- Phase limit: **600 Hz**\n- Slope-rajat: **POIS oletuksena** (0 = off)\n- DF smoothing: **POIS oletuksena**\n- Leveling-alue: **200–3000 Hz**, **Stereo-link POIS**\n- Low-bass cuts-only -vihje: **POIS (0 Hz)**\n\n**Vinkki:** Jos haluat “aseta ja unohda” -tyylin, pysy **BASIC**-tilassa.",
+        "afdw_preset_tight": "Tiukka",
         "afdw_preset_balanced": "Tasapainoinen",
         "afdw_preset_safe": "Turvallinen",
         "afdw_preset_minimal": "Minimi",
@@ -507,12 +521,22 @@
         "hc_nearfield": "Nearfield / desk listening",
         "hc_hifi_loudness": "Classic Hi-Fi loudness",
         "hc_speech": "Speech / broadcast clarity",
-        "wav_recommended_info": "Suositellaan tuomaan kaiuttimen mittausdata .wav-muodossa! (Mono, float32, Normalise & Place t=0 (256) ) (paras vaihe- ja TDC-tarkkuus).",
+        "wav_recommended_info": "Jos tuot kaiuttimien datan .wav-muodossa käytä : (Mono, float32, Normalise & Place t=0 (256) ) Tämä ominaisuus on vielä beta-vaiheessa.",
         "bass_first_title": "Bass-first AI (huonemoodit)",
         "bass_first_enable_label": "Ota Bass-first AI käyttöön (älä silota huonemodeja pois)",
         "bass_first_enable_help": "Tekee matalataajuiset huonemoodit näkyvämmiksi korjaukselle ja leikkaa ne tietoisesti sen sijaan, että ne silotettaisiin pois epäluotettavana mittauksena.",
         "bass_first_max_hz_label": "Bass-first -alueen yläraja (Hz)",
-        "bass_first_max_hz_help": "Tämä taajuus määrittää mihin asti TDC pitää kaikkea \"luotettevana\" eli ns. lanaa basson vastaamaan targettia."
+        "bass_first_max_hz_help": "Tämä taajuus määrittää mihin asti TDC pitää kaikkea \"luotettevana\" eli ns. lanaa basson vastaamaan targettia.",
+        "mode_label": "Tila",
+        "mode_basic_label": "Basic (suositus)",
+        "mode_advanced_label": "Advanced (expert)",
+        "mode_help": "Basic = turvakaiteet (suositus). Advanced = expert-tila (ei rajoituksia).",
+        "mode_desc_title": "Mitä tämä tila tekee",
+        "mode_basic_desc": "Turvakaiteet päällä. Varovaiset oletukset ja kovat rajat boost/cut-arvoille. Suositus useimpiin järjestelmiin.",
+        "mode_advanced_desc": "Expert-tila. Ei rajoituksia eikä moodi-clamppeja. Vastuu lopputuloksesta on käyttäjällä.",
+        "mode_apply_defaults_btn": "Aseta tilan oletukset",
+        "mode_apply_defaults_help": "Asettaa valitun tilan suositellut oletukset. Tämä yliajaa nykyiset arvosi.",
+        "mode_defaults_applied_toast": "Tilan oletukset asetettu: {mode}"
 
     }
 }

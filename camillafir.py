@@ -20,6 +20,8 @@ import camillafir_dsp as dsp
 import camillafir_plot as plots
 import models
 from models import FilterConfig
+from camillafir_modes import apply_mode_to_cfg, MODE_DEFAULTS
+
 #from camillafir_rew_api import *
 print("USING models.py      =", models.__file__)
 print("USING camillafir_dsp =", dsp.__file__)
@@ -31,9 +33,10 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.8.1"  # updated a-fdw and tdc guides
+VERSION = "v2.8.1.1"  # small ui-update for modes selection
 
 # Change log:
+# "v2.8.1.1" [UI] small ui-update for modes selection
 # v2.8.1: [DSP] fix A-FDW bandwidth limits & UI display
 # v2.8.0: [UI] removed html dashboard export (now PNG only)
 # v2.7.9: [UI] fix custom house curve upload
@@ -45,6 +48,126 @@ PROGRAM_NAME = "CamillaFIR"
 FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
+
+
+
+def update_mode_desc(_=None):
+    """
+    UI helper: show a short description under Mode selection.
+    """
+    try:
+        m = str(pin['mode'] or 'BASIC').strip().upper()
+    except Exception:
+        m = 'BASIC'
+    key = 'mode_basic_desc' if m == 'BASIC' else 'mode_advanced_desc'
+    with use_scope('mode_desc_scope', clear=True):
+        put_markdown(f"**{t('mode_desc_title')}**\n\n{t(key)}")
+
+def _as_pin_checkbox_list(v: bool):
+    # Project convention: checkbox pins are [] or [True]
+    return [True] if bool(v) else []
+
+def apply_mode_defaults_to_ui(_=None):
+    """
+    Apply current mode defaults to UI fields (manual button only).
+    This overwrites current UI values intentionally.
+    """
+    try:
+        mode = str(pin['mode'] or 'BASIC').strip().upper()
+    except Exception:
+        mode = 'BASIC'
+    if mode not in MODE_DEFAULTS:
+        mode = 'BASIC'
+
+    d = MODE_DEFAULTS.get(mode, {}) or {}
+
+    # FilterConfig field -> UI pin key mapping (update only safe/core tuning knobs)
+    map_num = {
+        "global_gain_db": "gain",
+        "mag_c_min": "mag_c_min",
+        "mag_c_max": "mag_c_max",
+        "max_boost_db": "max_boost",
+        "max_cut_db": "max_cut_db",
+        "phase_limit": "phase_limit",
+        "reg_strength": "reg_strength",
+        "fdw_cycles": "fdw_cycles",
+        "smoothing_level": "smoothing_level",
+        "tdc_strength": "tdc_strength",
+        "tdc_max_reduction_db": "tdc_max_reduction_db",
+        "tdc_slope_db_per_oct": "tdc_slope_db_per_oct",
+        "low_bass_cut_hz": "low_bass_cut_hz",
+        "ir_window_ms": "ir_window",
+        "ir_window_ms_left": "ir_window_left",
+        "mixed_split_freq": "mixed_freq",
+        "trans_width": "trans_width",
+        "bass_first_mode_max_hz": "bass_first_mode_max_hz",
+        "max_slope_db_per_oct": "max_slope_db_per_oct",
+        "max_slope_boost_db_per_oct": "max_slope_boost_db_per_oct",
+        "max_slope_cut_db_per_oct": "max_slope_cut_db_per_oct",
+        "lvl_manual_db": "lvl_manual_db",
+        "lvl_min": "lvl_min",
+        "lvl_max": "lvl_max",
+    }
+    map_str = {
+        "filter_type_str": "filter_type",
+        "smoothing_type": "smoothing_type",
+        "lvl_mode": "lvl_mode",
+        "lvl_algo": "lvl_algo",
+    }
+    map_chk = {
+        "enable_mag_correction": "mag_correct",
+        "do_normalize": "normalize_opt",
+        "exc_prot": "exc_prot",
+        "enable_tdc": "enable_tdc",
+        "enable_afdw": "enable_afdw",
+        "df_smoothing": "df_smoothing",
+        "comparison_mode": "comparison_mode",
+        "bass_first_ai": "bass_first_ai",
+        "phase_safe_2058": "phase_safe_2058",
+        "stereo_link": "stereo_link",
+    }
+
+    for cfg_k, pin_k in map_num.items():
+        if cfg_k in d:
+            try:
+                pin_update(pin_k, value=d[cfg_k])
+            except Exception:
+                pass
+
+    for cfg_k, pin_k in map_str.items():
+        if cfg_k in d:
+            try:
+                pin_update(pin_k, value=d[cfg_k])
+            except Exception:
+                pass
+
+    for cfg_k, pin_k in map_chk.items():
+        if cfg_k in d:
+            try:
+                pin_update(pin_k, value=_as_pin_checkbox_list(bool(d[cfg_k])))
+            except Exception:
+                pass
+
+    # Refresh dependent UI
+    try:
+        update_lvl_ui()
+    except Exception:
+        pass
+    try:
+        update_taps_auto_info()
+    except Exception:
+        pass
+    update_mode_desc()
+
+    # Toast feedback (your project already uses toast() in presets)
+    try:
+        msg = t('mode_defaults_applied_toast').replace("{mode}", mode)
+    except Exception:
+        msg = f"Mode defaults applied: {mode}"
+    try:
+        toast(msg, color="success", duration=2.0)
+    except Exception:
+        pass
 
 
 
@@ -856,7 +979,7 @@ def load_target_curve(file_content):
 def load_config():
     default_conf = {
         'fmt': 'WAV', 'layout': 'Mono', 'fs': 44100, 'taps': 65536,
-        'filter_type': 'Linear Phase', 'gain': 0.0, 
+        'mode': 'BASIC','filter_type': 'Linear Phase', 'gain': 0.0, 
         'hc_mode': 'Harman6', 'mag_correct': True,
         'smoothing_type': 'smooth_psy', 'fdw_cycles': 10.0,
         'mag_c_min': 10.0, 'mag_c_max': 200.0, 'max_boost': 5.0,
@@ -911,6 +1034,7 @@ def save_config(data):
 def put_guide_section():
     # This list controls which guides are shown and in what order
     guides = [
+        ('guide_modes', t('guide_modes_title')),
         ('guide_taps', t('guide_taps_title')),
         ('guide_ft', t('guide_ft_title')),
         ('guide_sigma', t('guide_sigma_title')),
@@ -985,6 +1109,31 @@ def main():
     tab_basic = [
         put_markdown(f"### ⚙️ {t('tab_basic')}"),
         
+
+
+        # Mode + Apply defaults (manual apply is safer UX)
+        put_row([
+            put_select(
+                'mode',
+                label=t('mode_label'),
+                options=[
+                    {'label': t('mode_basic_label'), 'value': 'BASIC'},
+                    {'label': t('mode_advanced_label'), 'value': 'ADVANCED'},
+                ],
+                value=str(get_val('mode', 'BASIC') or 'BASIC').strip().upper(),
+                help_text=t('mode_help'),
+            ),
+            put_button(
+                t('mode_apply_defaults_btn'),
+                onclick=apply_mode_defaults_to_ui,
+                color='secondary'
+            ).style("margin-top:28px;"),
+        ]),
+        put_markdown(f"_{t('mode_apply_defaults_help')}_"),
+        put_scope('mode_desc_scope'),
+
+        put_markdown("---"),
+
         # Row 1: Sample rate and Taps
         put_row([
             put_select('fs', label=t('fs'), options=fs_opts, value=get_val('fs', 44100), help_text=t('fs_help')), 
@@ -1319,13 +1468,18 @@ put_markdown("---"),
         {'title': t('tab_adv'), 'content': tab_adv}, 
         {'title': t('tab_xo'), 'content': tab_xo}
     ])
-    pin_on_change('lvl_mode', onchange=update_lvl_ui)
-    pin_on_change('lvl_min', onchange=update_lvl_ui)
-    pin_on_change('lvl_max', onchange=update_lvl_ui)
+
 
 
     update_lvl_ui()
 
+    pin_on_change('lvl_mode', onchange=update_lvl_ui)
+    pin_on_change('lvl_min', onchange=update_lvl_ui)
+    pin_on_change('lvl_max', onchange=update_lvl_ui)
+
+    # Mode description: initial render + live updates
+    pin_on_change('mode', onchange=update_mode_desc)
+    update_mode_desc()
 
     # Auto-taps UI updater: react when multi-rate toggles (tab_files) or basic changes
     pin_on_change('multi_rate_opt', onchange=update_taps_auto_info)
@@ -1355,7 +1509,7 @@ put_markdown("---"),
     
 def _collect_ui_data():
     p_keys = [
-        'fs', 'taps', 'filter_type', 'mixed_freq', 'gain', 'hc_mode',
+        'mode','fs', 'taps', 'filter_type', 'mixed_freq', 'gain', 'hc_mode',
         'mag_c_min', 'mag_c_max', 'input_source', 'rew_api_base_url', 'rew_meas_left', 'rew_meas_right', 'max_boost', 'max_cut_db', 'max_slope_db_per_oct',
         'max_slope_boost_db_per_oct', 'max_slope_cut_db_per_oct', 'phase_limit', 'phase_safe_2058', 'mag_correct',
         'lvl_mode', 'reg_strength', 'normalize_opt', 'align_opt',
@@ -1572,7 +1726,7 @@ def _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m):
     except Exception:
         is_wav_src = False
 
-    return FilterConfig(
+    cfg = FilterConfig(
         fs=fs_v,
         num_taps=taps_v,
         df_smoothing=bool(pin['df_smoothing']),
@@ -1622,7 +1776,17 @@ def _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m):
         bass_first_smooth_floor_hi=float(data.get('bass_first_smooth_floor_hi') or 0.35),
         bass_first_k_mode_cut=float(data.get('bass_first_k_mode_cut') or 0.6),
         bass_first_k_mode_boost=float(data.get('bass_first_k_mode_boost') or 0.9),
+        # Source hint for heuristics (used by bass-first masking)
+        is_wav_source=bool(is_wav_src),
     )
+
+    # Apply mode policy (BASIC / ADVANCED). Default BASIC if missing.
+    try:
+        mode = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
+    except Exception:
+        mode = "BASIC"
+    cfg = apply_mode_to_cfg(cfg, mode)
+    return cfg
 
 
 def _log_df_smoothing_for_fs(cfg, fs_v, df_on):
