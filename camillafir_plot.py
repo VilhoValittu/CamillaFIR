@@ -640,7 +640,7 @@ def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 655
     bw = out.get("afdw_bw_oct", None)
     bw_cmp = _interp(bw) if bw is not None and np.asarray(bw).shape == f.shape else None
     if bw_cmp is not None:
-        out["cmp_afdw_bw_oct"] = np.clip(bw_cmp, 1.0/48.0, 1.0/3.0).tolist()
+        out["cmp_afdw_bw_oct"] = np.clip(bw_cmp, 1.0/96.0, 2.0/3.0).tolist()
         out["cmp_offset_db"] = float(cmp_offset_db)
 
     # Keep scan range in Hz (same numbers), but provide cmp_ key so legacy code can use it.
@@ -938,7 +938,7 @@ def generate_prediction_plot(
 
                     if fx.size == bw.size and fx.size > 16:
                         bw_vis = np.interp(f_vis, fx, bw)
-                        bw_vis = np.clip(bw_vis, 1.0/48.0, 1.0/3.0)
+                        bw_vis = np.clip(bw_vis, 1.0/96.0, 2.0/3.0)
                         bw_vis_smooth = scipy.ndimage.gaussian_filter1d(bw_vis, sigma=5.0)
                         fig.add_trace(
                             go.Scatter(
@@ -985,13 +985,13 @@ def generate_prediction_plot(
         fig.update_yaxes(range=[-30, 12], row=4, col=1)
         # Y-axis for A-FDW BW panel
         if bw_vis is not None and len(bw_vis) > 0:
-            bw_lo = max(1.0/48.0, float(np.min(bw_vis)) * 0.9)
-            bw_hi = min(1.0/3.0,  float(np.max(bw_vis)) * 1.1)
+            bw_lo = max(1.0/96.0, float(np.min(bw_vis)) * 0.9)
+            bw_hi = min(2.0/3.0,  float(np.max(bw_vis)) * 1.1)
             if bw_hi - bw_lo < 1e-6:
-                bw_lo, bw_hi = (1.0/48.0, 1.0/3.0)
+                bw_lo, bw_hi = (1.0/96.0, 2.0/3.0)
             fig.update_yaxes(range=[bw_lo, bw_hi], row=6, col=1) 
         else:
-            fig.update_yaxes(range=[1.0/48.0, 1.0/3.0], row=6, col=1)
+            fig.update_yaxes(range=[1.0/96.0, 2.0/3.0], row=6, col=1)
 
         fig.update_yaxes(title_text="oct", row=6, col=1)
 

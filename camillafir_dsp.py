@@ -8,7 +8,8 @@ import camillafir_bassfirst as bf
 logger = logging.getLogger("CamillaFIR.dsp")
 from models import FilterConfig
 from camillafir_leveling import compute_leveling
-#CamillaFIR DSP Engine v1.0.8
+#CamillaFIR DSP Engine v1.0.9
+
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
 #1.04 All features works at different configurations
@@ -16,6 +17,7 @@ from camillafir_leveling import compute_leveling
 #1.06 added no phase correction mode (2058-safe)
 #1.07 TDC improvements and bugfixes
 #1.08 Bugfixes for bass-first and TDC
+#1.09 Improved TDC stability and reliability
 
 def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto_headroom_db=0.0, logger_obj=None):
     """
@@ -337,7 +339,7 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
     oct_widths = 2.0 / np.maximum(adaptive_cycles, 1.0)  # larger => heavier smoothing
 
     # Fixed set of octave widths to blend between (ascending for searchsorted)
-    bw_list = np.array([1/48, 1/24, 1/12, 1/6, 1/3], dtype=float)
+    bw_list = np.array([1.0/96.0, 1.0/48.0, 1.0/24.0, 1.0/12.0, 1.0/6.0, 1.0/3.0, 2.0/3.0], dtype=float)
 
     # Precompute smoothed curves for each BW (fast: only 5 passes)
     sm_stack = []
@@ -1146,7 +1148,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 adaptive_cycles = float(afdw_min) + (c * (float(afdw_base) - float(afdw_min)))
                 bw = 2.0 / np.maximum(adaptive_cycles, 1.0)
                 # clamp to same range used by the continuous blender
-                bw = np.clip(bw, 1.0/48.0, 1.0/3.0)
+                bw = np.clip(bw, 1.0/96.0, 1.0/3.0)
                 afdw_bw_oct = bw
                 afdw_bw_min_oct = float(np.min(bw))
                 afdw_bw_mean_oct = float(np.mean(bw))

@@ -5,8 +5,10 @@
 from __future__ import annotations
 import numpy as np
 
+scipy = None  # type: ignore
 try:
-    import scipy.signal
+    import scipy  # used via scipy.signal.windows.tukey
+    import scipy.signal  # noqa: F401
 except Exception:  # pragma: no cover
     scipy = None  # type: ignore
 

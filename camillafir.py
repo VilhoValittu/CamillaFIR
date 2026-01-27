@@ -31,8 +31,10 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.8.0"  # fix custom house curve upload (would silently fail)
+VERSION = "v2.8.1"  # updated a-fdw and tdc guides
 
+# Change log:
+# v2.8.1: [DSP] fix A-FDW bandwidth limits & UI display
 # v2.8.0: [UI] removed html dashboard export (now PNG only)
 # v2.7.9: [UI] fix custom house curve upload
 # v2.7.8: [IO] fix WAV parsing – phase unwrap
@@ -336,8 +338,10 @@ def _ir_wav_to_freq_response(
                 mag_db = _octave_smooth_loggrid(freqs, mag_db, sl)
         except Exception:
             pass
-    
-        hf = freqs > min(0.45 * fs_i, 18000.0)
+
+    # HF phase hold (avoid wild unwrap at very high frequencies)
+    hf = freqs > min(0.45 * fs_i, 18000.0)
+    if np.any(hf) and np.any(~hf):
         phase_deg[hf] = phase_deg[np.where(~hf)[0][-1]]
 
     return freqs.astype(float), mag_db.astype(float), phase_deg.astype(float)
@@ -608,6 +612,37 @@ def apply_tdc_preset(name: str):
     # small feedback
     toast(f"TDC preset applied: {name}", color="success", duration=1.5)
 
+def apply_afdw_preset(name: str):
+    """
+    UI preset buttons for A-FDW (FDW cycles).
+    Note: put_checkbox stores list values ([] / [True]) in this project.
+    """
+    presets = {
+        "Tight":   {"enable": True, "cycles": 5.0},  
+        "Balanced":{"enable": True, "cycles": 10.0},   
+        "Safe":    {"enable": True, "cycles": 15.0}, 
+        "Minimal": {"enable": True, "cycles": 20.0},  
+    }
+    p = presets.get(str(name or ""))
+    if not p:
+        return
+
+    try:
+        pin_update("enable_afdw", value=[True] if p["enable"] else [])
+    except Exception:
+        pass
+
+    try:
+        pin_update("fdw_cycles", value=float(p["cycles"]))
+    except Exception:
+        pass
+
+    try:
+        toast(f"A-FDW preset applied: {name}", color="success", duration=1.5)
+    except Exception:
+        pass
+
+
 def _normalize_hc_mode_key(v) -> str:
     """
     Convert UI label / legacy saved strings into a stable preset key.
@@ -823,7 +858,7 @@ def load_config():
         'fmt': 'WAV', 'layout': 'Mono', 'fs': 44100, 'taps': 65536,
         'filter_type': 'Linear Phase', 'gain': 0.0, 
         'hc_mode': 'Harman6', 'mag_correct': True,
-        'smoothing_type': 'smooth_psy', 'fdw_cycles': 15.0,
+        'smoothing_type': 'smooth_psy', 'fdw_cycles': 10.0,
         'mag_c_min': 10.0, 'mag_c_max': 200.0, 'max_boost': 5.0,
         'lvl_mode': 'Auto', 'lvl_algo': 'Median', 
         'lvl_manual_db': 75.0, 'lvl_min': 300.0, 'lvl_max': 3000.0,
@@ -833,10 +868,10 @@ def load_config():
         'low_bass_cut_hz': 40.0,    # below this frequency only cuts allowed (no boosts)
         'hpf_enable': False, 'hpf_freq': 20.0, 'hpf_slope': 24,
         'local_path_l': '', 'local_path_r': '',
-        'input_source': 'file',             # 'file' | 'rew_api'
-        'rew_api_base_url': 'http://127.0.0.1:4735',
-        'rew_meas_left': '',
-        'rew_meas_right': '',
+        #'input_source': 'file',             # 'file' | 'rew_api'
+        #'rew_api_base_url': 'http://127.0.0.1:4735',
+        #'rew_meas_left': '',
+        #'rew_meas_right': '',
         'xo1_f': None, 'xo1_s': 12, 'xo2_f': None, 'xo2_s': 12,
         'xo3_f': None, 'xo3_s': 12, 'xo4_f': None, 'xo4_s': 12, 'xo5_f': None, 'xo5_s': 12,
         'mixed_freq': 300.0, 'phase_limit': 600.0,
@@ -880,7 +915,8 @@ def put_guide_section():
         ('guide_ft', t('guide_ft_title')),
         ('guide_sigma', t('guide_sigma_title')),
         ('guide_mix', t('guide_mix_title')),
-        ('guide_fdw', t('guide_fdw_title')),
+        ('guide_tdc', t('guide_tdc_title')),
+        ('guide_afdw', t('guide_afdw_title')),
         ('guide_reg', t('guide_reg_title')),
         ('guide_lvl', t('guide_lvl_title')),
         ('guide_sl', t('guide_sl_title')),
@@ -888,7 +924,7 @@ def put_guide_section():
         ('guide_asy', t('guide_asy_title')),
         ('guide_ai', t('guide_ai_title')),
         ('guide_summary', t('guide_summary_title')),
-        ('guide_afdw', t('guide_afdw_title'))
+        
     ]
     content = [put_collapse(t(g_key + '_title') if t(g_key + '_title') != (g_key + '_title') else g_title, [put_markdown(t(g_key + '_body') if t(g_key + '_body') != (g_key + '_body') else "Info text here")]) for g_key, g_title in guides]
     put_collapse("❓ CamillaFIR User Guides", content)
@@ -1094,10 +1130,26 @@ def main():
         put_markdown("---"),
 
         # A-FDW
+        put_markdown("#### ⏳ Adaptive Frequency-Domain Windowing (A-FDW)"),
         put_checkbox('enable_afdw', options=[{'label': t('enable_afdw'), 'value': True}], 
              value=[True] if get_val('enable_afdw', True) else [], help_text=t('afdw_help')),
+        
         put_row([
-            put_input('fdw_cycles', label=t('fdw'), type=FLOAT, value=get_val('fdw_cycles', 15.0), help_text=t('fdw_help'))
+            put_buttons(
+                [
+                    {"label": t("afdw_preset_tight"),    "value": "Tight"},
+                    {"label": t("afdw_preset_balanced"), "value": "Balanced"},
+                    {"label": t("afdw_preset_safe"),     "value": "Safe"},
+                    {"label": t("afdw_preset_minimal"),  "value": "Minimal"},
+                ],
+                onclick=lambda preset: apply_afdw_preset(preset),
+                small=True,
+            ),
+        ]),
+        put_html(f"<div style='opacity:0.65; font-size:13px'>{t('afdw_preset_help')}</div>"),
+
+        put_row([
+            put_input('fdw_cycles', label=t('fdw'), type=FLOAT, value=get_val('fdw_cycles', 8.0), help_text=t('fdw_help'))
         ]),
         put_markdown("---"),
         # --- TDC aka Trinnov-mode (PyWebIO)
@@ -1115,6 +1167,7 @@ def main():
             ),
         ]),
         put_html(f"<div style='opacity:0.65; font-size:13px'>{t('tdc_preset_help')}</div>"),
+        put_html(f"<div style='opacity:0.70; font-size:13px; margin-top:6px'>{t('tdc_summary_hint')}</div>"),
 
 
         put_checkbox(

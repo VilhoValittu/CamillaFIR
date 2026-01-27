@@ -23,7 +23,7 @@ class FilterConfig:
     # --- 3. SMOOTHING AND FDW ---
     smoothing_type: str = "Psychoacoustic" # Smoothing type (Standard, Psychoacoustic)
     smoothing_level: int = 12       # Smoothing strength (e.g. 1/12 octave)
-    fdw_cycles: float = 15.0        # FDW (Frequency Dependent Windowing) cycles
+    fdw_cycles: float = 10.0        # FDW (Frequency Dependent Windowing) cycles
     reg_strength: float = 30.0      # Regularization (dB), prevents sharp corrections
     max_slope_db_per_oct: float = 12.0  # Max change dB per octave (0 = off)
     # NEW: separate slope limits for boosts and cuts.

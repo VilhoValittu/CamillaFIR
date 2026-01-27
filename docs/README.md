@@ -1,56 +1,25 @@
 # CamillaFIR by Vilho Valittu
 
-## v2.8.0 (current / upcoming)
+## v2.8.1
 
-### Plot export & reproducibility improvements
+### A-FDW & TDC guidance improvements
 
-- **Dashboard export as static PNG**
-  - Filter dashboards are now exported to ZIP files as static **PNG images** instead of interactive HTML.
-  - The PNG output is generated using Plotly’s native Kaleido backend and **matches exactly** the HTML dashboard
-    “Download plot as PNG” output.
-  - Exported ZIP files no longer depend on `plotly.min.js`, browser security policies, or local file handling.
+- **Refined A-FDW bandwidth limits**
+  - Fixed incorrect A-FDW bandwidth constraints that could produce overly wide or misleading smoothing regions.
+  - Ensures A-FDW operates strictly within intended psychoacoustic and confidence-based limits.
 
-- **Improved offline & cross-platform compatibility**
-  - Exported results open identically on Windows, macOS, and Linux without a browser.
-  - Eliminates issues with missing JS assets, blocked local scripts, or CDN availability.
+- **Clearer A-FDW & TDC visualization**
+  - Updated plot annotations and guides to better reflect the *effective* A-FDW bandwidth actually used.
+  - Reduces confusion between configured values and internally clamped / safety-limited behavior.
 
-- **More robust packaging (Windows exe)**
-  - Kaleido and its runtime dependencies are now explicitly included in the PyInstaller build.
-  - Ensures PNG export works reliably in standalone executables.
+- **Improved documentation & UI hints**
+  - A-FDW and TDC descriptions updated to better explain *why* certain regions are protected or limited.
+  - Helps advanced users interpret confidence masks, decay control, and correction safety logic.
 
 ### Notes
-- No changes to FIR magnitude, phase, leveling, or correction logic.
-- Visualization changes only affect exported artifacts, not DSP behavior.
+- DSP behavior is unchanged except for corrected A-FDW limit handling.
+- No changes to FIR magnitude targets, phase algorithms, or auto-leveling logic.
 
----
-
- ## v2.7.9
-
-### Stability & export fixes
-
-- **House curve upload fix**
-  - Fixed an issue where custom (user-uploaded) house curves could fail to load or apply correctly.
-  - Improves consistency between UI preview, DSP processing, and saved configurations.
-
-- **Plot export bugfix**
-  - Fixed a broken Plotly PNG export path caused by an invalid `try/except` structure.
-  - Ensures Plotly image export works correctly when generating offline artifacts.
-
-### Notes
-- Safe maintenance release.
-- No changes to filter generation, phase handling, or auto-leveling behavior.
-
-## What’s new in v2.7.8
-
-- **Stereo-linked auto-leveling (TXT-compatible default)**  
-  SmartScan level window and gain are computed from a shared L/R reference and applied identically to both channels.  
-  This removes channel-dependent gain drift while preserving automatic delay alignment.
-
-- **Correction-band visualization**  
-  The active magnitude correction range (`mag_c_min … mag_c_max`) is shaded in plots, making it immediately obvious where correction is applied.
-
-- **Reliability / confidence shading**  
-  Low-confidence frequency regions are visually highlighted in plots to explain why some areas are protected or only lightly corrected.
 
 
 **Time-domain–first FIR room correction (CamillaDSP-focused)**
@@ -117,14 +86,37 @@ Ubuntu:
 
 ---
 
-## Key features (v2.7.7)
+## Key features (v2.8.1)
 
-- **2058-safe phase mode**: disables room phase correction (confidence/FDW/excess-phase) and uses only theoretical XO phase and minimum-phase where applicable. Good when phase/GD looks “spiky”.
-- **Independent slope limits for boost vs cut** (dB/oct): keeps gentle boosts from being flattened while still preventing wild cut shapes.
-- **TDC safety brakes**: hard cap for total TDC reduction plus optional slope limit for a predictable reduction curve.
-- **DF smoothing (experimental)**: keeps smoothing width roughly constant in Hz across different fs/taps (useful for comparable “detail level” across sample rates).
-- **Comparison mode**: locks scoring/plots to a fixed analysis grid (fs/taps) so A/B comparisons remain meaningful.
-- **Multi-rate auto-taps mapping**: keeps FIR time-length constant across sample rates (44.1 kHz reference).
+- **2058-safe phase mode**  
+  Disables room phase correction (confidence / FDW / excess-phase) and uses only theoretical XO phase and minimum-phase where applicable. Recommended when phase or group delay looks unstable or “spiky”.
+
+- **Independent slope limits for boost vs cut (dB/oct)**  
+  Separate slope constraints for boosts and cuts prevent gentle boosts from being flattened while still keeping aggressive cuts under control.
+
+- **Temporal Decay Control (TDC) with safety brakes**  
+  Time-domain reduction of room-induced energy storage with:
+  - hard cap on total reduction per frequency bin  
+  - optional slope limit (dB/oct) for predictable and stable decay shaping
+
+- **Adaptive FDW (A-FDW)**  
+  Frequency-dependent smoothing driven by measurement confidence:
+  - high confidence → sharper correction  
+  - low confidence → heavier smoothing  
+  Includes corrected bandwidth limits and clear visualization of the *effective* A-FDW range.
+
+- **DF smoothing (experimental)**  
+  Optional Gaussian smoothing with approximately constant bandwidth in Hz across different sample rates and tap lengths, keeping perceived detail comparable.
+
+- **Comparison mode (locked analysis grid)**  
+  Locks scoring and plots to a fixed reference (fs/taps) so A/B comparisons remain deterministic and meaningful.
+
+- **Multi-rate auto-taps mapping**  
+  Automatically scales FIR taps to keep filter **time length constant** across sample rates (44.1 kHz reference).
+
+- **WAV/IR-aware analysis path**  
+  When using IR-derived WAV inputs, phase and reliability heuristics are adapted to avoid false “unreliable” regions compared to REW TXT-based responses.
+
 
 ---
 

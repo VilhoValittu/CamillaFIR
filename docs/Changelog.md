@@ -5,6 +5,26 @@ All notable changes to **CamillaFIR** are documented in this file.
 The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP behavior and reproducibility.
 
 ---
+
+---
+## [2.8.1] – 2026-01-25
+
+### Fixed
+- **A-FDW bandwidth limits**
+  - Corrected incorrect or overly permissive A-FDW bandwidth constraints.
+  - Prevents misleading smoothing widths and improves consistency between analysis and visualization.
+
+### Improved
+- **A-FDW & TDC guides**
+  - Plot guides and annotations now reflect the *effective* (clamped) A-FDW bandwidth.
+  - Improves interpretability of confidence masking and decay-based correction limits.
+
+### Notes
+- No changes to FIR magnitude targets, phase correction modes, or leveling behavior.
+- Maintenance update focused on analysis clarity and safety transparency.
+
+
+
 ## [2.8.0] - 2026-01-24
 
 - **Plot export robustness (ZIP outputs)**
