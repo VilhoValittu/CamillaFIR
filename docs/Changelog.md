@@ -7,6 +7,11 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 ---
 
 ---
+## [2.8.1.1] - 2026-01-27
+
+### Ui-update
+- **Added modes selection (Basic & Advanced)**
+
 ## [2.8.1] – 2026-01-25
 
 ### Fixed
