@@ -1,5 +1,45 @@
 # CamillaFIR 
 
+## v2.8.0 (current / upcoming)
+
+### Plot export & reproducibility improvements
+
+- **Dashboard export as static PNG**
+  - Filter dashboards are now exported to ZIP files as static **PNG images** instead of interactive HTML.
+  - The PNG output is generated using Plotly’s native Kaleido backend and **matches exactly** the HTML dashboard
+    “Download plot as PNG” output.
+  - Exported ZIP files no longer depend on `plotly.min.js`, browser security policies, or local file handling.
+
+- **Improved offline & cross-platform compatibility**
+  - Exported results open identically on Windows, macOS, and Linux without a browser.
+  - Eliminates issues with missing JS assets, blocked local scripts, or CDN availability.
+
+- **More robust packaging (Windows exe)**
+  - Kaleido and its runtime dependencies are now explicitly included in the PyInstaller build.
+  - Ensures PNG export works reliably in standalone executables.
+
+### Notes
+- No changes to FIR magnitude, phase, leveling, or correction logic.
+- Visualization changes only affect exported artifacts, not DSP behavior.
+
+---
+
+ ## v2.7.9
+
+### Stability & export fixes
+
+- **House curve upload fix**
+  - Fixed an issue where custom (user-uploaded) house curves could fail to load or apply correctly.
+  - Improves consistency between UI preview, DSP processing, and saved configurations.
+
+- **Plot export bugfix**
+  - Fixed a broken Plotly PNG export path caused by an invalid `try/except` structure.
+  - Ensures Plotly image export works correctly when generating offline artifacts.
+
+### Notes
+- Safe maintenance release.
+- No changes to filter generation, phase handling, or auto-leveling behavior.
+
 ## What’s new in v2.7.8
 
 - **Stereo-linked auto-leveling (TXT-compatible default)**  

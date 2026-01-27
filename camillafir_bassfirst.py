@@ -13,14 +13,14 @@ def _log_grad(x, f):
     return dx_df * np.maximum(f, 1.0)
 
 def _baseline_heavy(freqs, mags_db, sigma_hz=6.0):
-    # Hz-vakioinen pehmennys log-asteikolla: approksimoidaan bin-sigmalla
-    # (riittävä tähän käyttöön ja nopea)
+    # Hz-constant smoothing in log scale: approximate with bin-sigma
+    # (sufficient for this use case and fast)
     df = np.median(np.diff(freqs[np.isfinite(freqs)])) if len(freqs) > 2 else 1.0
     sigma_bins = max(1.0, float(sigma_hz / max(df, 1e-9)))
     return scipy.ndimage.gaussian_filter1d(mags_db, sigma=sigma_bins)
 
 def _freq_prior(freqs, f1=120.0, f2=200.0):
-    # 1.0 alle f1, lineaarinen lasku f1..f2, 0 yli f2
+    # 1.0 below f1, linear decline f1..f2, 0 above f2
     p = np.ones_like(freqs, dtype=float)
     p[freqs >= f2] = 0.0
     mid = (freqs >= f1) & (freqs < f2)

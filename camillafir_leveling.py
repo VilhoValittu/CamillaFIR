@@ -1,14 +1,14 @@
 """
-CamillaFIR DSP - Tasosovitus (leveling) eriytettynä moduulina.
+CamillaFIR DSP - Leveling as a separate module.
 
-Tavoite
-- Yksi paikka kaikelle tasosovituksen/SmartScanin logiikalle
-- Robustit fallbackit (tyhjät maskit, NaN/inf, out-of-range)
-- Helppo yksikkötestata
+Goal
+- Single place for all leveling/SmartScan logic
+- Robust fallbacks (empty masks, NaN/inf, out-of-range)
+- Easy to unit test
 
-Huom
-- Tämä moduuli ei tee I/O:ta eikä riipu CamillaFIR:n muista sisäisistä funktioista.
-- Palautusarvot ovat aina määriteltyjä ja finittejä (erityisesti calc_offset_db).
+Note
+- This module does not do I/O and does not depend on other internal CamillaFIR functions.
+- Return values are always defined and finite (especially calc_offset_db).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ __all__ = [
 
 
 def _to_float(x, default: float) -> float:
-    """Parsi x floatiksi; jos epäonnistuu tai ei-finite, palauta default."""
+    """Parse x as float; if it fails or is non-finite, return default."""
     try:
         v = float(x)
     except Exception:
@@ -43,9 +43,9 @@ def find_stable_level_window(
     hpf_freq: float = 0.0,
 ) -> Tuple[float, float]:
     """
-    Etsii alueen, jossa mittaus seuraa tavoitekäyrän muotoa vakaimmin.
+    Finds the region where the measurement follows the target curve shape most stably.
 
-    Palauttaa (s_min, s_max). Fallbackaa (f_min, f_max) jos ei löydy kelvollista ikkunaa.
+    Returns (s_min, s_max). Falls back to (f_min, f_max) if no valid window is found.
     """
     try:
         f_min = _to_float(f_min, 0.0)
@@ -56,7 +56,7 @@ def find_stable_level_window(
         if f_min <= 0 or f_max <= 0 or f_min >= f_max:
             return float(f_min), float(f_max)
 
-        # Väistä HPF-aluetta jos mahdollista
+        # Avoid HPF area if possible
         safe_f_min = max(float(f_min), float(hpf_freq) * 1.5)
         if safe_f_min >= float(f_max) * 0.8:
             safe_f_min = float(f_min)
@@ -64,30 +64,30 @@ def find_stable_level_window(
         mask = (freq_axis >= safe_f_min) & (freq_axis <= float(f_max))
         f_search = freq_axis[mask]
 
-        # Tarkastellaan erotusta tavoitteeseen (poistaa tilt-vaikutuksen)
+        # Look at difference to target (removes tilt effect)
         m_search = (magnitudes - target_mags)[mask]
 
-        # Liian vähän pisteitä => ei luotettavaa ikkunaa
+        # Too few points => no reliable window
         if f_search.size < 50:
             return float(f_min), float(f_max)
 
         best_score = float("inf")
         res_min, res_max = float(safe_f_min), float(f_max)
 
-        # liu'uta ikkunaa log-asteikolla
+        # Slide window on log scale
         current_f = float(safe_f_min)
-        step = 2 ** (1 / 24.0)  # ~1/24 oktaavi
+        step = 2 ** (1 / 24.0)  # ~1/24 octave
 
         while current_f * (2 ** float(window_size_octaves)) <= float(f_max):
             w_start = current_f
             w_end = current_f * (2 ** float(window_size_octaves))
             w_mask = (f_search >= w_start) & (f_search <= w_end)
             if np.any(w_mask):
-                # std erotuskäyrästä = "vakaisuus"
+                # std from difference curve = "stability"
                 std = float(np.std(m_search[w_mask]))
 
-                # kevyt painotus kohti keskialuetta (ettei valita vain matalinta)
-                # (pieni vaikutus, mutta auttaa outoihin dataihin)
+                # Light weighting towards center area (prevents selecting only the lowest)
+                # (small effect, but helps with strange data)
                 weight = 1.0 + 0.05 * abs(np.log10(max(w_start, 1.0) / 1000.0))
                 score = std * weight
 
@@ -97,7 +97,7 @@ def find_stable_level_window(
 
             current_f *= step
 
-        # jos ei löytynyt mitään järkevää
+        # if nothing reasonable was found
         if not np.isfinite(best_score):
             return float(f_min), float(f_max)
 
@@ -109,17 +109,17 @@ def find_stable_level_window(
 
 def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags: np.ndarray):
     """
-    Laskee tasosovituksen (offset) robustisti.
+    Calculates leveling (offset) robustly.
 
-    Palauttaa:
+    Returns:
       target_level_db, calc_offset_db, meas_level_db_window, target_level_db_window,
       offset_method, s_min, s_max
 
-    Huom:
-      - calc_offset_db on aina määritelty ja finitti
-      - tyhjälle maskille ei tehdä mean/median-opeja
+    Note:
+      - calc_offset_db is always defined and finite
+      - no mean/median operations are performed on empty masks
     """
-    # perusarvot (aina määritelty)
+    # basic values (always defined)
     target_level_db = 0.0
     calc_offset_db = 0.0
     meas_level_db_window = 0.0
@@ -128,13 +128,13 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
 
     manual_target_db = _to_float(getattr(cfg, "lvl_manual_db", 75.0), 75.0)
 
-    # user-range (käytetään myös palautuksessa)
+    # user-range (also used in return)
     s_min = _to_float(getattr(cfg, "lvl_min", 500.0), 500.0)
     s_max = _to_float(getattr(cfg, "lvl_max", 2000.0), 2000.0)
 
-    # perusvalidointi
+    # basic validation
     if s_min <= 0 or s_max <= 0 or s_min >= s_max:
-        # viimeinen järkevä fallback
+        # last reasonable fallback
         s_min, s_max = 500.0, 2000.0
 
     mode = str(getattr(cfg, "lvl_mode", "Auto"))
@@ -257,7 +257,7 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
 
     mask = (freq_axis >= ss_min) & (freq_axis <= ss_max)
 
-    # Jos ikkuna liian pieni, yritä perus "hifi" fallback user-rangeen clämpättynä
+    # If window too small, try basic "hifi" fallback clamped to user-range
     if np.count_nonzero(mask) < 20:
         fb_min = max(s_min, 350.0)
         fb_max = min(s_max, 5000.0)
@@ -265,7 +265,7 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
             ss_min, ss_max = fb_min, fb_max
             mask = (freq_axis >= ss_min) & (freq_axis <= ss_max)
 
-    # Viimeinen fallback: koko user-range
+    # Last fallback: entire user-range
     if np.count_nonzero(mask) < 20:
         ss_min, ss_max = s_min, s_max
         mask = (freq_axis >= ss_min) & (freq_axis <= ss_max)
@@ -276,7 +276,7 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
         calc_offset_db = float(np.median(m_anal[mask] - target_mags[mask]))
         offset_method = "SmartScanMedian"
     else:
-        # TÄRKEÄ: älä tee mitään tyhjille taulukoille.
+        # IMPORTANT: don't do anything with empty arrays.
         calc_offset_db = 0.0
         meas_level_db_window = 0.0
         target_level_db_window = 0.0
@@ -287,7 +287,7 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
     # - Auto/SmartScan: follow measured SPL in the chosen stable window
     target_level_db = float(manual_target_db) if is_manual else float(meas_level_db_window)
 
-    # Safety: pakota finitteys
+    # Safety: force finitenness
     if not np.isfinite(calc_offset_db):
         calc_offset_db = 0.0
 
