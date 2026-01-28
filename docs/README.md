@@ -40,7 +40,7 @@ Development inspired by the methodologies of **OCA** (Obsessive Compulsive Audio
 
 ---
 
-**[Download Standalone EXE](https://drive.google.com/drive/folders/1AkESLDo-UhPqxDCdaZuXE6u8-H4EDuOI)**
+**[Download Standalone EXE](https://drive.google.com/drive/folders/1-nYtB5hmM-tob7URk8JRrOZA10QUjnfV?usp=sharing)**
 
 ---
 
