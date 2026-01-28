@@ -8,6 +8,11 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 
 ---
 
+## [2.8.2] - 2026-01-27
+
+### Ui-update
+- improved robustness of file upload parsing from browser & added xo_help translation
+
 ## [v2.8.1.2] - 2026-01-27   
 
 ### Fixed

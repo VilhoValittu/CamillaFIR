@@ -1,5 +1,7 @@
 {
     "en": {
+        "txt_upload_no_data": "TXT upload failed: no valid measurement data found (at least frequency + magnitude required).",
+        "txt_upload_parse_error": "TXT upload failed: error while parsing file or unsupported format.",
         "guide_modes_title": "Modes: BASIC vs ADVANCED",
         "guide_modes_body": "CamillaFIR has two operating modes. **The DSP engine is the same**; modes only change defaults and (in BASIC) apply hard safety limits.\n\n---\n\n## BASIC (recommended)\n**Goal:** predictable results with guard rails.\n\n**What BASIC does (policy):**\n- Applies conservative defaults and **hard clamps** to prevent extreme boost/cut and overly sharp corrections.\n- Keeps the workflow stable for most rooms/systems.\n\n**BASIC defaults (from `camillafir_modes.py`):**\n- Max boost / cut: **+5 dB / −15 dB** (hard clamp up to +6/−15)\n- Correction band: **20–250 Hz** (mag_c_min / mag_c_max)\n- Phase limit: **600 Hz**\n- Smoothing: **Psychoacoustic**, level **12** (≈ 1/12 oct)\n- TDC: **ON** (strength **50%**, max reduction **9 dB**, slope **6 dB/oct**)\n- A-FDW: **ON** (FDW cycles **10**)\n- Bass-first AI: **ON**, mode max **180 Hz**\n- Leveling: **Auto + Median**, **500–2000 Hz**, **Stereo-link ON**\n- Low-bass cuts-only hint: **30 Hz**\n\n---\n\n## ADVANCED (expert)\n**Goal:** fewer constraints; you are responsible for the result.\n\n**What ADVANCED does (policy):**\n- Applies expert defaults and **does not clamp** values by mode policy.\n- Lets you push larger boost/cut and disable slope limiting by default.\n\n**ADVANCED defaults (from `camillafir_modes.py`):**\n- Max boost / cut: **+8 dB / −20 dB**\n- Correction band: **10–200 Hz**\n- Phase limit: **600 Hz**\n- Slope limits: **OFF by default** (0 = off)\n- DF smoothing: **OFF by default**\n- Leveling window: **200–3000 Hz**, **Stereo-link OFF**\n- Low-bass cuts-only hint: **OFF (0 Hz)**\n\n**Tip:** If you want repeatable “set and forget” behavior, keep **BASIC\"",
         "afdw_preset_tight": "Tight (REW/VBA)",
@@ -263,13 +265,18 @@
         "mode_advanced_desc": "Expert mode. No constraints and no mode clamps. You are responsible for the result.",
         "mode_apply_defaults_btn": "Apply mode defaults",
         "mode_apply_defaults_help": "Applies the selected mode’s recommended defaults. This will overwrite your current values.",
-        "mode_defaults_applied_toast": "Mode defaults applied: {mode}"
+        "mode_defaults_applied_toast": "Mode defaults applied: {mode}",
+        "tab_xo_help": "Define theoretical crossover filters between bands. XO filters shape only the crossover region and do not perform room correction. Leave unused XO slots empty.",
+        "xo_freq_help": "Crossover frequency in Hz. This creates a theoretical split point between bands and defines where the crossover filter is centered. Leave empty to disable this XO stage.",
+        "xo_slope_help": "Crossover slope in dB/oct. Steeper slopes give stronger band separation but increase phase rotation and ringing. Typical values are 12–24 dB/oct."
 
 
 
     },
     
     "fi": {
+        "txt_upload_no_data": "TXT-lataus epäonnistui: tiedostosta ei löytynyt kelvollista mittausdataa (tarvitaan vähintään taajuus + magnitudi).",
+        "txt_upload_parse_error": "TXT-lataus epäonnistui: virhe tiedoston muodossa tai sisällössä.",
         "guide_modes_title": "Tilat: BASIC vs ADVANCED",
         "guide_modes_body": "CamillaFIR:ssä on kaksi toimintatilaa. **DSP-moottori on sama**; tilat muuttavat vain oletuksia ja (BASIC-tilassa) asettavat kovat turvarajat.\n\n---\n\n## BASIC (suositus)\n**Tavoite:** ennustettava lopputulos turvakaiteilla.\n\n**Mitä BASIC tekee (policy):**\n- Asettaa varovaiset oletukset ja **kovat clampit**, jotta boost/cut ja liian terävä korjaus eivät karkaa.\n- Pitää käytöksen vakaana useimmissa huoneissa/järjestelmissä.\n\n**BASIC-oletukset (`camillafir_modes.py`):**\n- Max boost / cut: **+5 dB / −15 dB** (kova clamp max +6/−15)\n- Korjauskaista: **20–250 Hz** (mag_c_min / mag_c_max)\n- Phase limit: **600 Hz**\n- Smoothing: **Psychoacoustic**, taso **12** (≈ 1/12 oktaavi)\n- TDC: **PÄÄLLÄ** (voimakkuus **50%**, max reduktio **9 dB**, slope **6 dB/okt**)\n- A-FDW: **PÄÄLLÄ** (FDW cycles **10**)\n- Bass-first AI: **PÄÄLLÄ**, mode max **180 Hz**\n- Leveling: **Auto + Mediaani**, **500–2000 Hz**, **Stereo-link PÄÄLLÄ**\n- Low-bass cuts-only -vihje: **30 Hz**\n\n---\n\n## ADVANCED (expert)\n**Tavoite:** vähemmän rajoituksia; käyttäjä vastaa lopputuloksesta.\n\n**Mitä ADVANCED tekee (policy):**\n- Asettaa expert-oletukset ja **ei clamppaa** arvoja moodin puolesta.\n- Sallii isommat boost/cut-arvot ja slope-limiterit pois oletuksena.\n\n**ADVANCED-oletukset (`camillafir_modes.py`):**\n- Max boost / cut: **+8 dB / −20 dB**\n- Korjauskaista: **10–200 Hz**\n- Phase limit: **600 Hz**\n- Slope-rajat: **POIS oletuksena** (0 = off)\n- DF smoothing: **POIS oletuksena**\n- Leveling-alue: **200–3000 Hz**, **Stereo-link POIS**\n- Low-bass cuts-only -vihje: **POIS (0 Hz)**\n\n**Vinkki:** Jos haluat “aseta ja unohda” -tyylin, pysy **BASIC**-tilassa.",
         "afdw_preset_tight": "Tiukka",
@@ -536,7 +543,10 @@
         "mode_advanced_desc": "Expert-tila. Ei rajoituksia eikä moodi-clamppeja. Vastuu lopputuloksesta on käyttäjällä.",
         "mode_apply_defaults_btn": "Aseta tilan oletukset",
         "mode_apply_defaults_help": "Asettaa valitun tilan suositellut oletukset. Tämä yliajaa nykyiset arvosi.",
-        "mode_defaults_applied_toast": "Tilan oletukset asetettu: {mode}"
+        "mode_defaults_applied_toast": "Tilan oletukset asetettu: {mode}",
+        "tab_xo_help": "Määritä teoreettiset jakosuodattimet kaistojen välille. XO-suodattimet vaikuttavat vain jakotaajuusalueeseen eivätkä tee huonekorjausta. Jätä käyttämättömät XO-kohdat tyhjiksi.",
+        "xo_freq_help": "Jakotaajuus (Hz). Määrittää teoreettisen kaistojen välisen jakopisteen ja suodattimen keskitaajuuden. Jätä tyhjäksi poistaaksesi tämän XO-vaiheen käytöstä.",
+        "xo_slope_help": "Jakosuodattimen jyrkkyys (dB/okt). Jyrkempi arvo erottaa kaistat selvemmin, mutta lisää vaihekiertoa ja mahdollisia soimisia. Tyypilliset arvot ovat 12–24 dB/okt."
 
     }
 }

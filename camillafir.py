@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import zipfile
+import typing
 from datetime import datetime
 from textwrap import dedent
 
@@ -33,9 +34,10 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.8.1.2"  # bug fix for modes selection, that was not saving ui state correctly
+VERSION = "v2.8.2"  # robusted file upload from browser & added xo_help translation
 
 # Change log:
+# v.2.8.2: [UI] improved robustness of file upload parsing from browser & added xo_help translation
 # "v2.8.1.2" [UI/DSP] bug fix for modes selection, that was not saving ui state correctly
 # "v2.8.1.1" [UI] small ui-update for modes selection
 # v2.8.1: [DSP] fix A-FDW bandwidth limits & UI display
@@ -630,48 +632,71 @@ def update_status(msg):
 def parse_measurements_from_bytes(file_content):
     """Reads measurement data (REW export) from bytes robustly."""
     try:
-        # Decode bytes to text
-        content_str = file_content.decode('utf-8', errors='ignore')
-        lines = content_str.split('\n')
-        
+        from pywebio.output import toast
+
+        # Decode bytes to text (also accept str just in case)
+        if isinstance(file_content, (bytes, bytearray)):
+            content_str = file_content.decode('utf-8', errors='ignore')
+        else:
+            content_str = str(file_content)
+
+        lines = content_str.splitlines()
         freqs, mags, phases = [], [], []
-        
+
         for line in lines:
             line = line.strip()
-            # Skip empty lines and comments (* or #)
-            if not line or line.startswith(('*', '#')):
+
+            # Skip comments and empty lines (match path parser)
+            if not line or line.startswith(('*', '#', ';')):
                 continue
-            
-            # Try to identify if line is data (starts with digit)
+
+            # Skip lines that don't start with a digit
             if not line[0].isdigit() and line[0] != '-':
                 continue
-                
-            # Replace comma with period (European format compatibility)
-            line = line.replace(',', '.')
-            
-            # Split by spaces/tabs
+
+            # --- SMART SEPARATOR DETECTION (match parse_measurements_from_path) ---
+            if ',' in line and '.' in line:
+                line = line.replace(',', ' ')
+            else:
+                line = line.replace(',', '.')
+            # ---------------------------------------------------------------------
+
             parts = line.split()
-            
-            if len(parts) >= 3:
+            if len(parts) >= 2:
                 try:
-                    f = float(parts[0])
-                    m = float(parts[1])
-                    p = float(parts[2])
-                    
-                    freqs.append(f)
-                    mags.append(m)
-                    phases.append(p)
+                    f_val = float(parts[0])
+                    m_val = float(parts[1])
+                    p_val = float(parts[2]) if len(parts) > 2 else 0.0
+                    freqs.append(f_val)
+                    mags.append(m_val)
+                    phases.append(p_val)
                 except ValueError:
                     continue
-        
+
         if len(freqs) == 0:
+            try:
+                toast(
+                    t("txt_upload_no_data"),
+                    color="warning",
+                    duration=4.0,
+                )
+            except Exception:
+                pass
             return None, None, None
-            
+
         return np.array(freqs), np.array(mags), np.array(phases)
 
-    except Exception as e:
-        print(f"Error parsing file: {e}")
+    except Exception:
+        try:
+            toast(
+                t("txt_upload_parse_error"),
+                color="error",
+                duration=4.0,
+            )
+        except Exception:
+            pass
         return None, None, None
+
 
 # clear() can be output.clear, but use_scope(clear=True) handles it
 
@@ -992,10 +1017,6 @@ def load_config():
         'low_bass_cut_hz': 40.0,    # below this frequency only cuts allowed (no boosts)
         'hpf_enable': False, 'hpf_freq': 20.0, 'hpf_slope': 24,
         'local_path_l': '', 'local_path_r': '',
-        #'input_source': 'file',             # 'file' | 'rew_api'
-        #'rew_api_base_url': 'http://127.0.0.1:4735',
-        #'rew_meas_left': '',
-        #'rew_meas_right': '',
         'xo1_f': None, 'xo1_s': 12, 'xo2_f': None, 'xo2_s': 12,
         'xo3_f': None, 'xo3_s': 12, 'xo4_f': None, 'xo4_s': 12, 'xo5_f': None, 'xo5_s': 12,
         'mixed_freq': 300.0, 'phase_limit': 600.0,
@@ -1454,10 +1475,28 @@ put_markdown("---"),
 
 #--- #5 XO
     tab_xo = [
-        put_markdown(f"### ❌ {t('tab_xo')}"), 
+        put_markdown(f"### ❌ {t('tab_xo')}"),
+        put_html(
+            f"<div style='opacity:0.75; font-size:13px; margin-top:-6px;'>"
+            f"{t('tab_xo_help')}"
+            f"</div>"
+        ),
+        put_markdown("---"),
         put_grid([[
-            put_input(f'xo{i}_f', label=f"XO {i} Hz", type=FLOAT, value=get_val(f'xo{i}_f', None), help_text=t('xo_freq_help')), 
-            put_select(f'xo{i}_s', label="dB/oct", options=slope_opts, value=get_val(f'xo{i}_s', 12), help_text=t('xo_slope_help'))
+            put_input(
+                f'xo{i}_f',
+                label=f"XO {i} Hz",
+                type=FLOAT,
+                value=get_val(f'xo{i}_f', None),
+                help_text=t('xo_freq_help')
+            ),
+            put_select(
+                f'xo{i}_s',
+                label="dB/oct",
+                options=slope_opts,
+                value=get_val(f'xo{i}_s', 12),
+                help_text=t('xo_slope_help')
+            )
         ] for i in range(1, 6)])
     ]
 
@@ -1511,7 +1550,7 @@ put_markdown("---"),
 def _collect_ui_data():
     p_keys = [
         'mode','fs', 'taps', 'filter_type', 'mixed_freq', 'gain', 'hc_mode',
-        'mag_c_min', 'mag_c_max', 'input_source', 'rew_api_base_url', 'rew_meas_left', 'rew_meas_right', 'max_boost', 'max_cut_db', 'max_slope_db_per_oct',
+        'mag_c_min', 'mag_c_max', 'max_boost', 'max_cut_db', 'max_slope_db_per_oct',
         'max_slope_boost_db_per_oct', 'max_slope_cut_db_per_oct', 'phase_limit', 'phase_safe_2058', 'mag_correct',
         'lvl_mode', 'reg_strength', 'normalize_opt', 'align_opt',
         'stereo_link', 'exc_prot', 'exc_freq', 'low_bass_cut_hz', 'hpf_enable', 'hpf_freq',
@@ -1558,62 +1597,13 @@ def _log_df_smoothing_toggle():
 
 
 def _load_measurements(data):
-    # --- REW (API) FIRST: if selected, skip file parsing entirely ---
-    if str(data.get('input_source') or 'file') == 'rew_api':
-        try:
-            from camillafir_rew_api import RewApiClient, RewMeasurementMeta
-        except Exception as e:
-            raise RuntimeError(f"Missing camillafir_rew_api.py: {e}")
-
-        base_url = str(data.get('rew_api_base_url') or "http://127.0.0.1:4735")
-        left_id  = str(data.get('rew_meas_left') or "")
-        right_id = str(data.get('rew_meas_right') or "")
-
-        if not left_id or not right_id:
-            # keep same return-contract as file path: (f_l,m_l,p_l,f_r,m_r,p_r)
-            return None, None, None, None, None, None
-
-        client = RewApiClient(base_url=base_url)
-        if not client.ping():
-            raise RuntimeError("REW API not reachable. Open REW and enable API.")
-
-        client.discover_operation_ids()
-
-        # Fetch only FR for now (freq/mag/phase). Keep it symmetric with txt/wav pipeline.
-        mL = RewMeasurementMeta(id=left_id, name="Left")
-        mR = RewMeasurementMeta(id=right_id, name="Right")
-
-        # --- Fetch FR explicitly via discovered operationId ---
-        if not client.op_get_fr:
-            raise RuntimeError("REW API: FR operation not found in OpenAPI spec.")
-
-                # --- Use robust client parser (handles dict-indexed arrays "1","2",... etc.) ---
-        fr_obj_L = client.get_frequency_response(left_id)
-        fr_obj_R = client.get_frequency_response(right_id)
-
-        if fr_obj_L is None or fr_obj_R is None:
-            raise RuntimeError(
-                f"REW did not return usable FR data. L={left_id}, R={right_id}"
-            )
-
-        f_l = np.asarray(fr_obj_L.freqs_hz, dtype=float)
-        m_l = np.asarray(fr_obj_L.mag_db, dtype=float)
-        p_l = np.asarray(fr_obj_L.phase_rad, dtype=float) if fr_obj_L.phase_rad is not None else np.zeros_like(m_l)
-
-        f_r = np.asarray(fr_obj_R.freqs_hz, dtype=float)
-        m_r = np.asarray(fr_obj_R.mag_db, dtype=float)
-        p_r = np.asarray(fr_obj_R.phase_rad, dtype=float) if fr_obj_R.phase_rad is not None else np.zeros_like(m_r)
-
-        return f_l, m_l, p_l, f_r, m_r, p_r
-
-
-
-    # UI-driven IR windows (ms) + smoothing for WAV parsing
-    try:
-        pre_ms = float(data.get("ir_window_left", 50.0) or 50.0)
-    except Exception:
-        pre_ms = 50.0
-    ...
+    """
+    Load measurements for Left/Right.
+    Priority:
+      1) Browser upload (pin.file_l / pin.file_r)
+      2) Local path fields (local_path_l / local_path_r)
+    REW-API mode removed (not used).
+    """
 
     # UI-driven IR windows (ms) + smoothing for WAV parsing
     try:
@@ -1629,50 +1619,44 @@ def _load_measurements(data):
     except Exception:
         sl = 0
 
-    # First: local paths (can be .txt or .wav; parse_measurements_from_path handles both)
-    f_l, m_l, p_l = parse_measurements_from_path(data["local_path_l"]) if data.get("local_path_l") else (None, None, None)
-    f_r, m_r, p_r = parse_measurements_from_path(data["local_path_r"]) if data.get("local_path_r") else (None, None, None)
+    # 1) Browser uploads
+    try:
+        up_l = pin['file_l']
+    except Exception:
+        up_l = None
+    try:
+        up_r = pin['file_r']
+    except Exception:
+        up_r = None
 
-    # Then: upload priority (WAV wins; then fallback)
-    # LEFT
-    if pin.file_l and str(pin.file_l.get("filename", "")).lower().endswith(".wav"):
+    has_up_l = isinstance(up_l, dict) and (up_l.get("content") is not None)
+    has_up_r = isinstance(up_r, dict) and (up_r.get("content") is not None)
+
+    if has_up_l and has_up_r:
         f_l, m_l, p_l = parse_measurements_from_upload(
-            pin.file_l,
-            channel_index=0,
+            up_l,
             pre_ms=pre_ms,
             post_ms=post_ms,
-            smoothing_level=sl,
+            smoothing_level=sl
         )
-    elif f_l is None and pin.file_l:
-        # TXT upload fallback (or unknown ext)
-        f_l, m_l, p_l = parse_measurements_from_upload(
-            pin.file_l,
-            channel_index=0,
-            pre_ms=pre_ms,
-            post_ms=post_ms,
-            smoothing_level=sl,
-        )
-
-    # RIGHT
-    if pin.file_r and str(pin.file_r.get("filename", "")).lower().endswith(".wav"):
         f_r, m_r, p_r = parse_measurements_from_upload(
-            pin.file_r,
-            channel_index=0,
+            up_r,
             pre_ms=pre_ms,
             post_ms=post_ms,
-            smoothing_level=sl,
+            smoothing_level=sl
         )
-    elif f_r is None and pin.file_r:
-        f_r, m_r, p_r = parse_measurements_from_upload(
-            pin.file_r,
-            channel_index=0,
-            pre_ms=pre_ms,
-            post_ms=post_ms,
-            smoothing_level=sl,
-        )
+        if f_l is not None and f_r is not None:
+            return f_l, m_l, p_l, f_r, m_r, p_r
 
-    return f_l, m_l, p_l, f_r, m_r, p_r
+    # 2) Local paths fallback
+    lp_l = str(data.get("local_path_l", "") or "").strip()
+    lp_r = str(data.get("local_path_r", "") or "").strip()
+    if lp_l and lp_r:
+        f_l, m_l, p_l = parse_measurements_from_path(lp_l)
+        f_r, m_r, p_r = parse_measurements_from_path(lp_r)
+        return f_l, m_l, p_l, f_r, m_r, p_r
 
+    return None, None, None, None, None, None
 
 
 def _load_house_curve(data):
@@ -2131,10 +2115,10 @@ def process_run():
     data = _collect_ui_data()
     save_config(data)
 
-    # 2) Measurements (file OR REW API) via the new loader
+    # 2) Measurements (upload OR local paths)
     f_l, m_l, p_l, f_r, m_r, p_r = _load_measurements(data)
     if f_l is None or f_r is None:
-        toast("Mittaustiedostot / REW valinnat puuttuvat!", color='red')
+        toast("Measurement files missing! Load Left/Right or give local.", color='red')
         return
 
     # 3) Target / house curve
@@ -2185,28 +2169,40 @@ def process_run():
 
 
             # Tag measurement source for DSP (bass-first AI tuning).
-            # WAV/IR-derived responses often have noisier phase/GD derivatives than REW exports.
+            # WAV/IR-derived responses often have noisier phase/GD derivatives than TXT exports.
             try:
-                src = str(data.get('input_source', 'file') or 'file')
+                lp_l_s = str(data.get('local_path_l', '') or '').lower()
+                lp_r_s = str(data.get('local_path_r', '') or '').lower()
             except Exception:
-                src = 'file'
-            is_wav = False
-            if src == 'file':
-                try:
-                    lp_l = str(data.get('local_path_l', '') or '').lower()
-                    lp_r = str(data.get('local_path_r', '') or '').lower()
-                except Exception:
-                    lp_l, lp_r = '', ''
-                try:
-                    up_l = str(pin.file_l.get('filename', '') or '').lower() if getattr(pin, 'file_l', None) else ''
-                    up_r = str(pin.file_r.get('filename', '') or '').lower() if getattr(pin, 'file_r', None) else ''
-                except Exception:
-                    up_l, up_r = '', ''
-                is_wav = (lp_l.endswith('.wav') or lp_r.endswith('.wav') or up_l.endswith('.wav') or up_r.endswith('.wav') or str(data.get('fmt','')).upper() == 'WAV')
+                lp_l_s, lp_r_s = '', ''
+
+            try:
+                up_l_s = (
+                    str(pin['file_l'].get('filename', '') or '').lower()
+                    if isinstance(pin.get('file_l', None), dict)
+                    else ''
+                )
+                up_r_s = (
+                    str(pin['file_r'].get('filename', '') or '').lower()
+                    if isinstance(pin.get('file_r', None), dict)
+                    else ''
+                )
+            except Exception:
+                up_l_s, up_r_s = '', ''
+
+            is_wav = (
+                lp_l_s.endswith('.wav')
+                or lp_r_s.endswith('.wav')
+                or up_l_s.endswith('.wav')
+                or up_r_s.endswith('.wav')
+                or str(data.get('fmt', '')).upper() == 'WAV'
+            )
+
             try:
                 setattr(cfg, "is_wav_source", bool(is_wav))
             except Exception:
                 pass
+
 
             _log_df_smoothing_for_fs(cfg, fs_v, df_on)
 
