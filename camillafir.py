@@ -33,9 +33,10 @@ logger = logging.getLogger("CamillaFIR")
 CONFIG_FILE = 'config.json'
 TRANS_FILE = 'translations.json'
 
-VERSION = "v2.8.1.1"  # small ui-update for modes selection
+VERSION = "v2.8.1.2"  # bug fix for modes selection, that was not saving ui state correctly
 
 # Change log:
+# "v2.8.1.2" [UI/DSP] bug fix for modes selection, that was not saving ui state correctly
 # "v2.8.1.1" [UI] small ui-update for modes selection
 # v2.8.1: [DSP] fix A-FDW bandwidth limits & UI display
 # v2.8.0: [UI] removed html dashboard export (now PNG only)
@@ -1785,7 +1786,9 @@ def _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m):
         mode = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
     except Exception:
         mode = "BASIC"
-    cfg = apply_mode_to_cfg(cfg, mode)
+    # Runtime: do NOT overwrite user-entered values with mode defaults.
+    # Mode is enforced via clamps/forced booleans; defaults are applied only via the UI button.
+    cfg = apply_mode_to_cfg(cfg, mode, apply_defaults=False)
     return cfg
 
 

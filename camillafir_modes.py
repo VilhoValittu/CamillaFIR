@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Dict, Any, Tuple
 from models import FilterConfig  # uses your existing dataclass fields :contentReference[oaicite:1]{index=1}
 
+#Version: v0.1.1
 
 def _clamp_float(v, lo: float, hi: float) -> float:
     try:
@@ -57,9 +58,9 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 
         # --- CORRECTION LIMITS ---
         "enable_mag_correction": True,
-        "mag_c_min": 10.0,
+        "mag_c_min": 25.0,
         "mag_c_max": 250.0,
-        "max_boost_db": 5.0,
+        "max_boost_db": 3.0,
         "max_cut_db": 30.0,
 
         # Phase: allow, but still bounded by other rails
@@ -87,7 +88,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 
         # --- IR WINDOW / MIXED ---
         "ir_window_ms": 500.0,
-        "ir_window_ms_left": 10.0,
+        "ir_window_ms_left": 100.0,
         "mixed_split_freq": 300.0,
         "trans_width": 100.0,
 
@@ -105,7 +106,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 
         # --- PROTECTIONS ---
         "do_normalize": False,
-        "exc_prot": False,
+        "exc_prot": True,
         "low_bass_cut_hz": 50.0,
     },
 
@@ -115,23 +116,24 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "global_gain_db": 0.0,
 
         "enable_mag_correction": True,
-        "mag_c_min": 10.0,
+        "mag_c_min": 18.0,
         "mag_c_max": 200.0,
-        "max_boost_db": 8.0,
-        "max_cut_db": 20.0,
+        "max_boost_db": 3.0,
+        "max_cut_db": 30.0,
 
         "phase_safe_2058": False,
-        "phase_limit": 600.0,
+        "phase_limit": 400.0,
 
         "smoothing_type": "Psychoacoustic",
-        "smoothing_level": 12,
+        "smoothing_level": 24,
         "fdw_cycles": 10.0,
         "reg_strength": 30.0,
 
         # Off by default: user decides
-        "max_slope_db_per_oct": 0.0,
+        "max_slope_db_per_oct": 24.0,
         "max_slope_boost_db_per_oct": 0.0,
         "max_slope_cut_db_per_oct": 0.0,
+        # Auto by default: internal normalization (no UI control)
         "df_smoothing": False,
 
         "enable_tdc": True,
@@ -141,7 +143,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "enable_afdw": True,
 
         "ir_window_ms": 500.0,
-        "ir_window_ms_left": 10.0,
+        "ir_window_ms_left": 50.0,
 
         "bass_first_ai": True,
         "bass_first_mode_max_hz": 200.0,
@@ -155,7 +157,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 
         "do_normalize": False,
         "exc_prot": False,
-        "low_bass_cut_hz": 0.0,
+        "low_bass_cut_hz": 15.0,
     },
 }
 
@@ -176,8 +178,11 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
 
         "enable_afdw": (True, True),
         "fdw_cycles": (6.0, 16.0),
-
-        "low_bass_cut_hz": (0.0, 40.0),
+        # Correction band guard rails (BASIC)
+        "mag_c_min": (18.0, 300.0),
+        "mag_c_max": (18.0, 300.0),
+        "phase_limit": (200.0, 1000.0),
+        "low_bass_cut_hz": (20.0, 100.0),
     },
 
     # ADVANCED: no clamps
@@ -185,7 +190,7 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
 }
 
 
-def apply_mode_to_cfg(cfg: FilterConfig, mode: str | None) -> FilterConfig:
+def apply_mode_to_cfg(cfg: FilterConfig, mode: str | None, *, apply_defaults: bool = False) -> FilterConfig:
     """
     Apply mode defaults + clamps to an existing FilterConfig.
 
@@ -201,6 +206,7 @@ def apply_mode_to_cfg(cfg: FilterConfig, mode: str | None) -> FilterConfig:
     if m not in MODE_DEFAULTS:
         m = "BASIC"
 
-    _apply_defaults(cfg, MODE_DEFAULTS[m])
+    if apply_defaults:
+        _apply_defaults(cfg, MODE_DEFAULTS[m])
     _apply_clamps(cfg, MODE_CLAMPS.get(m, {}))
     return cfg
