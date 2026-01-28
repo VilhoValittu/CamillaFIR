@@ -8,6 +8,14 @@ import camillafir_bassfirst as bf
 logger = logging.getLogger("CamillaFIR.dsp")
 from models import FilterConfig
 from camillafir_leveling import compute_leveling
+from camillafir_analysis import (
+    _sigma_bins_from_hz as _sigma_bins_from_hz_analysis,
+    analyze_acoustic_confidence as analyze_acoustic_confidence_analysis,
+    calculate_rt60 as calculate_rt60_analysis,
+    calculate_rt60_bands as calculate_rt60_bands_analysis,
+    _third_oct_centers as _third_oct_centers_analysis,
+)
+
 #CamillaFIR DSP Engine v1.0.9
 
 #1.0.2 Fix comma mistake at HPF
@@ -457,24 +465,8 @@ def interpolate_response(input_freqs, input_values, target_freqs):
     return np.interp(target_freqs, input_freqs, input_values)
 
 def _sigma_bins_from_hz(freq_axis, sigma_hz: float, fallback_bins: float = 3.0) -> float:
-    """
-    Convert smoothing width (Hz) to gaussian_filter1d sigma value (in bins).
-    freq_axis is assumed to be increasing and roughly evenly spaced.
-    """
-    try:
-        f = np.asarray(freq_axis, dtype=float)
-        if f.size < 4:
-            return float(fallback_bins)
-        # Use median, robust to small irregularities
-        df = np.median(np.diff(f))
-        if not np.isfinite(df) or df <= 0:
-            return float(fallback_bins)
-        s = float(sigma_hz) / float(df)
-        if not np.isfinite(s) or s <= 0:
-            return float(fallback_bins)
-        return float(max(1.0, s))
-    except Exception:
-        return float(fallback_bins)
+    return _sigma_bins_from_hz_analysis(freq_axis, sigma_hz=sigma_hz, fallback_bins=fallback_bins)
+
 
 
 def calculate_group_delay(freqs, phases_deg):
@@ -510,214 +502,19 @@ def remove_time_of_flight(freq_axis, phase_rad):
     poly = np.polyfit(freq_axis[mask], phase_rad[mask], 1)
     return phase_rad - (poly[0] * freq_axis), poly[0]
 
+# ------------- camillafir_analysis.py ---------
 def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
-    """Analyze acoustic confidence with scalable resolution."""
-    phase_rad = np.unwrap(np.angle(complex_meas))
-    df = np.gradient(freq_axis) + 1e-12
-    gd_s = -np.gradient(phase_rad) / (2 * np.pi * df)
-    gd_ms = gd_s * 1000.0
-    
-    # Smoothing at constant Hz width (matches previous ~44.1k/65536-taps behavior)
-    # 44.1k & ~65537 FFT-bins -> df ~0.67 Hz -> sigma_bins=10 ~ 6.7 Hz
-    sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=6.7, fallback_bins=10.0)
-    gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms, sigma=sigma_bins)
-    gd_diff = np.abs(gd_ms - gd_smooth)
-
-    # Luottamusmaski
-    threshold_ms = 2.5
-    confidence_mask = 1.0 / (1.0 + np.exp(1.5 * (gd_diff - threshold_ms)))
-    # Ensure `peaks` is always defined (protects against potential refactoring)
-    peaks = np.array([], dtype=int)
-
-    reflection_nodes = []
-    valid_idx = np.where(freq_axis > 20)[0] 
-    
-    if len(valid_idx) > 0:
-        # 2. PEAK DETECTION (Increased sensitivity)
-        # Lowered height threshold 3.0 -> 2.0 to find smaller modes
-        # Shortened distance 50 -> 30 to detect nearby resonances
-        peaks, props = scipy.signal.find_peaks(gd_diff[valid_idx], height=2.0, distance=100)
-    
-    raw_nodes = []
-    for p in peaks:
-        idx = valid_idx[p]
-        raw_nodes.append({
-            'freq': round(freq_axis[idx], 1), 
-            'gd_error': round(gd_diff[idx], 2),
-            'dist': round((gd_diff[idx] / 1000.0 * 343.0) / 2.0, 2), 
-            'type': "Resonance" if freq_axis[idx] < 200 else "Reflection"
-        })
-    
-    # KEEP ONLY 15 STRONGEST (prevents score collapse)
-    reflection_nodes = sorted(raw_nodes, key=lambda x: x['gd_error'], reverse=True)[:15]
-            
-    return confidence_mask, reflection_nodes, gd_ms
-
+    return analyze_acoustic_confidence_analysis(freq_axis, complex_meas, fs)
 
 def calculate_rt60(impulse, fs):
-    """
-    More robust RT60 estimate:
-    - Schroeder EDC
-    - noise floor limiting
-    - EDT, T20, T30 + fallback
-    - quality criterion (R^2)
-    Returns float (seconds), otherwise 0.0
-    """
-    try:
-        imp = np.asarray(impulse, dtype=float)
-        if imp.size < int(0.1 * fs):
-            return 0.0
-
-        # 1) Start: from peak location (like yours)
-        peak_idx = int(np.argmax(np.abs(imp)))
-        x = imp[peak_idx:]
-        if x.size < int(0.05 * fs):
-            return 0.0
-
-        # 2) Energy curve
-        e = x * x
-
-        # 3) Noise floor from tail (last 15% or at least 50 ms)
-        tail_n = max(int(0.15 * e.size), int(0.05 * fs))
-        tail_n = min(tail_n, e.size)
-        noise_power = float(np.mean(e[-tail_n:]))
-
-        # 4) Schroeder EDC (integrated energy)
-        E = np.cumsum(e[::-1])[::-1]
-        E0 = float(E[0]) + 1e-18
-
-        # 5) Stop point: where integrated energy approaches noise floor
-        # noise_mult determines how "early" to stop (20 = conservative)
-        noise_mult = 20.0
-        stop_candidates = np.where(E <= noise_mult * noise_power)[0]
-        stop_idx = int(stop_candidates[0]) if stop_candidates.size > 0 else (E.size - 1)
-        stop_idx = max(stop_idx, 10)  # don't let it go to zero length
-
-        t = np.arange(E.size) / fs
-        edc_db = 10.0 * np.log10((E / E0) + 1e-30)
-
-        # 6) Light smoothing to EDC (stabilizes indices)
-        smooth_ms = 10.0
-        win = max(1, int((smooth_ms / 1000.0) * fs))
-        if win > 1:
-            kernel = np.ones(win) / win
-            edc_db = np.convolve(edc_db, kernel, mode="same")
-
-        # Limit to reliable area
-        t_u = t[:stop_idx + 1]
-        d_u = edc_db[:stop_idx + 1]
-
-        def fit_rt(lo_db, hi_db):
-            # fit d_u ~ a*t + b, when d_u is in range [hi_db..lo_db]
-            mask = (d_u <= lo_db) & (d_u >= hi_db)
-            if np.count_nonzero(mask) < 12:
-                return None
-
-            tt = t_u[mask]
-            yy = d_u[mask]
-            A = np.vstack([tt, np.ones_like(tt)]).T
-            a, b = np.linalg.lstsq(A, yy, rcond=None)[0]  # yy = a*t + b
-
-            # R^2
-            yhat = a * tt + b
-            ss_res = float(np.sum((yy - yhat) ** 2))
-            ss_tot = float(np.sum((yy - np.mean(yy)) ** 2)) + 1e-12
-            r2 = 1.0 - ss_res / ss_tot
-
-            if a >= -1e-9:  # not descending
-                return None
-
-            rt60 = -60.0 / a
-            return rt60, r2
-
-        candidates = []
-        # EDT: 0..-10 dB (same formula rt60 = -60/a)
-        r = fit_rt(0.0, -10.0)
-        if r: candidates.append(("EDT",) + r)
-
-        # T20: -5..-25
-        r = fit_rt(-5.0, -25.0)
-        if r: candidates.append(("T20",) + r)
-
-        # T30: -5..-35
-        r = fit_rt(-5.0, -35.0)
-        if r: candidates.append(("T30",) + r)
-
-        if not candidates:
-            return 0.0
-
-        # Preference: T30 > T20 > EDT, but require reasonable R^2 if possible
-        pref = {"T30": 0, "T20": 1, "EDT": 2}
-        candidates.sort(key=lambda x: (pref[x[0]], -x[2]))  # (prefer, best r2)
-
-        # Choose r2>=0.90 first if found, otherwise best available
-        chosen = None
-        for c in candidates:
-            name, rt60, r2 = c
-            if r2 >= 0.90:
-                chosen = (rt60, r2, name)
-                break
-        if chosen is None:
-            name, rt60, r2 = candidates[0]
-            chosen = (rt60, r2, name)
-
-        rt60 = float(chosen[0])
-
-        # Sanity limits (you can adjust)
-        if 0.05 < rt60 < 5.0:
-            return round(rt60, 2)
-        return 0.0
-
-    except Exception:
-        return 0.0
-    
+    return calculate_rt60_analysis(impulse, fs)
 
 def _third_oct_centers(f_min=31.5, f_max=8000.0):
-    """IEC-style 1/3-octave band centers (sufficient for this purpose)."""
-    centers = []
-    f = float(f_min)
-    step = 2 ** (1/3)  # 1/3 octave
-    while f <= f_max * 1.0001:
-        centers.append(float(f))
-        f *= step
-    return centers
+    return _third_oct_centers_analysis(f_min=f_min, f_max=f_max)
 
 def calculate_rt60_bands(impulse, fs, f_min=31.5, f_max=8000.0, order=4):
-    """
-    Calculate RT60 in 1/3-octave bands:
-      - bandpass (sos) -> filtered impulse
-      - RT60 (uses existing calculate_rt60)
-    Returns dict: {center_hz: rt60_s}
-    """
-    try:
-        imp = np.asarray(impulse, dtype=float)
-        if imp.size < int(0.1 * fs):
-            return {}
-
-        nyq = 0.5 * fs
-        centers = _third_oct_centers(f_min, min(f_max, nyq * 0.90))
-        out = {}
-
-        for fc in centers:
-            # 1/3 octave limits: fc * 2^(±1/6)
-            fl = fc / (2 ** (1/6))
-            fh = fc * (2 ** (1/6))
-            # clamp
-            fl = max(1.0, fl)
-            fh = min(nyq * 0.98, fh)
-            if fh <= fl * 1.05:
-                continue
-
-            sos = scipy.signal.butter(order, [fl/nyq, fh/nyq], btype='bandpass', output='sos')
-            # zero-phase filtering (stable, doesn't add group delay)
-            x = scipy.signal.sosfiltfilt(sos, imp)
-            rt = calculate_rt60(x, fs)
-            if 0.05 < rt < 5.0:
-                out[float(round(fc, 2))] = float(rt)
-        return out
-    except Exception:
-        return {}
-
+    return calculate_rt60_bands_analysis(impulse, fs, f_min=f_min, f_max=f_max, order=order)
+#-------------------------------------------------
 
 def get_min_phase_impulse(mags_db, n_fft):
     """Create minimum-phase impulse response from magnitude response."""

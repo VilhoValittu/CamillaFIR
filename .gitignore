@@ -12,3 +12,4 @@ test.py
 .venv/
 *.bat
 config.json
+filters/

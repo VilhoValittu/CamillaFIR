@@ -5,6 +5,7 @@ import os
 import sys
 import zipfile
 import typing
+import scipy.io.wavfile
 from datetime import datetime
 from textwrap import dedent
 
@@ -28,6 +29,16 @@ from camillafir_ui_helpers import (
     apply_afdw_preset,
     put_guide_section,
 )
+from camillafir_pipeline import (
+    collect_ui_data,
+    log_df_smoothing_toggle,
+    build_xos_hpf,
+    filter_type_short,
+    choose_target_rates,
+    choose_dash_fs,
+    detect_is_wav_source,
+    build_filter_config,
+)
 import camillafir_dsp as dsp
 import camillafir_plot as plots
 import models
@@ -45,12 +56,13 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.8.2"  # robusted file upload from browser & added xo_help translation
+VERSION = "v2.8.2.1"  # changed file structure
 
 # Change log:
-# v.2.8.2: [UI] improved robustness of file upload parsing from browser & added xo_help translation
-# "v2.8.1.2" [UI/DSP] bug fix for modes selection, that was not saving ui state correctly
-# "v2.8.1.1" [UI] small ui-update for modes selection
+# v.2.8.2.1 changed file structure to more debug-friendly format
+# v2.8.2: [UI] improved robustness of file upload parsing from browser & added xo_help translation
+# v2.8.1.2" [UI/DSP] bug fix for modes selection, that was not saving ui state correctly
+# v2.8.1.1" [UI] small ui-update for modes selection
 # v2.8.1: [DSP] fix A-FDW bandwidth limits & UI display
 # v2.8.0: [UI] removed html dashboard export (now PNG only)
 # v2.7.9: [UI] fix custom house curve upload
@@ -540,143 +552,6 @@ put_markdown("---"),
         cursor: pointer;
     """)
     
-def _collect_ui_data():
-    p_keys = [
-        'mode','fs', 'taps', 'filter_type', 'mixed_freq', 'gain', 'hc_mode',
-        'mag_c_min', 'mag_c_max', 'max_boost', 'max_cut_db', 'max_slope_db_per_oct',
-        'max_slope_boost_db_per_oct', 'max_slope_cut_db_per_oct', 'phase_limit', 'phase_safe_2058', 'mag_correct',
-        'lvl_mode', 'reg_strength', 'normalize_opt', 'align_opt',
-        'stereo_link', 'exc_prot', 'exc_freq', 'low_bass_cut_hz', 'hpf_enable', 'hpf_freq',
-        'hpf_slope', 'multi_rate_opt', 'ir_window', 'ir_window_left',
-        'local_path_l', 'local_path_r', 'fmt', 'lvl_manual_db',
-        'lvl_min', 'lvl_max', 'lvl_algo', 'smoothing_type', 'fdw_cycles',
-        'trans_width', 'smoothing_level', 'enable_tdc', 'tdc_strength', 'tdc_max_reduction_db',
-        'tdc_slope_db_per_oct', 'enable_afdw', 'df_smoothing', 'comparison_mode', 'bass_first_ai', 'bass_first_mode_max_hz'
-    ]
-
-    data = {}
-    for k in p_keys:
-        try:
-            data[k] = pin[k]
-        except Exception:
-            data[k] = None
-
-    for k in ['mag_correct', 'normalize_opt', 'align_opt', 'multi_rate_opt', 'stereo_link', 'exc_prot', 'hpf_enable', 'df_smoothing', 'comparison_mode', 'bass_first_ai']:
-        try:
-            if isinstance(data.get(k, None), list):
-                data[k] = bool(data[k])
-        except Exception:
-            pass
-
-    for i in range(1, 6):
-        data[f'xo{i}_f'] = pin[f'xo{i}_f']
-        data[f'xo{i}_s'] = pin[f'xo{i}_s']
-        data['max_cut_db'] = abs(float(data.get('max_cut_db', 15.0) or 15.0))
-        data['max_slope_db_per_oct'] = max(0.0, float(data.get('max_slope_db_per_oct', 24.0) or 24.0))
-        data['max_slope_boost_db_per_oct'] = max(0.0, float(data.get('max_slope_boost_db_per_oct', 0.0) or 0.0))
-        data['max_slope_cut_db_per_oct'] = max(0.0, float(data.get('max_slope_cut_db_per_oct', 0.0) or 0.0))        
-        data['lvl_manual_db'] = float(data.get('lvl_manual_db', 75.0) or 75.0)
-
-    return data
-
-
-def _log_df_smoothing_toggle():
-    try:
-        df_on = bool(pin['df_smoothing'])
-    except Exception:
-        df_on = False
-    logger.info(f"DF smoothing: {'ON' if df_on else 'OFF'}")
-    return df_on
-
-
-def _build_xos_hpf(data):
-    xos = [{'freq': data[f'xo{i}_f'], 'order': data[f'xo{i}_s'] // 6} for i in range(1, 6) if data[f'xo{i}_f']]
-    hpf = {'enabled': data['hpf_enable'], 'freq': data['hpf_freq'], 'order': data['hpf_slope'] // 6} if data['hpf_enable'] else None
-    return xos, hpf
-
-
-def _filter_type_short(filter_type):
-    if "Asymmetric" in filter_type:
-        return "Asymmetric"
-    if "Min" in filter_type:
-        return "Minimum"
-    if "Mixed" in filter_type:
-        return "Mixed"
-    return "Linear"
-
-#filtterin teko
-def _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m):
-    # Source hint for analysis heuristics (Bass-first reliability masking)
-    # WAV/IR-derived measurements tend to have noisier phase unwrap/jitter than REW text/API.
-    try:
-        is_wav_src = str(data.get('fmt', 'TXT') or 'TXT').strip().upper() == 'WAV'
-    except Exception:
-        is_wav_src = False
-
-    cfg = FilterConfig(
-        fs=fs_v,
-        num_taps=taps_v,
-        df_smoothing=bool(pin['df_smoothing']),
-        **({"comparison_mode": True} if hasattr(FilterConfig, "comparison_mode") else {}),
-        filter_type_str=data['filter_type'],
-        mixed_split_freq=data['mixed_freq'],
-        global_gain_db=data['gain'],
-        mag_c_min=data['mag_c_min'],
-        mag_c_max=data['mag_c_max'],
-        max_boost_db=data['max_boost'],
-        max_cut_db=data.get('max_cut_db', 30.0),
-        max_slope_db_per_oct=data.get('max_slope_db_per_oct', 24.0),
-        max_slope_boost_db_per_oct=data.get('max_slope_boost_db_per_oct', 0.0),
-        max_slope_cut_db_per_oct=data.get('max_slope_cut_db_per_oct', 0.0),
-        phase_limit=data['phase_limit'],
-        phase_safe_2058=bool(data.get('phase_safe_2058', False)),
-        enable_mag_correction=bool(data.get('mag_correct', True)),
-        lvl_mode=data['lvl_mode'],
-        reg_strength=float(data.get('reg_strength', 30.0)),
-        do_normalize=bool(data['normalize_opt']),
-        exc_prot=bool(data['exc_prot']),
-        exc_freq=data['exc_freq'],
-        low_bass_cut_hz=float(data.get('low_bass_cut_hz', 40.0) or 40.0),
-        ir_window_ms=data['ir_window'],
-        ir_window_ms_left=data.get('ir_window_left', 100.0),
-        enable_afdw=bool(pin.enable_afdw),
-        enable_tdc=bool(pin.enable_tdc),
-        tdc_strength=data.get('tdc_strength', 50.0),
-        tdc_max_reduction_db=float(pin['tdc_max_reduction_db']),
-        tdc_slope_db_per_oct=float(pin['tdc_slope_db_per_oct']),
-        smoothing_type=data['smoothing_type'],
-        fdw_cycles=data['fdw_cycles'],
-        lvl_manual_db=data['lvl_manual_db'],
-        lvl_min=data['lvl_min'],
-        lvl_max=data['lvl_max'],
-        lvl_algo=data['lvl_algo'],
-        stereo_link=bool(data.get('stereo_link', False)),
-        smoothing_level=int(pin.smoothing_level),
-        crossovers=xos,
-        hpf_settings=hpf,
-        house_freqs=hc_f,
-        house_mags=hc_m,
-        trans_width=data.get('trans_width', 100.0),
-        bass_first_ai=bool(data.get('bass_first_ai', False)),
-        bass_first_mode_max_hz=float(data.get('bass_first_mode_max_hz') or 200.0),
-        bass_first_smooth_floor_lo=float(data.get('bass_first_smooth_floor_lo') or 0.75),
-        bass_first_smooth_floor_hi=float(data.get('bass_first_smooth_floor_hi') or 0.35),
-        bass_first_k_mode_cut=float(data.get('bass_first_k_mode_cut') or 0.6),
-        bass_first_k_mode_boost=float(data.get('bass_first_k_mode_boost') or 0.9),
-        # Source hint for heuristics (used by bass-first masking)
-        is_wav_source=bool(is_wav_src),
-    )
-
-    # Apply mode policy (BASIC / ADVANCED). Default BASIC if missing.
-    try:
-        mode = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
-    except Exception:
-        mode = "BASIC"
-    # Runtime: do NOT overwrite user-entered values with mode defaults.
-    # Mode is enforced via clamps/forced booleans; defaults are applied only via the UI button.
-    cfg = apply_mode_to_cfg(cfg, mode, apply_defaults=False)
-    return cfg
-
 
 def _log_df_smoothing_for_fs(cfg, fs_v, df_on):
     if df_on:
@@ -1014,7 +889,7 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
 
 def process_run():
     # 1) UI -> data dict (new unified collector)
-    data = _collect_ui_data()
+    data = collect_ui_data(pin)
     save_config(data)
 
     # 2) Measurements (upload OR local paths)
@@ -1031,23 +906,17 @@ def process_run():
     data['hc_source'] = hc_source
     logger.info(f"House curve source: {hc_source}")
     # 4) XO + HPF
-    xos, hpf = _build_xos_hpf(data)
+    xos, hpf = build_xos_hpf(data)
 
     # 5) (Optional) DF smoothing log
-    df_on = _log_df_smoothing_toggle()
+    df_on = log_df_smoothing_toggle(pin, logger)
+
 
     # 6) Sample rates list
-    target_rates = (
-        [44100, 48000, 88200, 96000, 176400, 192000]
-        if bool(data.get('multi_rate_opt'))
-        else [int(data.get('fs') or 44100)]
-    )
+    target_rates = choose_target_rates(data)
+    multi_rate_on = bool(data.get("multi_rate_opt"))
+    dash_fs = choose_dash_fs(target_rates, multi_rate_on=multi_rate_on, forced_plot_fs_hz=int(FORCE_SINGLE_PLOT_FS_HZ))
 
-    # Forced policy: when multi-rate is enabled, include dashboards only for ONE fs.
-    multi_rate_on = bool(data.get('multi_rate_opt'))
-    dash_fs = int(FORCE_SINGLE_PLOT_FS_HZ) if multi_rate_on else int(data.get('fs') or 44100)
-    if multi_rate_on and dash_fs not in target_rates:
-        dash_fs = int(target_rates[0])
 
     put_processbar('bar')
     put_scope('status_area')
@@ -1056,7 +925,7 @@ def process_run():
     zip_buffer = io.BytesIO()
     ts = datetime.now().strftime('%d%m%y_%H%M')
     file_ts = datetime.now().strftime('%H%M_%d%m%y')
-    ft_short = _filter_type_short(data['filter_type'])
+    ft_short = filter_type_short(data['filter_type'])
     split, zoom = data['mixed_freq'], t('zoom_hint')
     l_st_f, r_st_f, l_imp_f, r_imp_f = None, None, None, None
 
@@ -1070,43 +939,26 @@ def process_run():
             update_status(f"Lasketaan {fs_v}Hz...")
             set_processbar('bar', 0.2 + 0.6 * (i/len(target_rates)))
 
-            cfg = _build_filter_config(fs_v, taps_v, data, xos, hpf, hc_f, hc_m)
-
-
-            # Tag measurement source for DSP (bass-first AI tuning).
-            # WAV/IR-derived responses often have noisier phase/GD derivatives than TXT exports.
-            try:
-                lp_l_s = str(data.get('local_path_l', '') or '').lower()
-                lp_r_s = str(data.get('local_path_r', '') or '').lower()
-            except Exception:
-                lp_l_s, lp_r_s = '', ''
-
-            try:
-                up_l_s = (
-                    str(pin['file_l'].get('filename', '') or '').lower()
-                    if isinstance(pin.get('file_l', None), dict)
-                    else ''
-                )
-                up_r_s = (
-                    str(pin['file_r'].get('filename', '') or '').lower()
-                    if isinstance(pin.get('file_r', None), dict)
-                    else ''
-                )
-            except Exception:
-                up_l_s, up_r_s = '', ''
-
-            is_wav = (
-                lp_l_s.endswith('.wav')
-                or lp_r_s.endswith('.wav')
-                or up_l_s.endswith('.wav')
-                or up_r_s.endswith('.wav')
-                or str(data.get('fmt', '')).upper() == 'WAV'
+            cfg = build_filter_config(
+                FilterConfig_cls=FilterConfig,
+                fs_v=fs_v,
+                taps_v=taps_v,
+                data=data,
+                xos=xos,
+                hpf=hpf,
+                hc_f=hc_f,
+                hc_m=hc_m,
+                pin=pin,
             )
 
+
+
+            is_wav = detect_is_wav_source(data, pin)
             try:
                 setattr(cfg, "is_wav_source", bool(is_wav))
             except Exception:
                 pass
+
 
 
             _log_df_smoothing_for_fs(cfg, fs_v, df_on)
@@ -1257,13 +1109,19 @@ def process_run():
                 write_dashboards=(not multi_rate_on) or (int(fs_v) == int(dash_fs))
             )
 
+    # --- Save ZIP into filters/ directory ---
+    filters_dir = os.path.join(os.getcwd(), "filters")
+    os.makedirs(filters_dir, exist_ok=True)
+
     fname = f"CamillaFIR_{ft_short}_{ts}.zip"
+    out_path = os.path.join(filters_dir, fname)
+
     try:
-        with open(fname, "wb") as f:
+        with open(out_path, "wb") as f:
             f.write(zip_buffer.getvalue())
-        save_msg = f"Tallennettu: {os.path.abspath(fname)}"
+        save_msg = f"Saved: {os.path.abspath(out_path)}"
     except Exception:
-        save_msg = "Tallennus epäonnistui."
+        save_msg = "Zip saving failed."
 
 
     # --- Ensure UI has stats even if fs selection didn't hit (e.g. WAV/local path quirks) ---
