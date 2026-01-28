@@ -154,6 +154,11 @@ The Summary report typically includes:
 - RT60 estimate and confidence summary
 - match score and (optionally) comparison-mode grid info
 
+### Output directory
+All generated filter packages (`.zip`) are written to the **`filters/`** directory
+in the CamillaFIR project root.  
+The directory is created automatically during export.
+
 ---
 
 ## 9. MiniDSP / limited-taps workflow (practical)

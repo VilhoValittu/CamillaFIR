@@ -52,6 +52,10 @@ Development inspired by the methodologies of **OCA** (Obsessive Compulsive Audio
 - Plots and a **Summary.txt** report (confidence, RT60, match score, effective A-FDW bandwidth, safety limits)
 - Multi-rate export for common sample rates (44.1/48/88.2/96/176.4/192 kHz)
 
+### Output location
+Generated filter packages (`.zip`) are automatically saved to the **`filters/`** directory
+in the project root. The directory is created automatically if it does not exist.
+
 ---
 
 ## Quickstart (source)

@@ -8,6 +8,12 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 
 ---
 
+## [2.8.2.1] - 2026-01-28
+
+## Nothing changed DSP or UI
+- changed file structure to more debug-friendly format
+- filters go now to ./filters directory
+
 ## [2.8.2] - 2026-01-27
 
 ### Ui-update
