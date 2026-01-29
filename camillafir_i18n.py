@@ -37,11 +37,4 @@ def t(key: str) -> str:
     # current hardcoded special cases
     if key == "zoom_hint":
         return "(Vinkki: Voit zoomata hiirellä kuvaajaa)" if lang == "fi" else "(Hint: Use mouse to zoom)"
-    if key == "lvl_algo_help":
-        return (
-            "Mediaani on suositeltu: se on immuuni huonemoodeille. Keskiarvo sopii kaiuttimen lähimittauksiin."
-            if lang == "fi"
-            else "Median is recommended."
-        )
-
     return TRANSLATIONS.get(lang, TRANSLATIONS.get("en", {})).get(key, key)

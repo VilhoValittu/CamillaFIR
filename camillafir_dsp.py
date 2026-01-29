@@ -302,11 +302,41 @@ def calculate_minimum_phase(mags_lin_fft):
     min_phase_rad = -np.imag(analytic)
     return min_phase_rad[:len(mags_lin_fft)]
 
-def psychoacoustic_smoothing(freqs, mags, oct_bw=1/3.0):
-    """Combines heavy and light smoothing to achieve optimal visualization."""
-    mags_heavy, _ = apply_smoothing_std(freqs, mags, np.zeros_like(mags), oct_bw)
-    mags_light, _ = apply_smoothing_std(freqs, mags, np.zeros_like(mags), 1/12.0)
-    return np.maximum(mags_heavy, mags_light)
+def psychoacoustic_smoothing(
+    freqs,
+    mags,
+    *,
+    heavy_bw=1/3.0,
+    light_bw=1/48.0,
+    f_lo=200.0,
+    f_hi=2000.0,
+):
+    """
+    REW-like psychoacoustic smoothing for *visualization*:
+      - heavy smoothing dominates at low frequencies
+      - light smoothing dominates at higher frequencies
+      - smooth crossfade on log-frequency axis
+
+    NOTE: This should be used for plots/UX, not for filter math.
+    """
+    f = np.asarray(freqs, dtype=float)
+    m = np.asarray(mags, dtype=float)
+    if f.size < 8 or m.size != f.size:
+        return np.copy(m)
+
+    dummy = np.zeros_like(m)
+    m_heavy, _ = apply_smoothing_std(f, m, dummy, float(heavy_bw))
+    m_light, _ = apply_smoothing_std(f, m, dummy, float(light_bw))
+
+    # Crossfade weight w: 0 -> heavy, 1 -> light (log-frequency)
+    # Clamp to avoid log10(0)
+    ff = np.maximum(f, 1.0)
+    lo = float(max(f_lo, 1.0))
+    hi = float(max(f_hi, lo * 1.01))
+    w = (np.log10(ff) - np.log10(lo)) / (np.log10(hi) - np.log10(lo))
+    w = np.clip(w, 0.0, 1.0)
+
+    return (1.0 - w) * m_heavy + w * m_light
 
 def apply_fdw_smoothing(freqs, phases, cycles):
     """Apply frequency-dependent windowing (FDW) to phase."""
@@ -565,8 +595,14 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     oct_frac = 1.0 / float(cfg.smoothing_level) if cfg.smoothing_level > 0 else 1/24.0
     is_psy = 'psy' in str(cfg.smoothing_type).lower()
     
-    # Magnituditasoitus
-    m_smooth, _ = apply_smoothing_std(f_in, m_in, np.zeros_like(m_in), oct_frac * (1.5 if is_psy else 1.0))
+
+    # --- IMPORTANT ---
+    # Keep DSP math stable: analysis/correction uses STANDARD smoothing only.
+    # Psychoacoustic mode affects only what we *show* in UI (plots/score),
+    # not confidence/leveling/correction curve generation.
+    m_smooth_std, _ = apply_smoothing_std(
+        f_in, m_in, np.zeros_like(m_in), float(oct_frac)
+    )
     
     # FIX: Dynamic phase smoothing based on sample rate
     # At high sample rates (>96kHz) interpolation creates "corners" in phase,
@@ -579,13 +615,28 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     p_rad_raw = np.deg2rad(np.interp(freq_axis, f_in, p_in))
     p_rad_interp, delay_slope = remove_time_of_flight(freq_axis, p_rad_raw)
 
+    # Psychoacoustic plot magnitude on the *analysis axis* (UI only)
+    m_plot_db = None
+    if is_psy:
+        try:
+            m_plot_db = psychoacoustic_smoothing(
+                freq_axis,
+                m_interp,
+                heavy_bw=1/3.0,
+                light_bw=1/48.0,
+                f_lo=200.0,
+                f_hi=2000.0,
+            )
+        except Exception:
+            m_plot_db = None
+
     # Raw measurement as complex FR (TOF removed) for features that need phase/GD.
     # NOTE: This is intentionally "raw" (not smoothing-analysis), to match Bass-first intent.
     # (Magnitude is dB -> linear amplitude.)
     complex_meas = 10**(m_interp/20.0) * np.exp(1j * p_rad_interp)
 
     # --- 5. ANALYYSI (Skaalattu luottamusmaski) ---
-    m_anal = np.interp(freq_axis, f_in, m_smooth)
+    m_anal = np.interp(freq_axis, f_in, m_smooth_std)
     p_anal_rad = np.deg2rad(np.interp(freq_axis, f_in, p_smooth))
     p_anal_rad, _ = remove_time_of_flight(freq_axis, p_anal_rad)
     complex_anal = 10**(m_anal/20.0) * np.exp(1j * p_anal_rad)
@@ -794,7 +845,14 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             # Plot everything relative to Smart Scan / Manual leveling window
             # so target & measured share the SAME 0 dB reference
 
-            measured_aligned = np.asarray(m_anal, dtype=float) - float(calc_offset_db)
+            m_src = np.asarray(m_anal, dtype=float)
+            if is_psy and (m_plot_db is not None):
+                # UI-only psychoacoustic magnitude view (REW-like)
+                mp = np.asarray(m_plot_db, dtype=float)
+                if mp.size == m_src.size:
+                    m_src = mp
+
+            measured_aligned = m_src - float(calc_offset_db)
             target_aligned   = np.asarray(target_mags, dtype=float) - float(target_level_db)
 
             st["measured_mags"] = measured_aligned.tolist()
@@ -1332,6 +1390,38 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             hpf_slope=hpf_slope
         )
 
+
+        # --- Phase correction limit (Hz) with smooth blend ---
+        # Goal:
+        #   - below phase_limit: keep measured/room phase (TOF removed) in p_rad_interp
+        #   - above phase_limit*1.41 (~1/2 octave): use only theoretical XO/HPF phase (theo_xo)
+        #   - between: smooth crossfade (prevents GD "bump" from hard cut)
+        try:
+            phase_lim = float(getattr(cfg, "phase_limit", 0.0) or 0.0)
+            if phase_lim > 0.0 and freq_axis.size == theo_xo.size:
+                f0 = float(phase_lim)
+                f1 = float(phase_lim) * 1.41  # ~1/2 octave
+
+                # Clamp transition to valid frequency span
+                f_min = float(freq_axis[0]) if freq_axis.size else 0.0
+                f_max = float(freq_axis[-1]) if freq_axis.size else 0.0
+                f0 = max(f0, max(f_min, 1e-6))
+                f1 = min(f1, f_max)
+
+                if f1 <= f0:
+                    # Degenerate case: act like hard limit
+                    mask = freq_axis <= f0
+                    p_rad_interp = np.where(mask, p_rad_interp, theo_xo)
+                else:
+                    # Crossfade weight w: 0 below f0, 1 above f1
+                    w = (freq_axis - f0) / (f1 - f0)
+                    w = np.clip(w, 0.0, 1.0)
+
+                    # Blend phase itself (radians). Both are already unwrapped-ish and TOF-removed upstream.
+                    p_rad_interp = (1.0 - w) * p_rad_interp + w * theo_xo
+        except Exception:
+            pass
+
         # --- LOGGING: HPF inclusion status ---
         if hpf_freq and hpf_slope:
             logger.info(
@@ -1583,7 +1673,11 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'final_max_db': float(np.max(final_gain_total)),
 
         # Diagnostics for user-visible Summary / troubleshooting
+        # max_boost_db in stats is EFFECTIVE (may be safety-capped in UI before DSP)
         'max_boost_db': float(getattr(cfg, 'max_boost_db', 0.0) or 0.0),
+        'max_boost_db_effective': float(getattr(cfg, 'max_boost_db', 0.0) or 0.0),
+        'max_boost_db_user': float(getattr(cfg, 'max_boost_db_user', getattr(cfg, 'max_boost_db', 0.0)) or 0.0),
+        'max_safe_boost_db': float(getattr(cfg, 'max_safe_boost_db', 0.0) or 0.0),
         'max_cut_db': float(abs(float(getattr(cfg, 'max_cut_db', 15.0) or 15.0))),
         'low_bass_cut_hz': float(getattr(cfg, 'low_bass_cut_hz', 40.0) or 40.0),
         'exc_prot': bool(getattr(cfg, 'exc_prot', False)),

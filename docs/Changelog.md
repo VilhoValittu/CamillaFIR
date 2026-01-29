@@ -7,6 +7,10 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 ---
 
 ---
+## [2.8.2.2] - 2026-01-29
+
+### Ui-update
+- updated translations and phase plot to be more clear
 
 ## [2.8.2.1] - 2026-01-28
 

@@ -3,7 +3,7 @@ import numpy as np
 
 from pywebio.output import *  # needed because this PyWebIO build doesn't expose put_input/put_select as named exports
 from pywebio.input import FLOAT
-from pywebio.pin import pin, pin_update
+from pywebio.pin import pin, pin_update, put_input
 
 from camillafir_i18n import t
 from camillafir_modes import MODE_DEFAULTS

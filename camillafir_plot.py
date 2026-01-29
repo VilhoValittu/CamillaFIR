@@ -14,6 +14,11 @@ from datetime import datetime
 # Tuodaan tarvittavat funktiot DSP-moduulista
 from camillafir_dsp import apply_smoothing_std, psychoacoustic_smoothing, calculate_rt60
 
+# Plot-only phase smoothing strength (octave-fraction style).
+# Higher = smoother-looking phase/GD. Does NOT affect DSP/filter generation.
+PHASE_SMOOTH_OCT = 5.5
+GD_SMOOTH_OCT    = 3.0
+
 # Version 1.2.0
 
 
@@ -683,11 +688,38 @@ def format_summary_content(settings, l_stats, r_stats):
 
     return _format_summary_content_legacy(settings, l_stats, r_stats)
 
+def _view_mags_for_plot(freqs, mags, *, smoothing_type="Psychoacoustic", smoothing_level=48):
+    """Plot-only smoothing (never affects DSP math).
+
+    - Standard: octave smoothing width = 1/smoothing_level
+    - Psychoacoustic: REW-style combined smoothing (broad LF, fine HF)
+    """
+    f = np.asarray(freqs, dtype=float)
+    m = np.asarray(mags, dtype=float)
+
+    if f.size == 0 or m.size == 0:
+        return m
+
+    st = str(smoothing_type or "Standard").strip().lower()
+    if "psy" in st:
+        return psychoacoustic_smoothing(f, m)
+
+    try:
+        lvl = int(smoothing_level)
+    except Exception:
+        lvl = 48
+    lvl = max(1, lvl)
+    out, _ = apply_smoothing_std(f, m, np.zeros_like(m), 1.0 / float(lvl))
+    return out
+
+
 
 def generate_prediction_plot(
     orig_freqs, orig_mags, orig_phases, filt_ir, fs, title,
     save_filename=None, target_stats=None, mixed_split=None,
-    zoom_hint="", create_full_html=True, return_fig: bool = False
+    zoom_hint="", create_full_html=True, return_fig: bool = False,
+    smoothing_type: str = "Psychoacoustic",
+    smoothing_level: int = 48,
 ):
     """Luo optimoidun HTML-dashboardin (Pieni tiedostokoko, korkea resoluutio)."""
     try:
@@ -721,19 +753,37 @@ def generate_prediction_plot(
                 t_interp = np.interp(f_lin, f_stats, np.asarray(t_stats, dtype=float))
                 m_interp = _align_meas_to_target_window(f_lin, m_interp, t_interp, f_win_min, f_win_max)
 
-            m_lin_clean = psychoacoustic_smoothing(f_lin, m_interp)
+            m_lin_clean = _view_mags_for_plot(
+                f_lin, m_interp,
+                smoothing_type=smoothing_type,
+                smoothing_level=smoothing_level,
+            )
         else:
             m_raw = np.interp(f_lin, orig_freqs, orig_mags)
-            m_lin_clean = psychoacoustic_smoothing(f_lin, m_raw)
+            m_lin_clean = _view_mags_for_plot(
+                f_lin, m_raw,
+                smoothing_type=smoothing_type,
+                smoothing_level=smoothing_level,
+            )
 
         p_lin = np.interp(f_lin, orig_freqs, orig_phases)
         total_spec = 10**(m_lin_clean/20.0) * np.exp(1j * np.deg2rad(p_lin)) * h_filt
         
         # Calculate other curves (Heavy)
-        p_sm = psychoacoustic_smoothing(f_lin, 20*np.log10(np.abs(total_spec)+1e-12))
-        spec_sm = smooth_complex(f_lin, total_spec, 3.0)
-        ph_sm = (np.rad2deg(np.angle(spec_sm)) + 180) % 360 - 180
-        gd_sm = calculate_clean_gd(f_lin, spec_sm)
+        p_sm = _view_mags_for_plot(
+            f_lin,
+            20*np.log10(np.abs(total_spec)+1e-12),
+            smoothing_type=smoothing_type,
+            smoothing_level=smoothing_level,
+        )
+        #spec_sm phase smoothing for plots
+        # Phase: heavier smoothing for readability
+        spec_sm_phase = smooth_complex(f_lin, total_spec, PHASE_SMOOTH_OCT)
+        ph_sm = (np.rad2deg(np.angle(spec_sm_phase)) + 180) % 360 - 180
+
+        # Group Delay: lighter smoothing to keep detail (still stable)
+        spec_sm_gd = smooth_complex(f_lin, total_spec, GD_SMOOTH_OCT)
+        gd_sm = calculate_clean_gd(f_lin, spec_sm_gd)
         filt_db = 20 * np.log10(np.abs(h_filt) + 1e-12)
 
         # 2. OPTIMOINTI (Resampling visualisointia varten)

@@ -6,6 +6,7 @@ import sys
 import zipfile
 import typing
 import scipy.io.wavfile
+import math
 from datetime import datetime
 from textwrap import dedent
 
@@ -15,6 +16,7 @@ from pywebio.input import *
 from pywebio.output import *
 from pywebio.pin import *
 from pywebio.session import set_env
+from pywebio.output import toast
 from camillafir_config import load_config, save_config
 from camillafir_i18n import t
 from camillafir_housecurve import _normalize_hc_mode_key, get_house_curve_by_name, load_target_curve, load_house_curve
@@ -56,9 +58,10 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.8.2.1"  # changed file structure
+VERSION = "v2.8.2.2"  # updated translations and phase plot
 
 # Change log:
+# v.2.8.2.2 [UI] updated translations and phase plot
 # v.2.8.2.1 changed file structure to more debug-friendly format
 # v2.8.2: [UI] improved robustness of file upload parsing from browser & added xo_help translation
 # v2.8.1.2" [UI/DSP] bug fix for modes selection, that was not saving ui state correctly
@@ -71,9 +74,55 @@ VERSION = "v2.8.2.1"  # changed file structure
 # v2.7.6: [IO] fix WAV parsing smoothing
 
 PROGRAM_NAME = "CamillaFIR"
-FINE_TUNE_LIMIT = 45.0
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
+
+def _warn_max_boost_if_over_cap(_=None):
+    """
+    Warn user if max_boost exceeds internal safety cap.
+    Uses a simple "edge trigger" to avoid spamming toast repeatedly.
+    """
+    try:
+        v = pin.get('max_boost', None)
+        if v is None or v == '':
+            return
+        v = float(v)
+        if not math.isfinite(v):
+            return
+
+        over = (float(MAX_SAFE_BOOST) > 0.0) and (v > float(MAX_SAFE_BOOST) + 1e-9)
+        # Edge-trigger (warn only when transitioning to over-cap state)
+        prev = bool(getattr(_warn_max_boost_if_over_cap, "_prev_over", False))
+        if over and not prev:
+            # Build message safely even if translations are missing
+            try:
+                cap_suffix = t('max_boost_help_cap').format(value=f"{MAX_SAFE_BOOST:.1f}")
+            except Exception:
+                cap_suffix = f" (capped to {MAX_SAFE_BOOST:.1f} dB)"
+
+            msg = f"{t('max_boost')}: {v:.1f} dB > {MAX_SAFE_BOOST:.1f} dB{cap_suffix}"
+
+            # Use default toast styling to avoid version-specific color keyword issues
+            toast(msg, duration=5)
+        _warn_max_boost_if_over_cap._prev_over = over
+    except Exception as e:
+
+        try:
+            logger.warning(f"max_boost toast failed: {e}")
+        except Exception:
+            pass
+        return
+
+
+
+def _max_boost_help_with_cap():
+    try:
+        return (
+            f"{t('max_boost_help')}"
+            f"{t('max_boost_help_cap').format(value=f'{MAX_SAFE_BOOST:.1f}')}"
+        )
+    except Exception:
+        return t('max_boost_help')
 
 
 def update_status(msg):
@@ -181,7 +230,7 @@ def main():
         
         put_input('gain', label=t('gain'), type=FLOAT, value=get_val('gain', 0.0), help_text=t('gain_help')),
         
-        put_select('lvl_algo', label="Algo", options=['Median', 'Average'], value=get_val('lvl_algo', 'Median'), help_text=t('lvl_algo_help')),
+        put_select('lvl_algo', label=t('lvl_algo'), options=['Median', 'Average'], value=get_val('lvl_algo', 'Median'), help_text=t('lvl_algo_help')),
         put_select(
                     'smoothing_type',
                     label=t('smooth_type'),
@@ -249,7 +298,7 @@ def main():
             put_input('mag_c_min', label=t('min_freq'), type=FLOAT, value=get_val('mag_c_min', 10.0), help_text=t('hc_range_help')), 
             put_input('mag_c_max', label=t('max_freq'), type=FLOAT, value=get_val('mag_c_max', 200.0), help_text=t('hc_range_help'))
         ]),
-        put_input('max_boost', label=t('max_boost'), type=FLOAT, value=get_val('max_boost', 5.0), help_text=t('max_boost_help')),
+        put_input('max_boost', label=t('max_boost'), type=FLOAT, value=get_val('max_boost', 5.0), help_text=_max_boost_help_with_cap()),
         put_row([
             put_input('max_cut_db', label=t('max_cut_db'), type=FLOAT, value=get_val('max_cut_db', 30.0),
                       help_text=t('max_cut_db_help')),
@@ -505,6 +554,7 @@ put_markdown("---"),
         ] for i in range(1, 6)])
     ]
 
+
     # Draw tabs
     put_tabs([
         {'title': t('tab_files'), 'content': tab_files}, 
@@ -514,14 +564,36 @@ put_markdown("---"),
         {'title': t('tab_xo'), 'content': tab_xo}
     ])
 
+    # Only sanitize range when BOTH ends are valid numbers.
+    # Do NOT call update_lvl_ui() here (it rerenders the scope and can reset inputs).
+    def _on_lvl_range_change(_=None):
+        try:
+            a = pin.get('lvl_min', None)
+            b = pin.get('lvl_max', None)
+            if a is None or b is None:
+                return
+            # If user is mid-edit, values can be '' -> ignore until valid
+            a = float(a)
+            b = float(b)
+            if not np.isfinite(a) or not np.isfinite(b):
+                return
+            if a > b:
+                pin_update('lvl_min', value=b)
+                pin_update('lvl_max', value=a)
+        except Exception:
+            return
+
+
 
 
     update_lvl_ui()
 
+    # Rerender manual field ONLY when mode changes (Auto/Manual)
     pin_on_change('lvl_mode', onchange=update_lvl_ui)
-    pin_on_change('lvl_min', onchange=update_lvl_ui)
-    pin_on_change('lvl_max', onchange=update_lvl_ui)
-
+    # Range change: sanitize only, no rerender
+    pin_on_change('lvl_min', onchange=_on_lvl_range_change)
+    pin_on_change('lvl_max', onchange=_on_lvl_range_change)
+    pin_on_change('lvl_manual_db', onchange=_on_lvl_range_change)
     # Mode description: initial render + live updates
     pin_on_change('mode', onchange=update_mode_desc)
     update_mode_desc()
@@ -531,7 +603,8 @@ put_markdown("---"),
     pin_on_change('fs', onchange=update_taps_auto_info)
     pin_on_change('taps', onchange=update_taps_auto_info)
     update_taps_auto_info()
-
+    pin_on_change('max_boost', onchange=_warn_max_boost_if_over_cap)
+    _warn_max_boost_if_over_cap()
     put_markdown("---")
 
     
@@ -591,6 +664,13 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
 
         summary_content += "\n=== DSP EFFECTIVE PARAMS (THIS SAMPLE RATE) ===\n"
         summary_content += f"Sample rate: {int(fs_v)} Hz\n"
+        # UI-only smoothing view (does not change DSP math)
+        try:
+            sv = str(data.get("smoothing_type", "Standard") or "Standard")
+            summary_content += f"Smoothing view: {sv}\n"
+        except Exception:
+            pass
+
 
         if enable_afdw:
             summary_content += "FDW mode: Adaptive (A-FDW)\n"
@@ -635,7 +715,14 @@ def _append_acoustic_events(summary_content, l_st, r_st):
         summary_content += f"Final Max (gain+global+headroom): {float(st.get('final_max_db', 0.0)):.2f} dB\n"
         # Diagnostics for boost/cut processing
         summary_content += f"\n=== BOOST/CUT DIAGNOSTICS ({side}) ===\n"
-        summary_content += f"Config: max_boost_db={float(st.get('max_boost_db', 0.0)):.2f} dB, "
+        # max_boost diagnostics: show effective + user + safety cap if present
+        _mb_eff = float(st.get('max_boost_db_effective', st.get('max_boost_db', 0.0)) or 0.0)
+        _mb_user = float(st.get('max_boost_db_user', st.get('max_boost_db', 0.0)) or 0.0)
+        _mb_cap = float(st.get('max_safe_boost_db', 0.0) or 0.0)
+        if _mb_cap > 0.0 and _mb_user > _mb_eff + 1e-9:
+            summary_content += f"Config: max_boost_db={_mb_eff:.2f} dB (user={_mb_user:.2f}, cap={_mb_cap:.2f}), "
+        else:
+            summary_content += f"Config: max_boost_db={_mb_eff:.2f} dB, "
         summary_content += f"max_cut_db={float(st.get('max_cut_db', 0.0)):.2f} dB\n"
         summary_content += f"Config: low_bass_cut_hz={float(st.get('low_bass_cut_hz', 0.0)):.1f} Hz, "
         summary_content += f"exc_prot={'ON' if bool(st.get('exc_prot', False)) else 'OFF'}, "
@@ -769,6 +856,7 @@ def _write_fs_outputs(
     summary_content = _append_dsp_effective_params(summary_content, data, fs_v)
     summary_content = _append_acoustic_events(summary_content, l_st, r_st)
 
+
     if 'auto_align' in l_st:
         res = l_st['auto_align']
         summary_content += "\n=== AUTO-ALIGN ===\n"
@@ -783,10 +871,14 @@ def _write_fs_outputs(
     # Dashboard format: PNG only (no HTML), so it opens everywhere without Plotly JS.
     if bool(write_dashboards):
         html_l, fig_l = plots.generate_prediction_plot(
-            f_l, m_l, p_l, l_imp, fs_v, "Left",
+            f_l,
+            view_mags_for_plot(f_l, m_l, smoothing_type=data.get("smoothing_type"), smoothing_level=data.get("smoothing_level")),
+            p_l, l_imp, fs_v, "Left",
             None, l_st, data['mixed_freq'], "low",
             create_full_html=False,
-            return_fig=True
+            return_fig=True,
+            smoothing_type=data.get('smoothing_type'),
+            smoothing_level=data.get('smoothing_level'),
         )
         if fig_l is not None:
             zf.writestr(l_dash_name, plots.plotly_fig_to_png(fig_l, scale=2))
@@ -795,10 +887,14 @@ def _write_fs_outputs(
             zf.writestr(l_dash_name.replace(".png", ".txt"), str(html_l))
 
         html_r, fig_r = plots.generate_prediction_plot(
-            f_r, m_r, p_r, r_imp, fs_v, "Right",
+            f_r,
+            view_mags_for_plot(f_r, m_r, smoothing_type=data.get("smoothing_type"), smoothing_level=data.get("smoothing_level")),
+            p_r, r_imp, fs_v, "Right",
             None, r_st, data['mixed_freq'], "low",
             create_full_html=False,
-            return_fig=True
+            return_fig=True,
+            smoothing_type=data.get('smoothing_type'),
+            smoothing_level=data.get('smoothing_level'),
         )
         if fig_r is not None:
             zf.writestr(r_dash_name, plots.plotly_fig_to_png(fig_r, scale=2))
@@ -823,6 +919,7 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
         if l_st_f is None or r_st_f is None:
             put_error("Error: No results captured.")
             return
+        
 
         put_success(t('done_msg'))
 
@@ -877,12 +974,25 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             - **FDW:** {data['fdw_cycles']}
             - **House curve:** {data['hc_mode']} — {data.get('hc_source', 'Unknown')} ({data['mag_c_min']}-{data['mag_c_max']} Hz)
             - **Filter type:** {data['filter_type']}
-            - **Smoothing:** {data['lvl_algo']}
+            - **Smoothing view:** {data.get('smoothing_type', 'Standard')}
+            - **Leveling algo:** {data.get('lvl_algo', '')}
             """))
 
         put_tabs([
-            {'title': 'Left Channel', 'content': put_html(plots.generate_prediction_plot(f_l, m_l, p_l, l_imp_f, data['fs'], "Left", None, l_st_f, data['mixed_freq'], "low", create_full_html=False))},
-            {'title': 'Right Channel', 'content': put_html(plots.generate_prediction_plot(f_r, m_r, p_r, r_imp_f, data['fs'], "Right", None, r_st_f, data['mixed_freq'], "low", create_full_html=False))}
+            {'title': 'Left Channel', 'content': put_html(plots.generate_prediction_plot(
+                f_l, m_l, p_l, l_imp_f, data['fs'], "Left",
+                None, l_st_f, data['mixed_freq'], "low",
+                create_full_html=False,
+                smoothing_type=data.get('smoothing_type'),
+                smoothing_level=data.get('smoothing_level'),
+            ))},
+            {'title': 'Right Channel', 'content': put_html(plots.generate_prediction_plot(
+                f_r, m_r, p_r, r_imp_f, data['fs'], "Right",
+                None, r_st_f, data['mixed_freq'], "low",
+                create_full_html=False,
+                smoothing_type=data.get('smoothing_type'),
+                smoothing_level=data.get('smoothing_level'),
+            ))}
         ])
         put_file(fname, zip_buffer.getvalue(), label=" DOWNLOAD FILTER ZIP")
 
@@ -891,6 +1001,18 @@ def process_run():
     # 1) UI -> data dict (new unified collector)
     data = collect_ui_data(pin)
     save_config(data)
+
+    # Always warn at START if user requested boost above safety cap
+    try:
+        mb = float(data.get('max_boost', 0.0) or 0.0)
+        if float(MAX_SAFE_BOOST) > 0.0 and mb > float(MAX_SAFE_BOOST) + 1e-9:
+            try:
+                cap_suffix = t('max_boost_help_cap').format(value=f"{MAX_SAFE_BOOST:.1f}")
+            except Exception:
+                cap_suffix = f" (capped to {MAX_SAFE_BOOST:.1f} dB)"
+            toast(f"{t('max_boost')}: {mb:.1f} dB > {MAX_SAFE_BOOST:.1f} dB{cap_suffix}", duration=6)
+    except Exception:
+        pass
 
     # 2) Measurements (upload OR local paths)
     f_l, m_l, p_l, f_r, m_r, p_r = load_measurements_lr(data, logger=logger)
@@ -950,6 +1072,23 @@ def process_run():
                 hc_m=hc_m,
                 pin=pin,
             )
+            # --- Safety cap for boost (CamillaFIR philosophy: never allow "surprise" boosts) ---
+            # max_boost_db is a user-visible knob, but we additionally cap it with MAX_SAFE_BOOST
+            # to prevent accidental large boosts from unstable measurements / target mismatch.
+            try:
+                _user_mb = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
+                setattr(cfg, "max_boost_db_user", _user_mb)
+                setattr(cfg, "max_safe_boost_db", float(MAX_SAFE_BOOST))
+                if _user_mb > 0.0 and float(MAX_SAFE_BOOST) > 0.0:
+                    _eff_mb = min(_user_mb, float(MAX_SAFE_BOOST))
+                    if _eff_mb < _user_mb - 1e-9:
+                        logger.info(
+                            f"Safety cap: max_boost_db user={_user_mb:.2f} dB -> effective={_eff_mb:.2f} dB "
+                            f"(MAX_SAFE_BOOST={float(MAX_SAFE_BOOST):.2f} dB)"
+                        )
+                    setattr(cfg, "max_boost_db", float(_eff_mb))
+            except Exception:
+                pass
 
 
 
@@ -1277,6 +1416,54 @@ def _pick_cmp(stats, key):
         return stats.get("cmp_" + key, stats.get(key))
     return stats.get(key)
 
+def view_mags_for_plot(freqs, mags, *, smoothing_type="Standard", smoothing_level=48):
+    """UI-only smoothing for plots (does NOT affect DSP math).
+
+    - Psychoacoustic: REW-like crossfade (heavy LF, light HF), view-only
+    """
+    # Always use DSP's standard smoother to avoid keyword/signature mismatches.
+    f = np.asarray(freqs, dtype=float)
+    m = np.asarray(mags, dtype=float)
+    if f.size < 8 or m.size != f.size:
+        return mags
+
+    try:
+        apply_smoothing_std = dsp.apply_smoothing_std
+    except Exception:
+        return mags
+
+    stype = str(smoothing_type or "Standard").lower()
+    if "psy" in stype:
+        # REW-like psychoacoustic smoothing for VIEW ONLY:
+        # heavy at LF (1/3 oct), light at HF (1/48 oct), crossfade on log-f axis 200–2000 Hz.
+        try:
+            dummy = np.zeros_like(m)
+            m_heavy, _ = apply_smoothing_std(f, m, dummy, 1/3.0)
+            m_light, _ = apply_smoothing_std(f, m, dummy, 1/48.0)
+
+            ff = np.maximum(f, 1.0)
+            lo = 200.0
+            hi = 2000.0
+            w = (np.log10(ff) - np.log10(lo)) / (np.log10(hi) - np.log10(lo))
+            w = np.clip(w, 0.0, 1.0)
+            return (1.0 - w) * m_heavy + w * m_light
+        except Exception:
+            return m
+
+    # Standard
+    try:
+        n = float(smoothing_level or 48.0)
+        if not np.isfinite(n) or n <= 0:
+            n = 48.0
+        oct_frac = 1.0 / n
+    except Exception:
+        oct_frac = 1.0 / 48.0
+
+    try:
+        m_sm, _ = apply_smoothing_std(f, m, np.zeros_like(m), float(oct_frac))
+        return m_sm
+    except Exception:
+        return m
 
 def _ensure_scoring_keys(st, f_in, m_in, hc_f, hc_m):
     """
