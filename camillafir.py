@@ -113,6 +113,19 @@ def _warn_max_boost_if_over_cap(_=None):
             pass
         return
 
+def scale_taps_with_fs(fs, taps_base, ref_fs=44100):
+    """Keep FIR length roughly constant in time across sample rates."""
+    try:
+        fs = float(fs)
+        taps_base = float(taps_base)
+        ref_fs = float(ref_fs)
+        if fs <= 0 or taps_base <= 0 or ref_fs <= 0:
+            return int(taps_base) if taps_base > 0 else 65536
+        return int(round(taps_base * fs / ref_fs))
+    except Exception:
+        return int(taps_base) if str(taps_base).isdigit() else 65536
+
+
 
 
 def _max_boost_help_with_cap():
@@ -1000,6 +1013,7 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
 def process_run():
     # 1) UI -> data dict (new unified collector)
     data = collect_ui_data(pin)
+    taps_base = int(float(data.get("taps", 65536) or 65536))
     save_config(data)
 
     # Always warn at START if user requested boost above safety cap
@@ -1040,6 +1054,7 @@ def process_run():
     dash_fs = choose_dash_fs(target_rates, multi_rate_on=multi_rate_on, forced_plot_fs_hz=int(FORCE_SINGLE_PLOT_FS_HZ))
 
 
+
     put_processbar('bar')
     put_scope('status_area')
     update_status(t('stat_reading'))
@@ -1053,18 +1068,18 @@ def process_run():
 
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         for i, fs_v in enumerate(target_rates):
-            if data['multi_rate_opt']:
-                taps_v = scale_taps_with_fs(fs_v)
-                logger.info(f"Auto taps: {int(fs_v)} Hz -> {int(taps_v)} taps (ref 44100 Hz -> 65536 taps)")
+            if bool(data.get('multi_rate_opt', False)):
+                taps_v = scale_taps_with_fs(fs_v, taps_base)
+                logger.info(f"Auto taps: {int(fs_v)} Hz -> {int(taps_v)} taps (ref 44100 Hz -> {taps_base} taps)")
             else:
-                taps_v = int(data['taps'])
+                taps_v = taps_base
             update_status(f"Lasketaan {fs_v}Hz...")
             set_processbar('bar', 0.2 + 0.6 * (i/len(target_rates)))
 
             cfg = build_filter_config(
                 FilterConfig_cls=FilterConfig,
                 fs_v=fs_v,
-                taps_v=taps_v,
+                taps_v = taps_v,
                 data=data,
                 xos=xos,
                 hpf=hpf,

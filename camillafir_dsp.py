@@ -123,6 +123,90 @@ def limit_slope_per_octave_asym(freq_axis, gain_db, max_db_per_oct_boost, max_db
     return g
 
 
+def build_slope_limit_envelope(
+    freq_axis,
+    target_db,
+    *,
+    mag_c_min: float,
+    mag_c_max: float,
+    max_slope_boost_db_per_oct: float,
+    max_slope_cut_db_per_oct: float,
+):
+    """Build a *visual* envelope for slope limiting (dB/oct).
+
+    This does NOT affect filter math. It's meant for the UI plot only:
+    show how far the target could move (up/down) while still respecting
+    the configured slope limits.
+
+    The envelope is anchored at a pivot frequency inside the correction band.
+    """
+    f = np.asarray(freq_axis, dtype=float)
+    t = np.asarray(target_db, dtype=float)
+
+    if f.size < 8 or t.size != f.size:
+        return None, None, None
+
+    # Disabled / invalid => no envelope
+    b = float(max_slope_boost_db_per_oct or 0.0)
+    c = float(max_slope_cut_db_per_oct or 0.0)
+    if b <= 0.0 and c <= 0.0:
+        return None, None, None
+
+    # Correction band sanity
+    try:
+        cmin = float(mag_c_min or 0.0)
+        cmax = float(mag_c_max or 0.0)
+    except Exception:
+        cmin, cmax = 0.0, 0.0
+    if not (np.isfinite(cmin) and np.isfinite(cmax) and cmin > 0 and cmax > cmin):
+        return None, None, None
+
+    # Pivot: geometric mean of correction band (stable on log axis)
+    pivot_hz = float(np.sqrt(cmin * cmax))
+    pivot_hz = float(np.clip(
+        pivot_hz,
+        float(np.min(f[f > 0])) if np.any(f > 0) else 1.0,
+        float(np.max(f))
+    ))
+    pivot_idx = int(np.argmin(np.abs(f - pivot_hz)))
+
+    upper_delta = np.zeros_like(t, dtype=float)
+    lower_delta = np.zeros_like(t, dtype=float)
+
+    # forward (pivot -> hi)
+    for i in range(pivot_idx + 1, f.size):
+        f0, f1 = float(f[i - 1]), float(f[i])
+        if f0 <= 0 or f1 <= 0:
+            upper_delta[i] = upper_delta[i - 1]
+            lower_delta[i] = lower_delta[i - 1]
+            continue
+        dx_oct = float(np.log2(f1 / f0))
+        dx_oct = max(dx_oct, 0.0)
+        upper_delta[i] = upper_delta[i - 1] + (b * dx_oct if b > 0 else 0.0)
+        lower_delta[i] = lower_delta[i - 1] + (c * dx_oct if c > 0 else 0.0)
+
+    # backward (pivot -> lo)
+    for i in range(pivot_idx - 1, -1, -1):
+        f0, f1 = float(f[i + 1]), float(f[i])
+        if f0 <= 0 or f1 <= 0:
+            upper_delta[i] = upper_delta[i + 1]
+            lower_delta[i] = lower_delta[i + 1]
+            continue
+        dx_oct = float(np.log2(f0 / f1))  # positive
+        dx_oct = max(dx_oct, 0.0)
+        upper_delta[i] = upper_delta[i + 1] + (b * dx_oct if b > 0 else 0.0)
+        lower_delta[i] = lower_delta[i + 1] + (c * dx_oct if c > 0 else 0.0)
+
+    env_hi = t + upper_delta
+    env_lo = t - lower_delta
+
+    # Only show inside correction band; outside return NaN to avoid drawing.
+    band = (f >= cmin) & (f <= cmax)
+    env_hi = np.where(band, env_hi, np.nan)
+    env_lo = np.where(band, env_lo, np.nan)
+
+    return env_lo, env_hi, pivot_hz
+
 
 def apply_smart_tdc(
     freq_axis,
@@ -857,6 +941,33 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
             st["measured_mags"] = measured_aligned.tolist()
             st["target_mags"]   = target_aligned.tolist()
+
+            # --- VISUAL: slope-limit envelope around Target (dB/oct) ---
+            # This is UI-only (does not change DSP).
+            try:
+                # Inherit legacy symmetric slope limit if boost/cut are unset
+                max_slope = float(getattr(cfg, "max_slope_db_per_oct", 0.0) or 0.0)
+                max_slope_boost = float(getattr(cfg, "max_slope_boost_db_per_oct", 0.0) or 0.0)
+                max_slope_cut = float(getattr(cfg, "max_slope_cut_db_per_oct", 0.0) or 0.0)
+                if max_slope_boost <= 0.0:
+                    max_slope_boost = max_slope
+                if max_slope_cut <= 0.0:
+                    max_slope_cut = max_slope
+
+                env_lo, env_hi, env_pivot = build_slope_limit_envelope(
+                    np.asarray(freq_axis, dtype=float),
+                    target_aligned,
+                    mag_c_min=float(getattr(cfg, "mag_c_min", 0.0) or 0.0),
+                    mag_c_max=float(getattr(cfg, "mag_c_max", 0.0) or 0.0),
+                    max_slope_boost_db_per_oct=float(max_slope_boost),
+                    max_slope_cut_db_per_oct=float(max_slope_cut),
+                )
+                if env_lo is not None and env_hi is not None:
+                    st["target_env_lo"] = np.asarray(env_lo, dtype=float).tolist()
+                    st["target_env_hi"] = np.asarray(env_hi, dtype=float).tolist()
+                    st["target_env_pivot_hz"] = float(env_pivot) if env_pivot is not None else None
+            except Exception:
+                pass
 
             st["target_shift_db"] = float(target_shift_db)
 

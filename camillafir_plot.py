@@ -926,6 +926,49 @@ def generate_prediction_plot(
 
         # B. TARGET (Original light data + avg_t correction)
         if target_stats and 'target_mags' in target_stats:
+            # --- Visual: slope-limit envelope (dB/oct) ---
+            # If DSP provided envelope bounds, draw a shaded band around Target.
+            try:
+                env_lo = target_stats.get('target_env_lo', None)
+                env_hi = target_stats.get('target_env_hi', None)
+                fx_env = target_stats.get('freq_axis', None)
+                if env_lo is not None and env_hi is not None and fx_env is not None:
+                    fx0 = np.asarray(fx_env, dtype=float)
+                    lo0 = np.asarray(env_lo, dtype=float)
+                    hi0 = np.asarray(env_hi, dtype=float)
+                    if fx0.size == lo0.size == hi0.size and fx0.size > 16:
+                        lo_abs = _maybe_shift_to_abs(lo0, avg_t)
+                        hi_abs = _maybe_shift_to_abs(hi0, avg_t)
+
+                        fig.add_trace(
+                            go.Scatter(
+                                x=fx0,
+                                y=lo_abs,
+                                mode='lines',
+                                line=dict(width=0),
+                                name='Slope limit envelope',
+                                showlegend=True,
+                                hoverinfo='skip'
+                            ),
+                            row=1, col=1
+                        )
+                        fig.add_trace(
+                            go.Scatter(
+                                x=fx0,
+                                y=hi_abs,
+                                mode='lines',
+                                fill='tonexty',
+                                opacity=0.15,
+                                line=dict(width=0),
+                                name='Slope limit envelope',
+                                showlegend=False,
+                                hoverinfo='skip'
+                            ),
+                            row=1, col=1
+                        )
+            except Exception:
+                pass
+
             t_mags = _maybe_shift_to_abs(target_stats.get('target_mags', []), avg_t)
             fig.add_trace(go.Scatter(x=target_stats['freq_axis'], y=t_mags,
                                      name='Target', line=dict(color='green', dash='dash', width=2.0)), row=1, col=1)
