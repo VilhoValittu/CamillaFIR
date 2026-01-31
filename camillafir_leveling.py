@@ -32,6 +32,144 @@ def _to_float(x, default: float) -> float:
         return float(default)
     return float(v)
 
+def _tilt_aware_offset_db(
+    freq_axis: np.ndarray,
+    diff_db: np.ndarray,
+    *,
+    max_db_per_oct: float = 2.0,
+) -> float:
+    """
+    Robust scalar offset from a windowed diff curve (m_anal - target),
+    while compensating for a gentle broadband tilt (dB/oct) inside the window.
+
+    Returns a SINGLE offset value (dB) to be used like:
+      measured_aligned = m_anal - offset
+
+    Notes
+    - This does NOT apply any tilt correction to the response. It only avoids
+      choosing a biased offset when the diff has slope.
+    - Fit is done on log2(f) axis and centered at the window's log-midpoint,
+      so returned offset is "at the center" of the window.
+    - Slope is clamped to +/- max_db_per_oct for safety.
+    """
+    try:
+        f = np.asarray(freq_axis, dtype=float)
+        y = np.asarray(diff_db, dtype=float)
+        if f.size != y.size or f.size < 20:
+            return float(np.median(y)) if y.size else 0.0
+
+        # Valid bins only
+        mask = np.isfinite(f) & np.isfinite(y) & (f > 0.0)
+        f = f[mask]
+        y = y[mask]
+        if f.size < 20:
+            return float(np.median(y)) if y.size else 0.0
+
+        # log2 frequency axis => slope in dB/oct
+        x = np.log2(f)
+
+        # Center at log-midpoint to make intercept meaningful for "window center"
+        x0 = float(np.median(x))
+        xc = x - x0
+
+        # Light trimming against extreme outliers (comb notches etc.)
+        # Keep middle 90% by absolute deviation from median.
+        y_med = float(np.median(y))
+        dev = np.abs(y - y_med)
+        if dev.size >= 30:
+            thr = float(np.quantile(dev, 0.90))
+            keep = dev <= thr
+            if np.count_nonzero(keep) >= 20:
+                xc = xc[keep]
+                y = y[keep]
+
+        # Least squares slope (robust enough after trimming)
+        denom = float(np.dot(xc, xc))
+        if denom <= 1e-12:
+            return float(np.median(y))
+
+        slope = float(np.dot(xc, (y - float(np.median(y)))) / denom)
+        # Clamp slope to sane range
+        max_db_per_oct = float(max_db_per_oct)
+        if not np.isfinite(max_db_per_oct) or max_db_per_oct <= 0:
+            max_db_per_oct = 2.0
+        slope = float(np.clip(slope, -max_db_per_oct, +max_db_per_oct))
+
+        # Intercept at window center: median of detrended curve
+        offset = float(np.median(y - slope * xc))
+        if not np.isfinite(offset):
+            offset = float(np.median(y)) if y.size else 0.0
+        return float(offset)
+    except Exception:
+        try:
+            return float(np.median(diff_db))
+        except Exception:
+            return 0.0
+        
+
+
+def _tilt_fit_offset_and_slope_db_per_oct(
+    freq_axis: np.ndarray,
+    diff_db: np.ndarray,
+    *,
+    max_db_per_oct: float = 2.0,
+):
+    """
+    Like _tilt_aware_offset_db(), but also returns the fitted tilt slope (dB/oct)
+    for reporting purposes only.
+
+    Returns (offset_db, slope_db_per_oct).
+    """
+    try:
+        f = np.asarray(freq_axis, dtype=float)
+        y = np.asarray(diff_db, dtype=float)
+        if f.size != y.size or f.size < 20:
+            off = float(np.median(y)) if y.size else 0.0
+            return off, 0.0
+
+        mask = np.isfinite(f) & np.isfinite(y) & (f > 0.0)
+        f = f[mask]
+        y = y[mask]
+        if f.size < 20:
+            off = float(np.median(y)) if y.size else 0.0
+            return off, 0.0
+
+        x = np.log2(f)
+        x0 = float(np.median(x))
+        xc = x - x0
+
+        # light trim against outliers
+        y_med = float(np.median(y))
+        dev = np.abs(y - y_med)
+        if dev.size >= 30:
+            thr = float(np.quantile(dev, 0.90))
+            keep = dev <= thr
+            if np.count_nonzero(keep) >= 20:
+                xc = xc[keep]
+                y = y[keep]
+
+        denom = float(np.dot(xc, xc))
+        if denom <= 1e-12:
+            off = float(np.median(y))
+            return off, 0.0
+
+        slope = float(np.dot(xc, (y - y_med)) / denom)
+        max_db_per_oct = float(max_db_per_oct)
+        if not np.isfinite(max_db_per_oct) or max_db_per_oct <= 0:
+            max_db_per_oct = 2.0
+        slope = float(np.clip(slope, -max_db_per_oct, +max_db_per_oct))
+
+        off = float(np.median(y - slope * xc))
+        if not np.isfinite(off):
+            off = float(np.median(y))
+
+        return off, slope
+    except Exception:
+        try:
+            return float(np.median(diff_db)), 0.0
+        except Exception:
+            return 0.0, 0.0
+
 
 def find_stable_level_window(
     freq_axis: np.ndarray,
@@ -139,6 +277,15 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
 
     mode = str(getattr(cfg, "lvl_mode", "Auto"))
     is_manual = ("Manual" in mode)
+    # Optional: tilt-aware leveling for Auto/SmartScan/ForcedWindow (NOT ForcedOffset, NOT Manual)
+    tilt_comp = bool(getattr(cfg, "lvl_tilt_comp", True))
+    tilt_max_db_per_oct = _to_float(getattr(cfg, "lvl_tilt_max_db_per_oct", 2.0), 2.0)
+
+    # Clear previous run's tilt (cfg may be reused)
+    try:
+        setattr(cfg, "_lvl_tilt_slope_db_per_oct", None)
+    except Exception:
+        pass
 
     # ---------- Forced window / offset (Stereo-link support) ----------
     # If the caller provides a fixed window and/or offset, respect it.
@@ -169,11 +316,36 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
             if forced_offset is not None:
                 calc_offset_db = _to_float(forced_offset, 0.0)
                 offset_method = "ForcedOffset"
+
+                # Reporting-only: still compute tilt slope in the chosen window (does NOT affect offset)
+                try:
+                    if tilt_comp and np.any(mask):
+                        _off_tmp, _slope = _tilt_fit_offset_and_slope_db_per_oct(
+                            freq_axis[mask],
+                            (m_anal[mask] - target_mags[mask]),
+                            max_db_per_oct=float(tilt_max_db_per_oct),
+                        )
+                        setattr(cfg, "_lvl_tilt_slope_db_per_oct", float(_slope))
+                except Exception:
+                    pass
             else:
                 # If only window is forced, compute a deterministic offset from that.
                 if np.any(mask):
-                    calc_offset_db = float(np.median(m_anal[mask] - target_mags[mask]))
-                    offset_method = "ForcedWindowMedian"
+                    diff = (m_anal[mask] - target_mags[mask])
+                    if tilt_comp:
+                        calc_offset_db, tilt_slope = _tilt_fit_offset_and_slope_db_per_oct(
+                            freq_axis[mask],
+                            diff,
+                            max_db_per_oct=float(tilt_max_db_per_oct),
+                        )
+                        try:
+                            setattr(cfg, "_lvl_tilt_slope_db_per_oct", float(tilt_slope))
+                        except Exception:
+                            pass
+                        offset_method = "ForcedWindowTiltMedian"
+                    else:
+                        calc_offset_db = float(np.median(diff))
+                        offset_method = "ForcedWindowMedian"
                 else:
                     calc_offset_db = 0.0
                     offset_method = "ForcedWindowNoMask"
@@ -273,8 +445,21 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
     if np.any(mask):
         meas_level_db_window = float(np.median(m_anal[mask]))
         target_level_db_window = float(np.median(target_mags[mask]))
-        calc_offset_db = float(np.median(m_anal[mask] - target_mags[mask]))
-        offset_method = "SmartScanMedian"
+        diff = (m_anal[mask] - target_mags[mask])
+        if tilt_comp:
+            calc_offset_db, tilt_slope = _tilt_fit_offset_and_slope_db_per_oct(
+                freq_axis[mask],
+                diff,
+                max_db_per_oct=float(tilt_max_db_per_oct),
+            )
+            try:
+                setattr(cfg, "_lvl_tilt_slope_db_per_oct", float(tilt_slope))
+            except Exception:
+                pass
+            offset_method = "SmartScanTiltMedian"
+        else:
+            calc_offset_db = float(np.median(diff))
+            offset_method = "SmartScanMedian"
     else:
         # IMPORTANT: don't do anything with empty arrays.
         calc_offset_db = 0.0

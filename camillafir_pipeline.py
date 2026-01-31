@@ -174,11 +174,59 @@ def build_filter_config(
     """
     Construct FilterConfig instance without importing camillafir/models inside this module.
     """
+
+    def _pin_get(key: str, default=None):
+        """Robust pin read: supports dict-like and attribute-like pin objects. NEVER raises."""
+        # dict-like: pin.get / pin[key]
+        try:
+            if hasattr(pin, "get"):
+                v = pin.get(key, None)
+                if v is not None:
+                    return v
+        except Exception:
+            pass
+
+        try:
+            return pin[key]
+        except Exception:
+            pass
+
+        # attribute-like: pin.key
+        try:
+            v = getattr(pin, key)
+            if v is not None:
+                return v
+        except Exception:
+            pass
+
+        return default
+
+    def _as_float(v, default=0.0) -> float:
+        try:
+            x = float(v)
+            return x if x == x else float(default)  # NaN guard
+        except Exception:
+            return float(default)
+
+    def _as_int(v, default=0) -> int:
+        try:
+            return int(float(v))
+        except Exception:
+            return int(default)
+
+    df_smoothing = bool(_pin_get("df_smoothing", data.get("df_smoothing", False)))
+    enable_afdw = bool(_pin_get("enable_afdw", data.get("enable_afdw", False)))
+    enable_tdc = bool(_pin_get("enable_tdc", data.get("enable_tdc", False)))
+    tdc_max_red = _as_float(_pin_get("tdc_max_reduction_db", data.get("tdc_max_reduction_db", 9.0)), 9.0)
+    tdc_slope = _as_float(_pin_get("tdc_slope_db_per_oct", data.get("tdc_slope_db_per_oct", 0.0)), 0.0)
+    smoothing_level = _as_int(_pin_get("smoothing_level", data.get("smoothing_level", 12)), 12)
+    comparison_mode = bool(data.get("comparison_mode", False))
+    
     cfg = FilterConfig_cls(
         fs=int(fs_v),
         num_taps=int(taps_v),
-        df_smoothing=bool(pin["df_smoothing"]),
-        **({"comparison_mode": True} if hasattr(FilterConfig_cls, "comparison_mode") else {}),
+        df_smoothing=bool(df_smoothing),
+        **({"comparison_mode": bool(comparison_mode)} if hasattr(FilterConfig_cls, "comparison_mode") else {}),
         filter_type_str=data["filter_type"],
         mixed_split_freq=data["mixed_freq"],
         global_gain_db=data["gain"],
@@ -200,11 +248,11 @@ def build_filter_config(
         low_bass_cut_hz=float(data.get("low_bass_cut_hz", 40.0) or 40.0),
         ir_window_ms=data["ir_window"],
         ir_window_ms_left=data.get("ir_window_left", 100.0),
-        enable_afdw=bool(pin.enable_afdw),
-        enable_tdc=bool(pin.enable_tdc),
+        enable_afdw=bool(enable_afdw),
+        enable_tdc=bool(enable_tdc),
         tdc_strength=data.get("tdc_strength", 50.0),
-        tdc_max_reduction_db=float(pin["tdc_max_reduction_db"]),
-        tdc_slope_db_per_oct=float(pin["tdc_slope_db_per_oct"]),
+        tdc_max_reduction_db=float(tdc_max_red),
+        tdc_slope_db_per_oct=float(tdc_slope),
         smoothing_type=data["smoothing_type"],
         fdw_cycles=data["fdw_cycles"],
         lvl_manual_db=data["lvl_manual_db"],
@@ -212,7 +260,7 @@ def build_filter_config(
         lvl_max=data["lvl_max"],
         lvl_algo=data["lvl_algo"],
         stereo_link=bool(data.get("stereo_link", False)),
-        smoothing_level=int(pin.smoothing_level),
+        smoothing_level=int(smoothing_level),
         crossovers=xos,
         hpf_settings=hpf,
         house_freqs=hc_f,
@@ -221,4 +269,11 @@ def build_filter_config(
         bass_first_ai=bool(data.get("bass_first_ai", False)),
         bass_first_mode_max_hz=float(data.get("bass_first_mode_max_hz", 200.0) or 200.0),
     )
+
+    # Optional experimental features (avoid breaking older FilterConfig constructors)
+    try:
+        setattr(cfg, "enable_residual_pass", bool(data.get("enable_residual_pass", False)))
+    except Exception:
+        pass
+
     return cfg

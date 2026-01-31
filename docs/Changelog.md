@@ -7,6 +7,15 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 ---
 
 ---
+
+## [2.8.2.3] - 2026 - 01 - 30
+
+### Io-update
+- Fixed ZIP output when multi-rate is enabled. Generate a single CamillaDSP .yml using $samplerate$
+
+### DSP-update
+- More precise leveling tilt used in magnitude calculation
+
 ## [2.8.2.2] - 2026-01-29
 
 ### Ui-update

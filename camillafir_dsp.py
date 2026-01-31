@@ -16,7 +16,7 @@ from camillafir_analysis import (
     _third_oct_centers as _third_oct_centers_analysis,
 )
 
-#CamillaFIR DSP Engine v1.0.9
+#CamillaFIR DSP Engine v1.1.0
 
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
@@ -26,6 +26,7 @@ from camillafir_analysis import (
 #1.07 TDC improvements and bugfixes
 #1.08 Bugfixes for bass-first and TDC
 #1.09 Improved TDC stability and reliability
+#1.1.0 More presice leveling tilt for magnitude calculation
 
 def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto_headroom_db=0.0, logger_obj=None):
     """
@@ -1555,6 +1556,179 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 hpf_db = apply_hpf_to_mags(freq_axis, np.zeros_like(freq_axis), hpf_f, hpf_order)
                 gain_db = gain_db + hpf_db
 
+        # --- 8G/9A2. Optional residual magnitude pass (2-pass target tracking) ---
+        # Improves target tracking without making correction aggressive:
+        #   pred0 = (m_anal - calc_offset_db) + gain_db
+        #   residual = target_mags - pred0
+        #   apply broad smoothing + confidence gating, add fraction back to gain_db
+        # Then re-apply the same magnitude safety constraints (lowbass policy, soft/hard clamp, slope, fades).
+        if bool(getattr(cfg, "enable_residual_pass", False)) and bool(getattr(cfg, "enable_mag_correction", True)):
+            try:
+                def _reapply_mag_constraints(_g):
+                    """Re-apply the same post-shaping constraints after residual tweaks (UI/DSP consistency)."""
+                    _g = np.asarray(_g, dtype=float).copy()
+
+                    # Keep low-bass 'no boost + stronger cut' policy intact
+                    try:
+                        low_hz = float(getattr(cfg, "low_bass_cut_hz", 40.0) or 40.0)
+                        low_mask = mask_c & (freq_axis > 0) & (freq_axis <= low_hz)
+                        if np.any(low_mask):
+                            # no boost below low_hz
+                            _g[low_mask] = np.minimum(_g[low_mask], 0.0)
+                            # If raw_g/final_g exist (mag correction path), keep 'stronger cut' rule
+                            if 'raw_g' in locals() and 'final_g' in locals():
+                                low_cut = np.minimum(final_g[low_mask], raw_g[low_mask])  # stronger cut
+                                low_cut = np.minimum(low_cut, 0.0)
+                                _g[low_mask] = np.minimum(_g[low_mask], low_cut)
+                    except Exception:
+                        pass
+
+                    # Soft clip (same as 8D)
+                    try:
+                        max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
+                        _g = soft_clip_gain(
+                            _g,
+                            float(getattr(cfg, "max_boost_db", 0.0) or 0.0),
+                            max_cut_db
+                        )
+                    except Exception:
+                        pass
+
+                    # Slope limiter (same as 8E)
+                    try:
+                        max_slope = float(getattr(cfg, "max_slope_db_per_oct", 24.0) or 0.0)  # legacy symmetric
+                        max_slope_boost = float(getattr(cfg, "max_slope_boost_db_per_oct", 0.0) or 0.0)
+                        max_slope_cut   = float(getattr(cfg, "max_slope_cut_db_per_oct", 0.0) or 0.0)
+                        if max_slope_boost <= 0.0:
+                            max_slope_boost = max_slope
+                        if max_slope_cut <= 0.0:
+                            max_slope_cut = max_slope
+
+                        if max_slope > 0 or max_slope_boost > 0 or max_slope_cut > 0:
+                            if max_slope_boost == max_slope_cut and max_slope_boost > 0:
+                                _g = limit_slope_per_octave(freq_axis, _g, max_db_per_oct=float(max_slope_boost))
+                            else:
+                                _g = limit_slope_per_octave_asym(
+                                    freq_axis,
+                                    _g,
+                                    max_db_per_oct_boost=float(max_slope_boost),
+                                    max_db_per_oct_cut=float(max_slope_cut),
+                                )
+                    except Exception:
+                        pass
+
+                    # Fade to zero near mag_c_max (same as post-8E fade)
+                    try:
+                        mag_c_min = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
+                        mag_c_max = float(getattr(cfg, "mag_c_max", 0.0) or 0.0)
+                        trans_w   = float(getattr(cfg, "trans_width", 0.0) or 0.0)
+                        if mag_c_max > 0 and trans_w > 0:
+                            f_start = max(mag_c_max - trans_w, mag_c_min)
+                            f_mask = (freq_axis > f_start) & (freq_axis <= mag_c_max)
+                            fade_len = mag_c_max - f_start
+                            if np.any(f_mask) and fade_len > 0:
+                                _g[f_mask] *= (mag_c_max - freq_axis[f_mask]) / fade_len
+                    except Exception:
+                        pass
+
+                    # Exc-protection (same as existing exc_prot re-application)
+                    try:
+                        if bool(getattr(cfg, "exc_prot", False)):
+                            f_start = float(getattr(cfg, "exc_freq", 0.0) or 0.0)
+                            if f_start > 0:
+                                f_end = f_start * 1.41
+                                prot_mask = freq_axis < f_start
+                                _g[prot_mask] = np.minimum(_g[prot_mask], 0.0)
+                                trans_mask = (freq_axis >= f_start) & (freq_axis <= f_end)
+                                if np.any(trans_mask):
+                                    fade = (freq_axis[trans_mask] - f_start) / (f_end - f_start)
+                                    allowed_boost = fade * float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
+                                    _g[trans_mask] = np.minimum(_g[trans_mask], allowed_boost)
+                    except Exception:
+                        pass
+
+                    # HPF policy fade (same as earlier HPF policy)
+                    try:
+                        hs2 = getattr(cfg, "hpf_settings", None)
+                        if isinstance(hs2, dict) and hs2.get('enabled'):
+                            _hpf_f = float(hs2.get('freq', 0.0) or 0.0)
+                            if _hpf_f > 0:
+                                hpf_end2 = _hpf_f * 1.41
+                                below2 = freq_axis < _hpf_f
+                                _g[below2] = 0.0
+                                trans2 = (freq_axis >= _hpf_f) & (freq_axis <= hpf_end2)
+                                if np.any(trans2):
+                                    fade2 = (freq_axis[trans2] - _hpf_f) / (hpf_end2 - _hpf_f)
+                                    _g[trans2] *= fade2
+                    except Exception:
+                        pass
+
+                    # Final hard clamp (same as 8F)
+                    try:
+                        max_cut_db2 = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
+                        _g = np.minimum(_g, float(getattr(cfg, "max_boost_db", 0.0) or 0.0))
+                        _g = np.maximum(_g, -max_cut_db2)
+                    except Exception:
+                        pass
+
+                    return _g
+
+                # Predicted response from current gain
+                measured_aligned = (m_anal - calc_offset_db)
+                pred0 = measured_aligned + gain_db
+                resid0 = (target_mags - pred0)
+
+                resid = np.zeros_like(gain_db, dtype=float)
+                resid[mask_c] = resid0[mask_c]
+
+                # Confidence gating (prefer reliable bins)
+                k = float(getattr(cfg, "residual_conf_power", 2.0) or 2.0)
+                try:
+                    if conf_mask is not None:
+                        resid[mask_c] *= np.clip(conf_mask[mask_c], 0.0, 1.0) ** k
+                except Exception:
+                    pass
+
+                # Broad smoothing: avoid chasing narrow combing
+                strength = float(getattr(cfg, "residual_strength", 0.6) or 0.6)
+                strength = float(np.clip(strength, 0.0, 1.0))
+                mult = float(getattr(cfg, "residual_smoothing_mult", 2.0) or 2.0)
+                mult = max(1.0, float(mult))
+
+                # Use same smoothing model as raw_g smoothing (df_smoothing aware)
+                _base_sigma = locals().get('base_sigma', 60 // (cfg.smoothing_level / 12 if cfg.smoothing_level > 0 else 1))
+                _df_mode = bool(locals().get('df_mode', bool(getattr(cfg, "df_smoothing", False))))
+                if _df_mode:
+                    df_ref = 44100.0 / 65536.0
+                    sigma_hz = float(_base_sigma) * df_ref * mult
+                    sigma_bins = _sigma_bins_from_hz(
+                        freq_axis,
+                        sigma_hz=sigma_hz,
+                        fallback_bins=max(2.0, float(_base_sigma) * mult)
+                    )
+                    resid_sm = scipy.ndimage.gaussian_filter1d(resid, sigma=float(sigma_bins))
+                else:
+                    sigma_scaling = cfg.fs / 44100.0
+                    sigma = max(2, int(float(_base_sigma) * sigma_scaling * mult))
+                    resid_sm = scipy.ndimage.gaussian_filter1d(resid, sigma=sigma)
+
+                # Apply fraction of residual only in correction band
+                gain_db[mask_c] = gain_db[mask_c] + (resid_sm[mask_c] * strength)
+
+                # Re-apply constraints to keep all safety rules intact
+                gain_db = _reapply_mag_constraints(gain_db)
+
+                try:
+                    if isinstance(st, dict):
+                        st["residual_pass_enabled"] = True
+                        st["residual_strength"] = float(strength)
+                        st["residual_smoothing_mult"] = float(mult)
+                        st["residual_conf_power"] = float(k)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
     # --- 9B. CLIP PREVENTION & HEADROOM ---
     # NOTE:
     # - If normalization is OFF, we do NOT auto-lower the whole response.
@@ -1772,6 +1946,12 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'meas_level_db_window': float(meas_level_db_window),
         'target_level_db_window': float(target_level_db_window),
         'offset_method': str(offset_method),
+            # Leveling tilt (reporting only). None if tilt-comp was not used or not computed.
+            'tilt_slope_db_per_oct': (
+                float(getattr(cfg, "_lvl_tilt_slope_db_per_oct"))
+                if getattr(cfg, "_lvl_tilt_slope_db_per_oct", None) is not None
+                else None
+            ),
         'rt60_val': float(current_rt60),
         'rt60_band_avg': float(band_avg),
         'rt60_bands': rt60_bands,        

@@ -17,6 +17,7 @@ from pywebio.output import *
 from pywebio.pin import *
 from pywebio.session import set_env
 from pywebio.output import toast
+from pywebio.output import put_html
 from camillafir_config import load_config, save_config
 from camillafir_i18n import t
 from camillafir_housecurve import _normalize_hc_mode_key, get_house_curve_by_name, load_target_curve, load_house_curve
@@ -58,9 +59,13 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.8.2.2"  # updated translations and phase plot
-
+VERSION = "v2.8.2.3"  # [IO] Fixed ZIP output when multi-rate is enabled:
+#                        generate a single CamillaDSP .yml using $samplerate$
+                      # [DSP] More presice leveling tilt for magnitude calculation
 # Change log:
+# v2.8.2.3 [IO] Fixed ZIP output when multi-rate is enabled:
+#               generate a single CamillaDSP .yml using $samplerate$
+# v2.8.2.3 [DSP] More precise leveling tilt used in magnitude calculation
 # v.2.8.2.2 [UI] updated translations and phase plot
 # v.2.8.2.1 changed file structure to more debug-friendly format
 # v2.8.2: [UI] improved robustness of file upload parsing from browser & added xo_help translation
@@ -657,18 +662,37 @@ def _log_df_smoothing_for_fs(cfg, fs_v, df_on):
     else:
         logger.info(f"{fs_v//1000} kHz -> DF smoothing OFF")
 
+def _pin_get(key, default=None):
+    """
+    Robust read from PyWebIO pin.
+    pin behaves like a dict, but membership/tests can be fragile depending on session state.
+    This helper NEVER raises.
+    """
+    try:
+        v = pin.get(key, None)
+        if v is None:
+            return default
+        return v
+    except Exception:
+        try:
+            # Fallback to __getitem__ if available
+            return pin[key]
+        except Exception:
+            return default
+
+
 
 def _append_dsp_effective_params(summary_content, data, fs_v):
     try:
-        enable_afdw = bool(pin['enable_afdw']) if 'enable_afdw' in pin else bool(data.get('enable_afdw', False))
-        enable_tdc = bool(pin['enable_tdc']) if 'enable_tdc' in pin else bool(data.get('enable_tdc', False))
+        enable_afdw = bool(_pin_get('enable_afdw', data.get('enable_afdw', False)))
+        enable_tdc  = bool(_pin_get('enable_tdc',  data.get('enable_tdc',  False)))
         tdc_strength = float(data.get('tdc_strength', 0.0) or 0.0)
         fdw_cycles = float(data.get('fdw_cycles', 15.0) or 15.0)
         fdw_oct_width = (2.0 / fdw_cycles) if fdw_cycles > 0 else 0.0
         afdw_min = max(3.0, fdw_cycles / 3.0)
         afdw_min_oct_width = (2.0 / afdw_min) if afdw_min > 0 else 0.0
 
-        df_on = bool(pin['df_smoothing']) if 'df_smoothing' in pin else bool(data.get('df_smoothing', False))
+        df_on = bool(_pin_get('df_smoothing', data.get('df_smoothing', False)))
         df_ref = 44100.0 / 65536.0
         base_sigma = 60 // (data.get('smoothing_level', 12) / 12 if (data.get('smoothing_level', 12) or 0) > 0 else 1)
         sigma_hz = float(base_sigma) * df_ref
@@ -703,7 +727,7 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
             summary_content += f"DF smoothing sigma: {sigma_bins:.1f} bins -> {sigma_hz:.2f} Hz\n"
     except Exception:
         summary_content += "\n=== DSP EFFECTIVE PARAMS (THIS SAMPLE RATE) ===\n"
-        summary_content += "Could not compute effective params (unexpected data/pin state).\n"
+        summary_content += f"Could not compute effective params: {type(e).__name__}: {e}\n"
 
     return summary_content
 
@@ -870,6 +894,33 @@ def _write_fs_outputs(
     summary_content = _append_acoustic_events(summary_content, l_st, r_st)
 
 
+    # --- Leveling tilt (StereoLink window, reporting only) ---
+    try:
+        tilt = None
+        if isinstance(l_st, dict):
+            tilt = l_st.get("tilt_slope_db_per_oct", None)
+        if tilt is not None:
+            summary_content += (
+                f"\nLeveling tilt (StereoLink window): "
+                f"{float(tilt):+.2f} dB/oct\n"
+            )
+
+            # --- Informational warning for large tilt ---
+            try:
+                tilt_warn_thr = 1.5  # dB/oct, reporting only
+                if abs(float(tilt)) > tilt_warn_thr:
+                    summary_content += (
+                        "⚠️  Large broadband tilt detected during leveling. "
+                        "This may indicate measurement/target mismatch "
+                        "or a strongly tilted room/speaker response.\n"
+                    )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+
     if 'auto_align' in l_st:
         res = l_st['auto_align']
         summary_content += "\n=== AUTO-ALIGN ===\n"
@@ -914,15 +965,22 @@ def _write_fs_outputs(
         else:
             zf.writestr(r_dash_name.replace(".png", ".txt"), str(html_r))
 
+    # HLC / BruteFIR cfg remains fs-specific
     hlc_cfg = generate_hlc_config(fs_v, ft_short, file_ts)
     zf.writestr(f"Config_{ft_short}_{fs_v}Hz.cfg", hlc_cfg)
-    yaml_content = generate_raspberry_yaml(
-        fs_v,
-        ft_short,
-        file_ts,
-        master_gain_db=float(data.get('gain', 0.0) or 0.0)
-    )
-    zf.writestr(f"camilladsp_{ft_short}_{fs_v}Hz.yml", yaml_content)
+
+    # CamillaDSP YAML:
+    # - single-rate: keep fs-specific YAML (historical behavior)
+    # - multi-rate: write ONE YAML once in process_run() (uses $samplerate$)
+    if not bool(data.get("multi_rate_opt", False)):
+        yaml_content = generate_raspberry_yaml(
+            fs_v,
+            ft_short,
+            file_ts,
+            master_gain_db=float(data.get('gain', 0.0) or 0.0)
+        )
+        zf.writestr(f"camilladsp_{ft_short}_{fs_v}Hz.yml", yaml_content)
+
 
 def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f, r_st_f, fname, zip_buffer):
     update_status(t('stat_plot'))
@@ -954,6 +1012,22 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
         else:
             avg_match = (float(l_match) + float(r_match)) / 2.0
 
+        def _fmt_tilt(st, warn_thr=1.5):
+            tilt = st.get('tilt_slope_db_per_oct', None)
+            if tilt is None:
+                return "—"
+            try:
+                tilt = float(tilt)
+                if abs(tilt) > warn_thr:
+                    return put_html(
+                        f'<span title="Large broadband tilt detected during leveling, house curve not suitable for speaker in room.">'
+                        f'{tilt:+.2f} dB/oct ⚠️'
+                        f'</span>'
+                    )
+                else:
+                    return f"{tilt:+.2f} dB/oct"
+            except Exception:
+                return "—"
 
         put_table([
             ['Speaker', 'L', 'R'],
@@ -961,6 +1035,7 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             ['Smart Scan Range',
              f"{l_st_f.get('smart_scan_range', [0,0])[0]:.0f}-{l_st_f.get('smart_scan_range', [0,0])[1]:.0f} Hz",
              f"{r_st_f.get('smart_scan_range', [0,0])[0]:.0f}-{r_st_f.get('smart_scan_range', [0,0])[1]:.0f} Hz"],
+            ['Leveling Tilt',_fmt_tilt(l_st_f),_fmt_tilt(r_st_f)],
             ['Offset to Meas.', f"{l_st_f.get('offset_db', 0):.1f} dB", f"{r_st_f.get('offset_db', 0):.1f} dB"],
             ['Acoustic Confidence', f"{l_st_f.get('avg_confidence', 0):.1f}%", f"{r_st_f.get('avg_confidence', 0):.1f}%"],
             ['Estimated RT60', f"{l_st_f.get('rt60_val', 0):.2f} s", f"{r_st_f.get('rt60_val', 0):.2f} s"],
@@ -1075,6 +1150,7 @@ def process_run():
                 taps_v = taps_base
             update_status(f"Lasketaan {fs_v}Hz...")
             set_processbar('bar', 0.2 + 0.6 * (i/len(target_rates)))
+            data["enable_residual_pass"] = True
 
             cfg = build_filter_config(
                 FilterConfig_cls=FilterConfig,
@@ -1144,6 +1220,16 @@ def process_run():
                                     smin,
                                     smax,
                                 ) = compute_leveling(cfg, fx_l, m_avg, tgt)
+
+                                # --- Report leveling tilt (StereoLink pass) ---
+                                try:
+                                    tilt_slope = getattr(cfg, "_lvl_tilt_slope_db_per_oct", None)
+                                    if isinstance(l_st, dict):
+                                        l_st["tilt_slope_db_per_oct"] = float(tilt_slope) if tilt_slope is not None else None
+                                    if isinstance(r_st, dict):
+                                        r_st["tilt_slope_db_per_oct"] = float(tilt_slope) if tilt_slope is not None else None
+                                except Exception:
+                                    pass
 
                                 # Force identical window+offset for both channels
                                 cfg.stereo_link = True
@@ -1262,6 +1348,16 @@ def process_run():
                 r_st,
                 write_dashboards=(not multi_rate_on) or (int(fs_v) == int(dash_fs))
             )
+
+        # Multi-rate: write ONE CamillaDSP YAML (uses $samplerate$ in FIR filenames)
+        if bool(data.get("multi_rate_opt", False)):
+            yaml_content = generate_raspberry_yaml(
+                int(data.get("fs") or 44100),
+                ft_short,
+                file_ts,
+                master_gain_db=float(data.get('gain', 0.0) or 0.0)
+            )
+            zf.writestr(f"camilladsp_{ft_short}.yml", yaml_content)
 
     # --- Save ZIP into filters/ directory ---
     filters_dir = os.path.join(os.getcwd(), "filters")
