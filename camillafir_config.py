@@ -54,6 +54,7 @@ def load_config() -> dict:
         "phase_safe_2058": False,
         "ir_window": 500.0,
         "ir_window_left": 50.0,
+        "ir_export_window_mode": "rew_sym",
         "enable_tdc": True,
         "tdc_strength": 50.0,
         "enable_afdw": True,
@@ -74,6 +75,7 @@ def load_config() -> dict:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
 
+
             # Legacy: PyWebIO checkbox pins saved as []/[True]
             for k in [
                 "mag_correct",
@@ -86,6 +88,7 @@ def load_config() -> dict:
                 "df_smoothing",
                 "comparison_mode",
                 "phase_safe_2058",
+                "ir_export_window_mode",
             ]:
                 if k in saved and isinstance(saved[k], list):
                     saved[k] = bool(saved[k])
@@ -99,7 +102,14 @@ def load_config() -> dict:
 
 def save_config(data: dict) -> None:
     try:
-        clean_data = {k: v for k, v in (data or {}).items() if not str(k).startswith("file_")}
+        clean_data = {
+            k: v for k, v in (data or {}).items()
+            if (
+                not str(k).startswith("file_")
+                and str(k) != "ir_export_window_mode"
+                and v is not None
+            )
+        }
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(clean_data, f, indent=4)
     except Exception:

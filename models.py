@@ -44,8 +44,16 @@ class FilterConfig:
     tdc_max_reduction_db: float = 9.0       # Max total TDC reduction (dB) per frequency bin
     tdc_slope_db_per_oct: float = 6.0       # Optional slope limit for TDC reduction curve (dB/oct), 0 = off
     enable_afdw: bool = True        # Adaptive FDW (A-FDW)
-    ir_window_ms: float = 500.0     # Right side time window
-    ir_window_ms_left: float = 10  # Left side time window (Pre-ringing)
+
+    # --- IR WINDOWING (REW-style export window, ms) ---
+    # Canonical fields used by DSP/exporter:
+    ir_export_window_mode: str = "auto"  # auto/off/rew_sym/rew_asym
+    ir_window_ms: float = 500.0          # Right-side window length (ms)
+    ir_window_ms_left: float = 50.0      # Left-side (pre) window (ms)
+    # Backward-compatible aliases (some UI paths used these names):
+    ir_window: float = 500.0
+    ir_window_left: float = 50.0
+
     mixed_split_freq: float = 300.0 # Mixed Phase filter split frequency
     trans_width: float = 100.0      # Transition width at upper limit
     bass_first_ai: bool = False

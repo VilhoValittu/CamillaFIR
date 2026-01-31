@@ -1,5 +1,8 @@
 {
     "en": {
+        "ft_asymmetric": "Asymmetric (Causal / low-latency)",
+        "ft_help": "Phase strategy. Linear = best timing, Min = no pre-ringing, Mixed = best of both. Asymmetric (Causal / low-latency) shifts the impulse earlier to reduce perceived delay.",
+        "ft_asym_note": "Asymmetric (Causal / low-latency) shifts the impulse earlier and may change the perceived latency/phase behavior. For REW/VBA-style windowed Linear/Mixed, keep Linear or Mixed and use “IR windowing style” in Advanced.",
         "txt_upload_no_data": "TXT upload failed: no valid measurement data found (at least frequency + magnitude required).",
         "txt_upload_parse_error": "TXT upload failed: error while parsing file or unsupported format.",
         "guide_modes_title": "Modes: BASIC vs ADVANCED",
@@ -52,6 +55,15 @@
         "guide_afdw_body": "**Adaptive FDW** is an intelligent windowing method.\n\n- **Why:** It protects the filter from errors. If the measurement is uncertain (e.g., a sharp dip or unstable phase), A-FDW shortens the effective time window.\n- **Benefit:** More natural treble and punchier bass, because the engine avoids correcting acoustic noise and late room decay.\n\n---\n### 🎯 Recommended A-FDW values\n\n**1) VBA / REW-IR-windowing style bass correction (tight target tracking)**\n- **2–4 cycles** (start at **3**)\n- Short window → less room decay → higher bass confidence → follows the target very closely.\n- Best when you want to actively cut room modes and the measurement is clean.\n\n**2) Normal / balanced (general use)**\n- **5–8 cycles** (start at **6**)\n- The usual sweet spot: effective bass correction without forcing the response to stick to every small target detail.\n\n**3) Conservative / safe (poor room or uncertain measurement)**\n- **9–12 cycles** (start at **10**)\n- Longer window sees more room behavior → confidence drops sooner → smoother, less aggressive bass correction.\n\n**4) Minimal bass intervention (light shaping only)**\n- **15–20 cycles**\n- Strongly limits precise bass correction. Useful when you want to be cautious and only gently shape upper bass or cutoff regions.",
         "ir_matala": "Minimum 0ms",
         "ir_korkea": "Maximum 1000ms",
+        "ir_export_window_title": "IR windowing (REW-style export)",
+        "ir_export_window_mode": "IR windowing style",
+        "ir_export_window_auto": "Auto (legacy)",
+        "ir_export_window_off": "Off",
+        "ir_export_window_sym": "REW Symmetric",
+        "ir_export_window_asym": "REW Asymmetric",
+        "ir_export_window_help": "Controls impulse-response windowing at export stage. Use this to get REW/VBA-style windowed Linear/Mixed filters without switching to Asymmetric. Auto keeps the legacy rule: Linear/Mixed are symmetric, Asymmetric/Minimum use literal left/right values.",
+        "ir_window_left_label": "Left window (ms)",
+        "ir_window_right_label": "Right window (ms)",
         "saved_local": "Saved locally:",
         "done_msg": "Analysis Complete.",
         "stat_calc": "Calculating...",
@@ -106,8 +118,6 @@
         "ft_linear": "Linear Phase",
         "ft_min": "Minimum Phase",
         "ft_mixed": "Mixed Phase",
-        "ft_asymmetric": "Asymmetric Linear",
-        "ft_help": "Phase handling strategy. Linear=Timing, Min=No pre-ringing, Mixed=Best of both. Asymmetric Linear=Linear-phase correction with asymmetric time windowing to reduce latency.",
         "mixed_freq": "Mixed Phase Split (Hz)",
         "mixed_freq_help": "Frequency splitting Linear (low) and Minimum (high) phase.",
         "gain": "Gain (dB)",
@@ -271,7 +281,16 @@
         "xo_freq_help": "Crossover frequency in Hz. This creates a theoretical split point between bands and defines where the crossover filter is centered. Leave empty to disable this XO stage.",
         "xo_slope_help": "Crossover slope in dB/oct. Steeper slopes give stronger band separation but increase phase rotation and ringing. Typical values are 12–24 dB/oct.",
         "err_plot": "Plot rendering failed. See console/log for details.",
-        "max_boost_help_cap": " (internally capped to {value} dB)"
+        "max_boost_help_cap": " (internally capped to {value} dB)",
+        "ir_export_window_title": "IR windowing (REW-style / export)",
+        "ir_export_window_mode": "IR windowing style",
+
+        "ir_export_window_auto": "Auto (legacy)",
+        "ir_export_window_off": "Off",
+        "ir_export_window_sym": "REW Symmetric",
+        "ir_export_window_asym": "REW Asymmetric",
+
+        "ir_export_window_help": "Controls IR windowing for exported impulse responses. Off keeps the full linear-phase FIR. REW Symmetric applies a symmetric window with the same latency. REW Asymmetric shifts the impulse earlier for lower latency."
 
 
     },
@@ -357,6 +376,15 @@
         "xo_freq_help": "Jakotaajuus, jonka vaihevaste halutaan oikaista.",
         "ir_matala": "Minimi 0ms",
         "ir_korkea": "Maksimi 1000ms",
+        "ir_export_window_title": "IR-ikkunointi (REW-tyyli / export)",
+        "ir_export_window_mode": "IR-ikkunoinnin tyyli",
+        "ir_export_window_auto": "Auto (vanha käytös)",
+        "ir_export_window_off": "Pois",
+        "ir_export_window_sym": "REW Symmetric",
+        "ir_export_window_asym": "REW Asymmetric",
+        "ir_export_window_help": "Säätää impulssivasteen ikkunointia export-vaiheessa. Tällä saat REW/VBA-tyylisen ikkunoidun Linear/Mixed-suodattimen ilman Asymmetric-tilaa. Auto säilyttää vanhan säännön: Linear/Mixed pakotetaan symmetriseksi, Asymmetric/Minimum käyttää vasen/oikea-arvoja sellaisenaan.",
+        "ir_window_left_label": "Vasen ikkuna (ms)",
+        "ir_window_right_label": "Oikea ikkuna (ms)",
         "phase_limit": "Vaihekorjauksen yläraja (Hz)",
         "phase_limit_help": "Taajuus, johon asti vaihevirhettä korjataan.",
         "rep_header": "--- LASKENTARAPORTTI ---",
@@ -408,8 +436,9 @@
         "ft_linear": "Linear Phase",
         "ft_min": "Minimum Phase",
         "ft_mixed": "Mixed Phase",
-        "ft_asymmetric": "Asymmetric Linear",
-        "ft_help": "Vaiheen käsittelytapa. Linear=Ajoitus, Min=Ei esisointia, Mixed=Paras molemmista. Asymmetric Linear = Lineaarivaiheinen korjaus epäsymmetrisellä aikaikkunoinnilla viiveen pienentämiseksi.",
+        "ft_asymmetric": "Asymmetric (kausaali / matala viive)",
+        "ft_help": "Vaihestrategia. Linear = paras ajoitus, Min = ei esisointia, Mixed = kompromissi. Asymmetric (kausaali / matala viive) siirtää impulssia aikaisemmaksi viiveen pienentämiseksi.",
+        "ft_asym_note": "Asymmetric (kausaali / matala viive) siirtää impulssia aikaisemmaksi ja voi muuttaa koettua viivettä/vaihekäytöstä. Jos haluat REW/VBA-tyylisen ikkunoidun Linear/Mixed-suodattimen, pidä Linear tai Mixed ja käytä Edistyneet-välilehden “IR-ikkunointi (REW-tyyli)” -asetusta.",
         "mixed_freq": "Mixed Phase Jakotaajuus (Hz)",
         "mixed_freq_help": "Taajuus, joka jakaa Linear (basso) ja Minimum (diskantti) vaiheet.",
         "gain": "Vahvistus (dB)",
@@ -553,7 +582,16 @@
         "ir_window_help": "Ikkunoi impulssivaste ennen FFT:tä. Pienempi ikkuna vähentää heijastuksia mutta saattaa heikentää alataajuuksien resoluutiota hyvin vähän.",
         "valid_freq": "Taajuusalue on kelvollinen",
         "valid_pos": "Tiedoston sijainti on kelvollinen",
-        "max_boost_help_cap": " (sisäinen turvaraja {value} dB)"
+        "max_boost_help_cap": " (sisäinen turvaraja {value} dB)",
+        "ir_export_window_title": "IR-ikkunointi (REW-tyyli / export)",
+        "ir_export_window_mode": "IR-ikkunoinnin tyyli",
+
+        "ir_export_window_auto": "Auto (vanha käytös)",
+        "ir_export_window_off": "Pois",
+        "ir_export_window_sym": "REW Symmetric",
+        "ir_export_window_asym": "REW Asymmetric",
+
+        "ir_export_window_help": "Säätää exportoidun impulssivasteen ikkunointia. Pois = täysi lineaarinen FIR ja suurin viive. REW Symmetric käyttää symmetristä ikkunaa samalla viiveellä. REW Asymmetric siirtää impulssin aikaisemmaksi ja pienentää viivettä."
 
     }
 }

@@ -1,6 +1,28 @@
 # CamillaFIR by Vilho Valittu
 
-## v2.8.2.3
+## v2.8.3
+
+### REW-style IR windowing (DSP & export)
+
+- **REW-compatible IR windowing added to DSP export path**
+  - Enables REW-style **symmetric** and **asymmetric (causal)** IR windowing during FIR export.
+  - Windowing is applied **only at IR export stage** (WAV generation), not during correction, target fitting, leveling, or scoring.
+
+- **Supported window modes**
+  - `auto` – automatic window selection (default)
+  - `off` – no IR windowing
+  - `rew_sym` – REW-style symmetric window
+  - `rew_asym` – REW-style asymmetric (causal) window
+
+- **IR windowing type included in exported filenames**
+  - ZIP and FIR WAV filenames include a short window tag for traceability and A/B comparison.
+  - Examples:
+    - `CamillaFIR_<type>_sym_<timestamp>.zip`
+    - `L_<type>_<fs>Hz_<timestamp>_asym.wav`
+
+### Notes
+- IR windowing affects **exported FIR impulse shape only**.
+- No change to correction targets, phase reconstruction, FDW, TDC, or leveling logic.
 
 ### A-FDW & TDC guidance improvements
 

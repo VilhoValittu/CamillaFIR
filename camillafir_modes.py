@@ -85,10 +85,13 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "tdc_max_reduction_db": 9.0,
         "tdc_slope_db_per_oct": 6.0,
         "enable_afdw": True,
+        
+
 
         # --- IR WINDOW / MIXED ---
-        "ir_window_ms": 500.0,
-        "ir_window_ms_left": 100.0,
+        "ir_export_window_mode": "rew_sym",
+        "ir_window": 500.0,
+        "ir_window_left": 100.0,
         "mixed_split_freq": 300.0,
         "trans_width": 100.0,
 
@@ -141,10 +144,9 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "tdc_max_reduction_db": 12.0,
         "tdc_slope_db_per_oct": 0.0,
         "enable_afdw": True,
-
-        "ir_window_ms": 500.0,
-        "ir_window_ms_left": 50.0,
-
+        "ir_window": 500.0,
+        "ir_window_left": 50.0,
+        "ir_export_window_mode": "rew_asym",
         "bass_first_ai": True,
         "bass_first_mode_max_hz": 200.0,
 
@@ -190,7 +192,7 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
 }
 
 
-def apply_mode_to_cfg(cfg: FilterConfig, mode: str | None, *, apply_defaults: bool = False) -> FilterConfig:
+def apply_mode_to_cfg(cfg: FilterConfig, mode: str | None, *, apply_defaults: bool = True) -> FilterConfig:
     """
     Apply mode defaults + clamps to an existing FilterConfig.
 

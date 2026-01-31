@@ -1,4 +1,4 @@
-# CamillaFIR – Official Manual (v2.7.7)
+# CamillaFIR – Official Manual (v2.8.3)
 
 ## 1. Overview
 CamillaFIR generates **FIR room-correction filters** from REW exports (magnitude + phase).
@@ -158,6 +158,16 @@ The Summary report typically includes:
 All generated filter packages (`.zip`) are written to the **`filters/`** directory
 in the CamillaFIR project root.  
 The directory is created automatically during export.
+
+### IR export windowing vs DSP correction
+
+IR windowing applied during FIR export is intentionally separated from the
+actual DSP correction logic.
+This distinction is important for understanding why FIR files may differ
+in time-domain appearance without changing the audible correction.
+
+See:
+- [IR Export Windowing vs DSP Correction](IR_Export_Windowing.md)
 
 ---
 

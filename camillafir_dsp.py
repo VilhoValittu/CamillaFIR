@@ -1853,12 +1853,14 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             final_phase = (1.0 - sm_mask) * low_phase + sm_mask * min_p
 
     # --- 10. IMPULSE GENERATION (common path) ---
+    
     h_complex = total_mag * np.exp(1j * final_phase)
     raw_imp = scipy.fft.irfft(h_complex, n=n_fft)
 
+    # --- 10a. INITIAL PLACEMENT (single-pass) ---
     if 'Asym' in cfg.filter_type_str:
         shift = min(
-            int(cfg.ir_window_ms_left * cfg.fs / 1000.0),
+            int(float(getattr(cfg, 'ir_window_left', 0.0) or 0.0) * cfg.fs / 1000.0),
             int(n_fft * 0.4)
         )
         impulse = np.roll(raw_imp, shift)
@@ -1866,63 +1868,84 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         impulse = raw_imp
     else:
         impulse = np.roll(raw_imp, n_fft // 2)
-    
-        # Initial placement
-    if 'Asym' in cfg.filter_type_str:
-        shift = min(int(cfg.ir_window_ms_left * cfg.fs / 1000.0), int(n_fft * 0.4))
-        impulse = np.roll(raw_imp, shift)
-    elif 'Min' in cfg.filter_type_str: impulse = raw_imp
-    else: impulse = np.roll(raw_imp, n_fft // 2)
+    # --- 10b. IR WINDOWING (REW-style export; separate from filter type) ---
+    win_mode = str(getattr(cfg, 'ir_export_window_mode', 'auto') or 'auto').strip().lower()
 
-    # --- 10. CORRECTED WINDOWING (PEAK-CENTRIC) ---
-    peak_idx = np.argmax(np.abs(impulse))
     n = len(impulse)
-    window = np.zeros(n)
-    
-    # Window boundary calculation (samples)
-    s_left = int(cfg.ir_window_ms_left * cfg.fs / 1000.0)
-    s_right = int(cfg.ir_window_ms * cfg.fs / 1000.0)
-    
-    # Logic:
-    # Asym/Min: Use user values literally.
-    # Linear/Mixed: Force symmetry (ir_window defines radius) to preserve linear phase.
-    if not ('Asym' in cfg.filter_type_str or 'Min' in cfg.filter_type_str):
-        radius = s_right
-        s_left = radius
-        s_right = radius
+    peak_idx = int(np.argmax(np.abs(impulse)))
 
-    # Build window around peak
-    # 1. Left side (rise from zero to one)
-    if s_left > 0:
-        win_rise = np.sin(np.linspace(0, np.pi/2, s_left + 1))[:-1]**2
-        start_idx = peak_idx - s_left
-        
-        # Place in buffer (carefully with edges)
-        if start_idx >= 0:
-            window[start_idx : peak_idx] = win_rise
-        else:
-            # If peak is too close to start, cut window beginning
-            offset = -start_idx
-            window[0 : peak_idx] = win_rise[offset:]
-            
-    # 2. Right side (fall from one to zero)
-    if s_right > 0:
-        win_fall = np.cos(np.linspace(0, np.pi/2, s_right + 1))[1:]**2
-        end_idx = peak_idx + 1 + s_right
-        
-        if end_idx <= n:
-            window[peak_idx + 1 : end_idx] = win_fall
-        else:
-            len_available = n - (peak_idx + 1)
-            window[peak_idx + 1 : n] = win_fall[:len_available]
-            
-    # Peak is always 1.0
-    if 0 <= peak_idx < n:
+    s_left = int(float(getattr(cfg, 'ir_window_left', 0.0) or 0.0) * cfg.fs / 1000.0)
+    s_right = int(float(getattr(cfg, 'ir_window', 0.0) or 0.0) * cfg.fs / 1000.0)
+
+    if win_mode == 'rew_asym' and n > 0:
+        desired_peak = int(np.clip(s_left, 0, n - 1))
+        shift_samp = desired_peak - peak_idx
+        if shift_samp != 0:
+            impulse = np.roll(impulse, shift_samp)
+            peak_idx = desired_peak
+
+    logger.info(f"IR export: mode={win_mode}, peak={peak_idx}, s_left={s_left}, s_right={s_right}")
+
+
+    # For REW asymmetric export, shift the peak earlier (reduces CamillaDSP startup latency)
+    if win_mode == 'rew_asym' and n > 0:
+        desired_peak = int(np.clip(s_left, 0, n - 1))
+        shift_samp = desired_peak - peak_idx
+        if shift_samp != 0:
+            impulse = np.roll(impulse, shift_samp)
+            peak_idx = desired_peak
+
+    if win_mode == 'off':
+        window = np.ones(n, dtype=float)
+        s_left = 0
+        s_right = 0
+    else:
+        window = np.zeros(n, dtype=float)
+
+        if win_mode == 'rew_sym':
+            radius = max(s_left, s_right)
+            s_left = radius
+            s_right = radius
+        elif win_mode == 'auto':
+            if not ('Asym' in cfg.filter_type_str or 'Min' in cfg.filter_type_str):
+                radius = s_right
+                s_left = radius
+                s_right = radius
+        # win_mode == 'rew_asym' -> literal L/R (already shifted)
+
+        # Build window around peak
+        if s_left > 0:
+            win_rise = np.sin(np.linspace(0, np.pi / 2, s_left + 1))[:-1] ** 2
+            start_idx = peak_idx - s_left
+            if start_idx >= 0:
+                window[start_idx:peak_idx] = win_rise
+            else:
+                window[0:peak_idx] = win_rise[-start_idx:]
+
+        if s_right > 0:
+            win_fall = np.cos(np.linspace(0, np.pi / 2, s_right + 1))[1:] ** 2
+            end_idx = peak_idx + 1 + s_right
+            if end_idx <= n:
+                window[peak_idx + 1:end_idx] = win_fall
+            else:
+                avail = n - (peak_idx + 1)
+                if avail > 0:
+                    window[peak_idx + 1:n] = win_fall[:avail]
+
         window[peak_idx] = 1.0
-        
-    # Apply window (zero everything outside window)
+
     impulse *= window
-    impulse -= np.mean(impulse) # DC removal
+    # DC removal (preserves zero outside the window)
+    # Subtract only inside the active window to avoid breaking the windowed zeros.
+    try:
+        w_sum = float(np.sum(window))
+        if w_sum > 0.0:
+            dc = float(np.sum(impulse) / w_sum)
+            impulse = impulse - (dc * window)
+    except Exception:
+        pass
+    
+
     
     # --- 11. STATS & RETURN ---
     max_peak = np.max(np.abs(impulse))

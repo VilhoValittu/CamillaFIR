@@ -15,7 +15,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "phase_safe_2058", "mag_correct",
         "lvl_mode", "reg_strength", "normalize_opt", "align_opt",
         "stereo_link", "exc_prot", "exc_freq", "low_bass_cut_hz", "hpf_enable", "hpf_freq",
-        "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left",
+        "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_export_window_mode", "ir_window_mode",
         "local_path_l", "local_path_r", "fmt", "lvl_manual_db",
         "lvl_min", "lvl_max", "lvl_algo", "smoothing_type", "fdw_cycles",
         "trans_width", "smoothing_level", "enable_tdc", "tdc_strength", "tdc_max_reduction_db",
@@ -71,6 +71,17 @@ def collect_ui_data(pin) -> Dict[str, Any]:
             data[k] = max(0.0, float(data.get(k, dv) or dv))
         except Exception:
             data[k] = dv
+
+    v_raw = data.get("ir_export_window_mode", None)
+    if v_raw is None or (isinstance(v_raw, str) and v_raw.strip() == ""):
+        v_raw = data.get("ir_window_mode", "auto")
+    v = str(v_raw or "auto").strip().lower()
+    v = v if v in ("auto", "off", "rew_sym", "rew_asym") else "auto"
+    # Canonical key used by DSP and exporter
+    data["ir_export_window_mode"] = v
+    # Backward-compat alias (some UI/configs used ir_window_mode)
+    data["ir_window_mode"] = v
+
 
     return data
 
@@ -248,6 +259,7 @@ def build_filter_config(
         low_bass_cut_hz=float(data.get("low_bass_cut_hz", 40.0) or 40.0),
         ir_window_ms=data["ir_window"],
         ir_window_ms_left=data.get("ir_window_left", 100.0),
+        ir_export_window_mode=data.get("ir_export_window_mode", "auto"),
         enable_afdw=bool(enable_afdw),
         enable_tdc=bool(enable_tdc),
         tdc_strength=data.get("tdc_strength", 50.0),

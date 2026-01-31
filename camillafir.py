@@ -47,6 +47,7 @@ import camillafir_plot as plots
 import models
 from models import FilterConfig
 from camillafir_modes import apply_mode_to_cfg, MODE_DEFAULTS
+from pywebio.pin import pin_update
 
 #from camillafir_rew_api import *
 print("USING models.py      =", models.__file__)
@@ -59,7 +60,7 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.8.2.3"  # [IO] Fixed ZIP output when multi-rate is enabled:
+VERSION = "v2.8.3"  # [IO] Fixed ZIP output when multi-rate is enabled:
 #                        generate a single CamillaDSP .yml using $samplerate$
                       # [DSP] More presice leveling tilt for magnitude calculation
 # Change log:
@@ -129,6 +130,24 @@ def scale_taps_with_fs(fs, taps_base, ref_fs=44100):
         return int(round(taps_base * fs / ref_fs))
     except Exception:
         return int(taps_base) if str(taps_base).isdigit() else 65536
+
+def _irwin_tag(mode: typing.Any) -> str:
+    """
+    Short, filename-safe tag for IR export windowing mode.
+    UI values: auto / off / rew_sym / rew_asym
+    """
+    try:
+        m = str(mode or "auto").strip().lower()
+    except Exception:
+        m = "auto"
+    if m == "rew_sym":
+        return "sym"
+    if m == "rew_asym":
+        return "asym"
+    if m in ("auto", "off"):
+        return m
+    return "auto"
+
 
 
 
@@ -240,9 +259,13 @@ def main():
         
         # Row 2: Filter type and Mixed frequency
         put_row([
-            put_radio('filter_type', label=t('filter_type'), 
-                    options=[t('ft_linear'), t('ft_min'), t('ft_mixed'), t('ft_asymmetric')], 
-                    value=get_val('filter_type', t('ft_linear')), help_text=t('ft_help')), 
+            put_radio(
+                'filter_type',
+                label=t('filter_type'),
+                options=[t('ft_linear'), t('ft_min'), t('ft_mixed'), t('ft_asymmetric')],
+                value=get_val('filter_type', t('ft_linear')),
+                help_text=(t('ft_help') + "\\n\\n" + t('ft_asym_note'))
+            ),
             put_input('mixed_freq', label=t('mixed_freq'), type=FLOAT, value=get_val('mixed_freq', 300.0), help_text=t('mixed_freq_help'))
         ]),
         
@@ -365,10 +388,23 @@ def main():
     tab_adv = [
         put_markdown(f"### 🛠️ {t('tab_adv')}"),
         
-        put_markdown("#### ⏱️ Asymmetric Linear - windowing"),
+        put_markdown(f"#### ⏱️ {t('ir_export_window_title')}"),
+        put_select(
+            'ir_export_window_mode',
+            label=t('ir_export_window_mode'),
+            options=[
+                {'label': t('ir_export_window_auto'), 'value': 'auto'},
+                {'label': t('ir_export_window_off'), 'value': 'off'},
+                {'label': t('ir_export_window_sym'), 'value': 'rew_sym'},
+                {'label': t('ir_export_window_asym'), 'value': 'rew_asym'},
+            ],
+            value=get_val('ir_export_window_mode', 'rew_sym'),
+            help_text=t('ir_export_window_help')
+        ),
+
         put_row([
-            put_input('ir_window_left', label="Left Window (ms)", type=FLOAT, value=get_val('ir_window_left', 100.0), help_text=t('ir_matala')),
-            put_input('ir_window', label="Right Window (ms)", type=FLOAT, value=get_val('ir_window', 500.0), help_text=t('ir_korkea'))
+            put_input('ir_window_left', label=t('ir_window_left_label'), type=FLOAT, value=get_val('ir_window_left', 100.0), help_text=t('ir_matala')),
+            put_input('ir_window', label=t('ir_window_right_label'), type=FLOAT, value=get_val('ir_window', 500.0), help_text=t('ir_korkea'))
         ]),
         put_markdown("---"),
 
@@ -613,8 +649,19 @@ put_markdown("---"),
     pin_on_change('lvl_max', onchange=_on_lvl_range_change)
     pin_on_change('lvl_manual_db', onchange=_on_lvl_range_change)
     # Mode description: initial render + live updates
-    pin_on_change('mode', onchange=update_mode_desc)
-    update_mode_desc()
+    def _on_mode_change(_=None):
+        update_mode_desc()
+        # Auto-set IR export window mode by selected mode defaults
+        try:
+            m = str(_pin_get('mode', 'BASIC') or 'BASIC').strip().upper()
+            v = (MODE_DEFAULTS.get(m, {}) or {}).get('ir_export_window_mode', None)
+            if isinstance(v, str) and v.strip():
+                pin_update('ir_export_window_mode', value=v.strip())
+        except Exception:
+            pass
+
+    pin_on_change('mode', onchange=_on_mode_change)
+    _on_mode_change()
 
     # Auto-taps UI updater: react when multi-rate toggles (tab_files) or basic changes
     pin_on_change('multi_rate_opt', onchange=update_taps_auto_info)
@@ -877,6 +924,7 @@ def _write_fs_outputs(
     r_st,
     *,
     write_dashboards: bool = True,
+    irw_tag: str = "auto",
 ):
     sum_name = f"Summary_{ft_short}_{fs_v}Hz.txt"
     l_dash_name = f"L_Dashboard_{ft_short}_{fs_v}Hz.png"
@@ -966,8 +1014,8 @@ def _write_fs_outputs(
             zf.writestr(r_dash_name.replace(".png", ".txt"), str(html_r))
 
     # HLC / BruteFIR cfg remains fs-specific
-    hlc_cfg = generate_hlc_config(fs_v, ft_short, file_ts)
-    zf.writestr(f"Config_{ft_short}_{fs_v}Hz.cfg", hlc_cfg)
+    hlc_cfg = generate_hlc_config(fs_v, ft_short, file_ts, irw_tag=irw_tag)
+    zf.writestr(f"Config_{ft_short}_{fs_v}Hz_{irw_tag}.cfg", hlc_cfg)
 
     # CamillaDSP YAML:
     # - single-rate: keep fs-specific YAML (historical behavior)
@@ -977,9 +1025,10 @@ def _write_fs_outputs(
             fs_v,
             ft_short,
             file_ts,
-            master_gain_db=float(data.get('gain', 0.0) or 0.0)
+            master_gain_db=float(data.get('gain', 0.0) or 0.0),
+            irw_tag=irw_tag,
         )
-        zf.writestr(f"camilladsp_{ft_short}_{fs_v}Hz.yml", yaml_content)
+        zf.writestr(f"camilladsp_{ft_short}_{fs_v}Hz_{irw_tag}.yml", yaml_content)
 
 
 def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f, r_st_f, fname, zip_buffer):
@@ -1088,6 +1137,11 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
 def process_run():
     # 1) UI -> data dict (new unified collector)
     data = collect_ui_data(pin)
+    # Sanitize IR export window mode (config.json may contain null)
+    _iw = data.get('ir_export_window_mode')
+    if not isinstance(_iw, str) or _iw.strip() == "":
+        data['ir_export_window_mode'] = 'auto'
+    logger.info(f"UI ir_export_window_mode={data.get('ir_export_window_mode')}")
     taps_base = int(float(data.get("taps", 65536) or 65536))
     save_config(data)
 
@@ -1141,6 +1195,17 @@ def process_run():
     split, zoom = data['mixed_freq'], t('zoom_hint')
     l_st_f, r_st_f, l_imp_f, r_imp_f = None, None, None, None
 
+    # --- IR windowing tag (used in filenames) ---
+    # Keep this stable across all outputs in this run.
+    val_raw = data.get('ir_export_window_mode', None)
+    if not isinstance(val_raw, str) or val_raw.strip() == '':
+        val_raw = data.get('ir_window_mode', 'auto')
+    irw_mode = str(val_raw or 'auto').strip().lower()
+    if irw_mode not in ('auto','off','rew_sym','rew_asym'):
+        irw_mode = 'auto'
+    data['ir_export_window_mode'] = irw_mode
+    irw_tag = _irwin_tag(irw_mode)
+
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
         for i, fs_v in enumerate(target_rates):
             if bool(data.get('multi_rate_opt', False)):
@@ -1163,6 +1228,17 @@ def process_run():
                 hc_m=hc_m,
                 pin=pin,
             )
+            setattr(cfg, 'ir_export_window_mode', irw_mode)
+
+
+
+            # IR window length values come from UI keys (ms). DSP expects *_ms fields.
+            try:
+                setattr(cfg, 'ir_window', float(data.get('ir_window', getattr(cfg, 'ir_window', 0.0)) or 0.0))
+                setattr(cfg, 'ir_window_left', float(data.get('ir_window_left', getattr(cfg, 'ir_window_left', 0.0)) or 0.0))
+            except Exception:
+                pass
+
             # --- Safety cap for boost (CamillaFIR philosophy: never allow "surprise" boosts) ---
             # max_boost_db is a user-visible knob, but we additionally cap it with MAX_SAFE_BOOST
             # to prevent accidental large boosts from unstable measurements / target mismatch.
@@ -1327,8 +1403,8 @@ def process_run():
             wav_l, wav_r = io.BytesIO(), io.BytesIO()
             scipy.io.wavfile.write(wav_l, fs_v, l_imp.astype(np.float32))
             scipy.io.wavfile.write(wav_r, fs_v, r_imp.astype(np.float32))
-            zf.writestr(f"L_{ft_short}_{fs_v}Hz_{file_ts}.wav", wav_l.getvalue())
-            zf.writestr(f"R_{ft_short}_{fs_v}Hz_{file_ts}.wav", wav_r.getvalue())
+            zf.writestr(f"L_{ft_short}_{fs_v}Hz_{file_ts}_{irw_tag}.wav", wav_l.getvalue())
+            zf.writestr(f"R_{ft_short}_{fs_v}Hz_{file_ts}_{irw_tag}.wav", wav_r.getvalue())
 
             _write_fs_outputs(
                 zf,
@@ -1346,7 +1422,8 @@ def process_run():
                 p_r,
                 r_imp,
                 r_st,
-                write_dashboards=(not multi_rate_on) or (int(fs_v) == int(dash_fs))
+                write_dashboards=(not multi_rate_on) or (int(fs_v) == int(dash_fs)),
+                irw_tag=irw_tag,
             )
 
         # Multi-rate: write ONE CamillaDSP YAML (uses $samplerate$ in FIR filenames)
@@ -1355,7 +1432,8 @@ def process_run():
                 int(data.get("fs") or 44100),
                 ft_short,
                 file_ts,
-                master_gain_db=float(data.get('gain', 0.0) or 0.0)
+                master_gain_db=float(data.get('gain', 0.0) or 0.0),
+                irw_tag=irw_tag,
             )
             zf.writestr(f"camilladsp_{ft_short}.yml", yaml_content)
 
@@ -1363,7 +1441,7 @@ def process_run():
     filters_dir = os.path.join(os.getcwd(), "filters")
     os.makedirs(filters_dir, exist_ok=True)
 
-    fname = f"CamillaFIR_{ft_short}_{ts}.zip"
+    fname = f"CamillaFIR_{ft_short}_{irw_tag}_{ts}.zip"
     out_path = os.path.join(filters_dir, fname)
 
     try:
@@ -1398,12 +1476,12 @@ def process_run():
     _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f, r_st_f, fname, zip_buffer)
 
 #snipet
-def generate_raspberry_yaml(fs, ft_short, file_ts, master_gain_db=0.0):
+def generate_raspberry_yaml(fs, ft_short, file_ts, master_gain_db=0.0, irw_tag: str = "auto"):
     import textwrap
 
     # FIR .wav files (CamillaDSP replaces $samplerate$ at runtime)
-    l_wav = f"../coeffs/L_{ft_short}_$samplerate$Hz_{file_ts}.wav"
-    r_wav = f"../coeffs/R_{ft_short}_$samplerate$Hz_{file_ts}.wav"
+    l_wav = f"./coeffs/L_{ft_short}_$samplerate$Hz_{file_ts}_{irw_tag}.wav"
+    r_wav = f"./coeffs/R_{ft_short}_$samplerate$Hz_{file_ts}_{irw_tag}.wav"
 
     # sanitize
     try:
@@ -1474,20 +1552,20 @@ def generate_raspberry_yaml(fs, ft_short, file_ts, master_gain_db=0.0):
         names: [mastergain, ir_right]
 
     processors: null
-    title: {ft_short}
+    title: {ft_short} Window {irw_tag}
     """).strip()
 
 
 
 
-def generate_hlc_config(fs, ft_short, file_ts):
+def generate_hlc_config(fs, ft_short, file_ts, irw_tag: str = "auto"):
     """
     Luo standardin .cfg konfiguraatiotiedoston (HLC, Convolver VST, BruteFIR).
     Generoi tiedostonimet sisäisesti samoilla säännöillä kuin YAML-funktio.
     """
     # Generoidaan tiedostonimet täsmälleen samalla kaavalla kuin tallennuksessa
-    l_name = f"L_{ft_short}_{fs}Hz_{file_ts}.wav"
-    r_name = f"R_{ft_short}_{fs}Hz_{file_ts}.wav"
+    l_name = f"L_{ft_short}_{fs}Hz_{file_ts}_{irw_tag}.wav"
+    r_name = f"R_{ft_short}_{fs}Hz_{file_ts}_{irw_tag}.wav"
 
     config = [
         f"{int(fs)} 2 2 0",  # Header: SampleRate, 2 In, 2 Out, 0 Offset

@@ -8,6 +8,29 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 
 ---
 
+## [2.8.3] - 2026 - 01 - 31
+
+### DSP update
+- **REW-style IR windowing enabled in DSP export path**
+  - Adds support for REW-compatible symmetric and asymmetric IR windowing during FIR export.
+  - Windowing is applied **only at IR export stage** (WAV generation), not during correction, target fitting, leveling, or scoring.
+  - Supported modes:
+    - `auto` – automatic window selection (default)
+    - `off` – no IR windowing
+    - `rew_sym` – REW-style symmetric window
+    - `rew_asym` – REW-style asymmetric (causal) window
+
+### IO update
+- **IR windowing type is now included in exported filenames**
+  - ZIP and FIR WAV filenames include a short windowing tag for traceability and A/B comparisons.
+  - Tags: `auto`, `off`, `sym`, `asym`
+  - Example: `CamillaFIR_<type>_sym_<timestamp>.zip`
+  - Example: `L_<type>_<fs>Hz_<timestamp>_sym.wav`
+
+### Notes
+- No change to correction targets, phase modes, FDW, TDC, or leveling behavior.
+- This update improves reproducibility and comparability between different IR export strategies.
+
 ## [2.8.2.3] - 2026 - 01 - 30
 
 ### Io-update
