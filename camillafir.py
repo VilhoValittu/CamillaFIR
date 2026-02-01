@@ -33,6 +33,7 @@ from camillafir_ui_helpers import (
     apply_tdc_preset,
     apply_afdw_preset,
     put_guide_section,
+    update_ir_tukey_ui,
 )
 from camillafir_pipeline import (
     collect_ui_data,
@@ -62,8 +63,9 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.8.4" # Github actions now makes running files
+VERSION = "v2.8.5" # [DSP] Added tukey windowing option
 # Change log:
+# v.2.8.5 [DSP] Added tukey windowing option
 # v2.8.4  Github actions now makes running files
 # v2.8.2.3 [IO] Fixed ZIP output when multi-rate is enabled:
 #               generate a single CamillaDSP .yml using $samplerate$
@@ -455,6 +457,20 @@ def main():
         ),
 
         put_row([
+            put_select(
+                'ir_export_window_shape',
+                label=t('ir_export_window_shape'),
+                options=[
+                    {'label': t('ir_export_window_shape_hann'), 'value': 'hann'},
+                    {'label': t('ir_export_window_shape_tukey'), 'value': 'tukey'},
+                ],
+                value=str(get_val('ir_export_window_shape', 'hann') or 'hann').strip().lower(),
+                help_text=t('ir_export_window_shape_help')
+            ),
+        put_scope('ir_tukey_alpha_scope'),
+        ]),
+        
+        put_row([
             put_input('ir_window_left', label=t('ir_window_left_label'), type=FLOAT, value=get_val('ir_window_left', 100.0), help_text=t('ir_matala')),
             put_input('ir_window', label=t('ir_window_right_label'), type=FLOAT, value=get_val('ir_window', 500.0), help_text=t('ir_korkea'))
         ]),
@@ -693,9 +709,12 @@ put_markdown("---"),
 
 
     update_lvl_ui()
+    update_ir_tukey_ui()
 
     # Rerender manual field ONLY when mode changes (Auto/Manual)
     pin_on_change('lvl_mode', onchange=update_lvl_ui)
+    # Rerender Tukey alpha ONLY when window shape changes
+    pin_on_change('ir_export_window_shape', onchange=update_ir_tukey_ui)
     # Range change: sanitize only, no rerender
     pin_on_change('lvl_min', onchange=_on_lvl_range_change)
     pin_on_change('lvl_max', onchange=_on_lvl_range_change)
@@ -1344,6 +1363,23 @@ def process_run():
     if not isinstance(_iw, str) or _iw.strip() == "":
         data['ir_export_window_mode'] = 'auto'
     logger.info(f"UI ir_export_window_mode={data.get('ir_export_window_mode')}")
+
+    # Sanitize IR export window shape + Tukey alpha
+    try:
+        sh = str(data.get('ir_export_window_shape', 'hann') or 'hann').strip().lower()
+    except Exception:
+        sh = 'hann'
+    if sh not in ('hann', 'tukey'):
+        sh = 'hann'
+    data['ir_export_window_shape'] = sh
+    try:
+        a = float(data.get('ir_export_tukey_alpha', 0.25))
+    except Exception:
+        a = 0.25
+    if not math.isfinite(a):
+        a = 0.25
+    data['ir_export_tukey_alpha'] = float(np.clip(a, 0.0, 1.0))
+
     taps_base = int(float(data.get("taps", 65536) or 65536))
     save_config(data)
 
@@ -1396,6 +1432,11 @@ def process_run():
     ft_short = filter_type_short(data['filter_type'])
     split, zoom = data['mixed_freq'], t('zoom_hint')
     l_st_f, r_st_f, l_imp_f, r_imp_f = None, None, None, None
+    # Debug: UI-selected IR export window parameters (cfg not built yet)
+    logger.warning(
+        f"EXPORT IR (UI): shape={data.get('ir_export_window_shape')}, "
+        f"alpha={data.get('ir_export_tukey_alpha')}"
+    )
 
     # --- IR windowing tag (used in filenames) ---
     # Keep this stable across all outputs in this run.
@@ -1430,11 +1471,21 @@ def process_run():
                 hc_m=hc_m,
                 pin=pin,
             )
+
+            logger.info(
+                f"[{fs_v} Hz] EXPORT IR cfg: shape={cfg.ir_export_window_shape}, "
+                f"alpha={cfg.ir_export_tukey_alpha}"
+            )
             setattr(cfg, 'ir_export_window_mode', irw_mode)
 
+            # IR export window shape (Hann/Tukey) + alpha (0..1)
+            try:
+                setattr(cfg, 'ir_export_window_shape', str(data.get('ir_export_window_shape', 'hann') or 'hann').strip().lower())
+                setattr(cfg, 'ir_export_tukey_alpha', float(data.get('ir_export_tukey_alpha', 0.25) or 0.25))
+            except Exception:
+                pass
 
-
-            # IR window length values come from UI keys (ms). DSP expects *_ms fields.
+           # IR window length values come from UI keys (ms). DSP expects *_ms fields.
             try:
                 setattr(cfg, 'ir_window', float(data.get('ir_window', getattr(cfg, 'ir_window', 0.0)) or 0.0))
                 setattr(cfg, 'ir_window_left', float(data.get('ir_window_left', getattr(cfg, 'ir_window_left', 0.0)) or 0.0))

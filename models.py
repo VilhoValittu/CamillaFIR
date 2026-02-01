@@ -48,6 +48,8 @@ class FilterConfig:
     # --- IR WINDOWING (REW-style export window, ms) ---
     # Canonical fields used by DSP/exporter:
     ir_export_window_mode: str = "auto"  # auto/off/rew_sym/rew_asym
+    ir_export_window_shape: str = "hann"  # hann/tukey (export window edge shape)
+    ir_export_tukey_alpha: float = 0.25   # 0..1 (only used when shape=tukey)
     ir_window_ms: float = 500.0          # Right-side window length (ms)
     ir_window_ms_left: float = 50.0      # Left-side (pre) window (ms)
     # Backward-compatible aliases (some UI paths used these names):

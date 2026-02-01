@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
-
+import logging
+import math
 
 def collect_ui_data(pin) -> Dict[str, Any]:
     """
     Read relevant pins into a plain dict and normalize checkbox pins (list -> bool).
     NOTE: pin is injected to keep this module testable without PyWebIO.
     """
+    logger = logging.getLogger("CamillaFIR")
     p_keys = [
         "mode", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
         "mag_c_min", "mag_c_max", "max_boost", "max_cut_db", "max_slope_db_per_oct",
@@ -16,6 +18,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "lvl_mode", "reg_strength", "normalize_opt", "align_opt",
         "stereo_link", "exc_prot", "exc_freq", "low_bass_cut_hz", "hpf_enable", "hpf_freq",
         "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_export_window_mode", "ir_window_mode",
+        "ir_export_window_shape", "ir_export_tukey_alpha",
         "local_path_l", "local_path_r", "fmt", "lvl_manual_db",
         "lvl_min", "lvl_max", "lvl_algo", "smoothing_type", "fdw_cycles",
         "trans_width", "smoothing_level", "enable_tdc", "tdc_strength", "tdc_max_reduction_db",
@@ -81,6 +84,32 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     data["ir_export_window_mode"] = v
     # Backward-compat alias (some UI/configs used ir_window_mode)
     data["ir_window_mode"] = v
+
+    # --- IR export window shape + Tukey alpha (must survive pipeline) ---
+    try:
+        sh_raw = data.get("ir_export_window_shape", None)
+        sh = str(sh_raw or "hann").strip().lower()
+    except Exception:
+        sh = "hann"
+    if sh not in ("hann", "tukey"):
+        sh = "hann"
+    data["ir_export_window_shape"] = sh
+
+    try:
+        a = float(data.get("ir_export_tukey_alpha", 0.25))
+    except Exception:
+        a = 0.25
+    if not math.isfinite(a):
+        a = 0.25
+    data["ir_export_tukey_alpha"] = max(0.0, min(1.0, float(a)))
+
+    try:
+        logger.info(
+            f"UI pins: ir_export_window_mode={data.get('ir_export_window_mode')}, "
+            f"shape={data.get('ir_export_window_shape')}, alpha={data.get('ir_export_tukey_alpha')}"
+        )
+    except Exception:
+        pass
 
 
     return data

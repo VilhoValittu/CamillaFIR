@@ -22,6 +22,40 @@ def update_mode_desc(_=None):
 def _as_pin_checkbox_list(v: bool):
     return [True] if bool(v) else []
 
+def update_ir_tukey_ui(_=None):
+    """UI helper: show/lock Tukey alpha depending on selected window shape."""
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
+    try:
+        sh = str(_p("ir_export_window_shape", "hann") or "hann").strip().lower()
+        is_tukey = (sh == "tukey")
+
+        # Clamp alpha to 0..1 for display stability (doesn't change DSP rules)
+        try:
+            a = float(_p("ir_export_tukey_alpha", 0.25) or 0.25)
+        except Exception:
+            a = 0.25
+        if not np.isfinite(a):
+            a = 0.25
+        a = float(np.clip(a, 0.0, 1.0))
+
+        with use_scope("ir_tukey_alpha_scope", clear=True):
+            w = put_input(
+                "ir_export_tukey_alpha",
+                label=t("ir_export_tukey_alpha"),
+                type=FLOAT,
+                value=a,
+                help_text=t("ir_export_tukey_alpha_help"),
+            )
+            if not is_tukey:
+                w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
+    except Exception:
+        pass
+
 
 def apply_mode_defaults_to_ui(_=None):
     """Apply current mode defaults to UI fields (manual button only)."""
@@ -102,6 +136,10 @@ def apply_mode_defaults_to_ui(_=None):
 
     try:
         update_lvl_ui()
+    except Exception:
+        pass
+    try:
+        update_ir_tukey_ui()
     except Exception:
         pass
     try:

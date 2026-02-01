@@ -5,6 +5,7 @@ import math
 import scipy.ndimage
 import logging
 import camillafir_bassfirst as bf
+import hashlib
 logger = logging.getLogger("CamillaFIR.dsp")
 from models import FilterConfig
 from camillafir_leveling import compute_leveling
@@ -16,7 +17,7 @@ from camillafir_analysis import (
     _third_oct_centers as _third_oct_centers_analysis,
 )
 
-#CamillaFIR DSP Engine v1.1.0
+#CamillaFIR DSP Engine v1.1.1
 
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
@@ -27,6 +28,7 @@ from camillafir_analysis import (
 #1.08 Bugfixes for bass-first and TDC
 #1.09 Improved TDC stability and reliability
 #1.1.0 More presice leveling tilt for magnitude calculation
+#1.1.1 Added tukey windowing option
 
 def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto_headroom_db=0.0, logger_obj=None):
     """
@@ -1856,9 +1858,10 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     
     h_complex = total_mag * np.exp(1j * final_phase)
     raw_imp = scipy.fft.irfft(h_complex, n=n_fft)
+    win_mode = str(getattr(cfg, 'ir_export_window_mode', 'auto') or 'auto').strip().lower()
 
     # --- 10a. INITIAL PLACEMENT (single-pass) ---
-    if 'Asym' in cfg.filter_type_str:
+    if ('Asym' in cfg.filter_type_str) or (win_mode == 'rew_asym'):
         shift = min(
             int(float(getattr(cfg, 'ir_window_left', 0.0) or 0.0) * cfg.fs / 1000.0),
             int(n_fft * 0.4)
@@ -1869,7 +1872,16 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     else:
         impulse = np.roll(raw_imp, n_fft // 2)
     # --- 10b. IR WINDOWING (REW-style export; separate from filter type) ---
-    win_mode = str(getattr(cfg, 'ir_export_window_mode', 'auto') or 'auto').strip().lower()
+    win_shape = str(getattr(cfg, 'ir_export_window_shape', 'hann') or 'hann').strip().lower()
+    try:
+        tukey_alpha = float(getattr(cfg, 'ir_export_tukey_alpha', 0.25))
+    except Exception:
+        tukey_alpha = 0.25
+    if not np.isfinite(tukey_alpha):
+        tukey_alpha = 0.25
+    tukey_alpha = float(np.clip(tukey_alpha, 0.0, 1.0))
+    if win_shape not in ('hann', 'tukey'):
+        win_shape = 'hann'
 
     n = len(impulse)
     peak_idx = int(np.argmax(np.abs(impulse)))
@@ -1885,6 +1897,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 #            peak_idx = desired_peak
 
     logger.info(f"IR export: mode={win_mode}, peak={peak_idx}, s_left={s_left}, s_right={s_right}")
+    logger.info(f"IR export: shape={win_shape}, tukey_alpha={tukey_alpha:.2f}")
 
 
     # For REW asymmetric export, shift the peak earlier (reduces CamillaDSP startup latency)
@@ -1914,8 +1927,49 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         # win_mode == 'rew_asym' -> literal L/R (already shifted)
 
         # Build window around peak
+        def _edge_taper(L: int, *, alpha: float, side: str) -> np.ndarray:
+            """
+            Edge taper for IR export window.
+            - hann: legacy sin^2/cos^2 (smoothest)
+            - tukey: rectangular-ish plateau near peak + raised-cosine taper to 0 at edge (alpha controls taper amount)
+            side: 'left' (toward peak) or 'right' (away from peak)
+            Returns length L weights from 0..1.
+            """
+            L = int(L)
+            if L <= 0:
+                return np.zeros(0, dtype=float)
+            if win_shape == 'hann' or alpha >= 0.999:
+                # legacy behavior (keep sound identical by default)
+                if side == 'left':
+                    return (np.sin(np.linspace(0, np.pi / 2, L + 1))[:-1] ** 2).astype(float)
+                else:
+                    return (np.cos(np.linspace(0, np.pi / 2, L + 1))[1:] ** 2).astype(float)
+
+            # Tukey-like: keep 1.0 near peak (plateau), then cosine down to 0 at edge.
+            a = float(np.clip(alpha, 0.0, 1.0))
+            taper_len = int(max(1, round(a * L)))
+            plateau_len = int(max(0, L - taper_len))
+
+            # k=0 near peak, increasing toward edge
+            k = (np.arange(L)[::-1] if side == 'left' else np.arange(L)).astype(float)
+            w = np.ones(L, dtype=float)
+            if plateau_len > 0:
+                w[k >= plateau_len] = 0.0  # will be overwritten by taper below
+                w[k < plateau_len] = 1.0
+            else:
+                w[:] = 0.0
+
+            # Taper region: k in [plateau_len .. plateau_len+taper_len]
+            kk = np.clip(k - plateau_len, 0.0, float(taper_len))
+            x = kk / float(max(taper_len, 1))  # 0..1
+            taper = 0.5 * (1.0 + np.cos(np.pi * x))  # 1..0
+
+            mask = (k >= plateau_len)
+            w[mask] = taper[mask]
+            return np.clip(w, 0.0, 1.0)
+
         if s_left > 0:
-            win_rise = np.sin(np.linspace(0, np.pi / 2, s_left + 1))[:-1] ** 2
+            win_rise = _edge_taper(s_left, alpha=tukey_alpha, side='left')
             start_idx = peak_idx - s_left
             if start_idx >= 0:
                 window[start_idx:peak_idx] = win_rise
@@ -1923,7 +1977,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 window[0:peak_idx] = win_rise[-start_idx:]
 
         if s_right > 0:
-            win_fall = np.cos(np.linspace(0, np.pi / 2, s_right + 1))[1:] ** 2
+            win_fall = _edge_taper(s_right, alpha=tukey_alpha, side='right')
             end_idx = peak_idx + 1 + s_right
             if end_idx <= n:
                 window[peak_idx + 1:end_idx] = win_fall
@@ -1934,7 +1988,18 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
         window[peak_idx] = 1.0
 
+    # --- APPLY EXPORT WINDOW TO *THE* IMPULSE ---
+    impulse_before = impulse.copy()
     impulse *= window
+
+    # --- ASSERT: Tukey must change IR (debug guard against "not applied") ---
+    if win_shape == "tukey" and tukey_alpha > 0.0 and win_mode != "off":
+        d = float(np.max(np.abs(impulse - impulse_before)))
+        if d <= 0.0:
+            raise RuntimeError(
+                "IR export window error: Tukey produced bit-identical impulse "
+                "(window not applied to exported impulse)."
+            )
     # DC removal (preserves zero outside the window)
     # Subtract only inside the active window to avoid breaking the windowed zeros.
     try:

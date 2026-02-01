@@ -6,12 +6,39 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 
 ---
 
+## [2.8.5] - 2026-02-01
+
+### DSP / IR export
+- **IR export window edge shape selection (Hann / Tukey)**
+  - Added support for selecting IR window edge shape during FIR export.
+  - Tukey window includes adjustable alpha parameter (0–1, default 0.25).
+  - Window shape is applied only at IR export stage (WAV generation).
+
+- **REW-style asymmetric export placement fix**
+  - When `rew_asym` is selected, FIR impulse peak is placed causally
+    (early in the impulse) instead of remaining centered.
+  - Reduces effective playback latency compared to symmetric placement.
+
+### UI / Pipeline
+- **IR window shape & alpha preserved through UI → pipeline → DSP**
+  - Prevents silent fallback to legacy Hann window.
+  - Selected window shape and alpha are logged immediately after UI collection
+    for traceability.
+
+### Notes
+- No changes to FIR magnitude targets, phase correction algorithms,
+  A-FDW, TDC, or auto-leveling behavior.
+- Differences between Hann and Tukey exports are sample-accurate
+  and produce non-identical FIR WAV files.
+
 ---
+
 ## [2.8.4] - 2026-02-01
 
 ### Misc
 - Github actions now makes running files.
 
+---
 
 ## [2.8.3] - 2026-01-31
 
@@ -36,6 +63,8 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 - No change to correction targets, phase modes, FDW, TDC, or leveling behavior.
 - This update improves reproducibility and comparability between different IR export strategies.
 
+---
+
 ## [2.8.2.3] - 2026-01-30
 
 ### Io-update
@@ -44,10 +73,14 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 ### DSP-update
 - More precise leveling tilt used in magnitude calculation
 
+---
+
 ## [2.8.2.2] - 2026-01-29
 
 ### Ui-update
 - updated translations and phase plot to be more clear
+
+---
 
 ## [2.8.2.1] - 2026-01-28
 
@@ -55,20 +88,28 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 - changed file structure to more debug-friendly format
 - filters go now to ./filters directory
 
+---
+
 ## [2.8.2] - 2026-01-27
 
 ### Ui-update
 - improved robustness of file upload parsing from browser & added xo_help translation
+
+---
 
 ## [v2.8.1.2] - 2026-01-27   
 
 ### Fixed
 - Bug fix for modes selection, that was not saving ui state correctly
 
+---
+
 ## [2.8.1.1] - 2026-01-27
 
 ### Ui-update
 - Added modes selection (Basic & Advanced)
+
+---
 
 ## [2.8.1] – 2026-01-25
 
@@ -86,7 +127,7 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 - No changes to FIR magnitude targets, phase correction modes, or leveling behavior.
 - Maintenance update focused on analysis clarity and safety transparency.
 
-
+---
 
 ## [2.8.0] - 2026-01-24
 
@@ -97,6 +138,7 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
   - Eliminates dependency on `.html` files and local `plotly.min.js` for offline ZIP viewing.
 
 ---
+
 ## [2.7.9] – 2026-01-24
 
 ### Fixed

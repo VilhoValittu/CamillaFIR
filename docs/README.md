@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v2.8.4
+## v2.8.5
 
 ### REW-style IR windowing (DSP & export)
 
@@ -19,6 +19,16 @@
   - Examples:
     - `CamillaFIR_<type>_sym_<timestamp>.zip`
     - `L_<type>_<fs>Hz_<timestamp>_asym.wav`
+
+- **Selectable IR window edge shape (Hann / Tukey)**
+  - IR export window edge can be shaped using either:
+    - **Hann** (legacy behavior)
+    - **Tukey** with adjustable alpha (default 0.25)
+  - Tukey window can reduce perceived sharpness and edge ripple compared to Hann,
+    especially with asymmetric (causal) exports.
+  - This affects **exported FIR impulse shape only** and does not modify DSP correction,
+    targets, phase reconstruction, or leveling.
+
 
 ### Notes
 - IR windowing affects **exported FIR impulse shape only**.
