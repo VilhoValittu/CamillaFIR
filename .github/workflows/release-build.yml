@@ -107,39 +107,48 @@ jobs:
         with:
           path: artifacts
 
-      - name: Generate release notes from CHANGELOG.md
-        shell: bash
-        run: |
-          python - << 'PY'
-          import os, re, pathlib
+      - name: Generate release notes from docs/Changelog.md
+  shell: bash
+  run: |
+    python - << 'PY'
+    import os, re, pathlib
 
-          version = os.environ["VERSION"]
-          tag = os.environ["TAG"]
-          changelog = pathlib.Path("CHANGELOG.md")
-          out = pathlib.Path("RELEASE_NOTES.md")
+    version = os.environ["VERSION"]
+    tag = os.environ["TAG"]
 
-          if not changelog.exists():
-              out.write_text(f"# {tag}\n\nNo changelog found.\n")
-              exit(0)
+    changelog = pathlib.Path("docs/Changelog.md")
+    out = pathlib.Path("RELEASE_NOTES.md")
 
-          text = changelog.read_text(encoding="utf-8", errors="ignore")
-          pattern = re.compile(
-              rf"^##\s*(?:\[)?v?{re.escape(version)}(?:\])?.*$",
-              re.MULTILINE
-          )
+    if not changelog.exists():
+        out.write_text(f"# {tag}\n\nNo changelog found at docs/Changelog.md.\n")
+        exit(0)
 
-          match = pattern.search(text)
-          if not match:
-              out.write_text(f"# {tag}\n\nVersion not found in changelog.\n")
-              exit(0)
+    text = changelog.read_text(encoding="utf-8", errors="ignore")
 
-          start = match.end()
-          next_match = re.search(r"^##\s+", text[start:], re.MULTILINE)
-          end = start + (next_match.start() if next_match else len(text))
+    pattern = re.compile(
+        rf"^##\s*(?:\[)?v?{re.escape(version)}(?:\])?.*$",
+        re.MULTILINE
+    )
 
-          body = text[start:end].strip()
-          out.write_text(f"# {tag}\n\n{body}\n")
-          PY
+    match = pattern.search(text)
+    if not match:
+        out.write_text(
+            f"# {tag}\n\n"
+            f"Version {version} not found in docs/Changelog.md.\n"
+        )
+        exit(0)
+
+    start = match.end()
+    next_match = re.search(r"^##\s+", text[start:], re.MULTILINE)
+    end = start + (next_match.start() if next_match else len(text))
+
+    body = text[start:end].strip()
+    if not body:
+        body = "No details listed for this version."
+
+    out.write_text(f"# {tag}\n\n{body}\n")
+    PY
+
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

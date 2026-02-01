@@ -62,10 +62,9 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.8.3"  # [IO] Fixed ZIP output when multi-rate is enabled:
-#                        generate a single CamillaDSP .yml using $samplerate$
-                      # [DSP] More presice leveling tilt for magnitude calculation
+VERSION = "v2.8.4" # Github actions now makes running files
 # Change log:
+# v2.8.4  Github actions now makes running files
 # v2.8.2.3 [IO] Fixed ZIP output when multi-rate is enabled:
 #               generate a single CamillaDSP .yml using $samplerate$
 # v2.8.2.3 [DSP] More precise leveling tilt used in magnitude calculation

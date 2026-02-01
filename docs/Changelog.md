@@ -7,6 +7,11 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 ---
 
 ---
+## [2.8.4] - 2026 - 02 - 01
+
+### Misc
+- Github actions now makes running files
+
 
 ## [2.8.3] - 2026 - 01 - 31
 
