@@ -7,13 +7,13 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 ---
 
 ---
-## [2.8.4] - 2026 - 02 - 01
+## [2.8.4] - 2026-02-01
 
 ### Misc
 - Github actions now makes running files.
 
 
-## [2.8.3] - 2026 - 01 - 31
+## [2.8.3] - 2026-01-31
 
 ### DSP update
 - **REW-style IR windowing enabled in DSP export path**
@@ -36,7 +36,7 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 - No change to correction targets, phase modes, FDW, TDC, or leveling behavior.
 - This update improves reproducibility and comparability between different IR export strategies.
 
-## [2.8.2.3] - 2026 - 01 - 30
+## [2.8.2.3] - 2026-01-30
 
 ### Io-update
 - Fixed ZIP output when multi-rate is enabled. Generate a single CamillaDSP .yml using $samplerate$
