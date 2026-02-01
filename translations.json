@@ -113,7 +113,7 @@
         "fs": "Base Sample Rate",
         "fs_help": "Sample rate used in filter.",
         "taps": "Base Taps",
-        "taps_help": "Filter length. Higher = better bass resolution but more latency.",
+        "taps_help": "Filter length. Higher = better bass resolution but more latency. Over 131072 taps not recomended.",
         "filter_type": "Filter Type",
         "ft_linear": "Linear Phase",
         "ft_min": "Minimum Phase",
@@ -290,9 +290,8 @@
         "ir_export_window_sym": "REW Symmetric",
         "ir_export_window_asym": "REW Asymmetric",
 
-        "ir_export_window_help": "Controls IR windowing for exported impulse responses. Off keeps the full linear-phase FIR. REW Symmetric applies a symmetric window with the same latency. REW Asymmetric shifts the impulse earlier for lower latency."
-
-
+        "ir_export_window_help": "Controls IR windowing for exported impulse responses. Off keeps the full linear-phase FIR. REW Symmetric applies a symmetric window with the same latency. REW Asymmetric shifts the impulse earlier for lower latency.",
+        "taps_warn_over": "⚠️ Very large tap count (> {value}). Expect high latency, higher CPU load, and little audible benefit for room correction."
     },
     
     "fi": {
@@ -431,7 +430,7 @@
         "fs": "Näytetaajuus (Hz)",
         "fs_help": "Käytettävä näytetaajuus.",
         "taps": "Tap-määrä",
-        "taps_help": "Filtterin pituus. Enemmän = parempi basso, mutta suurempi viive.",
+        "taps_help": "Filtterin pituus. Enemmän = parempi basso, mutta suurempi viive. Yli 131072 tapsi määrää ei suositella suuren viiveen takia.",
         "filter_type": "Suodintyyppi",
         "ft_linear": "Linear Phase",
         "ft_min": "Minimum Phase",
@@ -591,7 +590,9 @@
         "ir_export_window_sym": "REW Symmetric",
         "ir_export_window_asym": "REW Asymmetric",
 
-        "ir_export_window_help": "Säätää exportoidun impulssivasteen ikkunointia. Pois = täysi lineaarinen FIR ja suurin viive. REW Symmetric käyttää symmetristä ikkunaa samalla viiveellä. REW Asymmetric siirtää impulssin aikaisemmaksi ja pienentää viivettä."
+        "ir_export_window_help": "Säätää exportoidun impulssivasteen ikkunointia. Pois = täysi lineaarinen FIR ja suurin viive. REW Symmetric käyttää symmetristä ikkunaa samalla viiveellä. REW Asymmetric siirtää impulssin aikaisemmaksi ja pienentää viivettä.",
+        "taps_warn_over": "⚠️ Erittäin suuri taps-määrä (> {value}). Aiheuttaa suuren viiveen ja CPU-kuorman, yleensä ilman kuultavaa hyötyä huonekorjauksessa."
+
 
     }
 }

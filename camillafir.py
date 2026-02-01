@@ -17,7 +17,8 @@ from pywebio.input import *
 from pywebio.output import *
 from pywebio.pin import *
 from pywebio.session import set_env
-from pywebio.output import toast
+import pywebio.output as pwo
+#from pywebio.output import toast
 from pywebio.output import put_html
 from camillafir_config import load_config, save_config
 from camillafir_i18n import t
@@ -83,6 +84,8 @@ VERSION = "v2.8.3"  # [IO] Fixed ZIP output when multi-rate is enabled:
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
+MAX_SAFE_TAPS = 131072
+
 # =========================
 # Test / diagnostics output
 # =========================
@@ -114,7 +117,7 @@ def _warn_max_boost_if_over_cap(_=None):
             msg = f"{t('max_boost')}: {v:.1f} dB > {MAX_SAFE_BOOST:.1f} dB{cap_suffix}"
 
             # Use default toast styling to avoid version-specific color keyword issues
-            toast(msg, duration=5)
+            _toast(msg, duration=5)
         _warn_max_boost_if_over_cap._prev_over = over
     except Exception as e:
 
@@ -123,6 +126,51 @@ def _warn_max_boost_if_over_cap(_=None):
         except Exception:
             pass
         return
+
+def _warn_taps_if_over_cap(_=None):
+    """
+    Warn user if taps exceeds recommended maximum.
+    Uses edge trigger to avoid repeated toasts.
+    """
+    try:
+        v = pin.get('taps', None)
+        if v is None or v == '':
+            return
+        v = int(v)
+
+        over = v > int(MAX_SAFE_TAPS)
+        prev = bool(getattr(_warn_taps_if_over_cap, "_prev_over", False))
+
+        if over and not prev:
+            try:
+                msg = t('taps_warn_over').format(value=MAX_SAFE_TAPS)
+            except Exception:
+                msg = f"Taps > {MAX_SAFE_TAPS}: very high latency and diminishing returns."
+
+            _toast(msg, duration=6)
+
+        _warn_taps_if_over_cap._prev_over = over
+    except Exception as e:
+        try:
+            logger.warning(f"taps warning toast failed: {e}")
+        except Exception:
+            pass
+
+def _toast(msg, *, duration=5, color=None):
+    """
+    Safe toast wrapper for PyWebIO.
+    Works even if toast is unavailable or UI context is missing.
+    """
+    try:
+        fn = getattr(pwo, "toast", None)
+        if callable(fn):
+            if color is None:
+                fn(msg, duration=duration)
+            else:
+                fn(msg, duration=duration, color=color)
+    except Exception:
+        pass
+
 
 def scale_taps_with_fs(fs, taps_base, ref_fs=44100):
     """Keep FIR length roughly constant in time across sample rates."""
@@ -653,6 +701,9 @@ put_markdown("---"),
     pin_on_change('lvl_min', onchange=_on_lvl_range_change)
     pin_on_change('lvl_max', onchange=_on_lvl_range_change)
     pin_on_change('lvl_manual_db', onchange=_on_lvl_range_change)
+    pin_on_change('taps', onchange=_warn_taps_if_over_cap)
+    _warn_taps_if_over_cap()
+
     # Mode description: initial render + live updates
     def _on_mode_change(_=None):
         update_mode_desc()
@@ -1312,7 +1363,7 @@ def process_run():
     # 2) Measurements (upload OR local paths)
     f_l, m_l, p_l, f_r, m_r, p_r = load_measurements_lr(data, logger=logger)
     if f_l is None or f_r is None:
-        toast("Measurement files missing! Load Left/Right or give local.", color='red')
+        _toast("Measurement files missing! Load Left/Right or give local.", duration=6, color='red')
         return
 
     # 3) Target / house curve

@@ -1877,12 +1877,12 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     s_left = int(float(getattr(cfg, 'ir_window_left', 0.0) or 0.0) * cfg.fs / 1000.0)
     s_right = int(float(getattr(cfg, 'ir_window', 0.0) or 0.0) * cfg.fs / 1000.0)
 
-    if win_mode == 'rew_asym' and n > 0:
-        desired_peak = int(np.clip(s_left, 0, n - 1))
-        shift_samp = desired_peak - peak_idx
-        if shift_samp != 0:
-            impulse = np.roll(impulse, shift_samp)
-            peak_idx = desired_peak
+#    if win_mode == 'rew_asym' and n > 0:
+#        desired_peak = int(np.clip(s_left, 0, n - 1))
+#       shift_samp = desired_peak - peak_idx
+#        if shift_samp != 0:
+#            impulse = np.roll(impulse, shift_samp)
+#            peak_idx = desired_peak
 
     logger.info(f"IR export: mode={win_mode}, peak={peak_idx}, s_left={s_left}, s_right={s_right}")
 

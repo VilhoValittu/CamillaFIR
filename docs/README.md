@@ -62,7 +62,10 @@ Development inspired by the methodologies of **OCA** (Obsessive Compulsive Audio
 
 ---
 
-**[Download Standalone EXE](https://drive.google.com/drive/folders/1-nYtB5hmM-tob7URk8JRrOZA10QUjnfV?usp=sharing)**
+**Windows standalone EXE (recommended):** https://github.com/VilhoValittu/CamillaFIR/releases/latest
+- **All releases:** https://github.com/VilhoValittu/CamillaFIR/releases
+
+> Tip: If Windows SmartScreen warns on first run, choose **More info → Run anyway** (common for unsigned binaries).
 
 ---
 
