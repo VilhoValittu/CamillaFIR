@@ -62,10 +62,35 @@ Development inspired by the methodologies of **OCA** (Obsessive Compulsive Audio
 
 ---
 
-**Windows standalone EXE (recommended):** https://github.com/VilhoValittu/CamillaFIR/releases/latest
-- **All releases:** https://github.com/VilhoValittu/CamillaFIR/releases
+## Download
 
-> Tip: If Windows SmartScreen warns on first run, choose **More info → Run anyway** (common for unsigned binaries).
+- **Windows (standalone EXE, recommended):**  
+  https://github.com/VilhoValittu/CamillaFIR/releases/latest  
+  → Download `CamillaFIR_<version>_windows.zip` and run `CamillaFIR.exe`
+
+- **macOS (Intel & Apple Silicon):**  
+  https://github.com/VilhoValittu/CamillaFIR/releases/latest  
+  → Download `CamillaFIR_<version>_macos.tar.gz`, extract, then run `CamillaFIR`
+
+- **Linux (Ubuntu / Debian compatible):**  
+  https://github.com/VilhoValittu/CamillaFIR/releases/latest  
+  → Download `CamillaFIR_<version>_linux.tar.gz`, extract, then run `CamillaFIR`
+
+- **All releases:**  
+  https://github.com/VilhoValittu/CamillaFIR/releases
+
+> **Windows note:**  
+> If Windows SmartScreen warns on first run, choose **More info → Run anyway**  
+> (this is normal for unsigned open-source binaries).
+
+> **macOS note:**  
+> On first launch, macOS may block the app.  
+> Open **System Settings → Privacy & Security → Open Anyway**.
+
+> **Linux note:**  
+> If needed, make the binary executable:  
+> `chmod +x CamillaFIR`
+
 
 ---
 
