@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import re
 import zipfile
 import typing
 import scipy.io.wavfile
@@ -82,6 +83,10 @@ VERSION = "v2.8.3"  # [IO] Fixed ZIP output when multi-rate is enabled:
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
+# =========================
+# Test / diagnostics output
+# =========================
+TEST_MODE = os.environ.get("CAMILLAFIR_TEST", "0") == "1"
 
 def _warn_max_boost_if_over_cap(_=None):
     """
@@ -727,6 +732,110 @@ def _pin_get(key, default=None):
         except Exception:
             return default
 
+def _json_safe(obj, *, _depth=0, _max_depth=12):
+    """
+    Best-effort conversion of nested stats objects to JSON-serializable types.
+    - numpy scalars -> float/int
+    - numpy arrays -> lists
+    - dict/list/tuple -> recursively converted
+    - unknown objects -> string repr
+    """
+    try:
+        if _depth > _max_depth:
+            return str(obj)
+        # Basic primitives
+        if obj is None or isinstance(obj, (str, bool, int, float)):
+            return obj
+
+        # numpy scalars / arrays (avoid importing numpy here; rely on duck-typing)
+        try:
+            import numpy as _np  # local import (already dependency)
+            if isinstance(obj, _np.generic):
+                # e.g. np.float64, np.int64
+                return obj.item()
+            if isinstance(obj, _np.ndarray):
+                return obj.tolist()
+        except Exception:
+            pass
+
+        # dict
+        if isinstance(obj, dict):
+            out = {}
+            for k, v in obj.items():
+                # ensure keys are strings
+                try:
+                    ks = str(k)
+                except Exception:
+                    ks = "key"
+                out[ks] = _json_safe(v, _depth=_depth + 1, _max_depth=_max_depth)
+            return out
+
+        # list/tuple
+        if isinstance(obj, (list, tuple)):
+            return [_json_safe(v, _depth=_depth + 1, _max_depth=_max_depth) for v in obj]
+
+        # bytes
+        if isinstance(obj, (bytes, bytearray)):
+            try:
+                return obj.decode("utf-8", errors="replace")
+            except Exception:
+                return str(obj)
+
+        # fallback
+        return str(obj)
+    except Exception:
+        return str(obj)
+
+
+def _build_diagnostics_dict(data, fs_v, l_st, r_st):
+    """
+    Single source of truth diagnostics object for Summary.txt and future parsing.
+   Keep it stable; bump schema_version if changing structure.
+    """
+    # Extract a compact leveling block (StereoLink uses same window/offset for both)
+    def _leveling_block(st):
+        if not isinstance(st, dict):
+            return {}
+        win = st.get("smart_scan_range", None)
+        try:
+            if isinstance(win, (list, tuple)) and len(win) >= 2:
+                win = [float(win[0]), float(win[1])]
+            else:
+                win = None
+        except Exception:
+            win = None
+        return {
+            "method": st.get("offset_method", None),
+            "window_hz": win,
+            "offset_db": st.get("offset_db", None),
+            "eff_target_db": st.get("eff_target_db", None),
+            "tilt_slope_db_per_oct": st.get("tilt_slope_db_per_oct", None),
+            "avg_confidence_pct": st.get("avg_confidence", None),
+        }
+
+    diag = {
+        "schema_version": 1,
+        "meta": {
+            "program": PROGRAM_NAME,
+            "version": VERSION,
+            "fs_hz": int(fs_v),
+            "taps": int(float(data.get("taps", 0) or 0)),
+            "filter_type": str(data.get("filter_type", "") or ""),
+            "multi_rate": bool(data.get("multi_rate_opt", False)),
+            "ir_export_window_mode": str(data.get("ir_export_window_mode", "") or ""),
+            "ir_export_window_tag": str(_irwin_tag(data.get("ir_export_window_mode"))),
+        },
+        "settings": _json_safe(data),
+        "leveling": {
+            "stereo_link": bool(data.get("stereo_link", False)),
+            "left": _leveling_block(l_st),
+            "right": _leveling_block(r_st),
+        },
+        "left": _json_safe(l_st),
+        "right": _json_safe(r_st),
+    }
+    return diag
+
 
 
 def _append_dsp_effective_params(summary_content, data, fs_v):
@@ -783,14 +892,27 @@ def _append_acoustic_events(summary_content, l_st, r_st):
         reflections = st.get('reflections') or []
         if reflections:
             summary_content += f"\n=== ACOUSTIC EVENTS ({side}) ===\n"
-            summary_content += f"{'Freq (Hz)':<10} {'Type':<12} {'Error (ms)':<12} {'Dist (m)':<10}\n"
+            summary_content += (
+                "Note: 'Path Δ' is an equivalent path-length from Δt.\n"
+                "Reflections: time-of-flight equivalent extra path.\n"
+                "Resonances: not a physical distance.\n"
+            )
+            summary_content += f"{'Freq (Hz)':<10} {'Type':<12} {'Δt (ms)':<12} {'Path Δ (m)':<10}\n"
             summary_content += "-" * 50 + "\n"
             for rev in reflections:
                 freq = float(rev.get('freq', 0) or 0)
                 ev_type = str(rev.get('type', 'Event') or 'Event')
                 gd_error = float(rev.get('gd_error', 0) or 0)
                 dist = float(rev.get('dist', 0) or 0)
-                summary_content += f"{freq:<10} {ev_type:<12} {gd_error:<12} {dist:<10}\n"
+                # Keep numeric output stable; allow "—" if resonance distance is meaningless
+                try:
+                    et = ev_type.strip().lower()
+                except Exception:
+                    et = ""
+                if "reson" in et:
+                    summary_content += f"{freq:<10} {ev_type:<12} {gd_error:<12} {'—':<10}\n"
+                else:
+                    summary_content += f"{freq:<10} {ev_type:<12} {gd_error:<12} {dist:<10}\n"
         # Always report headroom/normalization per side (even if no events)
         summary_content += f"\n=== HEADROOM MANAGEMENT ({side}) ===\n"
         summary_content += f"Normalize: {'ON' if bool(st.get('do_normalize', False)) else 'OFF'}\n"
@@ -939,33 +1061,46 @@ def _write_fs_outputs(
     except Exception:
         pass
     summary_content = _append_dsp_effective_params(summary_content, data, fs_v)
-    summary_content = _append_acoustic_events(summary_content, l_st, r_st)
-
-
-    # --- Leveling tilt (StereoLink window, reporting only) ---
+    # --- Explicit leveling section (human-readable) ---
     try:
-        tilt = None
-        if isinstance(l_st, dict):
-            tilt = l_st.get("tilt_slope_db_per_oct", None)
-        if tilt is not None:
-            summary_content += (
-                f"\nLeveling tilt (StereoLink window): "
-                f"{float(tilt):+.2f} dB/oct\n"
-            )
-
-            # --- Informational warning for large tilt ---
+        # Prefer StereoLink summary if enabled, but always print per-side values.
+        summary_content += "\n=== LEVELING ===\n"
+        for side, st in [("LEFT", l_st), ("RIGHT", r_st)]:
+            if not isinstance(st, dict):
+                continue
+            summary_content += f"[{side}]\n"
+            summary_content += f"Method: {st.get('offset_method', 'n/a')}\n"
+            win = st.get("smart_scan_range", None)
+            if isinstance(win, (list, tuple)) and len(win) >= 2:
+                try:
+                    summary_content += f"Window: {float(win[0]):.0f}–{float(win[1]):.0f} Hz\n"
+                except Exception:
+                    pass
             try:
-                tilt_warn_thr = 1.5  # dB/oct, reporting only
-                if abs(float(tilt)) > tilt_warn_thr:
-                    summary_content += (
-                        "⚠️  Large broadband tilt detected during leveling. "
-                        "This may indicate measurement/target mismatch "
-                        "or a strongly tilted room/speaker response.\n"
-                    )
+                summary_content += f"Offset to measurement: {float(st.get('offset_db', 0.0) or 0.0):+.2f} dB\n"
             except Exception:
                 pass
+            try:
+                summary_content += f"Effective target level: {float(st.get('eff_target_db', 0.0) or 0.0):.2f} dB\n"
+            except Exception:
+                pass
+            tilt = st.get("tilt_slope_db_per_oct", None)
+            if tilt is not None:
+                try:
+                    tilt_f = float(tilt)
+                    summary_content += f"Tilt slope: {tilt_f:+.2f} dB/oct\n"
+                    if abs(tilt_f) > 1.5:
+                        summary_content += (
+                            "⚠️  Large broadband tilt detected. "
+                            "May indicate measurement/target mismatch or strong room tilt.\n"
+                        )
+                except Exception:
+                    pass
+            summary_content += "\n"
     except Exception:
         pass
+
+    summary_content = _append_acoustic_events(summary_content, l_st, r_st)
 
 
 
@@ -975,6 +1110,23 @@ def _write_fs_outputs(
         summary_content += f"Delay: {res['delay_ms']} ms\n"
         summary_content += f"Distance Diff: {res['distance_cm']} cm\n"
         summary_content += f"Gain Diff: {res['gain_diff_db']} dB\n"
+
+    # --- Machine-readable diagnostics block (JSON) ---
+    if TEST_MODE:
+        try:
+            diag = _build_diagnostics_dict(data, fs_v, l_st, r_st)
+            summary_content += "\n\n--- DIAGNOSTICS_JSON_BEGIN ---\n"
+            summary_content += json.dumps(_json_safe(diag), indent=2)
+            summary_content += "\n--- DIAGNOSTICS_JSON_END ---\n"
+        except Exception as e:
+            summary_content += "\n\n--- DIAGNOSTICS_JSON_BEGIN ---\n"
+            summary_content += json.dumps({
+                "schema_version": 1,
+                "error": f"diagnostics_json_failed: {type(e).__name__}: {e}"
+            }, indent=2)
+            summary_content += "\n--- DIAGNOSTICS_JSON_END ---\n"
+
+
 
     zf.writestr(sum_name, summary_content)
 
@@ -1435,7 +1587,7 @@ def process_run():
                 master_gain_db=float(data.get('gain', 0.0) or 0.0),
                 irw_tag=irw_tag,
             )
-            zf.writestr(f"camilladsp_{ft_short}.yml", yaml_content)
+            zf.writestr(f"camilladsp_{ft_short}_{irw_tag}.yml", yaml_content)
 
     # --- Save ZIP into filters/ directory ---
     filters_dir = os.path.join(os.getcwd(), "filters")
@@ -1480,8 +1632,8 @@ def generate_raspberry_yaml(fs, ft_short, file_ts, master_gain_db=0.0, irw_tag: 
     import textwrap
 
     # FIR .wav files (CamillaDSP replaces $samplerate$ at runtime)
-    l_wav = f"./coeffs/L_{ft_short}_$samplerate$Hz_{file_ts}_{irw_tag}.wav"
-    r_wav = f"./coeffs/R_{ft_short}_$samplerate$Hz_{file_ts}_{irw_tag}.wav"
+    l_wav = f'../coeffs/L_{ft_short}_$samplerate$Hz_{file_ts}_{irw_tag}.wav'
+    r_wav = f'../coeffs/R_{ft_short}_$samplerate$Hz_{file_ts}_{irw_tag}.wav'
 
     # sanitize
     try:
@@ -1502,6 +1654,7 @@ def generate_raspberry_yaml(fs, ft_short, file_ts, master_gain_db=0.0, irw_tag: 
         channels: 2
         format: S32LE
       samplerate: {int(fs)}
+      enable_rate_adjust: true
       chunksize: 4096
       queuelimit: 1
       volume_ramp_time: 150

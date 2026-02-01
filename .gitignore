@@ -13,3 +13,5 @@ test.py
 *.bat
 config.json
 filters/
+tools/
+tests/
