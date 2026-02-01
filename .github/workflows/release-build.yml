@@ -107,47 +107,50 @@ jobs:
         with:
           path: artifacts
 
-      - name: Generate release notes from docs/Changelog.md
-  shell: bash
-  run: |
-    python - << 'PY'
-    import os, re, pathlib
+            - name: Generate release notes from docs/CHANGELOG.md
+        shell: bash
+        run: |
+          python - << 'PY'
+          import os, re, pathlib
 
-    version = os.environ["VERSION"]
-    tag = os.environ["TAG"]
+          version = os.environ["VERSION"]
+          tag = os.environ["TAG"]
 
-    changelog = pathlib.Path("docs/Changelog.md")
-    out = pathlib.Path("RELEASE_NOTES.md")
+          # NOTE: case-sensitive on Linux runners:
+          changelog = pathlib.Path("docs/CHANGELOG.md")
+          out = pathlib.Path("RELEASE_NOTES.md")
 
-    if not changelog.exists():
-        out.write_text(f"# {tag}\n\nNo changelog found at docs/Changelog.md.\n")
-        exit(0)
+          if not changelog.exists():
+              out.write_text(f"# {tag}\n\nNo changelog found at docs/CHANGELOG.md.\n", encoding="utf-8")
+              raise SystemExit(0)
 
-    text = changelog.read_text(encoding="utf-8", errors="ignore")
+          text = changelog.read_text(encoding="utf-8", errors="ignore")
 
-    pattern = re.compile(
-        rf"^##\s*(?:\[)?v?{re.escape(version)}(?:\])?.*$",
-        re.MULTILINE
-    )
+          # Matches headings like:
+          # ## 2.8.3
+          # ## v2.8.3
+          # ## [2.8.3] - 2026-02-01
+          pattern = re.compile(
+              r"^##\s*(?:\[\s*)?(?:v)?"+re.escape(version)+r"(?:\s*\])?(?:\s*-.*)?\s*$",
+              re.IGNORECASE | re.MULTILINE
+          )
 
-    match = pattern.search(text)
-    if not match:
-        out.write_text(
-            f"# {tag}\n\n"
-            f"Version {version} not found in docs/Changelog.md.\n"
-        )
-        exit(0)
+          m = pattern.search(text)
+          if not m:
+              out.write_text(
+                  f"# {tag}\n\nVersion {version} not found in docs/CHANGELOG.md.\n",
+                  encoding="utf-8"
+              )
+              raise SystemExit(0)
 
-    start = match.end()
-    next_match = re.search(r"^##\s+", text[start:], re.MULTILINE)
-    end = start + (next_match.start() if next_match else len(text))
+          start = m.end()
+          m2 = re.search(r"^##\s+", text[start:], flags=re.MULTILINE)
+          end = start + (m2.start() if m2 else len(text[start:]))
 
-    body = text[start:end].strip()
-    if not body:
-        body = "No details listed for this version."
+          body = text[start:end].strip() or "No details listed for this version."
+          out.write_text(f"# {tag}\n\n{body}\n", encoding="utf-8")
+          PY
 
-    out.write_text(f"# {tag}\n\n{body}\n")
-    PY
 
 
       - name: Publish GitHub Release
