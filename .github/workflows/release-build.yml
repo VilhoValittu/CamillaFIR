@@ -3,7 +3,7 @@ name: Release CamillaFIR (Win / macOS / Linux)
 on:
   push:
     tags:
-      - "v*.*.*"
+      - "v*.*.*"   # e.g. v2.8.3
 
 permissions:
   contents: write
@@ -41,7 +41,7 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # Optional but recommended: version injected for UI / summary
+      # Optional: makes it easy to show exact release version inside the app
       - name: Generate build_version.py
         shell: bash
         run: |
@@ -62,23 +62,22 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path out | Out-Null
-          Compress-Archive `
-            -Path dist/CamillaFIR/* `
-            -DestinationPath out/CamillaFIR_${{ env.VERSION }}_windows.zip
+          Compress-Archive -Path dist\CamillaFIR\* -DestinationPath out\CamillaFIR_${{ env.VERSION }}_windows.zip
 
       - name: Package Linux build
         if: runner.os == 'Linux'
         shell: bash
         run: |
           mkdir -p out
+          chmod +x dist/CamillaFIR/CamillaFIR || true
           tar -C dist -czf out/CamillaFIR_${VERSION}_linux.tar.gz CamillaFIR
-          chmod +x dist/CamillaFIR/CamillaFIR
 
       - name: Package macOS build
         if: runner.os == 'macOS'
         shell: bash
         run: |
           mkdir -p out
+          chmod +x dist/CamillaFIR/CamillaFIR || true
           tar -C dist -czf out/CamillaFIR_${VERSION}_macos.tar.gz CamillaFIR
 
       - name: Upload build artifact
@@ -107,21 +106,31 @@ jobs:
         with:
           path: artifacts
 
-            - name: Generate release notes from docs/CHANGELOG.md
+      - name: Generate release notes from docs/CHANGELOG.md
         shell: bash
         run: |
           python - << 'PY'
           import os, re, pathlib
 
-          version = os.environ["VERSION"]
-          tag = os.environ["TAG"]
+          version = os.environ.get("VERSION", "").strip()
+          tag = os.environ.get("TAG", "").strip()
 
-          # NOTE: case-sensitive on Linux runners:
-          changelog = pathlib.Path("docs/CHANGELOG.md")
+          # Prefer docs/CHANGELOG.md (case-sensitive on Linux/macOS)
+          candidates = ["docs/CHANGELOG.md", "docs/changelog.md", "CHANGELOG.md", "changelog.md"]
+          changelog = None
+          for p in candidates:
+              pp = pathlib.Path(p)
+              if pp.exists():
+                  changelog = pp
+                  break
+
           out = pathlib.Path("RELEASE_NOTES.md")
 
-          if not changelog.exists():
-              out.write_text(f"# {tag}\n\nNo changelog found at docs/CHANGELOG.md.\n", encoding="utf-8")
+          if not tag:
+              tag = f"v{version}" if version else "release"
+
+          if changelog is None:
+              out.write_text(f"# {tag}\n\nNo changelog found.\n", encoding="utf-8")
               raise SystemExit(0)
 
           text = changelog.read_text(encoding="utf-8", errors="ignore")
@@ -130,15 +139,19 @@ jobs:
           # ## 2.8.3
           # ## v2.8.3
           # ## [2.8.3] - 2026-02-01
-          pattern = re.compile(
-              r"^##\s*(?:\[\s*)?(?:v)?"+re.escape(version)+r"(?:\s*\])?(?:\s*-.*)?\s*$",
+          # ## [v2.8.3]
+          pat = re.compile(
+              r"^##\s*(?:\[\s*)?(?:v)?"
+              + re.escape(version)
+              + r"(?:\s*\])?(?:\s*-.*)?\s*$",
               re.IGNORECASE | re.MULTILINE
           )
 
-          m = pattern.search(text)
+          m = pat.search(text)
           if not m:
               out.write_text(
-                  f"# {tag}\n\nVersion {version} not found in docs/CHANGELOG.md.\n",
+                  f"# {tag}\n\n"
+                  f"Version {version} not found in {changelog.as_posix()}.\n",
                   encoding="utf-8"
               )
               raise SystemExit(0)
@@ -150,8 +163,6 @@ jobs:
           body = text[start:end].strip() or "No details listed for this version."
           out.write_text(f"# {tag}\n\n{body}\n", encoding="utf-8")
           PY
-
-
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
