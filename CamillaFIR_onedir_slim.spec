@@ -21,12 +21,12 @@ datas += [
 ]
 
 # ----------------------------
-# NumPy (dynlibit + min data)
+# NumPy (dynlibs + minimal data)
 # ----------------------------
 binaries += collect_dynamic_libs("numpy")
 
 # ----------------------------
-# SciPy (dynlibit + vain käytetyt aliosat)
+# SciPy (dynlibs + only used submodules)
 # ----------------------------
 binaries += collect_dynamic_libs("scipy")
 hiddenimports += [
@@ -51,9 +51,8 @@ hiddenimports += [
 datas += collect_data_files("pywebio", include_py_files=False)
 
 # ----------------------------
-# Plotly (jos käytät Python-plotlyä / Kaleido-exportia)
+# Plotly (optional, but makes export/plots robust)
 # ----------------------------
-# Ei haittaa vaikka et käyttäisi; tekee paketista robustimman.
 datas += collect_data_files("plotly", include_py_files=False)
 hiddenimports += collect_submodules("plotly")
 
@@ -66,7 +65,7 @@ hiddenimports += [
     "kaleido",
     "kaleido.scopes",
     "kaleido.scopes.plotly",
-    # Kaleido runtime deps (seen in pip metadata)
+    # Kaleido runtime deps (commonly needed)
     "choreographer",
     "logistro",
     "orjson",
@@ -74,7 +73,7 @@ hiddenimports += [
 ]
 
 # ----------------------------
-# EXCLUDES: karsi testit + GUI backendit + turhat ekosysteemit
+# EXCLUDES: trim tests + GUI backends + heavy extras
 # ----------------------------
 excludes = [
     "tkinter",
@@ -85,19 +84,17 @@ excludes = [
     "notebook",
     "pytest",
     "pandas",
-
     "numpy.tests",
     "scipy.tests",
     "matplotlib.tests",
 ]
 
 # ----------------------------
-# Project modules (varmistetaan, ettei dynaaminen import/logiikka pudota näitä)
+# Project modules (ensure dynamic imports don't miss these)
 # ----------------------------
 hiddenimports += collect_submodules("camillafir_io")
 hiddenimports += [
     "camillafir_analysis",
-    "camillafir_bassfirst",
     "camillafir_config",
     "camillafir_dsp",
     "camillafir_housecurve",
@@ -111,17 +108,19 @@ hiddenimports += [
     "models",
 ]
 
+# DSP package modules (new structure)
+hiddenimports += [
+    "dsp",
+    "dsp.analysis",
+    "dsp.smoothing",
+    "dsp.limits",
+    "dsp.tdc",
+    "dsp.phase",
+    "dsp.bassfirst",
+]
+
 a = Analysis(
     ["camillafir.py"],
-    hiddenimports=[
-        'dsp',
-        'dsp.analysis',
-        'dsp.smoothing',
-        'dsp.limits',
-        'dsp.tdc',
-        'dsp.phase',
-        'dsp.bassfirst',
-    ]
     pathex=["."],
     binaries=binaries,
     datas=datas,
@@ -135,10 +134,6 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
-# Ensure DSP package files are included
-a.datas += [
-    ('dsp', 'dsp'),
-]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
@@ -150,7 +145,7 @@ exe = EXE(
     name="CamillaFIR",
     debug=False,
     strip=False,
-    upx=False,     # pidä OFF: SciPy/NumPy usein herkkä UPX:lle
+    upx=False,  # keep OFF: SciPy/NumPy can be sensitive to UPX
     console=True,
 )
 
