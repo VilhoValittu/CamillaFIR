@@ -1527,7 +1527,7 @@ def process_run():
 
             if bool(data.get('stereo_link', False)):
                 try:
-                    from camillafir_leveling import compute_leveling
+                    from dsp.camillafir_leveling import compute_leveling
 
                     if isinstance(l_st, dict) and isinstance(r_st, dict):
                         fx_l = np.asarray(l_st.get('freq_axis') or [], dtype=float)

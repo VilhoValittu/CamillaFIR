@@ -113,6 +113,15 @@ hiddenimports += [
 
 a = Analysis(
     ["camillafir.py"],
+    hiddenimports=[
+        'dsp',
+        'dsp.analysis',
+        'dsp.smoothing',
+        'dsp.limits',
+        'dsp.tdc',
+        'dsp.phase',
+        'dsp.bassfirst',
+    ]
     pathex=["."],
     binaries=binaries,
     datas=datas,
@@ -126,6 +135,10 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
+# Ensure DSP package files are included
+a.datas += [
+    ('dsp', 'dsp'),
+]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

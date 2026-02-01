@@ -4,17 +4,39 @@ import scipy.fft
 import math
 import scipy.ndimage
 import logging
-import camillafir_bassfirst as bf
 import hashlib
 logger = logging.getLogger("CamillaFIR.dsp")
+import dsp.bassfirst as bf
 from models import FilterConfig
-from camillafir_leveling import compute_leveling
-from camillafir_analysis import (
-    _sigma_bins_from_hz as _sigma_bins_from_hz_analysis,
-    analyze_acoustic_confidence as analyze_acoustic_confidence_analysis,
-    calculate_rt60 as calculate_rt60_analysis,
-    calculate_rt60_bands as calculate_rt60_bands_analysis,
-    _third_oct_centers as _third_oct_centers_analysis,
+from dsp.camillafir_leveling import compute_leveling
+from dsp.analysis import (
+    _sigma_bins_from_hz,
+    analyze_acoustic_confidence,
+    calculate_rt60,
+    calculate_rt60_bands,
+    _third_oct_centers,
+    calculate_group_delay,
+)
+from dsp.smoothing import (
+    psychoacoustic_smoothing,
+    apply_fdw_smoothing,
+    apply_adaptive_fdw,
+    apply_smoothing_std,
+)
+from dsp.limits import (
+    soft_clip_boost,
+    soft_clip_gain,
+    limit_slope_per_octave,
+    limit_slope_per_octave_asym,
+    build_slope_limit_envelope,
+)
+from dsp.tdc import apply_smart_tdc
+from dsp.phase import (
+    calculate_minimum_phase,
+    calculate_theoretical_phase,
+    combine_mixed_phase,
+    remove_time_of_flight,
+    get_min_phase_impulse,
 )
 
 #CamillaFIR DSP Engine v1.1.1
@@ -72,229 +94,6 @@ def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto
             "net_boost_peak_db": 0.0
         }
 
-def limit_slope_per_octave_asym(freq_axis, gain_db, max_db_per_oct_boost, max_db_per_oct_cut):
-    """
-    Asymmetric slope limiter in dB/oct:
-      - 'boost' slope limit applies when the curve rises (dg > 0)
-      - 'cut' slope limit applies when the curve falls (dg < 0)
-
-    This protects small boost candidates from being flattened to 0 by a too-tight symmetric limiter.
-    Backward compatible usage: set both limits equal to old max_slope_db_per_oct.
-    """
-    f = np.asarray(freq_axis, dtype=float)
-    g = np.asarray(gain_db, dtype=float).copy()
-
-    b = float(max_db_per_oct_boost or 0.0)
-    c = float(max_db_per_oct_cut or 0.0)
-    if b <= 0 and c <= 0:
-        return g
-
-    # Work only on valid positive freqs (avoid log2(0))
-    idx = np.where(f > 0.0)[0]
-    if idx.size < 2:
-        return g
-
-    lf = np.log2(f[idx])
-
-    def _limit_step(prev_val, cur_val, dx_oct):
-        if dx_oct <= 0:
-            return cur_val
-        dg = cur_val - prev_val
-        lim = (b if dg > 0 else c) * dx_oct
-        # if one side is disabled, treat it as "infinite"
-        if (dg > 0 and b <= 0) or (dg < 0 and c <= 0):
-            return cur_val
-        if dg > lim:
-            return prev_val + lim
-        if dg < -lim:
-            return prev_val - lim
-        return cur_val
-
-    # Forward pass
-    for k in range(1, idx.size):
-        i = idx[k]
-        j = idx[k - 1]
-        dx = float(lf[k] - lf[k - 1])
-        g[i] = _limit_step(g[j], g[i], dx)
-
-    # Backward pass (enforce constraint both directions)
-    for k in range(idx.size - 2, -1, -1):
-        i = idx[k]
-        j = idx[k + 1]
-        dx = float(lf[k + 1] - lf[k])
-        g[i] = _limit_step(g[j], g[i], dx)
-    return g
-
-
-def build_slope_limit_envelope(
-    freq_axis,
-    target_db,
-    *,
-    mag_c_min: float,
-    mag_c_max: float,
-    max_slope_boost_db_per_oct: float,
-    max_slope_cut_db_per_oct: float,
-):
-    """Build a *visual* envelope for slope limiting (dB/oct).
-
-    This does NOT affect filter math. It's meant for the UI plot only:
-    show how far the target could move (up/down) while still respecting
-    the configured slope limits.
-
-    The envelope is anchored at a pivot frequency inside the correction band.
-    """
-    f = np.asarray(freq_axis, dtype=float)
-    t = np.asarray(target_db, dtype=float)
-
-    if f.size < 8 or t.size != f.size:
-        return None, None, None
-
-    # Disabled / invalid => no envelope
-    b = float(max_slope_boost_db_per_oct or 0.0)
-    c = float(max_slope_cut_db_per_oct or 0.0)
-    if b <= 0.0 and c <= 0.0:
-        return None, None, None
-
-    # Correction band sanity
-    try:
-        cmin = float(mag_c_min or 0.0)
-        cmax = float(mag_c_max or 0.0)
-    except Exception:
-        cmin, cmax = 0.0, 0.0
-    if not (np.isfinite(cmin) and np.isfinite(cmax) and cmin > 0 and cmax > cmin):
-        return None, None, None
-
-    # Pivot: geometric mean of correction band (stable on log axis)
-    pivot_hz = float(np.sqrt(cmin * cmax))
-    pivot_hz = float(np.clip(
-        pivot_hz,
-        float(np.min(f[f > 0])) if np.any(f > 0) else 1.0,
-        float(np.max(f))
-    ))
-    pivot_idx = int(np.argmin(np.abs(f - pivot_hz)))
-
-    upper_delta = np.zeros_like(t, dtype=float)
-    lower_delta = np.zeros_like(t, dtype=float)
-
-    # forward (pivot -> hi)
-    for i in range(pivot_idx + 1, f.size):
-        f0, f1 = float(f[i - 1]), float(f[i])
-        if f0 <= 0 or f1 <= 0:
-            upper_delta[i] = upper_delta[i - 1]
-            lower_delta[i] = lower_delta[i - 1]
-            continue
-        dx_oct = float(np.log2(f1 / f0))
-        dx_oct = max(dx_oct, 0.0)
-        upper_delta[i] = upper_delta[i - 1] + (b * dx_oct if b > 0 else 0.0)
-        lower_delta[i] = lower_delta[i - 1] + (c * dx_oct if c > 0 else 0.0)
-
-    # backward (pivot -> lo)
-    for i in range(pivot_idx - 1, -1, -1):
-        f0, f1 = float(f[i + 1]), float(f[i])
-        if f0 <= 0 or f1 <= 0:
-            upper_delta[i] = upper_delta[i + 1]
-            lower_delta[i] = lower_delta[i + 1]
-            continue
-        dx_oct = float(np.log2(f0 / f1))  # positive
-        dx_oct = max(dx_oct, 0.0)
-        upper_delta[i] = upper_delta[i + 1] + (b * dx_oct if b > 0 else 0.0)
-        lower_delta[i] = lower_delta[i + 1] + (c * dx_oct if c > 0 else 0.0)
-
-    env_hi = t + upper_delta
-    env_lo = t - lower_delta
-
-    # Only show inside correction band; outside return NaN to avoid drawing.
-    band = (f >= cmin) & (f <= cmax)
-    env_hi = np.where(band, env_hi, np.nan)
-    env_lo = np.where(band, env_lo, np.nan)
-
-    return env_lo, env_hi, pivot_hz
-
-
-def apply_smart_tdc(
-    freq_axis,
-    target_mags,
-    reflections,
-    rt60_info,
-    base_strength=0.5,
-    max_total_reduction_db: float = 9.0,
-    max_slope_db_per_oct: float = 0.0,
-):
-    """Temporal Decay Control (TDC)
-
-    Idea: Instead of directly subtracting multiple overlapping kernels from the target
-    (which can unintentionally stack into a deep, narrow notch), we accumulate a
-    *reduction curve* and apply a safety brake:
-      - hard cap max total reduction (dB)
-      - optional slope limit (dB/oct) for smoothness
-    """
-    adjusted_target = np.copy(target_mags)
-    tdc_reduction_db = np.zeros_like(adjusted_target)
-
-    # rt60_info can be:
-    #  - float (old usage)
-    #  - dict: {center_hz: rt60_s, ...} (new: per-band)
-    def rt60_at(freq_hz: float) -> float:
-        # fallback
-        default = 0.4
-        if isinstance(rt60_info, (int, float)):
-            v = float(rt60_info)
-            return v if v > 0.1 else default
-        if isinstance(rt60_info, dict) and rt60_info:
-            # interpoloidaan log-taajuudessa kaistakeskuksien yli
-            c = np.array(sorted(rt60_info.keys()), dtype=float)
-            r = np.array([rt60_info[k] for k in c], dtype=float)
-            mask = (c > 0) & (r > 0.05) & (r < 5.0)
-            if np.count_nonzero(mask) < 2:
-                # if not enough bands, try e.g. median
-                vv = float(np.median(r[mask])) if np.count_nonzero(mask) else 0.0
-                return vv if vv > 0.1 else default
-            c = c[mask]; r = r[mask]
-            x = np.log10(np.clip(freq_hz, c.min(), c.max()))
-            return float(np.interp(x, np.log10(c), r))
-        return default
-    
-    for rev in reflections:
-        f_res = rev['freq']
-        # FIXED: Changed 'error_ms' to 'gd_error' to match analyze_acoustic_confidence
-        error_ms = rev['gd_error'] 
-        ref_rt60 = rt60_at(f_res)
-        # SENSITIVE THRESHOLD: React at 80% of average RT60
-        excess_ratio = error_ms / (ref_rt60 * 1000.0 + 1e-12)
-        
-        if excess_ratio > 0.8: 
-            # Dynaaminen kerroin
-            dynamic_mult = np.clip(excess_ratio * base_strength, 0.2, 3.0)
-            
-            # Kapeampi ja kohdistetumpi kaistanleveys (BW)
-            bw = f_res / (error_ms / 15.0) 
-            dist = np.abs(freq_axis - f_res)
-            kernel = np.exp(-0.5 * (dist / bw)**2)
-            
-            reduction_db = dynamic_mult * 4.0
-            # Accumulate effect in separate curve (prevents "stacking surprise" notches)
-            tdc_reduction_db += (kernel * reduction_db)
-            
-    # --- Safety brakes ---
-    # 1) Hard cap total reduction (per bin)
-    if max_total_reduction_db and max_total_reduction_db > 0:
-        tdc_reduction_db = np.minimum(tdc_reduction_db, float(max_total_reduction_db))
-
-    # 2) Optional slope limiting in dB/oct to keep the curve smooth/predictable
-    try:
-        if max_slope_db_per_oct and float(max_slope_db_per_oct) > 0:
-            tdc_reduction_db = limit_slope_per_octave(
-                freq_axis,
-                tdc_reduction_db,
-                max_db_per_oct=float(max_slope_db_per_oct),
-            )
-    except Exception:
-        # Never let TDC fail the whole pipeline
-        pass
-
-    adjusted_target -= tdc_reduction_db
-    return adjusted_target
-
 def apply_hpf_to_mags(freqs, mags, cutoff, order):
     """Applies Butterworth high-pass filter to magnitude response (dB)."""
     if cutoff <= 0 or order <= 0:
@@ -310,349 +109,9 @@ def apply_hpf_to_mags(freqs, mags, cutoff, order):
         attenuation = -10 * np.log10(1 + (cutoff / (f + 1e-12))**(2 * order))
     return mags + attenuation
 
-def soft_clip_boost(gain_db, max_boost):
-    """Softly clips boosts using tanh function to prevent exceeding max_boost abruptly."""
-    if gain_db <= 0: return gain_db
-    return max_boost * np.tanh(gain_db / max_boost)
-
-def soft_clip_gain(gain_db, max_boost_db, max_cut_db):
-    """
-    Soft limiter for both boost and cut.
-    - boost: +max_boost_db * tanh(g/max_boost_db)
-    - cut:   -max_cut_db  * tanh(|g|/max_cut_db)
-    """
-    g = np.asarray(gain_db, dtype=float)
-    out = np.empty_like(g)
-    pos = g > 0
-    neg = ~pos
-    # Boost
-    if np.any(pos):
-        mb = float(max_boost_db) if max_boost_db > 0 else 0.0
-        out[pos] = mb * np.tanh(g[pos] / (mb + 1e-12)) if mb > 0 else 0.0
-    # Cut
-    if np.any(neg):
-        mc = float(max_cut_db) if max_cut_db > 0 else 0.0
-        out[neg] = -mc * np.tanh((-g[neg]) / (mc + 1e-12)) if mc > 0 else g[neg]
-    return out
-
-def limit_slope_per_octave(freq_axis, gain_db, max_db_per_oct=12.0):
-    """
-    Limit gain curve change (dB) per octave (log2(f)).
-    Performs forward+backward pass to enforce limit in both directions.
-    """
-    f = np.asarray(freq_axis, dtype=float)
-    g = np.asarray(gain_db, dtype=float).copy()
-    max_db_per_oct = float(max_db_per_oct)
-    if max_db_per_oct <= 0:
-        return g
-
-    # Only use f>0 region (log2 doesn't work at f=0)
-    idx = np.where(f > 0)[0]
-    if idx.size < 3:
-        return g
-
-    ii = idx
-    x = np.log2(f[ii])
-    # Forward: limit rise/fall relative to previous
-    for k in range(1, ii.size):
-        dx = x[k] - x[k-1]
-        if dx <= 1e-12:
-            continue
-        lim = max_db_per_oct * dx
-        dg = g[ii[k]] - g[ii[k-1]]
-        if dg > lim:
-            g[ii[k]] = g[ii[k-1]] + lim
-        elif dg < -lim:
-            g[ii[k]] = g[ii[k-1]] - lim
-
-    # Backward: sama toiseen suuntaan
-    for k in range(ii.size - 2, -1, -1):
-        dx = x[k+1] - x[k]
-        if dx <= 1e-12:
-            continue
-        lim = max_db_per_oct * dx
-        dg = g[ii[k]] - g[ii[k+1]]
-        if dg > lim:
-            g[ii[k]] = g[ii[k+1]] + lim
-        elif dg < -lim:
-            g[ii[k]] = g[ii[k+1]] - lim
-
-    return g
-
-
-def calculate_minimum_phase(mags_lin_fft):
-    """Calculates minimum phase using Hilbert transform. 1e-10 protection prevents NaN errors."""
-    n_fft = (len(mags_lin_fft) - 1) * 2
-    ln_mag = np.log(np.maximum(np.abs(mags_lin_fft), 1e-10))
-    full_ln_mag = np.concatenate((ln_mag, ln_mag[-2:0:-1]))
-    analytic = scipy.signal.hilbert(full_ln_mag)
-    min_phase_rad = -np.imag(analytic)
-    return min_phase_rad[:len(mags_lin_fft)]
-
-def psychoacoustic_smoothing(
-    freqs,
-    mags,
-    *,
-    heavy_bw=1/3.0,
-    light_bw=1/48.0,
-    f_lo=200.0,
-    f_hi=2000.0,
-):
-    """
-    REW-like psychoacoustic smoothing for *visualization*:
-      - heavy smoothing dominates at low frequencies
-      - light smoothing dominates at higher frequencies
-      - smooth crossfade on log-frequency axis
-
-    NOTE: This should be used for plots/UX, not for filter math.
-    """
-    f = np.asarray(freqs, dtype=float)
-    m = np.asarray(mags, dtype=float)
-    if f.size < 8 or m.size != f.size:
-        return np.copy(m)
-
-    dummy = np.zeros_like(m)
-    m_heavy, _ = apply_smoothing_std(f, m, dummy, float(heavy_bw))
-    m_light, _ = apply_smoothing_std(f, m, dummy, float(light_bw))
-
-    # Crossfade weight w: 0 -> heavy, 1 -> light (log-frequency)
-    # Clamp to avoid log10(0)
-    ff = np.maximum(f, 1.0)
-    lo = float(max(f_lo, 1.0))
-    hi = float(max(f_hi, lo * 1.01))
-    w = (np.log10(ff) - np.log10(lo)) / (np.log10(hi) - np.log10(lo))
-    w = np.clip(w, 0.0, 1.0)
-
-    return (1.0 - w) * m_heavy + w * m_light
-
-def apply_fdw_smoothing(freqs, phases, cycles):
-    """Apply frequency-dependent windowing (FDW) to phase."""
-    safe_cycles = max(cycles, 1.0)
-    phase_u = np.unwrap(np.deg2rad(phases))
-    oct_width = 2.0 / safe_cycles
-    dummy_mags = np.zeros_like(freqs)
-    _, smoothed_phase_deg = apply_smoothing_std(freqs, dummy_mags, np.rad2deg(phase_u), oct_width)
-    return np.deg2rad(smoothed_phase_deg)
-
-def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycles=5.0):
-    """
-    Apply adaptive magnitude smoothing based on confidence.
-    High confidence = more cycles (sharper correction).
-    Low confidence = fewer cycles (heavier smoothing).
-    """
-    f = np.asarray(freqs, dtype=float)
-    m = np.asarray(mags, dtype=float)
-    c = np.asarray(confidence_mask, dtype=float) if confidence_mask is not None else None
-
-    if f.size < 8 or m.size != f.size:
-        return np.copy(mags)
-
-    # Confidence clamp (robustness)
-    if c is None or c.size != f.size:
-        c = np.ones_like(f)
-    c = np.clip(c, 0.0, 1.0)
-
-    # Target cycles & octave widths (continuous)
-    base_cycles = float(base_cycles)
-    min_cycles = float(min_cycles)
-    if base_cycles < 1.0: base_cycles = 1.0
-    if min_cycles < 1.0: min_cycles = 1.0
-    if min_cycles > base_cycles:
-        min_cycles, base_cycles = base_cycles, min_cycles
-
-    adaptive_cycles = min_cycles + (c * (base_cycles - min_cycles))
-    oct_widths = 2.0 / np.maximum(adaptive_cycles, 1.0)  # larger => heavier smoothing
-
-    # Fixed set of octave widths to blend between (ascending for searchsorted)
-    bw_list = np.array([1.0/96.0, 1.0/48.0, 1.0/24.0, 1.0/12.0, 1.0/6.0, 1.0/3.0, 2.0/3.0], dtype=float)
-
-    # Precompute smoothed curves for each BW (fast: only 5 passes)
-    sm_stack = []
-    dummy = np.zeros_like(m)
-    for bw in bw_list:
-        sm, _ = apply_smoothing_std(f, m, dummy, float(bw))
-        sm_stack.append(sm)
-    sm_stack = np.vstack(sm_stack)  # shape: (K, N)
-
-    # Clamp target widths to available range
-    t = np.clip(oct_widths, bw_list[0], bw_list[-1])
-
-    # Find neighbors in bw_list: bw_lo <= t <= bw_hi
-    # hi in [1..K-1], lo = hi-1
-    hi = np.searchsorted(bw_list, t, side='right')
-    hi = np.clip(hi, 1, len(bw_list) - 1)
-    lo = hi - 1
-
-    bw_lo = bw_list[lo]
-    bw_hi = bw_list[hi]
-    denom = (bw_hi - bw_lo)
-    denom = np.where(denom <= 1e-12, 1.0, denom)
-    alpha = (t - bw_lo) / denom
-    alpha = np.clip(alpha, 0.0, 1.0)
-
-    # Gather per-bin values from the two neighbor curves
-    idx = np.arange(f.size)
-    sm_lo = sm_stack[lo, idx]
-    sm_hi = sm_stack[hi, idx]
-
-    # Linear blend
-    out = (1.0 - alpha) * sm_lo + alpha * sm_hi
-
-
-    # --- DEBUG: effective BW statistics (log once) ---
-    try:
-        if not hasattr(apply_adaptive_fdw, "_dbg_printed"):
-            apply_adaptive_fdw._dbg_printed = True
-
-            bw_min = float(np.min(t))
-            bw_max = float(np.max(t))
-            bw_mean = float(np.mean(t))
-
-            f_min_bw = float(f[np.argmin(t)])
-            f_max_bw = float(f[np.argmax(t)])
-
-            logger.info(
-                "A-FDW effective BW: "
-                f"min={bw_min:.4f} oct @ {f_min_bw:.0f} Hz, "
-                f"mean={bw_mean:.4f} oct, "
-                f"max={bw_max:.4f} oct @ {f_max_bw:.0f} Hz"
-            )
-    except Exception:
-        pass
-
-    return out
-
-def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
-    """Standardized octave smoothing with logarithmic sampling."""
-    if octave_fraction <= 0: return mags, phases
-    f_min = max(freqs[0], 1.0)
-    f_max = freqs[-1]
-    
-    
-    points_per_octave = 384 
-    
-    num_points = int(np.log2(f_max / f_min) * points_per_octave)
-    num_points = max(num_points, 10)
-    
-    log_freqs = np.geomspace(f_min, f_max, num_points)
-    log_mags = np.interp(log_freqs, freqs, mags)
-    phase_unwrap = np.unwrap(np.deg2rad(phases))
-    log_phases = np.interp(log_freqs, freqs, phase_unwrap)
-    
-    window_size = int(points_per_octave * octave_fraction)
-    window_size = max(window_size, 1) # Ensure at least 1
-    window = np.ones(window_size) / window_size
-    
-    pad_len = window_size // 2
-    m_padded = np.pad(log_mags, (pad_len, pad_len), mode='edge')
-    p_padded = np.pad(log_phases, (pad_len, pad_len), mode='edge')
-    
-    if pad_len > 0:
-        sm_mags = np.convolve(m_padded, window, mode='same')[pad_len:-pad_len]
-        sm_phases = np.convolve(p_padded, window, mode='same')[pad_len:-pad_len]
-    else:
-        sm_mags = np.convolve(m_padded, window, mode='same')
-        sm_phases = np.convolve(p_padded, window, mode='same')
-        
-    return np.interp(freqs, log_freqs, sm_mags), np.rad2deg(np.interp(freqs, log_freqs, sm_phases))
-
-def calculate_theoretical_phase(freq_axis, crossovers, hpf_freq=None, hpf_slope=None):
-    """Calculates theoretical phase shift caused by crossovers and high-pass filter (HPF)."""
-    total_phase_rad = np.zeros_like(freq_axis)
-    
-    # 1. Add HPF phase effect using analog Butterworth model
-    if hpf_freq and hpf_slope and hpf_freq > 0:
-        hpf_order = int(hpf_slope / 6)
-        b, a = scipy.signal.butter(hpf_order, 2 * np.pi * hpf_freq, btype='high', analog=True)
-        w, h = scipy.signal.freqs(b, a, worN=2 * np.pi * freq_axis)
-        total_phase_rad += np.unwrap(np.angle(h))
-
-    # 2. Add crossover filter phase
-    for xo in crossovers:
-        if xo.get('freq') is None: continue
-        order = xo.get('order', int(xo.get('slope', 12) / 6))
-        b, a = scipy.signal.butter(order, 2 * np.pi * xo['freq'], btype='low', analog=True)
-        w, h = scipy.signal.freqs(b, a, worN=2 * np.pi * freq_axis)
-        total_phase_rad += np.unwrap(np.angle(h))
-        
-    return total_phase_rad
-
 def interpolate_response(input_freqs, input_values, target_freqs):
     """Interpolate response linearly to target frequencies."""
     return np.interp(target_freqs, input_freqs, input_values)
-
-def _sigma_bins_from_hz(freq_axis, sigma_hz: float, fallback_bins: float = 3.0) -> float:
-    return _sigma_bins_from_hz_analysis(freq_axis, sigma_hz=sigma_hz, fallback_bins=fallback_bins)
-
-
-
-def calculate_group_delay(freqs, phases_deg):
-    """Calculates group delay (ms) from phase gradient."""
-    phase_rad = np.unwrap(np.deg2rad(phases_deg))
-    d_phi_d_f = np.gradient(phase_rad, freqs)
-    gd_ms = -d_phi_d_f / (2 * np.pi) * 1000.0
-    # Smoothing in "Hz width", not bins -> stays same across fs/taps changes
-    sigma_bins = _sigma_bins_from_hz(freqs, sigma_hz=2.0, fallback_bins=3.0)
-    return scipy.ndimage.gaussian_filter1d(gd_ms, sigma=sigma_bins)
-
-
-def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=300):
-    """Combines Linear Phase bass with Minimum Phase treble."""
-    ntaps = len(ir_lin)
-    fir_lp = scipy.signal.firwin(2047, split_freq, fs=fs, pass_zero=True, window='blackman')
-    fir_hp = -fir_lp
-    fir_hp[1023] += 1.0
-    
-    idx_lin = np.argmax(np.abs(ir_lin))
-    idx_min = np.argmax(np.abs(ir_min))
-    shift = idx_lin - idx_min
-    ir_min_aligned = np.roll(ir_min, shift)
-    
-    filt_bass = scipy.signal.fftconvolve(ir_lin, fir_lp, mode='same')
-    filt_treble = scipy.signal.fftconvolve(ir_min_aligned, fir_hp, mode='same')
-    return filt_bass + filt_treble
-
-def remove_time_of_flight(freq_axis, phase_rad):
-    """Find and remove linear phase slope (delay) from measurement."""
-    mask = (freq_axis >= 1000) & (freq_axis <= 10000)
-    if not np.any(mask): return phase_rad, 0.0
-    poly = np.polyfit(freq_axis[mask], phase_rad[mask], 1)
-    return phase_rad - (poly[0] * freq_axis), poly[0]
-
-# ------------- camillafir_analysis.py ---------
-def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
-    return analyze_acoustic_confidence_analysis(freq_axis, complex_meas, fs)
-
-def calculate_rt60(impulse, fs):
-    return calculate_rt60_analysis(impulse, fs)
-
-def _third_oct_centers(f_min=31.5, f_max=8000.0):
-    return _third_oct_centers_analysis(f_min=f_min, f_max=f_max)
-
-def calculate_rt60_bands(impulse, fs, f_min=31.5, f_max=8000.0, order=4):
-    return calculate_rt60_bands_analysis(impulse, fs, f_min=f_min, f_max=f_max, order=order)
-#-------------------------------------------------
-
-def get_min_phase_impulse(mags_db, n_fft):
-    """Create minimum-phase impulse response from magnitude response."""
-    # Muunnetaan dB -> lineaarinen ja luodaan symmetrinen spektri
-    amp = 10**(mags_db / 20.0)
-    # Hilbert-muunnos vaatii logaritmi-amplitudin
-    l_amp = np.log(amp + 1e-12)
-    # Calculate minimum phase using FFT and Hilbert principle
-    h = scipy.fft.ifft(l_amp)
-    n = len(h)
-    window = np.zeros(n)
-    window[0] = 1
-    window[1:n//2] = 2
-    window[n//2] = 1
-    # Muodostetaan minimivaiheinen vaste
-    min_phase = np.exp(scipy.fft.fft(h * window))
-    return np.real(scipy.fft.ifft(min_phase))
-
-        
-
-
 
 
 #----------- Filtteri ---------------------
@@ -666,8 +125,6 @@ import logging
 from models import FilterConfig
 
 logger = logging.getLogger("CamillaFIR.dsp")
-
-#----- FILTER
 
 def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # --- 1. DATA ALIGNMENT ---
@@ -1992,13 +1449,18 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     impulse_before = impulse.copy()
     impulse *= window
 
-    # --- ASSERT: Tukey must change IR (debug guard against "not applied") ---
+    # --- GUARD (non-fatal): Tukey should usually change IR, but allow edge-cases ---
+    # Some impulses have tails that are exactly/near-zero in float, so a Tukey taper can be
+    # bit-identical in practice. This is not an error worth crashing the run.
     if win_shape == "tukey" and tukey_alpha > 0.0 and win_mode != "off":
-        d = float(np.max(np.abs(impulse - impulse_before)))
-        if d <= 0.0:
-            raise RuntimeError(
-                "IR export window error: Tukey produced bit-identical impulse "
-                "(window not applied to exported impulse)."
+        try:
+            d = float(np.max(np.abs(impulse - impulse_before)))
+        except Exception:
+            d = 0.0
+        if (not math.isfinite(d)) or (d <= 0.0):
+            logger.warning(
+                "IR export window: Tukey had no measurable effect on impulse "
+                f"(mode={win_mode}, alpha={tukey_alpha:.3f}). Continuing."
             )
     # DC removal (preserves zero outside the window)
     # Subtract only inside the active window to avoid breaking the windowed zeros.

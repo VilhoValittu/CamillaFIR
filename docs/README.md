@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v2.8.5
+## v2.8.6
 
 ### REW-style IR windowing (DSP & export)
 

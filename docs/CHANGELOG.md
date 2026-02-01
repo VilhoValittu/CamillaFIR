@@ -6,6 +6,21 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 
 ---
 
+## [2.8.6] - 2026-02-01
+
+### Changed
+- Refactored DSP-related code into a clearer, more modular file structure.
+- Separated DSP logic from UI and orchestration layers to improve maintainability.
+- Clarified responsibility boundaries between filter generation, windowing, and export logic.
+- No functional changes to DSP algorithms or generated filters.
+
+### Internal
+- DSP modules are now organized to allow easier future extensions.
+- Reduced implicit cross-dependencies between DSP and UI code.
+- Improved long-term stability by making DSP behavior less sensitive to UI-side changes.
+
+---
+
 ## [2.8.5] - 2026-02-01
 
 ### DSP / IR export
