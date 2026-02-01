@@ -6,7 +6,6 @@ dist/
 build/
 .env
 test.py
-*.spec
 *.code-workspace
 *.zip
 .venv/
