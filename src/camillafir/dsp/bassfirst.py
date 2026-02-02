@@ -98,6 +98,20 @@ def build_bassfirst_masks(freq_axis, m_raw_db, phase_rad_unwrapped, gd_ms, gd_di
         mag_only_mode = scipy.ndimage.gaussian_filter1d(_clamp01(mag_norm * prior), sigma=4)
         room_mode_mask = np.maximum(room_mode_mask, mag_only_mode)
 
+
+    # --- LOW-FREQ SAFETY TAPER ---
+    # Disable / fade-in bass-first effect below 30 Hz to avoid unstable behavior
+    # with asymmetric IR windowing + A-FDW at very low frequencies.
+    try:
+        f1, f2 = 20.0, 30.0
+        taper = np.ones_like(f, dtype=float)
+        taper[f <= f1] = 0.0
+        mid = (f > f1) & (f < f2)
+        taper[mid] = 0.5 - 0.5*np.cos(np.pi * (f[mid] - f1) / (f2 - f1))
+        room_mode_mask = room_mode_mask * taper
+    except Exception:
+        pass
+
     # --- RELIABILITY MASK ---
     # Magnitude roughness (fast variations) – should catch "noisy" / unstable regions
     g = np.abs(_log_grad(m, f))

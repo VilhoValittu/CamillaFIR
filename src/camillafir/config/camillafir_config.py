@@ -54,7 +54,7 @@ def load_config() -> dict:
         "phase_safe_2058": False,
         "ir_window": 500.0,
         "ir_window_left": 50.0,
-        "ir_export_window_mode": "rew_sym",
+        "ir_export_window_mode": "auto",
         "ir_export_window_shape": "hann",
         "ir_export_tukey_alpha": 0.25,
         "enable_tdc": True,

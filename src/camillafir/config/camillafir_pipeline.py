@@ -317,4 +317,17 @@ def build_filter_config(
     except Exception:
         pass
 
+    # Reset stereo-link state every run (prevents stale reuse across runs)
+    try:
+        setattr(cfg, "_stereo_link_window", None)
+        setattr(cfg, "_stereo_link_offset_db", None)
+        setattr(cfg, "_stereo_link_target_level_db", None)
+    except Exception:
+        pass
+    try:
+        setattr(cfg, "lvl_force_window", None)
+        setattr(cfg, "lvl_force_offset_db", None)
+    except Exception:
+        pass
+
     return cfg

@@ -3,6 +3,7 @@ import scipy.signal
 import scipy.fft
 import math
 import scipy.ndimage
+import copy
 import logging
 import hashlib
 logger = logging.getLogger("CamillaFIR.dsp")
@@ -134,6 +135,11 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # --- 2. AXES ---
     n_fft = cfg.num_taps if cfg.num_taps % 2 != 0 else cfg.num_taps + 1
     freq_axis = np.linspace(0, cfg.fs/2.0, n_fft // 2 + 1)
+
+    # Must exist early:
+    # - comparison-mode block interpolates gain_db before correction stage
+    # - later blocks may reference gain_db even if correction is disabled
+    gain_db = np.zeros_like(freq_axis, dtype=float)
     
     # --- 3. SMOOTHING (Scalable resolution) ---
     oct_frac = 1.0 / float(cfg.smoothing_level) if cfg.smoothing_level > 0 else 1/24.0
@@ -343,9 +349,34 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
     # --- 7. TASONSOVITUS ---
     # Huom: tasosovitus on erotettu omaan moduuliin testattavuuden ja edge-case -robustiuden takia.
-    target_level_db, calc_offset_db, meas_level_db_window, target_level_db_window, offset_method, s_min, s_max = (
-        compute_leveling(cfg, freq_axis, m_anal, target_mags)
-    )
+    #
+    # IMPORTANT:
+    # target_level_db / calc_offset_db / s_min / s_max MUST be defined before any later use.
+    # compute_leveling() guarantees finite outputs; stereo-link is handled inside compute_leveling().
+    target_level_db = 0.0
+    calc_offset_db = 0.0
+    meas_level_db_window = 0.0
+    target_level_db_window = 0.0
+    offset_method = "Init"
+    try:
+        s_min = float(getattr(cfg, "lvl_min", 500.0) or 500.0)
+        s_max = float(getattr(cfg, "lvl_max", 2000.0) or 2000.0)
+    except Exception:
+        s_min, s_max = 500.0, 2000.0
+
+    try:
+        (
+            target_level_db,
+            calc_offset_db,
+            meas_level_db_window,
+            target_level_db_window,
+            offset_method,
+            s_min,
+            s_max,
+        ) = compute_leveling(cfg, np.asarray(freq_axis, dtype=float), np.asarray(m_anal, dtype=float), np.asarray(target_mags, dtype=float))
+    except Exception:
+        # Keep safe defaults; never crash later with UnboundLocalError.
+        pass
 
     # --- 7A. Align target level to the SAME leveling window (Smart Scan / Manual) ---
     # Goal: target curve must "follow" the chosen level window, not float at an arbitrary absolute level.
@@ -435,6 +466,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             st["eff_target_db"] = float(target_level_db)
             st["target_level_db_window"] = float(target_level_db_window)
             st["meas_level_db_window"] = float(meas_level_db_window)
+            st["offset_db"] = float(calc_offset_db)
             st["offset_method"] = str(offset_method)
             st["smart_scan_range"] = [float(s_min), float(s_max)]
     except Exception:
@@ -488,7 +520,6 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         pass
 
     # --- 8. KORJAUS ---
-    gain_db = np.zeros_like(freq_axis)
     if cfg.enable_mag_correction:
         afdw_on = bool(getattr(cfg, "enable_afdw", False))
         afdw_base = float(getattr(cfg, "fdw_cycles", 15.0))
@@ -1741,3 +1772,80 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             stats['analysis_mode'] = "native"
 
     return impulse, stats
+
+def _safe_range(x, default_min=200.0, default_max=3000.0):
+    try:
+        a = float(x[0]); b = float(x[1])
+        if np.isfinite(a) and np.isfinite(b) and b > a:
+            return [a, b]
+    except Exception:
+        pass
+    return [float(default_min), float(default_max)]
+
+
+def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
+    """
+    Stereo-link (shared offset) implementation:
+    - Determine smart-scan/manual window and per-channel offsets first (no forcing).
+    - Compute shared offset from BOTH channels in that same window.
+    - Re-run both channels with forced window+shared offset.
+    """
+    if not bool(getattr(cfg, "stereo_link", False)):
+        l_imp, l_st = generate_filter(f_l, m_l, p_l, cfg)
+        r_imp, r_st = generate_filter(f_r, m_r, p_r, cfg)
+        return l_imp, l_st, r_imp, r_st
+
+    # --- Pass 1: independent leveling, just to discover window + offsets ---
+    cfg1 = copy.deepcopy(cfg)
+    try:
+        cfg1.stereo_link = False
+        cfg1.lvl_force_window = None
+        cfg1.lvl_force_offset_db = None
+    except Exception:
+        pass
+
+    l_imp1, l_st1 = generate_filter(f_l, m_l, p_l, cfg1)
+    r_imp1, r_st1 = generate_filter(f_r, m_r, p_r, cfg1)
+
+    # Determine the reference window:
+    # - Manual mode: use user lvl_min/lvl_max
+    # - Auto: use the smart-scan window (prefer left; fall back to right)
+    mode = str(getattr(cfg1, "lvl_mode", "Auto") or "Auto")
+    if "Manual" in mode:
+        win = [float(getattr(cfg1, "lvl_min", 200.0) or 200.0), float(getattr(cfg1, "lvl_max", 3000.0) or 3000.0)]
+    else:
+        win = _safe_range((l_st1 or {}).get("smart_scan_range"), getattr(cfg1, "lvl_min", 200.0), getattr(cfg1, "lvl_max", 3000.0))
+        if not (win[1] > win[0]):
+            win = _safe_range((r_st1 or {}).get("smart_scan_range"), getattr(cfg1, "lvl_min", 200.0), getattr(cfg1, "lvl_max", 3000.0))
+
+    # Read per-channel offsets from pass1
+    off_l = float((l_st1 or {}).get("offset_db", 0.0) or 0.0)
+    off_r = float((r_st1 or {}).get("offset_db", 0.0) or 0.0)
+    off_shared = 0.5 * (off_l + off_r)
+
+    # --- Pass 2: force common window + common offset ---
+    cfg2 = copy.deepcopy(cfg)
+    try:
+        cfg2.stereo_link = False  # we force explicitly; do not let per-call stereo state interfere
+        cfg2.lvl_force_window = (float(win[0]), float(win[1]))
+        cfg2.lvl_force_offset_db = float(off_shared)
+    except Exception:
+        pass
+
+    l_imp2, l_st2 = generate_filter(f_l, m_l, p_l, cfg2)
+    r_imp2, r_st2 = generate_filter(f_r, m_r, p_r, cfg2)
+
+    # Tag stats for visibility
+    try:
+        if isinstance(l_st2, dict):
+            l_st2["offset_method"] = str(l_st2.get("offset_method", "")) + " (StereoLinkShared)"
+            l_st2["stereo_link_shared_offset_db"] = float(off_shared)
+            l_st2["stereo_link_shared_window"] = [float(win[0]), float(win[1])]
+        if isinstance(r_st2, dict):
+            r_st2["offset_method"] = str(r_st2.get("offset_method", "")) + " (StereoLinkShared)"
+            r_st2["stereo_link_shared_offset_db"] = float(off_shared)
+            r_st2["stereo_link_shared_window"] = [float(win[0]), float(win[1])]
+    except Exception:
+        pass
+
+    return l_imp2, l_st2, r_imp2, r_st2

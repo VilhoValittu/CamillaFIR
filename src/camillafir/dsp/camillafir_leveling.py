@@ -12,7 +12,7 @@ Note
 """
 
 from __future__ import annotations
-
+from typing import Optional
 from typing import Tuple
 import numpy as np
 
@@ -287,11 +287,35 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
     except Exception:
         pass
 
+    # Stereo-link (DSP-owned):
+    # - First channel computes window+offset normally and stores them on cfg.
+    # - Subsequent calls reuse stored values automatically, even if caller re-runs compute_leveling()
+    #   (e.g. after target alignment or comparison-mode recalcs).
+    #
+    # IMPORTANT:
+    # To preserve L/R balance, stereo-link must also keep the *absolute* target level identical
+    # between channels in Auto/SmartScan mode. Otherwise target-alignment (shift target to
+    # target_level_db inside leveling window) can differ per channel and indirectly change the
+    # effective correction headroom (e.g. one side hitting boost caps earlier).
+    stereo_link = bool(getattr(cfg, "stereo_link", False))
+    sl_win = getattr(cfg, "_stereo_link_window", None) if stereo_link else None
+    sl_off = getattr(cfg, "_stereo_link_offset_db", None) if stereo_link else None
+    sl_tgt = getattr(cfg, "_stereo_link_target_level_db", None) if stereo_link else None
+
     # ---------- Forced window / offset (Stereo-link support) ----------
     # If the caller provides a fixed window and/or offset, respect it.
     # This is used to ensure identical leveling between L/R channels.
     forced_window = getattr(cfg, "lvl_force_window", None)
     forced_offset = getattr(cfg, "lvl_force_offset_db", None)
+
+    # If stereo-link is enabled and caller didn't force anything,
+    # automatically reuse stored window/offset (if available).
+    if stereo_link and (forced_window is None) and (forced_offset is None):
+        if sl_win is not None:
+            forced_window = sl_win
+        if sl_off is not None:
+            forced_offset = sl_off
+
     if forced_window is not None or forced_offset is not None:
         try:
             if forced_window is not None:
@@ -350,11 +374,28 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
                     calc_offset_db = 0.0
                     offset_method = "ForcedWindowNoMask"
 
-            # Manual -> respect user target level. Auto -> follow measured level in the chosen window.
-            target_level_db = float(manual_target_db) if is_manual else float(meas_level_db_window)
+            # Manual -> respect user target level.
+            # Auto/SmartScan -> follow measured SPL in the chosen window.
+            # Stereo-link -> reuse FIRST channel's target_level_db so target alignment is identical.
+            if is_manual:
+                target_level_db = float(manual_target_db)
+            else:
+                if stereo_link and (sl_tgt is not None):
+                    target_level_db = _to_float(sl_tgt, float(meas_level_db_window))
+                else:
+                    target_level_db = float(meas_level_db_window)
 
             if not np.isfinite(calc_offset_db):
                 calc_offset_db = 0.0
+
+            # Stereo-link: store first computed result for later calls/channels.
+            if stereo_link and (sl_win is None) and (sl_off is None) and (sl_tgt is None):
+                try:
+                    setattr(cfg, "_stereo_link_window", (float(ss_min), float(ss_max)))
+                    setattr(cfg, "_stereo_link_offset_db", float(calc_offset_db))
+                    setattr(cfg, "_stereo_link_target_level_db", float(target_level_db))
+                except Exception:
+                    pass
 
             return (
                 float(target_level_db),
@@ -388,6 +429,14 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
 
         if not np.isfinite(calc_offset_db):
             calc_offset_db = 0.0
+        # Stereo-link: store first computed result for later calls/channels.
+        if stereo_link and (sl_win is None) and (sl_off is None) and (sl_tgt is None):
+            try:
+                setattr(cfg, "_stereo_link_window", (float(s_min), float(s_max)))
+                setattr(cfg, "_stereo_link_offset_db", float(calc_offset_db))
+                setattr(cfg, "_stereo_link_target_level_db", float(target_level_db))
+            except Exception:
+                pass
 
         return (
             float(target_level_db),
@@ -470,11 +519,26 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
     # Plot/raportti-basis:
     # - Manual: user-defined target SPL
     # - Auto/SmartScan: follow measured SPL in the chosen stable window
-    target_level_db = float(manual_target_db) if is_manual else float(meas_level_db_window)
+    if is_manual:
+        target_level_db = float(manual_target_db)
+    else:
+        if stereo_link and (sl_tgt is not None):
+            target_level_db = _to_float(sl_tgt, float(meas_level_db_window))
+        else:
+            target_level_db = float(meas_level_db_window)
 
     # Safety: force finitenness
     if not np.isfinite(calc_offset_db):
         calc_offset_db = 0.0
+    # Stereo-link: store first computed result for later calls/channels.
+    if stereo_link and (sl_win is None) and (sl_off is None) and (sl_tgt is None):
+        try:
+            setattr(cfg, "_stereo_link_window", (float(ss_min), float(ss_max)))
+            setattr(cfg, "_stereo_link_offset_db", float(calc_offset_db))
+            setattr(cfg, "_stereo_link_target_level_db", float(target_level_db))
+        except Exception:
+            pass
+
 
     return (
         float(target_level_db),

@@ -31,7 +31,10 @@ def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
     gd_diff = np.abs(gd_ms - gd_smooth)
 
     threshold_ms = 2.5
-    confidence_mask = 1.0 / (1.0 + np.exp(1.5 * (gd_diff - threshold_ms)))
+    x = 1.5 * (gd_diff - threshold_ms)
+    # prevent overflow in exp; values beyond +-60 are already numerically saturated
+    x = np.clip(x, -60.0, 60.0)
+    confidence_mask = 1.0 / (1.0 + np.exp(x))
     peaks = np.array([], dtype=int)
 
     reflection_nodes = []

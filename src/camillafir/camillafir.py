@@ -287,61 +287,15 @@ def process_run():
 
             log_df_smoothing_toggle(cfg, df_on)
             _status(t('stat_calc'))
-            l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, cfg)
-            r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, cfg)
-
-            if bool(data.get('stereo_link', False)):
-                try:
-                    from dsp.camillafir_leveling import compute_leveling
-
-                    if isinstance(l_st, dict) and isinstance(r_st, dict):
-                        fx_l = np.asarray(l_st.get('freq_axis') or [], dtype=float)
-                        fx_r = np.asarray(r_st.get('freq_axis') or [], dtype=float)
-                        if fx_l.size > 32 and fx_l.size == fx_r.size and np.allclose(fx_l, fx_r, rtol=0, atol=1e-9):
-                            # reconstruct m_anal (A-FDW already applied inside DSP):
-                            mL = np.asarray(l_st.get('measured_mags') or [], dtype=float) + float(l_st.get('offset_db', 0.0) or 0.0)
-                            mR = np.asarray(r_st.get('measured_mags') or [], dtype=float) + float(r_st.get('offset_db', 0.0) or 0.0)
-                            tgt = np.asarray(l_st.get('target_mags') or [], dtype=float)
-                            if mL.size == fx_l.size and mR.size == fx_l.size and tgt.size == fx_l.size:
-                                m_avg = 0.5 * (mL + mR)
-
-                                (
-                                    _tl,
-                                    off,
-                                    _mlw,
-                                    _tlw,
-                                    _meth,
-                                    smin,
-                                    smax,
-                                ) = compute_leveling(cfg, fx_l, m_avg, tgt)
-
-                                # --- Report leveling tilt (StereoLink pass) ---
-                                try:
-                                    tilt_slope = getattr(cfg, "_lvl_tilt_slope_db_per_oct", None)
-                                    if isinstance(l_st, dict):
-                                        l_st["tilt_slope_db_per_oct"] = float(tilt_slope) if tilt_slope is not None else None
-                                    if isinstance(r_st, dict):
-                                        r_st["tilt_slope_db_per_oct"] = float(tilt_slope) if tilt_slope is not None else None
-                                except Exception:
-                                    pass
-
-                                # Force identical window+offset for both channels
-                                cfg.stereo_link = True
-                                cfg.lvl_force_window = (float(smin), float(smax))
-                                cfg.lvl_force_offset_db = float(off)
-
-                                # Regenerate with forced leveling
-                                l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, cfg)
-                                r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, cfg)
-
-                                # Tag method in stats for visibility
-                                if isinstance(l_st, dict):
-                                    l_st['offset_method'] = str(l_st.get('offset_method') or '') + " (StereoLink)"
-                                if isinstance(r_st, dict):
-                                    r_st['offset_method'] = str(r_st.get('offset_method') or '') + " (StereoLink)"
-                except Exception as e:
-                    logger.warning(f"Stereo link leveling failed (continuing without link): {e}")
-
+            if bool(getattr(cfg, "stereo_link", False)):
+                l_imp, l_st, r_imp, r_st = dsp.generate_filter_pair(
+                    f_l, m_l, p_l,
+                    f_r, m_r, p_r,
+                    cfg
+                )
+            else:
+                l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, cfg)
+                r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, cfg)
 
             # ------------------------------------------------------------------
             # RT60 reliability tagging for scoring:
