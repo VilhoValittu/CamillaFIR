@@ -1,94 +1,69 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import (
-    collect_dynamic_libs,
-    collect_data_files,
-    collect_submodules,
-)
+from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
 
-# Build these BEFORE Analysis() (2-tuples are OK here)
-binaries = []
-datas = []
-hiddenimports = []
+# --- Hidden imports: koko camillafir-paketti ---
+hiddenimports = collect_submodules("camillafir")
 
-# ----------------------------
-# Resources (datas: (src, dest))
-# ----------------------------
-datas += [
-    ("translations.json", "."),
-    ("assets/plotly.min.js", "assets"),
+# --- Data files (runtime resources) ---
+datas = [
+    # i18n
+    (
+        "src/camillafir/resources/i8n/translations.json",
+        "camillafir/resources/i8n",
+    ),
+    # plotly
+    (
+        "src/camillafir/resources/plotly/plotly.min.js",
+        "camillafir/resources/plotly",
+    ),
 ]
 
-# ----------------------------
-# NumPy / SciPy binaries
-# (binaries: typically (dest, src) or (src, dest) depending on helper;
-# these helpers return what Analysis expects.)
-# ----------------------------
-binaries += collect_dynamic_libs("numpy")
-binaries += collect_dynamic_libs("scipy")
-
-# ----------------------------
-# Matplotlib datas
-# ----------------------------
-datas += collect_data_files("matplotlib", include_py_files=False)
-
-# ----------------------------
-# Hidden imports
-# ----------------------------
-hiddenimports += collect_submodules("pywebio")
-hiddenimports += collect_submodules("scipy.signal")
-hiddenimports += [
-    "scipy.fft",
-    "scipy.io",
-    "scipy.io.wavfile",
-    "scipy.signal.windows",
-    "matplotlib.backends.backend_agg",
-    "matplotlib.figure",
-    # App internal modules (varmistus)
-    "camillafir_dsp",
-    "camillafir_modes",
-    "camillafir_ui_helpers",
-    "models",
-]
-
-analysis = Analysis(
-    ["camillafir.py"],
-    pathex=["."],
-    binaries=binaries,
+a = Analysis(
+    ["src/camillafir/camillafir.py"],
+    pathex=["src"],
+    binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
+    hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        "tests",
+        "tools",
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
+    noarchive=False,
 )
 
-pyz = PYZ(analysis.pure, analysis.zipped_data, cipher=block_cipher)
+pyz = PYZ(
+    a.pure,
+    a.zipped_data,
+    cipher=block_cipher,
+)
 
 exe = EXE(
     pyz,
-    analysis.scripts,
-    analysis.binaries,
-    analysis.zipfiles,
-    analysis.datas,
-    exclude_binaries=True,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
     name="CamillaFIR",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    console=False,   # True jos haluat konsoli-ikkunan
 )
 
 coll = COLLECT(
     exe,
-    analysis.binaries,
-    analysis.zipfiles,
-    analysis.datas,
+    a.binaries,
+    a.datas,
     strip=False,
     upx=True,
     name="CamillaFIR",

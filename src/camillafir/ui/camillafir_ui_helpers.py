@@ -5,8 +5,9 @@ from pywebio.output import *  # needed because this PyWebIO build doesn't expose
 from pywebio.input import FLOAT
 from pywebio.pin import pin, pin_update, put_input
 
-from camillafir_i18n import t
-from camillafir_modes import MODE_DEFAULTS
+from ..resources.i8n.camillafir_i18n import t
+from .camillafir_modes import MODE_DEFAULTS
+from .camillafir_utils import scale_taps_with_fs
 
 def update_mode_desc(_=None):
     """UI helper: show a short description under Mode selection."""
@@ -156,31 +157,6 @@ def apply_mode_defaults_to_ui(_=None):
         toast(msg, color="success", duration=2.0)
     except Exception:
         pass
-
-
-def scale_taps_with_fs(
-    fs: int,
-    base_fs: int = 44100,
-    base_taps: int = 65536,
-    allowed_taps=(
-        512, 1024, 2048, 4096, 8192, 16384,
-        32768, 65536, 131072, 262144, 524288,
-        1048576
-    ),
-) -> int:
-    """Scale FIR taps with sample rate so that filter time length stays constant."""
-    try:
-        fs_i = int(fs)
-        if fs_i <= 0:
-            return int(base_taps)
-        target = float(base_taps) * (float(fs_i) / float(base_fs))
-        for taps in allowed_taps:
-            if int(taps) >= target:
-                return int(taps)
-        return int(allowed_taps[-1])
-    except Exception:
-        return int(base_taps)
-
 
 def update_taps_auto_info(_=None):
     """UI helper: show Auto-taps mapping when multi-rate is enabled."""

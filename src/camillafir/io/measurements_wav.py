@@ -5,7 +5,7 @@ import scipy.io.wavfile
 
 try:
     # Preferred: dedicated helper (closer to REW .txt export)
-    from camillafir_wav_window import ir_wav_to_freq_response as _wav_ir_to_fr
+    from src.camillafir.io.camillafir_wav_window import ir_wav_to_freq_response as _wav_ir_to_fr
 except Exception:
     _wav_ir_to_fr = None
 

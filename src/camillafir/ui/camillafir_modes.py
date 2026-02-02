@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Dict, Any, Tuple
-from models import FilterConfig  # uses your existing dataclass fields :contentReference[oaicite:1]{index=1}
+from camillafir.config.models import FilterConfig  # uses your existing dataclass fields :contentReference[oaicite:1]{index=1}
 
 #Version: v0.1.1
 

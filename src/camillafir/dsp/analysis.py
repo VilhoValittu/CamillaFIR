@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.ndimage
 
-from dsp.camillafir_analysis import (
+from .camillafir_analysis import (
     _sigma_bins_from_hz,
     analyze_acoustic_confidence,
     calculate_rt60,

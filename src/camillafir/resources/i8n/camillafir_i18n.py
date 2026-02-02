@@ -3,16 +3,18 @@ import json
 import locale
 import os
 import sys
+from pathlib import Path
 
 
 def get_resource_path(relative_path: str) -> str:
     """Returns the path to a resource, whether inside an EXE package or in development."""
     if hasattr(sys, "_MEIPASS"):
         return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath("."), relative_path)
+    package_root = Path(__file__).resolve().parents[1]
+    return str(package_root / relative_path)
 
 
-TRANS_FILE = get_resource_path("translations.json")
+TRANS_FILE = get_resource_path(os.path.join("i8n", "translations.json"))
 
 
 def load_translations() -> dict:
