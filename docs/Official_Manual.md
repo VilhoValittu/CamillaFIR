@@ -47,7 +47,7 @@ python -m venv venv
 # Linux/macOS:
 #   source venv/bin/activate
 pip install numpy scipy pywebio matplotlib plotly
-python camillafir.py
+python run_camillafir.py
 ```
 
 The UI opens in your browser (default: `http://localhost:8080`).

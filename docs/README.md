@@ -134,7 +134,7 @@ pip install -r requirements.txt
 sudo apt update
 sudo apt install -y chromium-browser
 
-python camillafir.py
+python run_camillafir.py
 ```
 
 The UI opens in your browser (default: `http://localhost:8080`).
