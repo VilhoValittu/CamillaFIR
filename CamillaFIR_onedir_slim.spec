@@ -22,7 +22,7 @@ datas = [
 ]
 
 a = Analysis(
-    ["src/camillafir/camillafir.py"],
+    ["src/camillafir/__main__.py"],
     pathex=["src"],
     binaries=[],
     datas=datas,
@@ -57,7 +57,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,   # True jos haluat konsoli-ikkunan
+    console=True,   # True jos haluat konsoli-ikkunan
     exclude_binaries=True,
 )
 
