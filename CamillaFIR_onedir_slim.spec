@@ -58,6 +58,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,   # True jos haluat konsoli-ikkunan
+    exclude_binaries=True,
 )
 
 coll = COLLECT(
