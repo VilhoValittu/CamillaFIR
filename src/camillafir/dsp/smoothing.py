@@ -8,37 +8,28 @@ def psychoacoustic_smoothing(
     freqs,
     mags,
     *,
-    heavy_bw=1/3.0,
-    light_bw=1/48.0,
-    f_lo=200.0,
-    f_hi=2000.0,
+    low_bw=1/48.0,     # tarkka basso
+    high_bw=1/3.0,     # sileä yläpää
+    f_lo=120.0,
+    f_hi=600.0,
 ):
-    """
-    REW-like psychoacoustic smoothing for *visualization*:
-      - heavy smoothing dominates at low frequencies
-      - light smoothing dominates at higher frequencies
-      - smooth crossfade on log-frequency axis
-
-    NOTE: This should be used for plots/UX, not for filter math.
-    """
     f = np.asarray(freqs, dtype=float)
     m = np.asarray(mags, dtype=float)
     if f.size < 8 or m.size != f.size:
         return np.copy(m)
 
     dummy = np.zeros_like(m)
-    m_heavy, _ = apply_smoothing_std(f, m, dummy, float(heavy_bw))
-    m_light, _ = apply_smoothing_std(f, m, dummy, float(light_bw))
+    m_low, _  = apply_smoothing_std(f, m, dummy, float(low_bw))
+    m_high, _ = apply_smoothing_std(f, m, dummy, float(high_bw))
 
-    # Crossfade weight w: 0 -> heavy, 1 -> light (log-frequency)
-    # Clamp to avoid log10(0)
     ff = np.maximum(f, 1.0)
     lo = float(max(f_lo, 1.0))
     hi = float(max(f_hi, lo * 1.01))
     w = (np.log10(ff) - np.log10(lo)) / (np.log10(hi) - np.log10(lo))
     w = np.clip(w, 0.0, 1.0)
 
-    return (1.0 - w) * m_heavy + w * m_light
+    return (1.0 - w) * m_low + w * m_high
+
 
 def apply_fdw_smoothing(freqs, phases, cycles):
     """Apply frequency-dependent windowing (FDW) to phase."""

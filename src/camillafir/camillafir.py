@@ -33,7 +33,6 @@ from .ui.camillafir_ui_helpers import (
     apply_tdc_preset,
     apply_afdw_preset,
     put_guide_section,
-    update_ir_tukey_ui,
 )
 from .config.camillafir_pipeline import (
     collect_ui_data,
@@ -65,7 +64,7 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.8.5" # [DSP] Added tukey windowing option
+VERSION = "v2.8.7" # [DSP] Added tukey windowing option
 # Change log:
 # v.2.8.5 [DSP] Added tukey windowing option
 # v2.8.4  Github actions now makes running files

@@ -6,6 +6,17 @@ The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP 
 
 ---
 
+## [2.8.7] - 2026-02-03
+
+### Fixed
+- Psychoacoustic smoothing now affects only visualization/plots, not analysis or correction.
+- IR export windowing no longer changes the filter’s absolute level (gain).
+
+### UI
+- Updated UI text strings and help descriptions.
+
+---
+
 ## [2.8.6] - 2026-02-01
 
 ### Changed

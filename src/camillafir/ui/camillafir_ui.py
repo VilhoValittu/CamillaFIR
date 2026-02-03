@@ -368,7 +368,7 @@ def main():
                     value=get_val('smoothing_level', 12),
                     help_text=t('smoothing_level_help'),
                 ),
-              
+        put_text(t('smoothing_level_saw')),
         
         put_input('phase_limit', label=t('phase_limit'), type=FLOAT, value=get_val('phase_limit', 1000.0), help_text=t('phase_limit_help')),
         
@@ -385,6 +385,7 @@ def main():
         put_markdown(f"### 🛠️ {t('tab_adv')}"),
         
         put_markdown(f"#### ⏱️ {t('ir_export_window_title')}"),
+        put_text(t('')),
         put_select(
             'ir_export_window_mode',
             label=t('ir_export_window_mode'),
@@ -394,28 +395,36 @@ def main():
                 {'label': t('ir_export_window_sym'), 'value': 'rew_sym'},
                 {'label': t('ir_export_window_asym'), 'value': 'rew_asym'},
             ],
-            value=get_val('ir_export_window_mode', 'rew_sym'),
-            help_text=t('ir_export_window_help')
+            value=get_val('ir_export_window_mode', 'auto'),
+            help_text=t('ir_export_window_help'),
         ),
 
         put_row([
             put_select(
                 'ir_export_window_shape',
                 label=t('ir_export_window_shape'),
+                
                 options=[
                     {'label': t('ir_export_window_shape_hann'), 'value': 'hann'},
                     {'label': t('ir_export_window_shape_tukey'), 'value': 'tukey'},
                 ],
                 value=str(get_val('ir_export_window_shape', 'hann') or 'hann').strip().lower(),
-                help_text=t('ir_export_window_shape_help')
+                help_text=t('ir_export_window_shape_help'),
+                
             ),
         put_scope('ir_tukey_alpha_scope'),
         ]),
+
+        put_collapse(
+            t('ir_export_window_help_long_title'),
+            [put_markdown(t('ir_export_window_help_long'))]
+        ),
         
         put_row([
             put_input('ir_window_left', label=t('ir_window_left_label'), type=FLOAT, value=get_val('ir_window_left', 100.0), help_text=t('ir_matala')),
             put_input('ir_window', label=t('ir_window_right_label'), type=FLOAT, value=get_val('ir_window', 500.0), help_text=t('ir_korkea'))
         ]),
+        
         put_markdown("---"),
 
         # A-FDW

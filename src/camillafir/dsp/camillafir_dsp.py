@@ -141,8 +141,11 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # - later blocks may reference gain_db even if correction is disabled
     gain_db = np.zeros_like(freq_axis, dtype=float)
     
-    # --- 3. SMOOTHING (Scalable resolution) ---
-    oct_frac = 1.0 / float(cfg.smoothing_level) if cfg.smoothing_level > 0 else 1/24.0
+    # --- 3. SMOOTHING ---
+    # IMPORTANT:
+    # Tasoitusresoluutio (smoothing_level) must NOT affect analysis/leveling.
+    # Keep analysis smoothing FIXED; smoothing_level is used later only for filter shaping.
+    analysis_bw = 1/24.0
     is_psy = 'psy' in str(cfg.smoothing_type).lower()
     
 
@@ -151,7 +154,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # Psychoacoustic mode affects only what we *show* in UI (plots/score),
     # not confidence/leveling/correction curve generation.
     m_smooth_std, _ = apply_smoothing_std(
-        f_in, m_in, np.zeros_like(m_in), float(oct_frac)
+        f_in, m_in, np.zeros_like(m_in), float(analysis_bw)
     )
     
     # FIX: Dynamic phase smoothing based on sample rate
@@ -1348,10 +1351,27 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     raw_imp = scipy.fft.irfft(h_complex, n=n_fft)
     win_mode = str(getattr(cfg, 'ir_export_window_mode', 'auto') or 'auto').strip().lower()
 
+    def _ms(name_ms: str, name_alias: str, default: float = 0.0) -> float:
+        """
+        Read milliseconds value from config, preferring canonical *_ms fields,
+        with fallback to legacy aliases for backwards compatibility.
+        """
+        v = getattr(cfg, name_ms, None)
+        if v is None:
+            v = getattr(cfg, name_alias, default)
+        try:
+            return float(v or 0.0)
+        except Exception:
+            return float(default)
+
+    left_ms = _ms('ir_window_ms_left', 'ir_window_left', 0.0)
+    right_ms = _ms('ir_window_ms', 'ir_window', 0.0)
+
+
     # --- 10a. INITIAL PLACEMENT (single-pass) ---
-    if ('Asym' in cfg.filter_type_str) or (win_mode == 'rew_asym'):
+    if ('Asym' in cfg.filter_type_str):
         shift = min(
-            int(float(getattr(cfg, 'ir_window_left', 0.0) or 0.0) * cfg.fs / 1000.0),
+            int(left_ms * cfg.fs / 1000.0),
             int(n_fft * 0.4)
         )
         impulse = np.roll(raw_imp, shift)
@@ -1374,27 +1394,11 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     n = len(impulse)
     peak_idx = int(np.argmax(np.abs(impulse)))
 
-    s_left = int(float(getattr(cfg, 'ir_window_left', 0.0) or 0.0) * cfg.fs / 1000.0)
-    s_right = int(float(getattr(cfg, 'ir_window', 0.0) or 0.0) * cfg.fs / 1000.0)
-
-#    if win_mode == 'rew_asym' and n > 0:
-#        desired_peak = int(np.clip(s_left, 0, n - 1))
-#       shift_samp = desired_peak - peak_idx
-#        if shift_samp != 0:
-#            impulse = np.roll(impulse, shift_samp)
-#            peak_idx = desired_peak
+    s_left = int(left_ms * cfg.fs / 1000.0)
+    s_right = int(right_ms * cfg.fs / 1000.0)
 
     logger.info(f"IR export: mode={win_mode}, peak={peak_idx}, s_left={s_left}, s_right={s_right}")
     logger.info(f"IR export: shape={win_shape}, tukey_alpha={tukey_alpha:.2f}")
-
-
-    # For REW asymmetric export, shift the peak earlier (reduces CamillaDSP startup latency)
-    if win_mode == 'rew_asym' and n > 0:
-        desired_peak = int(np.clip(s_left, 0, n - 1))
-        shift_samp = desired_peak - peak_idx
-        if shift_samp != 0:
-            impulse = np.roll(impulse, shift_samp)
-            peak_idx = desired_peak
 
     if win_mode == 'off':
         window = np.ones(n, dtype=float)
@@ -1403,7 +1407,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     else:
         window = np.zeros(n, dtype=float)
 
-        if win_mode == 'rew_sym':
+        if win_mode in ('rew_sym', 'rew_asym'):
             radius = max(s_left, s_right)
             s_left = radius
             s_right = radius
@@ -1412,7 +1416,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 radius = s_right
                 s_left = radius
                 s_right = radius
-        # win_mode == 'rew_asym' -> literal L/R (already shifted)
+        # win_mode == 'rew_asym' -> use symmetric window, do peak shift AFTER window
 
         # Build window around peak
         def _edge_taper(L: int, *, alpha: float, side: str) -> np.ndarray:
@@ -1479,6 +1483,32 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # --- APPLY EXPORT WINDOW TO *THE* IMPULSE ---
     impulse_before = impulse.copy()
     impulse *= window
+
+    # For REW asymmetric export:
+    # - keep SAME windowing as rew_sym (magnitude identical)
+    # - then shift peak earlier to reduce startup latency (phase/delay only)
+    if win_mode == 'rew_asym' and n > 0:
+        desired_peak = int(np.clip(int(left_ms * cfg.fs / 1000.0), 0, n - 1))
+        peak_now = int(np.argmax(np.abs(impulse)))
+        shift_samp = desired_peak - peak_now
+        if shift_samp != 0:
+            # IMPORTANT: do NOT use np.roll here (circular wrap).
+            # Circular wrap leaves non-zero tail at the end -> comb/sawtooth ripple.
+            if shift_samp > 0:
+                # shift right (later): pad zeros at start
+                if shift_samp >= n:
+                    impulse[:] = 0.0
+                else:
+                    impulse = np.concatenate((np.zeros(shift_samp, dtype=impulse.dtype),
+                                              impulse[:-shift_samp]))
+            else:
+                # shift left (earlier): pad zeros at end
+                s = -shift_samp
+                if s >= n:
+                    impulse[:] = 0.0
+                else:
+                    impulse = np.concatenate((impulse[s:],
+                                              np.zeros(s, dtype=impulse.dtype)))
 
     # --- GUARD (non-fatal): Tukey should usually change IR, but allow edge-cases ---
     # Some impulses have tails that are exactly/near-zero in float, so a Tukey taper can be
