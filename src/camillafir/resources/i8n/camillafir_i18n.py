@@ -9,7 +9,12 @@ from pathlib import Path
 def get_resource_path(relative_path: str) -> str:
     """Returns the path to a resource, whether inside an EXE package or in development."""
     if hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, relative_path)
+        base = os.path.join(sys._MEIPASS, relative_path)
+        if os.path.exists(base):
+            return base
+        # Fallback for older bundle layouts
+        alt = os.path.join(sys._MEIPASS, "camillafir", "resources", relative_path)
+        return alt
     package_root = Path(__file__).resolve().parents[1]
     return str(package_root / relative_path)
 

@@ -1,8 +1,17 @@
+import os
+import sys
+
+# Allow running as a script or frozen entrypoint by forcing package context.
+if __package__ in (None, ""):
+    _pkg_root = os.path.dirname(os.path.abspath(__file__))
+    _src_root = os.path.dirname(_pkg_root)
+    if _src_root not in sys.path:
+        sys.path.insert(0, _src_root)
+    __package__ = "camillafir"
+
 import io
 import json
 import logging
-import os
-import sys
 import re
 import zipfile
 import typing
