@@ -53,7 +53,7 @@ jobs:
       - name: Build using PyInstaller spec
         shell: bash
         run: |
-          pyinstaller --clean --noconfirm CamillaFIR_onedir_slim.spec
+          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
 
       # -------- Packaging per OS --------
 
