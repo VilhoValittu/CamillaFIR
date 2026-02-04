@@ -51,6 +51,13 @@ from camillafir.config.models import FilterConfig
 from .camillafir_modes import apply_mode_to_cfg, MODE_DEFAULTS
 from .camillafir_utils import scale_taps_with_fs
 from pywebio.pin import pin_update
+from .camillafir_ui_helpers import (
+    _max_boost_help_with_cap,
+    _toast,
+    _warn_taps_if_over_cap,
+    _warn_max_boost_if_over_cap,
+)
+
 
 logger = logging.getLogger("CamillaFIR")
 
@@ -68,103 +75,221 @@ def build_app(*, process_run, PROGRAM_NAME: str, VERSION: str, MAX_SAFE_BOOST: f
     g["update_status"] = update_status
     return main
 
-def _warn_max_boost_if_over_cap(_=None):
-    """
-    Warn user if max_boost exceeds internal safety cap.
-    Uses a simple "edge trigger" to avoid spamming toast repeatedly.
-    """
-    try:
-        v = pin.get('max_boost', None)
-        if v is None or v == '':
-            return
-        v = float(v)
-        if not math.isfinite(v):
-            return
 
-        over = (float(MAX_SAFE_BOOST) > 0.0) and (v > float(MAX_SAFE_BOOST) + 1e-9)
-        # Edge-trigger (warn only when transitioning to over-cap state)
-        prev = bool(getattr(_warn_max_boost_if_over_cap, "_prev_over", False))
-        if over and not prev:
-            # Build message safely even if translations are missing
-            try:
-                cap_suffix = t('max_boost_help_cap').format(value=f"{MAX_SAFE_BOOST:.1f}")
-            except Exception:
-                cap_suffix = f" (capped to {MAX_SAFE_BOOST:.1f} dB)"
-
-            msg = f"{t('max_boost')}: {v:.1f} dB > {MAX_SAFE_BOOST:.1f} dB{cap_suffix}"
-
-            # Use default toast styling to avoid version-specific color keyword issues
-            _toast(msg, duration=5)
-        _warn_max_boost_if_over_cap._prev_over = over
-    except Exception as e:
-
-        try:
-            logger.warning(f"max_boost toast failed: {e}")
-        except Exception:
-            pass
-        return
-
-def _warn_taps_if_over_cap(_=None):
-    """
-    Warn user if taps exceeds recommended maximum.
-    Uses edge trigger to avoid repeated toasts.
-    """
-    try:
-        v = pin.get('taps', None)
-        if v is None or v == '':
-            return
-        v = int(v)
-
-        over = v > int(MAX_SAFE_TAPS)
-        prev = bool(getattr(_warn_taps_if_over_cap, "_prev_over", False))
-
-        if over and not prev:
-            try:
-                msg = t('taps_warn_over').format(value=MAX_SAFE_TAPS)
-            except Exception:
-                msg = f"Taps > {MAX_SAFE_TAPS}: very high latency and diminishing returns."
-
-            _toast(msg, duration=6)
-
-        _warn_taps_if_over_cap._prev_over = over
-    except Exception as e:
-        try:
-            logger.warning(f"taps warning toast failed: {e}")
-        except Exception:
-            pass
-
-def _toast(msg, *, duration=5, color=None):
-    """
-    Safe toast wrapper for PyWebIO.
-    Works even if toast is unavailable or UI context is missing.
-    """
-    try:
-        fn = getattr(pwo, "toast", None)
-        if callable(fn):
-            if color is None:
-                fn(msg, duration=duration)
-            else:
-                fn(msg, duration=duration, color=color)
-    except Exception:
-        pass
-
-def _max_boost_help_with_cap():
-    try:
-        return (
-            f"{t('max_boost_help')}"
-            f"{t('max_boost_help_cap').format(value=f'{MAX_SAFE_BOOST:.1f}')}"
-        )
-    except Exception:
-        return t('max_boost_help')
 
 
 def update_status(msg):
     with use_scope('status_area', clear=True):
         put_text(msg).style('font-weight: bold; color: #4CAF50; margin-bottom: 10px;')
 
+def _inject_dark_css():
+    put_html("""
+<style>
+  /* ===== CamillaFIR Matte Dark — PyWebIO specific ===== */
+
+  :root{
+    color-scheme: dark;
+
+    --cf-bg: #0b0f14;
+    --cf-surface: rgba(255,255,255,0.035);
+    --cf-surface-2: rgba(255,255,255,0.055);
+    --cf-surface-3: rgba(255,255,255,0.075);
+    --cf-border: rgba(255,255,255,0.10);
+    --cf-border-2: rgba(255,255,255,0.16);
+
+    --cf-text: rgba(255,255,255,0.92);
+    --cf-muted: rgba(255,255,255,0.70);
+    --cf-faint: rgba(255,255,255,0.52);
+
+    --cf-accent: rgba(160,210,255,0.80);
+    --cf-focus: rgba(160,210,255,0.22);
+
+    --cf-radius: 14px;
+    --cf-radius-sm: 10px;
+    --cf-shadow: 0 8px 22px rgba(0,0,0,0.35);
+  }
+
+  /* ===== Root containers ===== */
+  body.webio-theme-dark {
+    background: var(--cf-bg) !important;
+    color: var(--cf-text) !important;
+  }
+
+  .pywebio,
+  #output-container,
+  #input-container {
+    background: var(--cf-bg) !important;
+    color: var(--cf-text) !important;
+  }
+
+  /* ===== Markdown output ===== */
+  .markdown-body {
+    color: var(--cf-text) !important;
+  }
+  .markdown-body h1 { font-size: 28px; }
+  .markdown-body h2 { font-size: 20px; margin-top: 18px; }
+  .markdown-body h3 { font-size: 16px; opacity: 0.95; }
+  .markdown-body p,
+  .markdown-body li { color: var(--cf-text); }
+  .markdown-body em,
+  .markdown-body small { color: var(--cf-muted); }
+  .markdown-body hr { border-color: rgba(255,255,255,0.08); }
+
+  /* ===== Cards / collapses ===== */
+  .card,
+  .collapse,
+  .panel,
+  .well {
+    background: var(--cf-surface) !important;
+    border: 1px solid var(--cf-border) !important;
+    border-radius: var(--cf-radius) !important;
+    box-shadow: var(--cf-shadow) !important;
+  }
+
+  .card-header,
+  .collapse > .title {
+    color: var(--cf-text) !important;
+    font-weight: 700;
+  }
+
+  /* ===== Tabs (Bootstrap via PyWebIO) ===== */
+  .nav-tabs {
+    border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+  }
+  .nav-tabs .nav-link {
+    color: var(--cf-muted) !important;
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 12px 12px 0 0 !important;
+    padding: 10px 14px !important;
+  }
+  .nav-tabs .nav-link.active {
+    color: var(--cf-text) !important;
+    background: var(--cf-surface-2) !important;
+    border: 1px solid var(--cf-border) !important;
+    border-bottom: 0 !important;
+  }
+
+  .tab-content {
+    background: var(--cf-surface) !important;
+    border: 1px solid var(--cf-border) !important;
+    border-top: 0 !important;
+    border-radius: 0 0 var(--cf-radius) var(--cf-radius) !important;
+    padding: 14px 14px 6px !important;
+  }
+
+  /* ===== Inputs ===== */
+  input,
+  select,
+  textarea {
+    background: var(--cf-surface-2) !important;
+    color: var(--cf-text) !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
+    border-radius: 12px !important;
+  }
+  input:hover,
+  select:hover,
+  textarea:hover {
+    background: var(--cf-surface-3) !important;
+    border-color: rgba(255,255,255,0.18) !important;
+  }
+  input:focus,
+  select:focus,
+  textarea:focus {
+    border-color: rgba(160,210,255,0.45) !important;
+    box-shadow: 0 0 0 3px var(--cf-focus) !important;
+  }
+
+  label { color: var(--cf-text) !important; }
+  .help-block,
+  .form-text,
+  .input-help {
+    color: var(--cf-faint) !important;
+    font-size: 13px;
+  }
+
+  /* ===== Native select dropdown (critical fix) ===== */
+  select { color-scheme: dark; }
+  select option,
+  select optgroup {
+    color: #0b0f14 !important;
+    background: #ffffff !important;
+  }
+  select option:checked {
+    background: #dbeafe !important;
+    color: #0b0f14 !important;
+  }
+
+  /* ===== Buttons ===== */
+  button,
+  .btn,
+  .pywebio-button {
+    background: var(--cf-surface-2) !important;
+    color: var(--cf-text) !important;
+    border: 1px solid rgba(255,255,255,0.14) !important;
+    border-radius: 14px !important;
+  }
+  button:hover,
+  .btn:hover,
+  .pywebio-button:hover {
+    background: var(--cf-surface-3) !important;
+    border-color: rgba(255,255,255,0.22) !important;
+  }
+
+  /* ===== Tables ===== */
+  table { border-collapse: separate !important; border-spacing: 0 !important; }
+  th {
+    background: var(--cf-surface-2) !important;
+    color: var(--cf-text) !important;
+    font-weight: 700;
+  }
+  td { color: var(--cf-text); }
+  tr:hover td { background: rgba(255,255,255,0.03); }
+
+  /* ===== Scrollbars (Chromium) ===== */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+  ::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); }
+  /* ===== Alerts (PyWebIO put_success/put_info/put_warning/put_error) ===== */
+  .alert{
+    border-radius: var(--cf-radius) !important;
+    border: 1px solid var(--cf-border) !important;
+    color: var(--cf-text) !important;
+    box-shadow: none !important;
+  }
+  .alert-success{
+    background: rgba(34, 197, 94, 0.10) !important;   /* matte green */
+    border-color: rgba(34, 197, 94, 0.25) !important;
+    color: rgba(235, 255, 245, 0.92) !important;
+    font-weight: 700 !important;
+  }
+  .alert-info{
+    background: rgba(59, 130, 246, 0.10) !important;  /* matte blue */
+    border-color: rgba(59, 130, 246, 0.25) !important;
+    color: rgba(235, 245, 255, 0.92) !important;
+    font-weight: 650 !important;
+  }
+  .alert-warning{
+    background: rgba(234, 179, 8, 0.12) !important;   /* matte amber */
+    border-color: rgba(234, 179, 8, 0.28) !important;
+    color: rgba(255, 250, 235, 0.92) !important;
+    font-weight: 650 !important;
+  }
+  .alert-danger{
+    background: rgba(239, 68, 68, 0.12) !important;   /* matte red */
+    border-color: rgba(239, 68, 68, 0.28) !important;
+    color: rgba(255, 235, 235, 0.92) !important;
+    font-weight: 650 !important;
+  }
+</style>
+""")
+
+
 @config(theme="dark")
 def main():
     set_env(output_max_width='1850px') 
+    _inject_dark_css()
     put_markdown(f"# 🎛️ {PROGRAM_NAME} {VERSION}")
     put_markdown(f"### {t('subtitle')}")
     put_guide_section(); put_markdown("---")
@@ -856,7 +981,9 @@ def _build_diagnostics_dict(data, fs_v, l_st, r_st):
 
 def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f, r_st_f, fname, zip_buffer):
     update_status(t('stat_plot'))
-    set_processbar('bar', 1.0)
+    import time
+    time.sleep(0.05)
+    set_processbar('bar', 0.8)
 
     with use_scope('results', clear=True):
         if l_st_f is None or r_st_f is None:
@@ -864,9 +991,9 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             return
         
 
-        put_success(t('done_msg'))
-        update_status(t('stat_done'))
-        
+       # put_success(t('done_msg'))
+       # update_status(t('stat_done'))
+            
         # --- Acoustic Intelligence UI (single source of truth: SAME as Summary.txt) ---
         # No separate "measured vs filtered" logic in UI. We display the Summary-based result.
         l_ai = plots.calc_ai_summary_from_stats(l_st_f)
@@ -956,4 +1083,8 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             ))}
         ])
         put_file(fname, zip_buffer.getvalue(), label=" DOWNLOAD FILTER ZIP")
+        
+        put_success(t('done_msg'))
+        update_status(t('stat_done'))
+        set_processbar('bar', 1.0)
     return main

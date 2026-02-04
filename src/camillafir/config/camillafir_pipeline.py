@@ -260,7 +260,7 @@ def build_filter_config(
     tdc_max_red = _as_float(_pin_get("tdc_max_reduction_db", data.get("tdc_max_reduction_db", 9.0)), 9.0)
     tdc_slope = _as_float(_pin_get("tdc_slope_db_per_oct", data.get("tdc_slope_db_per_oct", 0.0)), 0.0)
     smoothing_level = _as_int(_pin_get("smoothing_level", data.get("smoothing_level", 12)), 12)
-    comparison_mode = bool(data.get("comparison_mode", False))
+    comparison_mode = bool(data.get("comparison_mode", True))
     
     cfg = FilterConfig_cls(
         fs=int(fs_v),

@@ -9,6 +9,95 @@ from ..resources.i8n.camillafir_i18n import t
 from .camillafir_modes import MODE_DEFAULTS
 from .camillafir_utils import scale_taps_with_fs
 
+def _warn_max_boost_if_over_cap(_=None):
+    """
+    Warn user if max_boost exceeds internal safety cap.
+    Uses a simple "edge trigger" to avoid spamming toast repeatedly.
+    """
+    try:
+        v = pin.get('max_boost', None)
+        if v is None or v == '':
+            return
+        v = float(v)
+        if not math.isfinite(v):
+            return
+
+        over = (float(MAX_SAFE_BOOST) > 0.0) and (v > float(MAX_SAFE_BOOST) + 1e-9)
+        # Edge-trigger (warn only when transitioning to over-cap state)
+        prev = bool(getattr(_warn_max_boost_if_over_cap, "_prev_over", False))
+        if over and not prev:
+            # Build message safely even if translations are missing
+            try:
+                cap_suffix = t('max_boost_help_cap').format(value=f"{MAX_SAFE_BOOST:.1f}")
+            except Exception:
+                cap_suffix = f" (capped to {MAX_SAFE_BOOST:.1f} dB)"
+
+            msg = f"{t('max_boost')}: {v:.1f} dB > {MAX_SAFE_BOOST:.1f} dB{cap_suffix}"
+
+            # Use default toast styling to avoid version-specific color keyword issues
+            _toast(msg, duration=5)
+        _warn_max_boost_if_over_cap._prev_over = over
+    except Exception as e:
+
+        try:
+            logger.warning(f"max_boost toast failed: {e}")
+        except Exception:
+            pass
+        return
+
+def _warn_taps_if_over_cap(_=None):
+    """
+    Warn user if taps exceeds recommended maximum.
+    Uses edge trigger to avoid repeated toasts.
+    """
+    try:
+        v = pin.get('taps', None)
+        if v is None or v == '':
+            return
+        v = int(v)
+
+        over = v > int(MAX_SAFE_TAPS)
+        prev = bool(getattr(_warn_taps_if_over_cap, "_prev_over", False))
+
+        if over and not prev:
+            try:
+                msg = t('taps_warn_over').format(value=MAX_SAFE_TAPS)
+            except Exception:
+                msg = f"Taps > {MAX_SAFE_TAPS}: very high latency and diminishing returns."
+
+            _toast(msg, duration=6)
+
+        _warn_taps_if_over_cap._prev_over = over
+    except Exception as e:
+        try:
+            logger.warning(f"taps warning toast failed: {e}")
+        except Exception:
+            pass
+
+def _toast(msg, *, duration=5, color=None):
+    """
+    Safe toast wrapper for PyWebIO.
+    Works even if toast is unavailable or UI context is missing.
+    """
+    try:
+        fn = getattr(pwo, "toast", None)
+        if callable(fn):
+            if color is None:
+                fn(msg, duration=duration)
+            else:
+                fn(msg, duration=duration, color=color)
+    except Exception:
+        pass
+
+def _max_boost_help_with_cap():
+    try:
+        return (
+            f"{t('max_boost_help')}"
+            f"{t('max_boost_help_cap').format(value=f'{MAX_SAFE_BOOST:.1f}')}"
+        )
+    except Exception:
+        return t('max_boost_help')
+
 def update_mode_desc(_=None):
     """UI helper: show a short description under Mode selection."""
     try:

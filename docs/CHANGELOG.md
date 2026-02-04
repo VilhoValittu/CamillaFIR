@@ -4,10 +4,25 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP behavior and reproducibility.
 
----
-## [2.8.6] - 2026-02-01
+diff --git a/c:\CamillaFIR\CamillaFIR\docs/CHANGELOG.md b/c:\CamillaFIR\CamillaFIR\docs/CHANGELOG.md
+@@ -6,5 +6,16 @@
+ 
+----
 
-### Changed
+## [2.8.7] - 2026-02-04
+
+### Fixed
+- Psychoacoustic smoothing corrected.
+- IR windowing no longer affects filter level.
+
+### UI
+- Updated UI text strings and help descriptions.
+- Little update to interface look
+---
+
+## [2.8.6] - 2026-02-01
+ 
+ ### Changed
 - Refactored DSP-related code into a clearer, more modular file structure.
 - Separated DSP logic from UI and orchestration layers to improve maintainability.
 - Clarified responsibility boundaries between filter generation, windowing, and export logic.

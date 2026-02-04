@@ -34,7 +34,7 @@ class FilterConfig:
     df_smoothing: bool = False      # Raw_g gaussian smoothing: keep constant Hz width across fs/taps
     
     # --- 3B. COMPARISON MODE (locked analysis grid for scoring/reporting) ---
-    comparison_mode: bool = False   # Lock score/match analysis to a fixed reference grid
+    comparison_mode: bool = True   # Lock score/match analysis to a fixed reference grid
     comparison_ref_fs: int = 44100  # Reference analysis sample rate
     comparison_ref_taps: int = 65536 # Reference analysis FFT length (taps -> rfft bins)
 

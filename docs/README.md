@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v2.8.6
+## v2.8.7
 
 ### REW-style IR windowing (DSP & export)
 
@@ -134,7 +134,7 @@ pip install -r requirements.txt
 sudo apt update
 sudo apt install -y chromium-browser
 
-python run_camillafir.py
+python src/camillafir/camillafir.py
 ```
 
 The UI opens in your browser (default: `http://localhost:8080`).

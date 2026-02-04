@@ -42,6 +42,10 @@ from .ui.camillafir_ui_helpers import (
     apply_tdc_preset,
     apply_afdw_preset,
     put_guide_section,
+    _max_boost_help_with_cap,
+    _toast,
+    _warn_taps_if_over_cap,
+    _warn_max_boost_if_over_cap,
 )
 from .config.camillafir_pipeline import (
     collect_ui_data,
@@ -96,7 +100,7 @@ PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
 MAX_SAFE_TAPS = 131072
-
+TEST_MODE = 1
 # =========================
 # Test / diagnostics output
 # =========================
@@ -121,7 +125,7 @@ def _irwin_tag(mode: typing.Any) -> str:
 
 def process_run():
 
-    status_cb = globals().get("update_status", None)
+    from .ui.camillafir_ui import update_status as status_cb
 
     def _status(msg):
         if callable(status_cb):
@@ -155,6 +159,10 @@ def process_run():
 
     taps_base = int(float(data.get("taps", 65536) or 65536))
     save_config(data)
+    put_processbar('bar')
+    put_scope('status_area')
+    set_processbar('bar', 0.0)
+
 
     # Always warn at START if user requested boost above safety cap
     try:
@@ -194,11 +202,6 @@ def process_run():
     multi_rate_on = bool(data.get("multi_rate_opt"))
     dash_fs = choose_dash_fs(target_rates, multi_rate_on=multi_rate_on, forced_plot_fs_hz=int(FORCE_SINGLE_PLOT_FS_HZ))
 
-
-
-    put_processbar('bar')
-    put_scope('status_area')
-    set_processbar('bar', 0.2)
     zip_buffer = io.BytesIO()
     ts = datetime.now().strftime('%d%m%y_%H%M')
     file_ts = datetime.now().strftime('%H%M_%d%m%y')
@@ -294,7 +297,7 @@ def process_run():
 
 
             log_df_smoothing_toggle(cfg, df_on)
-            _status(t('stat_calc'))
+            _status(f"{t('stat_calc')} {int(fs_v)} Hz")
             if bool(getattr(cfg, "stereo_link", False)):
                 l_imp, l_st, r_imp, r_st = dsp.generate_filter_pair(
                     f_l, m_l, p_l,

@@ -65,7 +65,7 @@ def load_config() -> dict:
         "max_slope_boost_db_per_oct": 0.0,
         "max_slope_cut_db_per_oct": 0.0,
         "df_smoothing": False,
-        "comparison_mode": False,
+        "comparison_mode": True,
         "tdc_max_reduction_db": 9.0,
         "tdc_slope_db_per_oct": 6.0,
         "bass_first_ai": True,

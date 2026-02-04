@@ -237,7 +237,7 @@
         "df_smoothing_help": "When enabled, the frequency correction smoothing keeps a constant width in Hz regardless of sample rate or tap count. This makes the correction behavior more consistent across different sample rates and often reduces over-smoothing at high fs/tap combinations. A/B test by toggling this option and re-generating the filters.",
         "badge_experimental": "(experimental)",
         "comparison_mode": "Comparison mode (lock Summary scoring grid)",
-        "comparison_mode_help": "Locks Target Match & Acoustic Score analysis to a fixed 44.1 kHz / 65536 grid, so scores stay comparable when changing fs/taps.",
+        "comparison_mode_help": "Locks Target Match & Acoustic Score analysis to a fixed 44.1 kHz / 65536 grid. Prevents low-frequency room modes from disappearing in the report when using short tap lengths.",
         "low_bass_cut_hz": "Low-bass boost lock (Hz)",
         "low_bass_cut_hz_help": "Below this frequency, the filter will never boost — cuts only. This is not a filter and does not affect phase.",
 
@@ -347,7 +347,7 @@
         "guide_exc_prot_body": "**Excursion Protection** on turvamekanismi.\n\n- Reagoi mittaukseen ja tavoitekäyrään.\n- Voi rajoittaa boostia tai pakottaa leikkausta.\n- Tarkoitettu estämään elementin yliohjaus.\n\nTämä ei korvaa HPF-suodinta, mutta toimii sen rinnalla.",
 
         "comparison_mode": "Vertailutila (lukitse Summary-pisteytys)",
-        "comparison_mode_help": "Lukitsee Target Match & Acoustic Score -analyysin kiinteään 44,1 kHz / 65536 -tilaaan, jolloin pisteet pysyvät vertailukelpoisina vaikka fs/taps vaihtuu.",
+        "comparison_mode_help": "Lukitsee Target Match & Acoustic Score -analyysin kiinteään 44,1 kHz / 65536 -tilaan. Estää matalien huonemoodien katoamisen raportista, jos tap-määrä on pieni.",
         "badge_experimental": "(kokeellinen)",
         "df_smoothing_label": "Taajuuskorjauksen tarkkuuden vakiointi (A/B)",
         "df_smoothing_help": "Kun päällä, taajuuskorjauksen tasoitus pidetään samanlevyisenä hertseissä riippumatta näytetaajuudesta tai taps-määrästä. Tämä tekee korjauksesta johdonmukaisemman eri sample rate -asetuksilla ja vähentää ylisiloitusta korkeilla fs/taps-yhdistelmillä. A/B-testaa kytkemällä päälle tai pois ja generoimalla suotimet uudelleen.",

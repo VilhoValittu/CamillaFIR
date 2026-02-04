@@ -7,6 +7,7 @@ from .camillafir_plot import _view_mags_for_plot
 from ..config.camillafir_convolver_configs import generate_hlc_config, generate_raspberry_yaml
 logger = logging.getLogger("CamillaFIR")
 
+TEST_MODE = 1
 
 # Test / diagnostics mode
 TEST_MODE = os.environ.get("CAMILLAFIR_TEST", "0") == "1"
