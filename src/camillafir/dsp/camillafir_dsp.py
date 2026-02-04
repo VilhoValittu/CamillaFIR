@@ -38,6 +38,7 @@ from .phase import (
     combine_mixed_phase,
     remove_time_of_flight,
     get_min_phase_impulse,
+    limit_phase_deg,
 )
 
 #CamillaFIR DSP Engine v1.1.1
@@ -140,7 +141,11 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # - comparison-mode block interpolates gain_db before correction stage
     # - later blocks may reference gain_db even if correction is disabled
     gain_db = np.zeros_like(freq_axis, dtype=float)
-    
+
+    # Stats accumulator used by various mid-pipeline blocks (phase clamp, residual pass, etc.)
+    # Note: Some blocks write into `st` long before the final `stats` dict is built.
+    st: dict = {}
+
     # --- 3. SMOOTHING ---
     # IMPORTANT:
     # Tasoitusresoluutio (smoothing_level) must NOT affect analysis/leveling.
@@ -1323,6 +1328,40 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         phase_weight[bass_band] = np.maximum(phase_weight[bass_band], w)
 
         extra_phase = -excess_phase * phase_weight
+
+        # Clamp ONLY the phase *correction* component (room/excess-phase),
+        # so we don't limit the loudspeaker/XO/HPF phase itself.
+        # Fixed safety default: +/-45 degrees.
+        try:
+            _limit_deg = 45.0
+            _limit_rad = np.deg2rad(_limit_deg)
+            _before_rad = float(np.max(np.abs(extra_phase)))
+            extra_phase = np.clip(extra_phase, -_limit_rad, _limit_rad)
+            _after_rad = float(np.max(np.abs(extra_phase)))
+
+            # Always report in logs + stats.
+            _before_deg = float(np.rad2deg(_before_rad))
+            _after_deg = float(np.rad2deg(_after_rad))
+            _clipped = bool(_before_rad > (_limit_rad + 1e-12))
+
+            if _clipped:
+                msg = f"Phase Correction Clamp: max={_before_deg:.1f}° -> {_limit_deg:.1f}°"
+            else:
+                msg = f"Phase Correction Clamp: max={_before_deg:.1f}° (limit {_limit_deg:.1f}°)"
+            logger.info(msg)
+
+            try:
+                if isinstance(st, dict):
+                    st["phase_corr_clamp_deg"] = float(_limit_deg)
+                    st["phase_corr_max_before_deg"] = float(_before_deg)
+                    st["phase_corr_max_after_deg"] = float(_after_deg)
+                    st["phase_corr_clipped"] = bool(_clipped)
+                    st["phase_corr_clamp_msg"] = str(msg)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
         low_phase = (-theo_xo) + extra_phase
 
         if 'Mixed' in cfg.filter_type_str:
@@ -1540,6 +1579,10 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     if cfg.do_normalize and max_peak > 0: impulse *= (0.89 / max_peak)
 
     stats = {
+        # NOTE: `st` is merged into `stats` just after this dict is created,
+        # so anything collected mid-pipeline (e.g. Phase Correction Clamp)
+        # becomes visible in UI + Summary.txt.
+
         'analysis_mode': analysis_mode,
         'freq_axis': freq_axis.tolist(),
         # User-visible correction band (for plots / diagnostics)
@@ -1598,6 +1641,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'boost_candidate_bins_lowbass': int(locals().get('n_boost_cand_low', 0)),
         'boost_candidate_bins_excprot': int(locals().get('n_boost_cand_exc', 0)),
 
+
         # --- Bass-first AI markers (for Summary/debug) ---
         'bass_first_ai': bool(locals().get('use_bassfirst', False)),
 
@@ -1637,6 +1681,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             )
             else False
         ),
+
 
         # --- BF debug stats (Summary-friendly, 20–200 Hz) ---
         # Raw reliability (0..1)
@@ -1694,6 +1739,14 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
     }
 
+
+    # Merge any mid-pipeline stats that were collected into `st`
+    # (e.g. Phase Correction Clamp, residual pass diagnostics).
+    try:
+        if isinstance(st, dict) and st:
+            stats.update(st)
+    except Exception:
+        pass
 
     # Attach A-FDW effective BW data if available
     try:

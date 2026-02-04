@@ -3,17 +3,34 @@ import scipy.signal
 import scipy.fft
 
 
-def calculate_minimum_phase(mags_lin_fft):
+def limit_phase_deg(phase_rad, max_deg=45.0):
+    """
+    Limit phase to +/- max_deg (degrees).
+    Keeps correction "safe" by preventing extreme phase rotations.
+    """
+    if max_deg is None:
+        return phase_rad
+    try:
+        max_deg = float(max_deg)
+    except Exception:
+        max_deg = 45.0
+    max_rad = np.deg2rad(abs(max_deg))
+    return np.clip(phase_rad, -max_rad, max_rad)
+
+
+def calculate_minimum_phase(mags_lin_fft, max_phase_deg=45.0):
     """Calculates minimum phase using Hilbert transform. 1e-10 protection prevents NaN errors."""
     n_fft = (len(mags_lin_fft) - 1) * 2
     ln_mag = np.log(np.maximum(np.abs(mags_lin_fft), 1e-10))
     full_ln_mag = np.concatenate((ln_mag, ln_mag[-2:0:-1]))
     analytic = scipy.signal.hilbert(full_ln_mag)
-    min_phase_rad = -np.imag(analytic)
-    return min_phase_rad[:len(mags_lin_fft)]
+    min_phase_rad = -np.imag(analytic)[:len(mags_lin_fft)]
+    # unwrap first, then limit
+    min_phase_rad = np.unwrap(min_phase_rad)
+    return limit_phase_deg(min_phase_rad, max_phase_deg)
 
 
-def calculate_theoretical_phase(freq_axis, crossovers, hpf_freq=None, hpf_slope=None):
+def calculate_theoretical_phase(freq_axis, crossovers, hpf_freq=None, hpf_slope=None, max_phase_deg=45.0):
     """Calculates theoretical phase shift caused by crossovers and high-pass filter (HPF)."""
     total_phase_rad = np.zeros_like(freq_axis)
 
@@ -33,7 +50,9 @@ def calculate_theoretical_phase(freq_axis, crossovers, hpf_freq=None, hpf_slope=
         w, h = scipy.signal.freqs(b, a, worN=2 * np.pi * freq_axis)
         total_phase_rad += np.unwrap(np.angle(h))
 
-    return total_phase_rad
+    # unwrap first, then limit
+    total_phase_rad = np.unwrap(total_phase_rad)
+    return limit_phase_deg(total_phase_rad, max_phase_deg)
 
 
 def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=300):

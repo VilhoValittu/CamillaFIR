@@ -2,12 +2,35 @@
 
 All notable changes to **CamillaFIR** are documented in this file.
 
-The format loosely follows *Keep a Changelog*, with a focus on user-visible DSP behavior and reproducibility.
+---
 
-diff --git a/c:\CamillaFIR\CamillaFIR\docs/CHANGELOG.md b/c:\CamillaFIR\CamillaFIR\docs/CHANGELOG.md
-@@ -6,5 +6,16 @@
- 
-----
+## [2.8.8] - 2026-02-04
+
+### DSP
+- **Phase correction safety clamp (±45°)**
+  - Room / excess-phase correction is now internally limited to ±45 degrees.
+  - The clamp is applied **only to the correction component** (measured − target phase),
+    never to loudspeaker minimum-phase or theoretical crossover phase.
+  - Prevents excessive phase rotations, pre-ringing, and unstable group delay behavior,
+    especially in low-confidence or sparsely measured regions.
+  - Improves robustness, repeatability, and subjective transient clarity.
+  - No user-facing control; this is a fixed safety default.
+
+### Analysis & Reporting
+- Phase correction clamp status is now always reported:
+  - Logged during processing (e.g. `max=54.5° -> 45.0°`).
+  - Included in `summary.txt` per channel.
+  - Shown in **DSP info** section in the UI.
+
+### UI
+- Removed slope-limit envelope visualization from magnitude plots.
+  - Eliminates confusing shaded artifacts without affecting DSP behavior.
+
+### Notes
+- No changes to magnitude targets, A-FDW, TDC, leveling, or IR export behavior.
+- Existing presets and workflows remain fully compatible.
+
+---
 
 ## [2.8.7] - 2026-02-04
 

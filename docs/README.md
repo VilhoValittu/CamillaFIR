@@ -1,8 +1,41 @@
 # CamillaFIR by Vilho Valittu
 
-## v2.8.7
+## v2.8.8
 
-### REW-style IR windowing (DSP & export)
+### Phase correction safety (v2.8.8)
+
+- **Internal phase correction clamp (±45°)**
+  - Room-induced *excess phase* correction is now internally limited to **±45 degrees**.
+  - The clamp is applied **only to the correction component**
+    (measured phase minus target phase),
+    and **never** to:
+    - loudspeaker minimum-phase
+    - theoretical crossover phase
+    - user-defined target behavior
+  - Prevents extreme phase rotations, excessive pre-ringing,
+    and unstable group delay in low-confidence regions.
+  - Improves subjective transient clarity and overall robustness,
+    especially with sparse or noisy measurements.
+
+- **Always reported**
+  - Phase correction clamp status is:
+    - logged during processing
+    - included in `Summary.txt` per channel
+    - shown in the **DSP info** section in the UI
+  - Example:
+    ```
+    Phase Correction Clamp: max=54.5° -> 45.0°
+    ```
+
+- **No user control by design**
+  - This is a fixed safety default.
+  - Advanced users still retain full control over:
+    - phase mode (Linear / Minimum / Mixed / Asymmetric)
+    - confidence masking
+    - A-FDW behavior
+    - correction bandwidth
+
+### REW-style IR windowing (DSP & export) (v.2.8.6)
 
 - **REW-compatible IR windowing added to DSP export path**
   - Enables REW-style **symmetric** and **asymmetric (causal)** IR windowing during FIR export.

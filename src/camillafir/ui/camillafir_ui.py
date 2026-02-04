@@ -1055,6 +1055,20 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
 
         put_markdown(f"###  {t('rep_header')}")
         with put_collapse(" DSP info"):
+            # Phase clamp reporting (always-on safety)
+            def _phase_clamp_str(st: dict) -> str:
+                try:
+                    lim = float((st or {}).get('phase_corr_clamp_deg', 0.0) or 0.0)
+                    bef = float((st or {}).get('phase_corr_max_before_deg', 0.0) or 0.0)
+                    clipped = bool((st or {}).get('phase_corr_clipped', False))
+                    if lim <= 0.0:
+                        return "—"
+                    if clipped:
+                        return f"max={bef:.1f}° -> {lim:.1f}°"
+                    return f"max={bef:.1f}° (limit {lim:.1f}°)"
+                except Exception:
+                    return "—"
+
             put_markdown(dedent(f"""
             - **Lenght:** {data['taps']} taps ({data['taps']/data['fs']*1000:.1f} ms)
             - **Resolution:** {data['fs']/data['taps']:.2f} Hz
@@ -1062,6 +1076,7 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             - **FDW:** {data['fdw_cycles']}
             - **House curve:** {data['hc_mode']} — {data.get('hc_source', 'Unknown')} ({data['mag_c_min']}-{data['mag_c_max']} Hz)
             - **Filter type:** {data['filter_type']}
+            - **Phase correction clamp:** L {_phase_clamp_str(l_st_f)} | R {_phase_clamp_str(r_st_f)}
             - **Smoothing view:** {data.get('smoothing_type', 'Standard')}
             - **Leveling algo:** {data.get('lvl_algo', '')}
             """))

@@ -318,6 +318,33 @@ def format_summary_content(settings, l_stats, r_stats):
                 f"Low-bass cut: <{low_bass_cut_hz:.1f} Hz (cuts only)"
             )
 
+    # --- Phase correction clamp (reporting; always-on safety) ---
+    def _phase_clamp_line(side: str, st: dict) -> str:
+        st = st or {}
+        lim = st.get("phase_corr_clamp_deg", None)
+        bef = st.get("phase_corr_max_before_deg", None)
+        aft = st.get("phase_corr_max_after_deg", None)
+        if lim is None or bef is None or aft is None:
+            # If stats are missing (older runs), stay silent.
+            return ""
+        try:
+            lim = float(lim)
+            bef = float(bef)
+            aft = float(aft)
+        except Exception:
+            return ""
+
+        clipped = bool(st.get("phase_corr_clipped", False))
+        if clipped:
+            return f"{side} Phase Correction Clamp: max={bef:.1f}° -> {lim:.1f}°"
+        return f"{side} Phase Correction Clamp: max={bef:.1f}° (limit {lim:.1f}°)"
+
+    _pL = _phase_clamp_line("L", l_stats)
+    _pR = _phase_clamp_line("R", r_stats)
+    if _pL:
+        lines.append(_pL)
+    if _pR:
+        lines.append(_pR)
 
     # --- A-FDW debug: active + effective BW range ---
     def _bw_frac(bw_oct: float) -> str:
@@ -798,14 +825,14 @@ def generate_prediction_plot(
 
         # --- PIIRTO ---
         fig = make_subplots(
-            rows=6, cols=1, vertical_spacing=0.045,
+            rows=5, cols=1, vertical_spacing=0.045,
             subplot_titles=(
                 "<b>Magnitude & Alignment</b>",
                 "<b>Phase</b>",
                 "<b>Group Delay</b>",
                 "<b>Filter (dB)</b>",
-                "<b>Step Response</b>",
                 "<b>A-FDW Effective BW (oct)</b>",
+                
             )
         )
 
@@ -926,48 +953,10 @@ def generate_prediction_plot(
 
         # B. TARGET (Original light data + avg_t correction)
         if target_stats and 'target_mags' in target_stats:
-            # --- Visual: slope-limit envelope (dB/oct) ---
-            # If DSP provided envelope bounds, draw a shaded band around Target.
-            try:
-                env_lo = target_stats.get('target_env_lo', None)
-                env_hi = target_stats.get('target_env_hi', None)
-                fx_env = target_stats.get('freq_axis', None)
-                if env_lo is not None and env_hi is not None and fx_env is not None:
-                    fx0 = np.asarray(fx_env, dtype=float)
-                    lo0 = np.asarray(env_lo, dtype=float)
-                    hi0 = np.asarray(env_hi, dtype=float)
-                    if fx0.size == lo0.size == hi0.size and fx0.size > 16:
-                        lo_abs = _maybe_shift_to_abs(lo0, avg_t)
-                        hi_abs = _maybe_shift_to_abs(hi0, avg_t)
-
-                        fig.add_trace(
-                            go.Scatter(
-                                x=fx0,
-                                y=lo_abs,
-                                mode='lines',
-                                line=dict(width=0),
-                                name='Slope limit envelope',
-                                showlegend=True,
-                                hoverinfo='skip'
-                            ),
-                            row=1, col=1
-                        )
-                        fig.add_trace(
-                            go.Scatter(
-                                x=fx0,
-                                y=hi_abs,
-                                mode='lines',
-                                fill='tonexty',
-                                opacity=0.15,
-                                line=dict(width=0),
-                                name='Slope limit envelope',
-                                showlegend=False,
-                                hoverinfo='skip'
-                            ),
-                            row=1, col=1
-                        )
-            except Exception:
-                pass
+            # NOTE:
+            # Slope-limit envelope visualization intentionally removed.
+            # It caused confusing artifacts (crossed fill / "orange X")
+            # and provided no essential information for end users.
 
             t_mags = _maybe_shift_to_abs(target_stats.get('target_mags', []), avg_t)
             fig.add_trace(go.Scatter(x=target_stats['freq_axis'], y=t_mags,
@@ -1000,15 +989,7 @@ def generate_prediction_plot(
                 pass
 
         
-        # Step Response
-        step_resp = np.cumsum(filt_ir)
-        step_resp /= (np.max(np.abs(step_resp)) + 1e-12)
-        time_axis_ms = (np.arange(len(filt_ir)) / fs) * 1000.0
-        fig.add_trace(go.Scatter(x=time_axis_ms[:int(fs*0.05)], y=step_resp[:int(fs*0.05)], name="Step Resp", line=dict(color='yellow')), row=5, col=1)
-        fig.update_xaxes(matches=None, row=5, col=1)
-        
-       
-# --- A-FDW BW panel (row 6) ---
+    # --- A-FDW BW panel (row 5) ---
         bw_vis = None
         bw_dbg = ""
 
@@ -1044,7 +1025,7 @@ def generate_prediction_plot(
                                 showlegend=False,
                                 name="A-FDW BW",
                             ),
-                            row=6, col=1
+                            row=5, col=1
                         )
                     else:
                         bw_dbg = f"shape mismatch: fx={fx.size} bw={bw.size}"
@@ -1061,14 +1042,14 @@ def generate_prediction_plot(
                 x=0.5,
                 y=0.5,
                 showarrow=False,
-                row=6,
+                row=5,
                 col=1
             )
 
 
         # Asetukset
         t_vals = [2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
-        for r in (1, 2, 3, 4, 6):
+        for r in (1, 2, 3, 4, 5):
             fig.update_xaxes(matches="x", row=r, col=1)
             fig.update_xaxes(type="log", range=[np.log10(2), np.log10(20000)], tickvals=t_vals, row=r, col=1)
 
@@ -1082,14 +1063,14 @@ def generate_prediction_plot(
             bw_hi = min(2.0/3.0,  float(np.max(bw_vis)) * 1.1)
             if bw_hi - bw_lo < 1e-6:
                 bw_lo, bw_hi = (1.0/96.0, 2.0/3.0)
-            fig.update_yaxes(range=[bw_lo, bw_hi], row=6, col=1) 
+            fig.update_yaxes(range=[bw_lo, bw_hi], row=5, col=1) 
         else:
-            fig.update_yaxes(range=[1.0/96.0, 2.0/3.0], row=6, col=1)
+            fig.update_yaxes(range=[1.0/96.0, 2.0/3.0], row=5, col=1)
 
-        fig.update_yaxes(title_text="oct", row=6, col=1)
+        fig.update_yaxes(title_text="oct", row=5, col=1)
 
         fig.update_layout(
-            height=1780,
+            height=1520,
             width=1750,
             template="plotly_white",
             title_text=f"{title} Analysis",

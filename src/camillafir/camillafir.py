@@ -77,7 +77,7 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.8.7" # [DSP] Added tukey windowing option
+VERSION = "v2.8.8" # [DSP] Added tukey windowing option
 # Change log:
 # v.2.8.5 [DSP] Added tukey windowing option
 # v2.8.4  Github actions now makes running files
