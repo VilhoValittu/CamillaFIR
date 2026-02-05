@@ -167,7 +167,7 @@ def apply_mode_defaults_to_ui(_=None):
         "phase_limit": "phase_limit",
         "reg_strength": "reg_strength",
         "fdw_cycles": "fdw_cycles",
-        "smoothing_level": "smoothing_level",
+        "filter_smooth": "filter_smooth",
         "tdc_strength": "tdc_strength",
         "tdc_max_reduction_db": "tdc_max_reduction_db",
         "tdc_slope_db_per_oct": "tdc_slope_db_per_oct",
@@ -186,7 +186,7 @@ def apply_mode_defaults_to_ui(_=None):
     }
     map_str = {
         "filter_type_str": "filter_type",
-        "smoothing_type": "smoothing_type",
+        "plot_smoothing_level": "plot_smoothing_level",
         "lvl_mode": "lvl_mode",
         "lvl_algo": "lvl_algo",
     }

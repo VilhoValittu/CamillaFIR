@@ -68,8 +68,8 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "phase_limit": 600.0,
 
         # --- SMOOTHING / FDW / REG ---
-        "smoothing_type": "Psychoacoustic",
-        "smoothing_level": 12,     # 1/12 oct default
+        "plot_smoothing_level": "Psychoacoustic",
+        "filter_smooth": 12,
         "fdw_cycles": 10.0,
         "reg_strength": 30.0,
 
@@ -90,8 +90,8 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 
         # --- IR WINDOW / MIXED ---
         "ir_export_window_mode": "auto",
-        "ir_window": 500.0,
-        "ir_window_left": 100.0,
+        "ir_window_right": 500.0,
+        "ir_window_left": 10.0,
         "mixed_split_freq": 300.0,
         "trans_width": 100.0,
 
@@ -127,8 +127,8 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "phase_safe_2058": False,
         "phase_limit": 400.0,
 
-        "smoothing_type": "Psychoacoustic",
-        "smoothing_level": 24,
+        "plot_smoothing_level": "Psychoacoustic",
+        "filter_smooth": 24,
         "fdw_cycles": 10.0,
         "reg_strength": 30.0,
 
@@ -144,8 +144,8 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "tdc_max_reduction_db": 12.0,
         "tdc_slope_db_per_oct": 0.0,
         "enable_afdw": True,
-        "ir_window": 500.0,
-        "ir_window_left": 50.0,
+        "ir_window_right": 500.0,
+        "ir_window_left": 10.0,
         "ir_export_window_mode": "auto",
         "bass_first_ai": True,
         "bass_first_mode_max_hz": 200.0,
@@ -170,7 +170,7 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
         "max_boost_db": (0.0, 6.0),
         "max_cut_db": (0.0, 15.0),
 
-        "smoothing_level": (1, 24),
+        "filter_smooth": (1, 24),
         "reg_strength": (10.0, 60.0),
 
         "enable_tdc": (True, True),

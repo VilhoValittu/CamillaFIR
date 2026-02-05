@@ -3,7 +3,6 @@ import json
 import logging
 import os
 from . import camillafir_plot as plots
-from .camillafir_plot import _view_mags_for_plot
 from ..config.camillafir_convolver_configs import generate_hlc_config, generate_raspberry_yaml
 logger = logging.getLogger("CamillaFIR")
 
@@ -24,7 +23,8 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
 
         df_on = bool(data.get('df_smoothing', False))
         df_ref = 44100.0 / 65536.0
-        base_sigma = 60 // (data.get('smoothing_level', 12) / 12 if (data.get('smoothing_level', 12) or 0) > 0 else 1)
+        fsmooth = data.get('filter_smooth', data.get('smoothing_level', 12))
+        base_sigma = 60 // (fsmooth / 12 if (fsmooth or 0) > 0 else 1)
         sigma_hz = float(base_sigma) * df_ref
         df_cur = (float(fs_v) / float(data.get('taps', 65536) or 65536))
         sigma_bins = (sigma_hz / df_cur) if (df_cur and df_cur > 0) else float(base_sigma)
@@ -33,8 +33,8 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
         summary_content += f"Sample rate: {int(fs_v)} Hz\n"
         # UI-only smoothing view (does not change DSP math)
         try:
-            sv = str(data.get("smoothing_type", "Standard") or "Standard")
-            summary_content += f"Smoothing view: {sv}\n"
+            psl = str(data.get("plot_smoothing_level", "Psychoacoustic") or "Psychoacoustic")
+            summary_content += f"Plot smoothing: {psl}\n"
         except Exception:
             pass
 
@@ -308,15 +308,18 @@ def _write_fs_outputs(
     # We store only ONE dashboard pair into the ZIP (forced, no UI choice).
     # Dashboard format: PNG only (no HTML), so it opens everywhere without Plotly JS.
     if bool(write_dashboards):
+        # Plot smoothing (view-only). New key: plot_smoothing_level.
+        
+        psl = data.get("plot_smoothing_level", "Psychoacoustic")
+
         html_l, fig_l = plots.generate_prediction_plot(
             f_l,
-            _view_mags_for_plot(f_l, m_l, smoothing_type=data.get("smoothing_type"), smoothing_level=data.get("smoothing_level")),
+            plots._view_mags_for_plot(f_l, m_l, plot_smoothing_level=psl),
             p_l, l_imp, fs_v, "Left",
             None, l_st, data['mixed_freq'], "low",
             create_full_html=False,
             return_fig=True,
-            smoothing_type=data.get('smoothing_type'),
-            smoothing_level=data.get('smoothing_level'),
+            plot_smoothing_level=psl,
         )
         if fig_l is not None:
             zf.writestr(l_dash_name, plots.plotly_fig_to_png(fig_l, scale=2))
@@ -326,13 +329,12 @@ def _write_fs_outputs(
 
         html_r, fig_r = plots.generate_prediction_plot(
             f_r,
-            _view_mags_for_plot(f_r, m_r, smoothing_type=data.get("smoothing_type"), smoothing_level=data.get("smoothing_level")),
+            plots._view_mags_for_plot(f_r, m_r, plot_smoothing_level=psl),
             p_r, r_imp, fs_v, "Right",
             None, r_st, data['mixed_freq'], "low",
             create_full_html=False,
             return_fig=True,
-            smoothing_type=data.get('smoothing_type'),
-            smoothing_level=data.get('smoothing_level'),
+            plot_smoothing_level=psl,
         )
         if fig_r is not None:
             zf.writestr(r_dash_name, plots.plotly_fig_to_png(fig_r, scale=2))

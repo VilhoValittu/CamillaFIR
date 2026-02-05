@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Union
 
 @dataclass
 class FilterConfig:
@@ -21,8 +21,8 @@ class FilterConfig:
     enable_mag_correction: bool = True # Is magnitude correction enabled
     
     # --- 3. SMOOTHING AND FDW ---
-    smoothing_type: str = "Psychoacoustic" # Smoothing type (Standard, Psychoacoustic)
-    smoothing_level: int = 12       # Smoothing strength (e.g. 1/12 octave)
+    plot_smoothing_level: Union[str, int] = "Psychoacoustic"  # Plot smoothing only
+    filter_smooth: int = 12  # Filter smoothing only (e.g. 12 => 1/12 octave)
     fdw_cycles: float = 10.0        # FDW (Frequency Dependent Windowing) cycles
     reg_strength: float = 30.0      # Regularization (dB), prevents sharp corrections
     max_slope_db_per_oct: float = 12.0  # Max change dB per octave (0 = off)
@@ -53,8 +53,8 @@ class FilterConfig:
     ir_window_ms: float = 500.0          # Right-side window length (ms)
     ir_window_ms_left: float = 50.0      # Left-side (pre) window (ms)
     # Backward-compatible aliases (some UI paths used these names):
-    ir_window: float = 500.0
-    ir_window_left: float = 50.0
+    ir_window_right: float = 500.0
+    ir_window_left: float = 10.0
 
     mixed_split_freq: float = 300.0 # Mixed Phase filter split frequency
     trans_width: float = 100.0      # Transition width at upper limit

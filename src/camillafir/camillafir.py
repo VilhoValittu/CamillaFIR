@@ -77,8 +77,9 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.8.8" # [DSP] Added tukey windowing option
+VERSION = "v2.8.9"
 # Change log:
+# v.2.8.9 [DSP] Added more safety checks and fixed edge cases in various blocks (leveling, TDC, bass-first, etc.)
 # v.2.8.5 [DSP] Added tukey windowing option
 # v2.8.4  Github actions now makes running files
 # v2.8.2.3 [IO] Fixed ZIP output when multi-rate is enabled:
@@ -480,12 +481,13 @@ def _pick_cmp(stats, key):
         return stats.get("cmp_" + key, stats.get(key))
     return stats.get(key)
 
-def view_mags_for_plot(freqs, mags, *, smoothing_type="Standard", smoothing_level=48):
+def view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
     """UI-only smoothing for plots (does NOT affect DSP math).
 
-    - Psychoacoustic: REW-like crossfade (heavy LF, light HF), view-only
+    plot_smoothing_level:
+      - "Psychoacoustic" => REW-like crossfade (heavy LF, light HF), view-only
+      - int N            => standard 1/N octave smoothing (view-only)
     """
-    # Always use DSP's standard smoother to avoid keyword/signature mismatches.
     f = np.asarray(freqs, dtype=float)
     m = np.asarray(mags, dtype=float)
     if f.size < 8 or m.size != f.size:
@@ -496,27 +498,26 @@ def view_mags_for_plot(freqs, mags, *, smoothing_type="Standard", smoothing_leve
     except Exception:
         return mags
 
-    stype = str(smoothing_type or "Standard").lower()
-    if "psy" in stype:
-        # REW-like psychoacoustic smoothing for VIEW ONLY:
-        # heavy at LF (1/3 oct), light at HF (1/48 oct), crossfade on log-f axis 200–2000 Hz.
+    psl = plot_smoothing_level
+
+    # Psychoacoustic (string selector)
+    if isinstance(psl, str) and ("psy" in psl.lower()):
         try:
             dummy = np.zeros_like(m)
             m_heavy, _ = apply_smoothing_std(f, m, dummy, 1/3.0)
             m_light, _ = apply_smoothing_std(f, m, dummy, 1/48.0)
 
             ff = np.maximum(f, 1.0)
-            lo = 200.0
-            hi = 2000.0
+            lo, hi = 200.0, 2000.0
             w = (np.log10(ff) - np.log10(lo)) / (np.log10(hi) - np.log10(lo))
             w = np.clip(w, 0.0, 1.0)
             return (1.0 - w) * m_heavy + w * m_light
         except Exception:
             return m
 
-    # Standard
+    # Standard (numeric selector => 1/N octave)
     try:
-        n = float(smoothing_level or 48.0)
+        n = float(psl if not isinstance(psl, str) else 48.0)
         if not np.isfinite(n) or n <= 0:
             n = 48.0
         oct_frac = 1.0 / n
@@ -528,6 +529,7 @@ def view_mags_for_plot(freqs, mags, *, smoothing_type="Standard", smoothing_leve
         return m_sm
     except Exception:
         return m
+
 
 def _ensure_scoring_keys(st, f_in, m_in, hc_f, hc_m):
     """

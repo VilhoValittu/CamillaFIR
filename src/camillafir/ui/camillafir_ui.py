@@ -394,15 +394,18 @@ def main():
         
         put_select('lvl_algo', label=t('lvl_algo'), options=['Median', 'Average'], value=get_val('lvl_algo', 'Median'), help_text=t('lvl_algo_help')),
         put_select(
-                    'smoothing_type',
-                    label=t('smooth_type'),
-                    options=[
-                        {'label': t('smooth_std'), 'value': 'Standard'},
-                        {'label': t('smooth_psy'), 'value': 'Psychoacoustic'}
-                    ],
-                    value=get_val('smoothing_type', 'Psychoacoustic'),
-                    help_text=t('smooth_help')
-                    ),
+            'plot_smoothing_level',
+            label=t('smooth_type'),
+            options=[
+                {'label': 'Psychoacoustic', 'value': 'Psychoacoustic'},
+                {'label': '1/12 Octave', 'value': 12},
+                {'label': '1/24 Octave', 'value': 24},
+                {'label': '1/48 Octave', 'value': 48},
+                {'label': '1/96 Octave', 'value': 96},
+            ],
+            value=get_val('plot_smoothing_level', get_val('plot_smoothing_level', 'Psychoacoustic')),
+            help_text=t('smooth_help')
+        ),
         # Row 3: Mode selection and target level (split into two parts for readability)
         # Level match range (help_text goes to the right place directly under fields)
         put_row([
@@ -479,7 +482,7 @@ def main():
         put_input('trans_width', type=NUMBER, label="1/1 Transition Width (Hz)", value=100, help_text=t('trans_width')),
         put_markdown("---"),
         put_select(
-                    'smoothing_level',
+                    'filter_smooth',
                     label=t('smoothing_level'),
                     options=[
                         {'label': '1/1 Octave', 'value': 1},
@@ -490,7 +493,7 @@ def main():
                         {'label': '1/48 Octave (Ultra)', 'value': 48},
                         {'label': '1/96 Octave (HC)', 'value': 96},
                     ],
-                    value=get_val('smoothing_level', 12),
+                    value=get_val('filter_smooth', get_val('smoothing_level', 12)),
                     help_text=t('smoothing_level_help'),
                 ),
         put_text(t('smoothing_level_saw')),
@@ -546,8 +549,11 @@ def main():
         ),
         
         put_row([
-            put_input('ir_window_left', label=t('ir_window_left_label'), type=FLOAT, value=get_val('ir_window_left', 100.0), help_text=t('ir_matala')),
-            put_input('ir_window', label=t('ir_window_right_label'), type=FLOAT, value=get_val('ir_window', 500.0), help_text=t('ir_korkea'))
+            put_input('ir_window_left', label=t('ir_window_left_label'), type=FLOAT, value=get_val('ir_window_left', 10.0), help_text=t('ir_matala')),
+            # Use new key 'ir_window_right' but keep backward-compat with older saved settings ('ir_window')
+            put_input('ir_window_right', label=t('ir_window_right_label'), type=FLOAT,
+                      value=get_val('ir_window_right', get_val('ir_window', 500.0)),
+                      help_text=t('ir_korkea'))
         ]),
         
         put_markdown("---"),
@@ -842,7 +848,9 @@ put_markdown("---"),
 def _log_df_smoothing_for_fs(cfg, fs_v, df_on):
     if df_on:
         try:
-            base_sigma = 60 // (cfg.smoothing_level / 12 if cfg.smoothing_level > 0 else 1)
+            fsmooth = float(getattr(cfg, "filter_smooth", getattr(cfg, "smoothing_level", 12)) or 12)
+            if fsmooth <= 0: fsmooth = 12
+            base_sigma = 60 // (fsmooth / 12 if fsmooth > 0 else 1)
             df_ref = 44100.0 / 65536.0
             sigma_hz = base_sigma * df_ref
             df_cur = (fs_v / cfg.num_taps)
@@ -984,7 +992,10 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
     import time
     time.sleep(0.05)
     set_processbar('bar', 0.8)
-
+    print("plot_smoothing_level =", data.get("plot_smoothing_level"))
+    print("filter_smooth =", data.get("filter_smooth"))
+    psl = data.get('plot_smoothing_level', 'Psychoacoustic')
+    psl_str = psl if isinstance(psl, str) else f"1/{int(psl)} octave"
     with use_scope('results', clear=True):
         if l_st_f is None or r_st_f is None:
             put_error("Error: No results captured.")
@@ -1077,7 +1088,7 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             - **House curve:** {data['hc_mode']} — {data.get('hc_source', 'Unknown')} ({data['mag_c_min']}-{data['mag_c_max']} Hz)
             - **Filter type:** {data['filter_type']}
             - **Phase correction clamp:** L {_phase_clamp_str(l_st_f)} | R {_phase_clamp_str(r_st_f)}
-            - **Smoothing view:** {data.get('smoothing_type', 'Standard')}
+            - **Smoothing view:** {psl_str}
             - **Leveling algo:** {data.get('lvl_algo', '')}
             """))
 
@@ -1086,15 +1097,13 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
                 f_l, m_l, p_l, l_imp_f, data['fs'], "Left",
                 None, l_st_f, data['mixed_freq'], "low",
                 create_full_html=False,
-                smoothing_type=data.get('smoothing_type'),
-                smoothing_level=data.get('smoothing_level'),
+                plot_smoothing_level=data.get('plot_smoothing_level', 'Psychoacoustic')
             ))},
             {'title': 'Right Channel', 'content': put_html(plots.generate_prediction_plot(
                 f_r, m_r, p_r, r_imp_f, data['fs'], "Right",
                 None, r_st_f, data['mixed_freq'], "low",
                 create_full_html=False,
-                smoothing_type=data.get('smoothing_type'),
-                smoothing_level=data.get('smoothing_level'),
+                plot_smoothing_level=data.get('plot_smoothing_level', 'Psychoacoustic')
             ))}
         ])
         put_file(fname, zip_buffer.getvalue(), label=" DOWNLOAD FILTER ZIP")

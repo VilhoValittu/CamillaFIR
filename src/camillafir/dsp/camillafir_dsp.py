@@ -41,7 +41,7 @@ from .phase import (
     limit_phase_deg,
 )
 
-#CamillaFIR DSP Engine v1.1.1
+#CamillaFIR DSP Engine v1.1.2
 
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
@@ -53,7 +53,7 @@ from .phase import (
 #1.09 Improved TDC stability and reliability
 #1.1.0 More presice leveling tilt for magnitude calculation
 #1.1.1 Added tukey windowing option
-
+#1.1.2 Added more safety checks and fixed edge cases in various blocks (leveling, TDC, bass-first, etc.)
 def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto_headroom_db=0.0, logger_obj=None):
     """
     Lightweight stage checkpoint for debugging gain evolution.
@@ -151,7 +151,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # Tasoitusresoluutio (smoothing_level) must NOT affect analysis/leveling.
     # Keep analysis smoothing FIXED; smoothing_level is used later only for filter shaping.
     analysis_bw = 1/24.0
-    is_psy = 'psy' in str(cfg.smoothing_type).lower()
+    is_psy = 'psy' in str(cfg.plot_smoothing_level).lower()
     
 
     # --- IMPORTANT ---
@@ -529,13 +529,21 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
     # --- 8. KORJAUS ---
     if cfg.enable_mag_correction:
+        # Filter smoothing (DSP only). Backward compatible with old config key.
+        try:
+            _filter_smooth = float(getattr(cfg, "filter_smooth", getattr(cfg, "smoothing_level", 12)) or 12)
+        except Exception:
+            _filter_smooth = 12.0
+        if not np.isfinite(_filter_smooth) or _filter_smooth <= 0:
+            _filter_smooth = 12.0
+
         afdw_on = bool(getattr(cfg, "enable_afdw", False))
         afdw_base = float(getattr(cfg, "fdw_cycles", 15.0))
         afdw_min = max(3.0, afdw_base / 3.0)
         
         raw_g = target_mags - (m_anal - calc_offset_db)
 
-        base_sigma = 60 // (cfg.smoothing_level / 12 if cfg.smoothing_level > 0 else 1)
+        base_sigma = 60 // (_filter_smooth / 12 if _filter_smooth > 0 else 1)
 
         # Raw_g smoothing:
         # - legacy: sigma in bins scales directly with fs (can over-smooth at high fs)
@@ -585,6 +593,18 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 # Same gd_diff idea as analyze_acoustic_confidence (sigma_bins/Hz not critical here)
                 gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms_local, sigma=20)
                 gd_diff_local = np.abs(gd_ms_local - gd_smooth)
+                # Limit bass-first effect at very low latency REW Asym to avoid unstable LF behavior.
+                # NOTE: this only affects bass-first masks (A-FDW confidence shaping), not the main correction band.
+                # Limit bass-first effect at very low latency REW Asym to avoid unstable LF behavior.
+                _bf_mode_f2 = float(getattr(cfg, "bass_first_mode_max_hz", 200.0) or 200.0)
+                try:
+                    _win_mode = str(getattr(cfg, "ir_export_window_mode", "auto") or "auto").strip().lower()
+                    _left_ms = float(getattr(cfg, "ir_window_left", getattr(cfg, "ir_window_ms_left", 0.0)) or 0.0)
+                    if _win_mode == "rew_asym" and _left_ms < 15.0:
+                        _bf_mode_f2 = min(_bf_mode_f2, 80.0)
+                        logger.info(f"REW Asym low-latency: left_ms={_left_ms:.1f} -> bass-first limited to {float(_bf_mode_f2):.0f} Hz")
+                except Exception:
+                    pass
 
                 # m_interp should be the "raw measured mags" interpolated to freq_axis
                 # If at this point a different name is used, use it (usually m_interp / meas_interp etc.)
@@ -595,7 +615,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                     gd_ms=gd_ms_local,
                     gd_diff=gd_diff_local,
                     is_wav_source=bool(getattr(cfg, "is_wav_source", False)),
-                    mode_f2=float(getattr(cfg, "bass_first_mode_max_hz", 200.0) or 200.0)
+                    mode_f2=_bf_mode_f2
                 )
                 bf_conf_for_smoothing = bf.fuse_conf_for_smoothing(
                     freq_axis=freq_axis,
@@ -651,6 +671,20 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         else:
             eff_conf = np.where(freq_axis < 100, np.maximum(conf_mask, 0.6), conf_mask)
             gain_apply = (final_g * eff_conf).copy()
+        # --- REW ASYM ultra-low latency safety (gain side) ---
+        # If latency target is extremely small, prevent LF boosts (cuts still allowed)
+        # to avoid unstable correction / ripple in bass.
+        try:
+            _win_mode = str(getattr(cfg, "ir_export_window_mode", "auto") or "auto").strip().lower()
+            _left_ms  = float(getattr(cfg, "ir_window_left", getattr(cfg, "ir_window_ms_left", 0.0)) or 0.0)
+            if _win_mode == "rew_asym" and _left_ms < 10.0:
+                _hz = 120.0
+                _m = mask_c & (freq_axis > 0.0) & (freq_axis <= _hz)
+                if np.any(_m):
+                    gain_apply[_m] = np.minimum(gain_apply[_m], 0.0)  # no boost, cuts OK
+                    logger.info(f"REW Asym safety: left_ms={_left_ms:.1f} -> no LF boost below {_hz:.0f} Hz")
+        except Exception:
+            pass
 
         # --- CHECKPOINT 1: after_gain_apply (before slope/fade/exc/limits) ---
         try:
@@ -1194,7 +1228,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 mult = max(1.0, float(mult))
 
                 # Use same smoothing model as raw_g smoothing (df_smoothing aware)
-                _base_sigma = locals().get('base_sigma', 60 // (cfg.smoothing_level / 12 if cfg.smoothing_level > 0 else 1))
+                _base_sigma = locals().get('base_sigma', 60 // (_filter_smooth / 12 if _filter_smooth > 0 else 1))
                 _df_mode = bool(locals().get('df_mode', bool(getattr(cfg, "df_smoothing", False))))
                 if _df_mode:
                     df_ref = 44100.0 / 65536.0
@@ -1403,8 +1437,10 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         except Exception:
             return float(default)
 
-    left_ms = _ms('ir_window_ms_left', 'ir_window_left', 0.0)
-    right_ms = _ms('ir_window_ms', 'ir_window', 0.0)
+    left_ms  = _ms('ir_window_ms_left',  'ir_window_left',  0.0)
+    # Prefer 'ir_window_right' / 'ir_window_ms_right'; fall back to legacy 'ir_window' / 'ir_window_ms'
+    right_ms = _ms('ir_window_ms_right', 'ir_window_right',
+                   _ms('ir_window_ms', 'ir_window', 0.0))
 
 
     # --- 10a. INITIAL PLACEMENT (single-pass) ---
@@ -1436,7 +1472,9 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     s_left = int(left_ms * cfg.fs / 1000.0)
     s_right = int(right_ms * cfg.fs / 1000.0)
 
-    logger.info(f"IR export: mode={win_mode}, peak={peak_idx}, s_left={s_left}, s_right={s_right}")
+    logger.info(
+        f"IR export: mode={win_mode}, peak={peak_idx}, user_s_left={s_left}, user_s_right={s_right}"
+    )
     logger.info(f"IR export: shape={win_shape}, tukey_alpha={tukey_alpha:.2f}")
 
     if win_mode == 'off':
@@ -1450,6 +1488,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             radius = max(s_left, s_right)
             s_left = radius
             s_right = radius
+            logger.info(f"IR export: mode={win_mode}, eff_radius={radius}")
         elif win_mode == 'auto':
             if not ('Asym' in cfg.filter_type_str or 'Min' in cfg.filter_type_str):
                 radius = s_right

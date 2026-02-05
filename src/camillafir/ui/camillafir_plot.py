@@ -715,11 +715,11 @@ def format_summary_content(settings, l_stats, r_stats):
 
     return _format_summary_content_legacy(settings, l_stats, r_stats)
 
-def _view_mags_for_plot(freqs, mags, *, smoothing_type="Psychoacoustic", smoothing_level=48):
+def _view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
     """Plot-only smoothing (never affects DSP math).
-
-    - Standard: octave smoothing width = 1/smoothing_level
-    - Psychoacoustic: REW-style combined smoothing (broad LF, fine HF)
+    plot_smoothing_level:
+      - "Psychoacoustic" => psychoacoustic_smoothing()
+      - int N => standard octave smoothing width = 1/N
     """
     f = np.asarray(freqs, dtype=float)
     m = np.asarray(mags, dtype=float)
@@ -727,12 +727,13 @@ def _view_mags_for_plot(freqs, mags, *, smoothing_type="Psychoacoustic", smoothi
     if f.size == 0 or m.size == 0:
         return m
 
-    st = str(smoothing_type or "Standard").strip().lower()
-    if "psy" in st:
+    psl = plot_smoothing_level
+    # Psychoacoustic mode by name (string)
+    if isinstance(psl, str) and ("psy" in psl.strip().lower()):   
         return psychoacoustic_smoothing(f, m)
-
+    # Standard smoothing: parse level (int)
     try:
-        lvl = int(smoothing_level)
+        lvl = int(psl)
     except Exception:
         lvl = 48
     lvl = max(1, lvl)
@@ -745,8 +746,7 @@ def generate_prediction_plot(
     orig_freqs, orig_mags, orig_phases, filt_ir, fs, title,
     save_filename=None, target_stats=None, mixed_split=None,
     zoom_hint="", create_full_html=True, return_fig: bool = False,
-    smoothing_type: str = "Psychoacoustic",
-    smoothing_level: int = 48,
+    plot_smoothing_level="Psychoacoustic",
 ):
     """Luo optimoidun HTML-dashboardin (Pieni tiedostokoko, korkea resoluutio)."""
     try:
@@ -782,15 +782,13 @@ def generate_prediction_plot(
 
             m_lin_clean = _view_mags_for_plot(
                 f_lin, m_interp,
-                smoothing_type=smoothing_type,
-                smoothing_level=smoothing_level,
+                plot_smoothing_level=plot_smoothing_level,
             )
         else:
             m_raw = np.interp(f_lin, orig_freqs, orig_mags)
             m_lin_clean = _view_mags_for_plot(
                 f_lin, m_raw,
-                smoothing_type=smoothing_type,
-                smoothing_level=smoothing_level,
+                plot_smoothing_level=plot_smoothing_level,
             )
 
         p_lin = np.interp(f_lin, orig_freqs, orig_phases)
@@ -800,8 +798,7 @@ def generate_prediction_plot(
         p_sm = _view_mags_for_plot(
             f_lin,
             20*np.log10(np.abs(total_spec)+1e-12),
-            smoothing_type=smoothing_type,
-            smoothing_level=smoothing_level,
+            plot_smoothing_level=plot_smoothing_level,
         )
         #spec_sm phase smoothing for plots
         # Phase: heavier smoothing for readability

@@ -86,6 +86,34 @@ Tips:
 - **Mixed Phase:** linear phase below a split frequency, minimum phase above.
 - **Asymmetric Linear:** linear phase, but with an asymmetric time window to suppress audible pre-ringing while preserving the leading edge.
 
+#### Asymmetric Linear (REW Asym)
+
+Asymmetric Linear is a **low-latency linear-phase mode** that reduces audible pre-ringing
+by shifting the impulse peak earlier in time.
+
+The **Left window (ms)** parameter defines the **latency target**:
+- smaller values → lower latency
+- but also less time-domain freedom for low-frequency correction
+
+**Practical guidance:**
+- **10 ms (default):** best balance between low latency and stable bass correction
+- **5–15 ms:** safe operating range
+- **< 5 ms:** extreme low-latency mode, expert use only
+
+##### Automatic safety behavior (important)
+
+To prevent unstable bass behavior at very low latency, CamillaFIR applies
+automatic safeguards in REW Asymmetric mode:
+
+- When **Left < 15 ms**  
+  → bass-first (A-FDW confidence shaping) is automatically limited to low frequencies  
+- When **Left < 10 ms**  
+  → low-frequency **boosts are disabled** (cuts are still allowed)
+
+These safeguards do **not** reduce correction quality at mid and high frequencies,
+but prevent excessive ripple and instability in the bass region.
+
+
 ### 5.3 Smoothing
 - **Standard smoothing:** classic fractional-octave smoothing.
 - **Psychoacoustic smoothing:** heavier smoothing where the ear is less sensitive (useful for robust targets).

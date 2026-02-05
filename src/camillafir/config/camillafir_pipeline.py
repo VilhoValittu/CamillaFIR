@@ -20,8 +20,9 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_export_window_mode", "ir_window_mode",
         "ir_export_window_shape", "ir_export_tukey_alpha",
         "local_path_l", "local_path_r", "fmt", "lvl_manual_db",
-        "lvl_min", "lvl_max", "lvl_algo", "smoothing_type", "fdw_cycles",
-        "trans_width", "smoothing_level", "enable_tdc", "tdc_strength", "tdc_max_reduction_db",
+        "lvl_min", "lvl_max", "lvl_algo", "fdw_cycles",
+        "trans_width", "smoothing_level", "filter_smooth", "plot_smoothing_level",
+        "enable_tdc", "tdc_strength", "tdc_max_reduction_db",
         "tdc_slope_db_per_oct", "enable_afdw", "df_smoothing", "comparison_mode",
         "bass_first_ai", "bass_first_mode_max_hz",
         "local_path_house",
@@ -111,7 +112,19 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     except Exception:
         pass
 
+    # Backward-compat: if UI still uses old key 'smoothing_level', map it to filter_smooth.
+    try:
+        if data.get("filter_smooth", None) is None and data.get("smoothing_level", None) is not None:
+            data["filter_smooth"] = data.get("smoothing_level")
+    except Exception:
+        pass
 
+    # Default plot smoothing if missing
+    try:
+        if data.get("plot_smoothing_level", None) is None:
+            data["plot_smoothing_level"] = "Psychoacoustic"
+    except Exception:
+        pass
     return data
 
 
@@ -259,7 +272,11 @@ def build_filter_config(
     enable_tdc = bool(_pin_get("enable_tdc", data.get("enable_tdc", False)))
     tdc_max_red = _as_float(_pin_get("tdc_max_reduction_db", data.get("tdc_max_reduction_db", 9.0)), 9.0)
     tdc_slope = _as_float(_pin_get("tdc_slope_db_per_oct", data.get("tdc_slope_db_per_oct", 0.0)), 0.0)
-    smoothing_level = _as_int(_pin_get("smoothing_level", data.get("smoothing_level", 12)), 12)
+    # Filter smoothing (DSP only)
+    filter_smooth = _as_int(
+        _pin_get("filter_smooth", data.get("filter_smooth", data.get("smoothing_level", 12))),
+        12
+    )
     comparison_mode = bool(data.get("comparison_mode", True))
     
     cfg = FilterConfig_cls(
@@ -286,22 +303,22 @@ def build_filter_config(
         exc_prot=bool(data["exc_prot"]),
         exc_freq=data["exc_freq"],
         low_bass_cut_hz=float(data.get("low_bass_cut_hz", 40.0) or 40.0),
-        ir_window_ms=data["ir_window"],
-        ir_window_ms_left=data.get("ir_window_left", 100.0),
+        ir_window_ms=data.get("ir_window_right", 500.0),
+        ir_window_ms_left=data.get("ir_window_left", 10.0),
         ir_export_window_mode=data.get("ir_export_window_mode", "auto"),
         enable_afdw=bool(enable_afdw),
         enable_tdc=bool(enable_tdc),
         tdc_strength=data.get("tdc_strength", 50.0),
         tdc_max_reduction_db=float(tdc_max_red),
         tdc_slope_db_per_oct=float(tdc_slope),
-        smoothing_type=data["smoothing_type"],
+        plot_smoothing_level=data.get("plot_smoothing_level", "Psychoacoustic"),
+        filter_smooth=int(filter_smooth),
         fdw_cycles=data["fdw_cycles"],
         lvl_manual_db=data["lvl_manual_db"],
         lvl_min=data["lvl_min"],
         lvl_max=data["lvl_max"],
         lvl_algo=data["lvl_algo"],
         stereo_link=bool(data.get("stereo_link", False)),
-        smoothing_level=int(smoothing_level),
         crossovers=xos,
         hpf_settings=hpf,
         house_freqs=hc_f,

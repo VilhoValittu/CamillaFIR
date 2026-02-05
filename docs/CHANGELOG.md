@@ -4,6 +4,22 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [2.8.9] - 2026-02-05
+
+### DSP
+- **REW Asymmetric low-latency bass safety**
+  - Added automatic safety guards for ultra–low-latency REW Asymmetric mode.
+  - When latency target (Left window) is **below 15 ms**:
+    - Bass-first (A-FDW confidence shaping) is automatically limited to low frequencies.
+  - When latency target is **below 10 ms**:
+    - Low-frequency **boosts are disabled** (cuts remain allowed).
+  - Prevents unstable bass behavior, excessive ripple, and aggressive FIR boosts
+    when time-domain constraints become too tight.
+  - Safeguards are automatic, non-configurable, and only active in REW Asymmetric mode.
+
+
+---
+
 ## [2.8.8] - 2026-02-04
 
 ### DSP

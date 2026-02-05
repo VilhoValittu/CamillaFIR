@@ -103,7 +103,10 @@ def build_bassfirst_masks(freq_axis, m_raw_db, phase_rad_unwrapped, gd_ms, gd_di
     # Disable / fade-in bass-first effect below 30 Hz to avoid unstable behavior
     # with asymmetric IR windowing + A-FDW at very low frequencies.
     try:
-        f1, f2 = 20.0, 30.0
+        if rew_asym and left_ms < 15.0:
+            f1, f2 = 60.0, 80.0
+        else:
+            f1, f2 = 20.0, 30.0
         taper = np.ones_like(f, dtype=float)
         taper[f <= f1] = 0.0
         mid = (f > f1) & (f < f2)

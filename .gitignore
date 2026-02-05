@@ -13,4 +13,4 @@ config.json
 filters/
 tools/
 tests/
-run_camillafir.py
+pytest.ini

@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v2.8.8
+## v2.8.9
 
 ### Phase correction safety (v2.8.8)
 
