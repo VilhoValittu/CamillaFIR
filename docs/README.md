@@ -96,6 +96,32 @@ Instead of treating everything as “EQ”, it separates three physical phenomen
 - **Excess phase distortion:** corrected with FIR phase reconstruction (Linear / Minimum / Mixed / Asymmetric)
 - **Room-induced energy storage (room modes):** reduced with **Temporal Decay Control (TDC)** (time-domain, not amplitude EQ)
 
+---
+
+## Project maturity & early feedback note
+
+Some public discussions and comments about CamillaFIR refer to **early development versions**
+of the project.
+
+Since then, the software has evolved significantly and now includes a complete and stable
+end-to-end workflow:
+
+- Functional **Web UI** with integrated analysis and plotting
+- Clear measurement → correction → export pipeline
+- Automatic multi-rate FIR export (ready for CamillaDSP and other convolvers)
+- Detailed per-run `Summary.txt` explaining internal decisions and safety limits
+- Phase, asymmetry, and confidence-based safety mechanisms enabled by default
+- Improved internal validation, guardrails, and reproducibility
+
+As a result, older feedback regarding missing UI elements, unclear workflow, or lack of user
+feedback may **no longer reflect the current state** of CamillaFIR.
+
+For a chronological overview of changes and fixes, see the  
+➡️ **https://github.com/VilhoValittu/CamillaFIR/releases**
+
+CamillaFIR remains an actively developed project, but the **core feature set and workflow are
+complete and usable as-is**.
+
 
 ---
 
