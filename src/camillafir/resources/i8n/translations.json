@@ -296,10 +296,12 @@
         "ir_export_window_help_long_title": "🪟 More about IR windowing",
         "taps_warn_over": "⚠️ Very large tap count (> 131072). Expect high latency, higher CPU load, and little audible benefit for room correction.",
         "ir_export_window_shape_help": "Controls how the final FIR filter is shaped in time (ringing and sidelobes).",
-        "ir_export_window_help_long": "IR windowing shapes the impulse response after frequency correction.\n\nIt affects ringing behavior, sidelobes, and effective time spread, but does not change the target curve or frequency-domain correction itself.\n\nHann provides stronger ringing control, while Tukey preserves more low-frequency energy with softer edges.\n\n A-FDW affects what is corrected; IR windowing affects how the correction is realized in time."
+        "ir_export_window_help_long": "IR windowing shapes the impulse response after frequency correction.\n\nIt affects ringing behavior, sidelobes, and effective time spread, but does not change the target curve or frequency-domain correction itself.\n\nHann provides stronger ringing control, while Tukey preserves more low-frequency energy with softer edges.\n\n A-FDW affects what is corrected; IR windowing affects how the correction is realized in time.",
+        "ir_asym_linear_only": "Asymmetric windowing works only with Linear Phase filters"
     },
     
     "fi": {
+        "ir_asym_linear_only": "Asymmetric-ikkunointi toimii vain Linear Phase -suodattimien kanssa",
         "txt_upload_no_data": "TXT-lataus epäonnistui: tiedostosta ei löytynyt kelvollista mittausdataa (tarvitaan vähintään taajuus + magnitudi).",
         "txt_upload_parse_error": "TXT-lataus epäonnistui: virhe tiedoston muodossa tai sisällössä.",
         "guide_modes_title": "Tilat: BASIC vs ADVANCED",

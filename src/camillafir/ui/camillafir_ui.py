@@ -33,6 +33,8 @@ from .camillafir_ui_helpers import (
     apply_afdw_preset,
     put_guide_section,
     update_ir_tukey_ui,
+    update_ir_export_window_mode_ui,
+    update_mixed_freq_ui,
 )
 from ..config.camillafir_pipeline import (
     collect_ui_data,
@@ -385,7 +387,7 @@ def main():
                 value=get_val('filter_type', t('ft_linear')),
                 help_text=(t('ft_help') + t('ft_asym_note'))
             ),
-            put_input('mixed_freq', label=t('mixed_freq'), type=FLOAT, value=get_val('mixed_freq', 300.0), help_text=t('mixed_freq_help'))
+            put_scope("update_mixed_freq_scope"),
         ]),
         
         put_input('gain', label=t('gain'), type=FLOAT, value=get_val('gain', 0.0), help_text=t('gain_help')),
@@ -513,18 +515,8 @@ def main():
         put_markdown(t('---')),
         put_markdown(f"#### ⏱️ {t('ir_export_window_title')}"),
         put_text(t('')),
-        put_select(
-            'ir_export_window_mode',
-            label=t('ir_export_window_mode'),
-            options=[
-                {'label': t('ir_export_window_auto'), 'value': 'auto'},
-                #{'label': t('ir_export_window_off'), 'value': 'off'},
-                #{'label': t('ir_export_window_sym'), 'value': 'rew_sym'},
-                {'label': t('ir_export_window_asym'), 'value': 'rew_asym'},
-            ],
-            value=get_val('ir_export_window_mode', 'auto'),
-            help_text=t('ir_export_window_help'),
-       ),
+        put_scope("ir_export_window_mode_scope"),
+
 
         put_row([
             put_select(
@@ -791,6 +783,10 @@ put_markdown("---"),
 
     update_lvl_ui()
     update_ir_tukey_ui()
+    update_ir_export_window_mode_ui()
+    update_mixed_freq_ui()
+    pin_on_change('ir_export_window_mode', onchange=update_ir_export_window_mode_ui)
+    pin_on_change('filter_type', onchange=update_mixed_freq_ui)
 
     # Rerender manual field ONLY when mode changes (Auto/Manual)
     pin_on_change('lvl_mode', onchange=update_lvl_ui)
@@ -1119,6 +1115,44 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
                     return " | ".join(items) if items else "—"
                 except Exception:
                     return "—"
+            def _xo_fc_gd_str(st: dict) -> str:
+                """
+                Show per-XO group delay delta at crossover frequency (ms).
+                Keys: xo{i}_dgd_ms@fc
+                """
+                try:
+                    if not isinstance(st, dict) or not st:
+                        return "—"
+
+                    xo_summary = str(st.get("xo_summary", "") or "")
+                    freqs = []
+                    for part in xo_summary.split(","):
+                        part = part.strip()
+                        if "Hz" in part:
+                            try:
+                                freqs.append(float(part.split("Hz")[0].strip()))
+                            except Exception:
+                                freqs.append(None)
+
+                    items = []
+                    for i in range(1, 6):
+                        k = f"xo{i}_dgd_ms@fc"
+                        if k not in st:
+                            continue
+                        try:
+                            v = float(st.get(k))
+                        except Exception:
+                            continue
+                        
+                        if i <= len(freqs) and freqs[i-1] is not None:
+                            lbl = f"{int(round(freqs[i-1]))}Hz"
+                        else:
+                            lbl = f"XO{i}"
+                        items.append(f"{lbl}:{v:+.2f} ms")
+
+                    return " | ".join(items) if items else "—"
+                except Exception:
+                    return "—"
 
             # XO/HPF phase model reporting (from DSP stats; falls back safely)
             def _xo_phase_model_str(st: dict) -> str:
@@ -1154,7 +1188,53 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
                     return " | ".join(parts) if parts else "—"
                 except Exception:
                     return "—"
-                
+
+            def _xo_fc_gd_badge(st: dict) -> str:
+                """
+                Color badge based on worst |ΔGD@fc| across XO points.
+                Thresholds (ms): <0.7 green, 0.7–1.5 yellow, >1.5 red.
+                """
+                try:
+                    if not isinstance(st, dict) or not st:
+                        return ""
+                    vals = []
+                    for i in range(1, 6):
+                        k = f"xo{i}_dgd_ms@fc"
+                        if k not in st:
+                            continue
+                        try:
+                            vals.append(abs(float(st.get(k))))
+                        except Exception:
+                            pass
+                    if not vals:
+                        return ""
+                    worst = max(vals)
+
+                    if worst < 0.7:
+                        label = "LOW"
+                        bg = "rgba(46, 125, 50, 0.15)"
+                        fg = "rgba(46, 125, 50, 1.0)"
+                        title = "Small XO ΔGD@fc (typically subtle)."
+                    elif worst < 1.5:
+                        label = "MED"
+                        bg = "rgba(255, 143, 0, 0.15)"
+                        fg = "rgba(255, 143, 0, 1.0)"
+                        title = "Moderate XO ΔGD@fc (often audible improvement with XO phase correction)."
+                    else:
+                        label = "HIGH"
+                        bg = "rgba(211, 47, 47, 0.15)"
+                        fg = "rgba(211, 47, 47, 1.0)"
+                        title = "Large XO ΔGD@fc (aggressive crossover / lots of time smear)."
+
+                    return (
+                        f"<span title='{title}' "
+                        f"style='display:inline-block; margin-left:6px; padding:1px 6px; "
+                        f"border-radius:10px; font-size:11px; font-weight:600; "
+                        f"background:{bg}; color:{fg}; vertical-align:middle;'>"
+                        f"{label}</span>"
+                    )
+                except Exception:
+                    return "" 
 
             def _hpf_diff_raw_str(st: dict) -> str:
                 try:
@@ -1202,6 +1282,12 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
                 # Auto / fallback
                 return "Auto (adaptive)"
 
+            # XO ΔGD@fc line with color badge (HTML for inline styling)
+            _xo_gd_line = (
+                f"XO ΔGD@fc: L {_xo_fc_gd_str(l_st_f)} | R {_xo_fc_gd_str(r_st_f)}"
+                f"{_xo_fc_gd_badge(l_st_f) or _xo_fc_gd_badge(r_st_f)}"
+            )
+
             put_markdown(dedent(f"""
             - **Lenght:** {data['taps']} taps ({data['taps']/data['fs']*1000:.1f} ms)
             - **Resolution:** {data['fs']/data['taps']:.2f} Hz
@@ -1211,6 +1297,7 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             - **Filter type:** {data['filter_type']}
             - **XO phase model:** L {_xo_phase_model_str(l_st_f)} | R {_xo_phase_model_str(r_st_f)}
             - **XO Δφ@fc (wrapped):** L {_xo_fc_wrapped_str(l_st_f)} | R {_xo_fc_wrapped_str(r_st_f)}
+            - {_xo_gd_line}
             - **XO effect (theoretical raw):**
               - **L:** {_xo_diff_raw_str(l_st_f)}
               - **R:** {_xo_diff_raw_str(r_st_f)}
@@ -1220,7 +1307,7 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             - **Phase correction clamp:** L {_phase_clamp_str(l_st_f)} | R {_phase_clamp_str(r_st_f)}
             - **Smoothing view:** {psl_str}
             - **Leveling algo:** {data.get('lvl_algo', '')}
-            """))
+            """), sanitize=False)
 
         put_tabs([
             {'title': 'Left Channel', 'content': put_html(plots.generate_prediction_plot(

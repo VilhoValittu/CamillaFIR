@@ -1164,6 +1164,20 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                     idx_fc = int(np.argmin(np.abs(f - fc)))
                     st[f"xo{i}_dphi_wrapped_deg@fc"] = float(dphi_wrapped_deg[idx_fc])
 
+                # Per-XO GD delta at fc (RAW, ms) — correlates best with transient tightness
+                for i, xo in enumerate(xo_list, start=1):
+                    try:
+                        fc = float(xo.get("freq", 0.0) or 0.0)
+                    except Exception:
+                        continue
+                    if fc <= 0:
+                        continue
+                    idx_fc = int(np.argmin(np.abs(f - fc)))
+                    try:
+                        st[f"xo{i}_dgd_ms@fc"] = float(dgd[idx_fc])
+                    except Exception:
+                        pass
+
                 hpf_phi, hpf_phi_hz = _max_abs_in_mask(dphi_raw_deg, hpf_mask)
                 if hpf_on and hpf_phi is not None:
                     st["hpf_diff_raw_max_phase_deg"] = hpf_phi
@@ -1177,6 +1191,20 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 gd_on = (-np.gradient(ph_on) / dw) * 1000.0
                 gd_off = (-np.gradient(ph_off) / dw) * 1000.0
                 dgd = gd_on - gd_off
+
+                # Per-XO GD delta at fc (RAW, ms) — best proxy for "transient tightness"
+                for i, xo in enumerate(xo_list, start=1):
+                    try:
+                        fc = float(xo.get("freq", 0.0) or 0.0)
+                    except Exception:
+                        continue
+                    if fc <= 0:
+                        continue
+                    idx_fc = int(np.argmin(np.abs(f - fc)))
+                    try:
+                        st[f"xo{i}_dgd_ms@fc"] = float(dgd[idx_fc])
+                    except Exception:
+                        pass
 
                 # GD maxima (separately)
                 xo_gd, xo_gd_hz = _max_abs_in_mask(dgd, xo_mask)

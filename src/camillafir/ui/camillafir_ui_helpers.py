@@ -3,7 +3,7 @@ import numpy as np
 
 from pywebio.output import *  # needed because this PyWebIO build doesn't expose put_input/put_select as named exports
 from pywebio.input import FLOAT
-from pywebio.pin import pin, pin_update, put_input
+from pywebio.pin import pin, pin_update, put_input, put_select
 
 from ..resources.i8n.camillafir_i18n import t
 from .camillafir_modes import MODE_DEFAULTS
@@ -142,6 +142,143 @@ def update_ir_tukey_ui(_=None):
                 help_text=t("ir_export_tukey_alpha_help"),
             )
             if not is_tukey:
+                w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
+    except Exception:
+        pass
+
+def update_ir_export_window_mode_ui(_=None):
+    """
+    UI helper: grey out (disable) 'rew_asym' option unless filter_type is Linear.
+    Also sanitizes saved/forced value: if not linear and mode==rew_asym -> auto.
+    Renders the select into scope 'ir_export_window_mode_scope'.
+    """
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
+    try:
+        ft = str(_p("filter_type", "") or "").strip().lower()
+
+        try:
+            ft_linear_label = str(t("ft_linear") or "").strip().lower()
+        except Exception:
+            ft_linear_label = "linear"
+
+        is_linear = (ft == ft_linear_label) or ("linear" in ft)
+
+        # Current value (from pins, may come from loaded config)
+        cur = str(_p("ir_export_window_mode", "auto") or "auto").strip().lower()
+
+        # If not linear, force away from rew_asym
+        if (not is_linear) and (cur == "rew_asym"):
+            try:
+                pin_update("ir_export_window_mode", value="auto")
+            except Exception:
+                pass
+            cur = "auto"
+
+        with use_scope("ir_export_window_mode_scope", clear=True):
+            put_select(
+                "ir_export_window_mode",
+                label=t("ir_export_window_mode"),
+                options=[
+                    {"label": t("ir_export_window_auto"), "value": "auto"},
+                    {"label": t("ir_export_window_asym"), "value": "rew_asym"},
+                ],
+                value=cur,
+                help_text=t("ir_export_window_help"),
+            )
+
+            # Disable/enable the rew_asym option at DOM level (greys out in native select)
+            # NOTE: do this after put_select so the element exists.
+            js_disable = "true" if (not is_linear) else "false"
+            put_html(f"""
+<script>
+(function() {{
+  try {{
+    var sel = document.querySelector('select[name="ir_export_window_mode"]');
+    if(!sel) return;
+    var opt = Array.from(sel.options).find(o => (o.value === "rew_asym"));
+    if(!opt) return;
+
+    opt.disabled = {js_disable};
+
+    // Optional: add a hint to the label when disabled/enabled (avoid duplicating)
+    var base = opt.textContent.replace(/\\s*\\(Linear only\\)\\s*$/,'');
+    if({js_disable}) opt.textContent = base + " (Linear only)";
+    else opt.textContent = base;
+
+    // If somehow selected while disabled (older browser state), force select back to auto
+    if(opt.disabled && sel.value === "rew_asym") {{
+      sel.value = "auto";
+    }}
+  }} catch(e) {{}}
+}})();
+</script>
+""")
+            # Info text: visible always, emphasized when non-linear
+            try:
+                msg_ = t("ir_asym_linear_only")
+                
+            except Exception:
+                pass
+            #    msg_fi = "Asymmetric toimii vain Linear Phase -suodattimien kanssa"
+            #    msg_en = "Asymmetricworks only with Linear Phase filters"
+
+            opacity = "1.0" if (not is_linear) else "0.55"
+            color = "#ffb74d" if (not is_linear) else "#9aa0a6"
+
+            put_html(f"""
+<div style="
+  margin-top:6px;
+  font-size:12.5px;
+  font-weight:700;
+  letter-spacing:0.4px;
+  color:{color};
+  opacity:{opacity};
+">
+  ⚠️ {msg_}<br>
+  <span style="font-weight:500; letter-spacing:0;">
+    
+  </span>
+</div>
+""")
+
+    except Exception:
+        pass
+
+def update_mixed_freq_ui(_=None):
+    """
+    UI helper: enable mixed_freq ONLY when filter_type == Mixed.
+    Otherwise grey out the field (visible but locked).
+    """
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
+    try:
+        ft = str(_p("filter_type", "") or "").strip().lower()
+
+        try:
+            ft_mixed_label = str(t("ft_mixed") or "").strip().lower()
+        except Exception:
+            ft_mixed_label = "mixed"
+
+        is_mixed = (ft == ft_mixed_label) or ("mixed" in ft)
+
+        with use_scope("update_mixed_freq_scope", clear=True):
+            w = put_input(
+                "mixed_freq",
+                label=t("mixed_freq"),
+                type=FLOAT,
+                value=float(_p("mixed_freq", 300.0) or 300.0),
+                help_text=t("mixed_freq_help"),
+            )
+            if not is_mixed:
                 w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
     except Exception:
         pass

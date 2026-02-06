@@ -1,6 +1,18 @@
 # Changelog
 
 All notable changes to **CamillaFIR** are documented in this file.
+---
+
+## [2.9.1] - 2026-02-06
+
+### UI
+- **Mixed Phase crossover frequency is now state-dependent**
+  - The “Mixed Phase crossover frequency (Hz)” field is active **only** when **Filter type = Mixed Phase**.
+  - For other filter types, the field remains visible but is **greyed out (locked)** to prevent invalid configurations.
+- **REW Asymmetric IR windowing restricted to Linear Phase filters**
+  - The “Asymmetric” IR windowing option (REW Asymmetric export) is selectable **only** when **Filter type = Linear Phase**.
+  - For other filter types, the option is shown but **greyed out**, and the UI displays a warning message:
+    - `WORKS ONLY WITH LINEAR PHASE FILTERS`
 
 ---
 

@@ -77,8 +77,9 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.9.0"
+VERSION = "v2.9.1"
 # Change log:
+# v.2.9.1 [UI] Cleared functions (mixed phase & ir-windowing)
 # v.2.9.0 [UI] Removed "Symmetric" & "Off" modes from windowing options, leaving only "Auto" (rewind-based) and "Asymmetric" (rewind-based + shift). 
 # This simplifies the UI and focuses on the most effective windowing strategies. The "Auto" mode will automatically choose the best windowing based on the impulse response characteristics, while "Asymmetric" can be used to further reduce latency if desired.
 # v.2.9.0 [DSP] Fixed HPF magnitude application to ensure it is applied as a real magnitude filter (gain_db += hpf_db) rather than being baked into the target curve. This keeps magnitude and phase consistent and avoids issues with double-HPF effects.

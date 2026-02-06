@@ -391,6 +391,170 @@ def format_summary_content(settings, l_stats, r_stats):
     lines.append(_afdw_line("Right", r_stats))
 
 
+    # ---------------- XO / HPF diagnostics ----------------
+    def _xo_freqs_from_summary(st):
+        # Parse freqs from "500.0Hz/12dB/oct, 2800.0Hz/12dB/oct"
+        out = []
+        try:
+            s = str((st or {}).get("xo_summary", "") or "")
+            for part in s.split(","):
+                part = part.strip()
+                if "Hz" in part:
+                    out.append(float(part.split("Hz")[0]))
+        except Exception:
+            pass
+        return out
+
+    def _xo_items_fc(st, key_tpl, unit):
+        freqs = _xo_freqs_from_summary(st)
+        items = []
+        for i in range(1, 6):
+            k = key_tpl.format(i=i)
+            if k not in (st or {}):
+                continue
+            try:
+                v = float(st.get(k))
+            except Exception:
+                continue
+            if i <= len(freqs):
+                lbl = f"{int(round(freqs[i-1]))}Hz"
+            else:
+                lbl = f"XO{i}"
+            items.append(f"{lbl}:{v:+.2f}{unit}")
+        return " | ".join(items) if items else "—"
+
+    def _xo_gd_class(st):
+        # Same thresholds as UI badge (ms): <0.7 LOW, 0.7–1.5 MED, >1.5 HIGH
+        vals = []
+        for i in range(1, 6):
+            k = f"xo{i}_dgd_ms@fc"
+            if k in (st or {}):
+                try:
+                    vals.append(abs(float(st.get(k))))
+                except Exception:
+                    pass
+        if not vals:
+            return ""
+        worst = max(vals)
+        if worst < 0.7:
+            return "LOW"
+        if worst < 1.5:
+            return "MED"
+        return "HIGH"
+
+    # Formatting helpers for Summary.txt (keep output compact + readable)
+    def _fmt_deg(v, default: str = "—") -> str:
+        try:
+            if v is None:
+                return default
+            x = float(v)
+            if not np.isfinite(x):
+                return default
+            return f"{x:.1f}°"
+        except Exception:
+            return default
+
+    def _fmt_ms(v, default: str = "—") -> str:
+        try:
+            if v is None:
+                return default
+            x = float(v)
+            if not np.isfinite(x):
+                return default
+            return f"{x:.2f} ms"
+        except Exception:
+            return default
+
+    def _fmt_hz(v, default: str = "—") -> str:
+        try:
+            if v is None:
+                return default
+            x = float(v)
+            if not np.isfinite(x):
+                return default
+            return f"{x:.0f} Hz"
+        except Exception:
+            return default
+
+    # XO phase model
+    lines.append("\n--- XO & Phase models ---")
+    lines.append("")
+    lines.append(
+        f"XO phase model: "
+        f"L {l_stats.get('xo_summary','—')} | "
+        f"R {r_stats.get('xo_summary','—')}"
+    )
+    lines.append("")
+
+    # XO Δφ@fc (wrapped)
+    lines.append(
+        f"XO Δφ@fc (wrapped): "
+        f"L {_xo_items_fc(l_stats, 'xo{i}_dphi_wrapped_deg@fc', '°')} | "
+        f"R {_xo_items_fc(r_stats, 'xo{i}_dphi_wrapped_deg@fc', '°')}"
+    )
+    lines.append("")
+
+    # XO ΔGD@fc + class
+    gd_class = _xo_gd_class(l_stats) or _xo_gd_class(r_stats)
+    gd_class_disp = gd_class if gd_class else "—"
+    lines.append(
+        f"XO ΔGD@fc: "
+        f"L {_xo_items_fc(l_stats, 'xo{i}_dgd_ms@fc', ' ms')} | "
+        f"R {_xo_items_fc(r_stats, 'xo{i}_dgd_ms@fc', ' ms')}"
+        )
+    lines.append(f"XO transient impact: {gd_class_disp}")
+    lines.append("")
+
+    # XO effect (theoretical raw)
+    lines.append("XO effect (theoretical raw):")
+    lines.append(
+        "L: "
+        f"max Δφ {_fmt_deg(l_stats.get('xo_diff_raw_max_phase_deg', None))} "
+        f"@ {_fmt_hz(l_stats.get('xo_diff_raw_max_phase_hz', None))} "
+        f"(XO {_fmt_hz(l_stats.get('xo_diff_raw_max_phase_xo_fc_hz', None))}) | "
+        f"max ΔGD {_fmt_ms(l_stats.get('xo_diff_raw_max_gd_ms', None))} "
+        f"@ {_fmt_hz(l_stats.get('xo_diff_raw_max_gd_hz', None))} "
+        f"(XO {_fmt_hz(l_stats.get('xo_diff_raw_max_gd_xo_fc_hz', None))})"
+    )
+    lines.append(
+        "R: "
+        f"max Δφ {_fmt_deg(r_stats.get('xo_diff_raw_max_phase_deg', None))} "
+        f"@ {_fmt_hz(r_stats.get('xo_diff_raw_max_phase_hz', None))} "
+        f"(XO {_fmt_hz(r_stats.get('xo_diff_raw_max_phase_xo_fc_hz', None))}) | "
+        f"max ΔGD {_fmt_ms(r_stats.get('xo_diff_raw_max_gd_ms', None))} "
+        f"@ {_fmt_hz(r_stats.get('xo_diff_raw_max_gd_hz', None))} "
+        f"(XO {_fmt_hz(r_stats.get('xo_diff_raw_max_gd_xo_fc_hz', None))})"
+    )
+    lines.append("")
+
+    # HPF effect (theoretical raw)
+    lines.append("HPF effect (theoretical raw):")
+    lines.append(
+        "L: "
+        f"max Δφ {_fmt_deg(l_stats.get('hpf_diff_raw_max_phase_deg', None))} "
+        f"@ {_fmt_hz(l_stats.get('hpf_diff_raw_max_phase_hz', None))} | "
+        f"max ΔGD {_fmt_ms(l_stats.get('hpf_diff_raw_max_gd_ms', None))} "
+        f"@ {_fmt_hz(l_stats.get('hpf_diff_raw_max_gd_hz', None))}"
+    )
+    lines.append(
+        "R: "
+        f"max Δφ {_fmt_deg(r_stats.get('hpf_diff_raw_max_phase_deg', None))} "
+        f"@ {_fmt_hz(r_stats.get('hpf_diff_raw_max_phase_hz', None))} | "
+        f"max ΔGD {_fmt_ms(r_stats.get('hpf_diff_raw_max_gd_ms', None))} "
+        f"@ {_fmt_hz(r_stats.get('hpf_diff_raw_max_gd_hz', None))}"
+    )
+    lines.append("")
+
+    # Phase clamp (keep consistent with UI)
+    lines.append(
+        f"Phase correction clamp: "
+        f"L max={l_stats.get('phase_corr_max_before_deg','—')}° -> "
+        f"{l_stats.get('phase_corr_clamp_deg','—')}° | "
+        f"R max={r_stats.get('phase_corr_max_before_deg','—')}° -> "
+        f"{r_stats.get('phase_corr_clamp_deg','—')}°"
+    )
+    lines.append("")
+
     # ---- Helpers ----
     def _as_np(stats, key):
         v = stats.get(key, None)
@@ -462,7 +626,8 @@ def format_summary_content(settings, l_stats, r_stats):
     # --- RT60 + Confidence ---
     l_rt, l_band_avg = _band_rt60_line(l_stats)
     r_rt, r_band_avg = _band_rt60_line(r_stats)
-
+    lines.append("\n--- RT60 ---")
+    lines.append("")
     lines.append(f"Left RT60 (wideband): {l_rt:.2f}s | Right RT60 (wideband): {r_rt:.2f}s")
     if (l_band_avg > 0) or (r_band_avg > 0):
         lines.append(f"RT60 band avg (125–4kHz): L {l_band_avg:.2f}s | R {r_band_avg:.2f}s")
