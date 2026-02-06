@@ -342,9 +342,7 @@ def main():
 
     tab_basic = [
         put_markdown(f"### ⚙️ {t('tab_basic')}"),
-        
-
-
+        put_markdown(t('---')),
         # Mode + Apply defaults (manual apply is safer UX)
         put_row([
             put_select(
@@ -373,19 +371,19 @@ def main():
             put_select('fs', label=t('fs'), options=fs_opts, value=get_val('fs', 44100), help_text=t('fs_help')),  # type: ignore
             put_select('taps', label=t('taps'), options=taps_opts, value=get_val('taps', 65536), help_text=t('taps_help'))
         ]),
-
+        put_markdown(f"_{t('taps_warn_over')}_"),
 
         # Auto-taps info (shown only when multi_rate_opt enabled)
         put_scope('taps_auto_info_scope_basic'),
         
         # Row 2: Filter type and Mixed frequency
         put_row([
-            put_radio(
+            put_select(
                 'filter_type',
                 label=t('filter_type'),
                 options=[t('ft_linear'), t('ft_min'), t('ft_mixed'), t('ft_asymmetric')],
                 value=get_val('filter_type', t('ft_linear')),
-                help_text=(t('ft_help') + "\\n\\n" + t('ft_asym_note'))
+                help_text=(t('ft_help') + t('ft_asym_note'))
             ),
             put_input('mixed_freq', label=t('mixed_freq'), type=FLOAT, value=get_val('mixed_freq', 300.0), help_text=t('mixed_freq_help'))
         ]),
@@ -446,6 +444,7 @@ def main():
     
     tab_target = [
         put_markdown(f"### 🎯 {t('tab_target')}"),
+        put_markdown(t('---')),
         put_select(
             'hc_mode',
             label=t('hc_mode'),
@@ -511,7 +510,7 @@ def main():
 #--- #4 Advanced
     tab_adv = [
         put_markdown(f"### 🛠️ {t('tab_adv')}"),
-        
+        put_markdown(t('---')),
         put_markdown(f"#### ⏱️ {t('ir_export_window_title')}"),
         put_text(t('')),
         put_select(
@@ -519,13 +518,13 @@ def main():
             label=t('ir_export_window_mode'),
             options=[
                 {'label': t('ir_export_window_auto'), 'value': 'auto'},
-                {'label': t('ir_export_window_off'), 'value': 'off'},
-                {'label': t('ir_export_window_sym'), 'value': 'rew_sym'},
+                #{'label': t('ir_export_window_off'), 'value': 'off'},
+                #{'label': t('ir_export_window_sym'), 'value': 'rew_sym'},
                 {'label': t('ir_export_window_asym'), 'value': 'rew_asym'},
             ],
             value=get_val('ir_export_window_mode', 'auto'),
             help_text=t('ir_export_window_help'),
-        ),
+       ),
 
         put_row([
             put_select(
@@ -629,7 +628,7 @@ def main():
                 help_text=t('tdc_slope_db_per_oct_help')
             ),
         ]),
-        
+            put_markdown("---"),
             put_markdown(f"#### 🧠 {t('bass_first_title')}"),
             put_checkbox(
                 'bass_first_ai',
@@ -1002,8 +1001,7 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             return
         
 
-       # put_success(t('done_msg'))
-       # update_status(t('stat_done'))
+      
             
         # --- Acoustic Intelligence UI (single source of truth: SAME as Summary.txt) ---
         # No separate "measured vs filtered" logic in UI. We display the Summary-based result.
@@ -1080,13 +1078,145 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
                 except Exception:
                     return "—"
 
+            def _xo_fc_wrapped_str(st: dict) -> str:
+                """
+                Show per-XO wrapped phase delta at crossover frequency (debug sanity check).
+                Looks for keys like: xo1_dphi_wrapped_deg@fc, xo2_dphi_wrapped_deg@fc, ...
+                """
+                try:
+                    if not isinstance(st, dict) or not st:
+                        return "—"
+
+                    # Pull XO freqs from the human-readable summary to label the numbers (best-effort).
+                    # Example xo_summary: "500.0Hz/12dB/oct, 2800.0Hz/12dB/oct"
+                    xo_summary = str(st.get("xo_summary", "") or "")
+                    freqs = []
+                    for part in xo_summary.split(","):
+                        part = part.strip()
+                        if "Hz" in part:
+                            try:
+                                freqs.append(float(part.split("Hz")[0].strip()))
+                            except Exception:
+                                freqs.append(None)
+
+                    items = []
+                    for i in range(1, 6):
+                        k = f"xo{i}_dphi_wrapped_deg@fc"
+                        if k not in st:
+                            continue
+                        try:
+                            v = float(st.get(k))
+                        except Exception:
+                            continue
+                        # Label with frequency if available, else "XO i"
+                        f_lbl = None
+                        if i <= len(freqs) and freqs[i-1] is not None:
+                            f_lbl = f"{int(round(freqs[i-1]))}Hz"
+                        else:
+                            f_lbl = f"XO{i}"
+                        items.append(f"{f_lbl}:{v:+.1f}°")
+
+                    return " | ".join(items) if items else "—"
+                except Exception:
+                    return "—"
+
+            # XO/HPF phase model reporting (from DSP stats; falls back safely)
+            def _xo_phase_model_str(st: dict) -> str:
+                try:
+                    s = (st or {}).get("xo_summary", None)
+                    if s is None or str(s).strip() == "":
+                        return "—"
+                    return str(s)
+                except Exception:
+                    return "—"
+
+            def _xo_diff_raw_str(st: dict) -> str:
+                try:
+                    p = (st or {}).get("xo_diff_raw_max_phase_deg", None)
+                    pf = (st or {}).get("xo_diff_raw_max_phase_hz", None)
+                    pfc = (st or {}).get("xo_diff_raw_max_phase_xo_fc_hz", None)
+                    g = (st or {}).get("xo_diff_raw_max_gd_ms", None)
+                    gf = (st or {}).get("xo_diff_raw_max_gd_hz", None)
+                    gfc = (st or {}).get("xo_diff_raw_max_gd_xo_fc_hz", None)
+                    if p is None and g is None:
+                        return "—"
+                    parts = []
+                    if p is not None and pf is not None:
+                        if pfc is not None:
+                            parts.append(f"max Δφ {float(p):.1f}° @ {float(pf):.0f} Hz (XO {float(pfc):.0f} Hz)")
+                        else:
+                            parts.append(f"max Δφ {float(p):.1f}° @ {float(pf):.0f} Hz")
+                    if g is not None and gf is not None:
+                        if gfc is not None:
+                            parts.append(f"max ΔGD {float(g):.2f} ms @ {float(gf):.0f} Hz (XO {float(gfc):.0f} Hz)")
+                        else:
+                            parts.append(f"max ΔGD {float(g):.2f} ms @ {float(gf):.0f} Hz")
+                    return " | ".join(parts) if parts else "—"
+                except Exception:
+                    return "—"
+                
+
+            def _hpf_diff_raw_str(st: dict) -> str:
+                try:
+                    p = (st or {}).get("hpf_diff_raw_max_phase_deg", None)
+                    pf = (st or {}).get("hpf_diff_raw_max_phase_hz", None)
+                    g = (st or {}).get("hpf_diff_raw_max_gd_ms", None)
+                    gf = (st or {}).get("hpf_diff_raw_max_gd_hz", None)
+                    if p is None and g is None:
+                        return "—"
+                    parts = []
+                    if p is not None and pf is not None:
+                        parts.append(f"max Δφ {float(p):.1f}° @ {float(pf):.0f} Hz")
+                    if g is not None and gf is not None:
+                        parts.append(f"max ΔGD {float(g):.2f} ms @ {float(gf):.0f} Hz")
+                    return " | ".join(parts) if parts else "—"
+                except Exception:
+                    return "—"
+
+
+            def _hpf_model_str(st: dict) -> str:
+                try:
+                    s = (st or {}).get("hpf_summary", None)
+                    if s is None or str(s).strip() == "":
+                        return "—"
+                    return str(s)
+                except Exception:
+                    return "—"
+            def _format_ir_window(data: dict) -> str:
+                """
+                Human-readable IR export window description.
+                Avoids tool-specific terminology and reflects actual behavior.
+                """
+                mode = str(data.get('ir_export_window_mode', '') or '').lower()
+
+                if mode == 'rew_asym':
+                    l = data.get('ir_window_left', None)
+                    r = data.get('ir_window_right', data.get('ir_window', None))
+                    try:
+                        if l is not None and r is not None:
+                            return f"Asymmetric (Left {float(l):.1f} ms, Right {float(r):.1f} ms)"
+                    except Exception:
+                        pass
+                    return "Asymmetric"
+
+                # Auto / fallback
+                return "Auto (adaptive)"
+
             put_markdown(dedent(f"""
             - **Lenght:** {data['taps']} taps ({data['taps']/data['fs']*1000:.1f} ms)
             - **Resolution:** {data['fs']/data['taps']:.2f} Hz
-            - **IR window:** {data['ir_window']} ms
+            - **IR window:** {_format_ir_window(data)}
             - **FDW:** {data['fdw_cycles']}
             - **House curve:** {data['hc_mode']} — {data.get('hc_source', 'Unknown')} ({data['mag_c_min']}-{data['mag_c_max']} Hz)
             - **Filter type:** {data['filter_type']}
+            - **XO phase model:** L {_xo_phase_model_str(l_st_f)} | R {_xo_phase_model_str(r_st_f)}
+            - **XO Δφ@fc (wrapped):** L {_xo_fc_wrapped_str(l_st_f)} | R {_xo_fc_wrapped_str(r_st_f)}
+            - **XO effect (theoretical raw):**
+              - **L:** {_xo_diff_raw_str(l_st_f)}
+              - **R:** {_xo_diff_raw_str(r_st_f)}
+            - **HPF effect (theoretical raw):**
+              - **L:** {_hpf_diff_raw_str(l_st_f)}
+              - **R:** {_hpf_diff_raw_str(r_st_f)}
             - **Phase correction clamp:** L {_phase_clamp_str(l_st_f)} | R {_phase_clamp_str(r_st_f)}
             - **Smoothing view:** {psl_str}
             - **Leveling algo:** {data.get('lvl_algo', '')}

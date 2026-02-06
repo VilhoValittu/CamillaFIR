@@ -2,7 +2,7 @@
 
 ## v2.8.9
 
-### Phase correction safety (v2.8.8)
+### Phase correction safety (v2.9.0)
 
 - **Internal phase correction clamp (±45°)**
   - Room-induced *excess phase* correction is now internally limited to **±45 degrees**.

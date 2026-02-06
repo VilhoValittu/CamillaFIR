@@ -1,4 +1,4 @@
-# CamillaFIR – Official Manual (v2.8.3)
+# CamillaFIR – Official Manual (v2.9.0)
 
 ## 1. Overview
 CamillaFIR generates **FIR room-correction filters** from REW exports (magnitude + phase).
@@ -92,8 +92,9 @@ Asymmetric Linear is a **low-latency linear-phase mode** that reduces audible pr
 by shifting the impulse peak earlier in time.
 
 The **Left window (ms)** parameter defines the **latency target**:
-- smaller values → lower latency
-- but also less time-domain freedom for low-frequency correction
+Only **Auto** and **Asymmetric** windowing modes are available.
+Legacy **Symmetric** and **Off** modes have been removed to simplify the UI
+and focus on the most effective REW-based strategies.
 
 **Practical guidance:**
 - **10 ms (default):** best balance between low latency and stable bass correction
@@ -126,6 +127,14 @@ but prevent excessive ripple and instability in the bass region.
 - **Independent slope limits for boost/cut:** optional, prevents small boosts from being flattened while keeping cuts controlled.
 - **Excursion protection:** blocks bass boost below a chosen frequency.
 - **HPF (subsonic):** protects woofers from ultra-low content.
+
+**HPF behavior (important):**
+- HPF is applied as a **true magnitude high-pass filter** in the FIR path.
+- The HPF response is added directly to the correction curve
+  (equivalent to applying a Butterworth HPF to the final FIR magnitude).
+- This ensures **magnitude and phase consistency**.
+- Prevents double-HPF behavior, incorrect low-frequency response,
+  and artificial group-delay artifacts.
 
 ### 5.5 Level matching
 CamillaFIR aligns measurement and target levels before synthesizing the filter.
@@ -229,3 +238,7 @@ A reliable approach is:
 - Enable HPF.
 - Reduce max boost.
 
+### HPF does not seem to affect bass
+- Verify that HPF is enabled and frequency/order are non-zero.
+- Check the filter magnitude plot: a proper roll-off should be visible below HPF frequency.
+- HPF is applied in the FIR magnitude path, not by disabling correction below cutoff.

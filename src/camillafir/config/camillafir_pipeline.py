@@ -141,8 +141,30 @@ def log_df_smoothing_toggle(pin, logger) -> bool:
 
 
 def build_xos_hpf(data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    xos = [{"freq": data[f"xo{i}_f"], "order": int(data[f"xo{i}_s"]) // 6}
-           for i in range(1, 6) if data.get(f"xo{i}_f")]
+    # XO: normalize pins -> list of dicts for DSP/phase model
+    xos: List[Dict[str, Any]] = []
+    for i in range(1, 6):
+        f_raw = data.get(f"xo{i}_f", None)
+        if f_raw in (None, "", 0):
+            continue
+        try:
+            f_hz = float(f_raw)
+        except Exception:
+            continue
+        if not math.isfinite(f_hz) or f_hz <= 0:
+            continue
+        s_raw = data.get(f"xo{i}_s", 12)
+        try:
+            slope_db_oct = int(round(float(s_raw)))
+        except Exception:
+            slope_db_oct = 12
+        # keep sane slope; order uses /6 in phase model
+        if slope_db_oct <= 0:
+            slope_db_oct = 12
+        order = max(1, int(round(slope_db_oct / 6.0)))
+        xos.append({"freq": f_hz, "order": order, "slope": slope_db_oct, "idx": i})
+    xos.sort(key=lambda d: float(d.get("freq", 0.0)))
+
     hpf = (
         {"enabled": bool(data.get("hpf_enable")),
          "freq": data.get("hpf_freq"),

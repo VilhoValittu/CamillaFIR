@@ -321,8 +321,9 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     else:
         # fallback: flat 0 dB target
         target_mags = np.zeros_like(freq_axis, dtype=float)
-    if cfg.hpf_settings and cfg.hpf_settings.get('enabled'):
-        target_mags = apply_hpf_to_mags(freq_axis, target_mags, cfg.hpf_settings['freq'], cfg.hpf_settings['order'])
+    # NOTE (HPF):
+    # Do NOT bake HPF into target curve. HPF is applied as a real magnitude filter later
+    # (gain_db += hpf_db), which keeps magnitude+phase consistent and avoids double-HPF.
     
     if cfg.enable_tdc:
         # NEW: TDC receives frequency-dependent RT60 (dict), auto-fallback if empty
@@ -901,24 +902,9 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             
             logger.info(f"Exc Prot: Full protection < {f_start}Hz, Soft fade up to {f_end:.1f}Hz.")
 
-        # --- HPF params (always defined) ---
-        hpf_f = 0.0
-        if cfg.hpf_settings and cfg.hpf_settings.get('enabled'):
-            hpf_f = float(cfg.hpf_settings.get('freq', 0.0) or 0.0)
-
-        # --- HPF policy: full stop + smooth fade (asym-safe) ---
-        if hpf_f > 0:
-                hpf_end = hpf_f * 1.41  # ~1/2 octave
-
-                # 1) Full stop below HPF
-                below = freq_axis < hpf_f
-                gain_db[below] = 0.0
-
-                # 2) Smooth fade HPF -> HPF*1.41 (0..1)
-                trans = (freq_axis >= hpf_f) & (freq_axis <= hpf_end)
-                if np.any(trans):
-                    fade = (freq_axis[trans] - hpf_f) / (hpf_end - hpf_f)
-                    gain_db[trans] *= fade
+        # NOTE (HPF):
+        # Do NOT "zero correction" below HPF. That is not a high-pass filter.
+        # Real HPF magnitude is applied later via gain_db += hpf_db.
 
         # --- CHECKPOINT 5: after_fade (place right AFTER your fade/transition operations) ---
         # If your fade is applied on gain_db, this is correct. If it is applied on another array, move accordingly.
@@ -1027,13 +1013,211 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             if hpf_freq > 0 and hpf_order > 0:
                 hpf_slope = float(hpf_order * 6)  # dB/oct
 
+        # --- DEBUG: what XO/HPF are we modeling? ---
+        try:
+            xo_list = getattr(cfg, "crossovers", None) or []
+            if xo_list:
+                xo_txt = ", ".join([
+                    f"{float(x.get('freq',0.0)):.1f}Hz/{int(x.get('slope', int(x.get('order',1))*6))}dB/oct"
+                    for x in xo_list if x.get("freq", None) is not None
+                ])
+            else:
+                xo_txt = "off"
+            if hpf_freq and hpf_slope and float(hpf_freq) > 0 and float(hpf_slope) > 0:
+                hpf_txt = f"{float(hpf_freq):.1f}Hz/{int(round(float(hpf_slope)))}dB/oct"
+            else:
+                hpf_txt = "off"
+            logger.info(f"Phase model: XO={xo_txt} | HPF={hpf_txt}")
+        except Exception:
+            xo_txt = "n/a"
+            hpf_txt = "n/a"
+
+        # RAW theoretical phase model (UNCLAMPED for debug indicators)
+        theo_on_raw = calculate_theoretical_phase(
+            freq_axis,
+            cfg.crossovers,
+            hpf_freq=hpf_freq,
+            hpf_slope=hpf_slope,
+            max_phase_deg=None
+        )
+        theo_off_raw = calculate_theoretical_phase(
+            freq_axis,
+            [],               # no XO
+            hpf_freq=None,    # no HPF
+            hpf_slope=None,
+            max_phase_deg=None
+        )
+
+        # (Keep your existing clamped theo_xo if you use it elsewhere)
         theo_xo = calculate_theoretical_phase(
             freq_axis,
             cfg.crossovers,
             hpf_freq=hpf_freq,
             hpf_slope=hpf_slope
         )
+        # --- XO/HPF ON/OFF diff indicator (debug-friendly, relevant band) ---
+        try:
+            xo_list = getattr(cfg, "crossovers", None) or []
+            hpf_on = (hpf_freq and hpf_slope and float(hpf_freq) > 0 and float(hpf_slope) > 0)
 
+            if xo_list or hpf_on:
+                f = np.asarray(freq_axis, float)
+
+                # IMPORTANT: use UNCLAMPED theoretical phase for "raw" indicator
+                theo_on_raw = calculate_theoretical_phase(
+                    f,
+                    xo_list,
+                    hpf_freq=hpf_freq,
+                    hpf_slope=hpf_slope,
+                    max_phase_deg=None
+                )
+                theo_off_raw = calculate_theoretical_phase(
+                    f,
+                    [],
+                    hpf_freq=None,
+                    hpf_slope=None,
+                    max_phase_deg=None
+                )
+
+                # RAW model delta (really no clamp)
+                dphi_raw = np.unwrap(np.asarray(theo_on_raw, float) - np.asarray(theo_off_raw, float))
+                dphi_raw_deg = np.rad2deg(dphi_raw)
+
+                # Wrap to [-180, 180) so "max phase" doesn't get dominated by unwrap turns / band edges
+                def _wrap_deg(x_deg: np.ndarray) -> np.ndarray:
+                    return (x_deg + 180.0) % 360.0 - 180.0
+
+                dphi_wrapped_deg = _wrap_deg(dphi_raw_deg)
+
+                # Build masks separately so HPF doesn't dominate XO
+                xo_mask = np.zeros_like(f, dtype=bool)
+                xo_band_masks = []  # list of (fc_hz, mask)
+                for xo in xo_list:
+                    try:
+                        fc = float(xo.get("freq", 0.0) or 0.0)
+                    except Exception:
+                        continue
+                    if fc > 0:
+                        m = (f >= fc / 4.0) & (f <= fc * 4.0)
+                        xo_mask |= m
+                        xo_band_masks.append((fc, m))
+
+                hpf_mask = np.zeros_like(f, dtype=bool)
+                if hpf_on:
+                    fc = float(hpf_freq)
+                    # HPF phase effect is most meaningful below/around fc -> focus a bit tighter
+                    hpf_mask |= (f >= max(fc / 8.0, 10.0)) & (f <= fc * 2.0)
+
+                # Fallbacks
+                wide_mask = np.isfinite(f) & (f >= 20.0) & (f <= float(np.nanmax(f)))
+                if np.count_nonzero(xo_mask) < 8:
+                    xo_mask = wide_mask
+                if np.count_nonzero(hpf_mask) < 8:
+                    hpf_mask = wide_mask if hpf_on else np.zeros_like(f, dtype=bool)
+
+                def _max_abs_in_mask(arr, mask):
+                    a = np.asarray(arr, float)
+                    m = np.asarray(mask, bool)
+                    if np.count_nonzero(m) < 8:
+                        return None, None
+                    aa = np.where(m, np.abs(a), -1.0)
+                    idx = int(np.argmax(aa))
+                    if aa[idx] < 0:
+                        return None, None
+                    return float(np.abs(a[idx])), float(f[idx])
+
+                # Phase maxima (XO only; also identify which XO band "won")
+                xo_phi, xo_phi_hz = _max_abs_in_mask(dphi_wrapped_deg, xo_mask)
+                if xo_phi is not None:
+                    st["xo_diff_raw_max_phase_deg"] = xo_phi
+                    st["xo_diff_raw_max_phase_hz"] = xo_phi_hz
+
+                    # Determine which XO band contains the winning frequency (closest fc if overlap)
+                    best_fc = None
+                    if xo_band_masks:
+                        # Find all fc where the winning frequency is in that band mask
+                        candidates = []
+                        for fc, m in xo_band_masks:
+                            try:
+                                idx_win = int(np.argmin(np.abs(f - xo_phi_hz)))
+                            except Exception:
+                                continue
+                            if bool(m[idx_win]):
+                                candidates.append(fc)
+                        if candidates:
+                            # pick the closest fc to the winning frequency
+                            best_fc = float(min(candidates, key=lambda c: abs(float(c) - float(xo_phi_hz))))
+                        else:
+                            # fallback: closest fc overall
+                            best_fc = float(min([fc for fc, _ in xo_band_masks], key=lambda c: abs(float(c) - float(xo_phi_hz))))
+                    if best_fc is not None:
+                        st["xo_diff_raw_max_phase_xo_fc_hz"] = float(best_fc)
+
+                # Per-XO phase delta at fc (wrapped) — sanity check / debug gold
+                for i, xo in enumerate(xo_list, start=1):
+                    try:
+                        fc = float(xo.get("freq", 0.0) or 0.0)
+                    except Exception:
+                        continue
+                    if fc <= 0:
+                        continue
+                    idx_fc = int(np.argmin(np.abs(f - fc)))
+                    st[f"xo{i}_dphi_wrapped_deg@fc"] = float(dphi_wrapped_deg[idx_fc])
+
+                hpf_phi, hpf_phi_hz = _max_abs_in_mask(dphi_raw_deg, hpf_mask)
+                if hpf_on and hpf_phi is not None:
+                    st["hpf_diff_raw_max_phase_deg"] = hpf_phi
+                    st["hpf_diff_raw_max_phase_hz"] = hpf_phi_hz
+
+                # GD delta (RAW) from RAW phases
+                w = 2.0 * math.pi * f
+                dw = np.gradient(w) + 1e-30
+                ph_on = np.unwrap(np.asarray(theo_on_raw, float))
+                ph_off = np.unwrap(np.asarray(theo_off_raw, float))
+                gd_on = (-np.gradient(ph_on) / dw) * 1000.0
+                gd_off = (-np.gradient(ph_off) / dw) * 1000.0
+                dgd = gd_on - gd_off
+
+                # GD maxima (separately)
+                xo_gd, xo_gd_hz = _max_abs_in_mask(dgd, xo_mask)
+                if xo_gd is not None:
+                    st["xo_diff_raw_max_gd_ms"] = xo_gd
+                    st["xo_diff_raw_max_gd_hz"] = xo_gd_hz
+                    # Optional: which XO band "won" for GD too (same idea)
+                    try:
+                        best_fc_gd = None
+                        if xo_band_masks:
+                            idx_win = int(np.argmin(np.abs(f - xo_gd_hz)))
+                            candidates = [fc for fc, m in xo_band_masks if bool(m[idx_win])]
+                            if candidates:
+                                best_fc_gd = float(min(candidates, key=lambda c: abs(float(c) - float(xo_gd_hz))))
+                            else:
+                                best_fc_gd = float(min([fc for fc, _ in xo_band_masks], key=lambda c: abs(float(c) - float(xo_gd_hz))))
+                        if best_fc_gd is not None:
+                            st["xo_diff_raw_max_gd_xo_fc_hz"] = float(best_fc_gd)
+                    except Exception:
+                        pass
+
+                hpf_gd, hpf_gd_hz = _max_abs_in_mask(dgd, hpf_mask)
+                if hpf_on and hpf_gd is not None:
+                    st["hpf_diff_raw_max_gd_ms"] = hpf_gd
+                    st["hpf_diff_raw_max_gd_hz"] = hpf_gd_hz
+
+        except Exception as e:
+            logger.debug("XO raw diff indicator failed: %s", e)
+
+
+
+        # Expose to stats/Summary (human readable)
+        try:
+            st["xo_summary"] = xo_txt
+            st["hpf_summary"] = hpf_txt
+            # small checkpoint samples (degrees) for debugging
+            for fchk in (20.0, 80.0, 200.0, 1000.0, 5000.0):
+                idx = int(np.argmin(np.abs(freq_axis - fchk)))
+                st[f"theo_xo_deg@{int(fchk)}Hz"] = float(np.rad2deg(theo_xo[idx]))
+        except Exception:
+            pass
 
         # --- Phase correction limit (Hz) with smooth blend ---
         # Goal:
@@ -1087,6 +1271,15 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             if hpf_f > 0 and hpf_order > 0:
                 hpf_db = apply_hpf_to_mags(freq_axis, np.zeros_like(freq_axis), hpf_f, hpf_order)
                 gain_db = gain_db + hpf_db
+                try:
+                    logger.info(
+                        "HPF magnitude applied to FIR: "
+                        f"fc={hpf_f:.1f} Hz, "
+                        f"order={hpf_order} "
+                        f"({hpf_order * 6:.0f} dB/oct)"
+                    )
+                except Exception:
+                    pass
 
         # --- 8G/9A2. Optional residual magnitude pass (2-pass target tracking) ---
         # Improves target tracking without making correction aggressive:
@@ -1179,21 +1372,9 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                     except Exception:
                         pass
 
-                    # HPF policy fade (same as earlier HPF policy)
-                    try:
-                        hs2 = getattr(cfg, "hpf_settings", None)
-                        if isinstance(hs2, dict) and hs2.get('enabled'):
-                            _hpf_f = float(hs2.get('freq', 0.0) or 0.0)
-                            if _hpf_f > 0:
-                                hpf_end2 = _hpf_f * 1.41
-                                below2 = freq_axis < _hpf_f
-                                _g[below2] = 0.0
-                                trans2 = (freq_axis >= _hpf_f) & (freq_axis <= hpf_end2)
-                                if np.any(trans2):
-                                    fade2 = (freq_axis[trans2] - _hpf_f) / (hpf_end2 - _hpf_f)
-                                    _g[trans2] *= fade2
-                    except Exception:
-                        pass
+                    # NOTE (HPF):
+                    # No "HPF policy fade" here. Real HPF magnitude is applied once (gain_db += hpf_db),
+                    # so residual constraints should not zero/shape below fc.
 
                     # Final hard clamp (same as 8F)
                     try:

@@ -19,7 +19,7 @@ import scipy.io.wavfile
 import math
 from datetime import datetime
 from textwrap import dedent
-
+import math
 import numpy as np
 from pywebio import config, start_server
 from pywebio.input import *
@@ -77,8 +77,11 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.8.9"
+VERSION = "v2.9.0"
 # Change log:
+# v.2.9.0 [UI] Removed "Symmetric" & "Off" modes from windowing options, leaving only "Auto" (rewind-based) and "Asymmetric" (rewind-based + shift). 
+# This simplifies the UI and focuses on the most effective windowing strategies. The "Auto" mode will automatically choose the best windowing based on the impulse response characteristics, while "Asymmetric" can be used to further reduce latency if desired.
+# v.2.9.0 [DSP] Fixed HPF magnitude application to ensure it is applied as a real magnitude filter (gain_db += hpf_db) rather than being baked into the target curve. This keeps magnitude and phase consistent and avoids issues with double-HPF effects.
 # v.2.8.9 [DSP] Added more safety checks and fixed edge cases in various blocks (leveling, TDC, bass-first, etc.)
 # v.2.8.5 [DSP] Added tukey windowing option
 # v2.8.4  Github actions now makes running files
@@ -193,7 +196,20 @@ def process_run():
     logger.info(f"House curve source: {hc_source}")
     # 4) XO + HPF
     xos, hpf = build_xos_hpf(data)
-
+    try:
+        if xos:
+            xo_txt = ", ".join([f"{float(x.get('freq')):.1f}Hz/{int(x.get('slope', int(x.get('order',1))*6))}dB/oct" for x in xos])
+            logger.info(f"XO (UI->CFG): {xo_txt}")
+        else:
+            logger.info("XO (UI->CFG): off")
+        if isinstance(hpf, dict) and hpf.get("enabled"):
+            hf = float(hpf.get("freq", 0.0) or 0.0)
+            ho = int(hpf.get("order", 0) or 0)
+            logger.info(f"HPF (UI->CFG): {hf:.1f}Hz/{int(ho*6)}dB/oct")
+        else:
+            logger.info("HPF (UI->CFG): off")
+    except Exception:
+        pass
     # 5) (Optional) DF smoothing log
     df_on = log_df_smoothing_toggle(pin, logger)
 

@@ -4,6 +4,28 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [2.9.0] - 2026-02-06
+
+### UI
+- **Windowing mode simplification**
+  - Removed **“Symmetric”** and **“Off”** windowing modes.
+  - Windowing now offers only:
+    - **Auto** – REW-based, adaptive windowing selected automatically from the impulse response.
+    - **Asymmetric** – REW-based asymmetric windowing with optional latency reduction.
+  - Simplifies the UI and focuses on the most effective and reliable windowing strategies.
+
+### DSP
+- **High-pass filter (HPF) magnitude fix**
+  - Fixed HPF handling so it is applied as a **true magnitude filter** in the FIR path.
+  - HPF is now applied directly to the correction curve (**`gain_db += hpf_db`**),
+    instead of being baked into the target response.
+  - Ensures **magnitude and phase consistency**.
+  - Prevents double-HPF behavior, incorrect low-frequency response,
+    and artificial group delay artifacts when HPF is enabled.
+
+
+---
+
 ## [2.8.9] - 2026-02-05
 
 ### DSP
