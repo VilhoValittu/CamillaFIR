@@ -35,6 +35,8 @@ from .camillafir_ui_helpers import (
     update_ir_tukey_ui,
     update_ir_export_window_mode_ui,
     update_mixed_freq_ui,
+    update_ir_window_shape_ui,
+    update_ir_lr_window_ui,
 )
 from ..config.camillafir_pipeline import (
     collect_ui_data,
@@ -311,7 +313,8 @@ def main():
         {'label': t('hc_cinema'),        'value': 'Cinema'},
         {'label': t('hc_mode_upload'),   'value': 'Custom'},
     ]
-    fs_opts = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]; taps_opts = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]; slope_opts = [6, 12, 18, 24, 36, 48]
+    fs_opts = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]; 
+    taps_opts = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]; slope_opts = [6, 12, 18, 24, 36, 48]
     
 #--- #1 Files
     
@@ -512,114 +515,7 @@ def main():
 #--- #4 Advanced
     tab_adv = [
         put_markdown(f"### 🛠️ {t('tab_adv')}"),
-        put_markdown(t('---')),
-        put_markdown(f"#### ⏱️ {t('ir_export_window_title')}"),
-        put_text(t('')),
-        put_scope("ir_export_window_mode_scope"),
 
-
-        put_row([
-            put_select(
-                'ir_export_window_shape',
-                label=t('ir_export_window_shape'),
-                
-                options=[
-                    {'label': t('ir_export_window_shape_hann'), 'value': 'hann'},
-                    {'label': t('ir_export_window_shape_tukey'), 'value': 'tukey'},
-                ],
-                value=str(get_val('ir_export_window_shape', 'hann') or 'hann').strip().lower(),
-                help_text=t('ir_export_window_shape_help'),
-                
-            ),
-        put_scope('ir_tukey_alpha_scope'),
-        ]),
-
-        put_collapse(
-            t('ir_export_window_help_long_title'),
-            [put_markdown(t('ir_export_window_help_long'))]
-        ),
-        
-        put_row([
-            put_input('ir_window_left', label=t('ir_window_left_label'), type=FLOAT, value=get_val('ir_window_left', 10.0), help_text=t('ir_matala')),
-            # Use new key 'ir_window_right' but keep backward-compat with older saved settings ('ir_window')
-            put_input('ir_window_right', label=t('ir_window_right_label'), type=FLOAT,
-                      value=get_val('ir_window_right', get_val('ir_window', 500.0)),
-                      help_text=t('ir_korkea'))
-        ]),
-        
-        put_markdown("---"),
-
-        # A-FDW
-        put_markdown("#### ⏳ Adaptive Frequency-Domain Windowing (A-FDW)"),
-        put_checkbox('enable_afdw', options=[{'label': t('enable_afdw'), 'value': True}], 
-             value=[True] if get_val('enable_afdw', True) else [], help_text=t('afdw_help')),
-        
-        put_row([
-            put_buttons(
-                [
-                    {"label": t("afdw_preset_tight"),    "value": "Tight"},
-                    {"label": t("afdw_preset_balanced"), "value": "Balanced"},
-                    {"label": t("afdw_preset_safe"),     "value": "Safe"},
-                    {"label": t("afdw_preset_minimal"),  "value": "Minimal"},
-                ],
-                onclick=lambda preset: apply_afdw_preset(preset),
-                small=True,
-            ),
-        ]),
-        put_html(f"<div style='opacity:0.65; font-size:13px'>{t('afdw_preset_help')}</div>"),
-
-        put_row([
-            put_input('fdw_cycles', label=t('fdw'), type=FLOAT, value=get_val('fdw_cycles', 8.0), help_text=t('fdw_help'))
-        ]),
-        put_markdown("---"),
-        # --- TDC aka Trinnov-mode (PyWebIO)
-
-        put_markdown("#### ⏳ Temporal Decay Control (TDC)"),
-        put_row([
-            put_buttons(
-                [
-                    {"label": t("tdc_preset_safe"), "value": "Safe"},
-                    {"label": t("tdc_preset_normal"), "value": "Normal"},
-                    {"label": t("tdc_preset_aggressive"), "value": "Aggressive"},
-                ],
-                onclick=lambda preset: apply_tdc_preset(preset),
-                small=True,
-            ),
-        ]),
-        put_html(f"<div style='opacity:0.65; font-size:13px'>{t('tdc_preset_help')}</div>"),
-        put_html(f"<div style='opacity:0.70; font-size:13px; margin-top:6px'>{t('tdc_summary_hint')}</div>"),
-
-
-        put_checkbox(
-            'enable_tdc',
-            options=[{'label': t('enable_tdc'), 'value': True}],
-            value=[True] if get_val('enable_tdc', True) else [],
-            help_text=t('tdc_help')
-        ),
-
-        put_row([
-            put_input(
-                'tdc_strength',
-                label=t('tdc_strength'),
-                type=FLOAT,
-                value=get_val('tdc_strength', 50.0),
-                help_text=t('tdc_help')
-            ),
-            put_input(
-                'tdc_max_reduction_db',
-                label=t('tdc_max_reduction_db'),
-                type=FLOAT,
-                value=get_val('tdc_max_reduction_db', 9.0),
-                help_text=t('tdc_max_reduction_db_help')
-            ),
-            put_input(
-                'tdc_slope_db_per_oct',
-                label=t('tdc_slope_db_per_oct'),
-                type=FLOAT,
-                value=get_val('tdc_slope_db_per_oct', 6.0),
-                help_text=t('tdc_slope_db_per_oct_help')
-            ),
-        ]),
             put_markdown("---"),
             put_markdown(f"#### 🧠 {t('bass_first_title')}"),
             put_checkbox(
@@ -722,7 +618,101 @@ put_markdown("---"),
         ])
     ]
 
-#--- #5 XO
+#--- #5 Window & TDC
+    tab_window_tdc = [
+        put_markdown(f"🪟 {t('tab_window_tdc')}"),
+        put_markdown("---"),
+        put_scope("ir_export_window_mode_scope"),
+
+
+        put_row([
+        put_scope("ir_export_window_shape_scope"),
+        put_scope("ir_tukey_alpha_scope"),
+        ]),
+
+        put_collapse(
+            t('ir_export_window_help_long_title'),
+            [put_markdown(t('ir_export_window_help_long'))]
+        ),
+        
+        
+        put_scope("ir_lr_window_scope"),
+        
+        put_markdown("---"),
+
+        # A-FDW
+        put_markdown("#### ⏳ Adaptive Frequency-Domain Windowing (A-FDW)"),
+        put_checkbox('enable_afdw', options=[{'label': t('enable_afdw'), 'value': True}], 
+             value=[True] if get_val('enable_afdw', True) else [], help_text=t('afdw_help')),
+        
+        put_row([
+            put_buttons(
+                [
+                    {"label": t("afdw_preset_tight"),    "value": "Tight"},
+                    {"label": t("afdw_preset_balanced"), "value": "Balanced"},
+                    {"label": t("afdw_preset_safe"),     "value": "Safe"},
+                    {"label": t("afdw_preset_minimal"),  "value": "Minimal"},
+                ],
+                onclick=lambda preset: apply_afdw_preset(preset),
+                small=True,
+            ),
+        ]),
+        put_html(f"<div style='opacity:0.65; font-size:13px'>{t('afdw_preset_help')}</div>"),
+
+        put_row([
+            put_input('fdw_cycles', label=t('fdw'), type=FLOAT, value=get_val('fdw_cycles', 8.0), help_text=t('fdw_help'))
+        ]),
+        put_markdown("---"),
+        # --- TDC aka Trinnov-mode (PyWebIO)
+
+        put_markdown("#### ⏳ Temporal Decay Control (TDC)"),
+        put_row([
+            put_buttons(
+                [
+                    {"label": t("tdc_preset_safe"), "value": "Safe"},
+                    {"label": t("tdc_preset_normal"), "value": "Normal"},
+                    {"label": t("tdc_preset_aggressive"), "value": "Aggressive"},
+                ],
+                onclick=lambda preset: apply_tdc_preset(preset),
+                small=True,
+            ),
+        ]),
+        put_html(f"<div style='opacity:0.65; font-size:13px'>{t('tdc_preset_help')}</div>"),
+        put_html(f"<div style='opacity:0.70; font-size:13px; margin-top:6px'>{t('tdc_summary_hint')}</div>"),
+
+
+        put_checkbox(
+            'enable_tdc',
+            options=[{'label': t('enable_tdc'), 'value': True}],
+            value=[True] if get_val('enable_tdc', True) else [],
+            help_text=t('tdc_help')
+        ),
+
+        put_row([
+            put_input(
+                'tdc_strength',
+                label=t('tdc_strength'),
+                type=FLOAT,
+                value=get_val('tdc_strength', 50.0),
+                help_text=t('tdc_help')
+            ),
+            put_input(
+                'tdc_max_reduction_db',
+                label=t('tdc_max_reduction_db'),
+                type=FLOAT,
+                value=get_val('tdc_max_reduction_db', 9.0),
+                help_text=t('tdc_max_reduction_db_help')
+            ),
+            put_input(
+                'tdc_slope_db_per_oct',
+                label=t('tdc_slope_db_per_oct'),
+                type=FLOAT,
+                value=get_val('tdc_slope_db_per_oct', 6.0),
+                help_text=t('tdc_slope_db_per_oct_help')
+            ),
+        ]),
+    ]
+#--- #6 XO
     tab_xo = [
         put_markdown(f"### ❌ {t('tab_xo')}"),
         put_html(
@@ -756,7 +746,8 @@ put_markdown("---"),
         {'title': t('tab_basic'), 'content': tab_basic}, 
         {'title': t('tab_target'), 'content': tab_target}, 
         {'title': t('tab_adv'), 'content': tab_adv}, 
-        {'title': t('tab_xo'), 'content': tab_xo}
+        {'title': t('tab_window_tdc'), 'content': tab_window_tdc},
+        {'title': t('tab_xo'), 'content': tab_xo},
     ])
 
     # Only sanitize range when BOTH ends are valid numbers.
@@ -778,38 +769,71 @@ put_markdown("---"),
         except Exception:
             return
 
-
-
-
+    # update ui (initial render)
     update_lvl_ui()
     update_ir_tukey_ui()
     update_ir_export_window_mode_ui()
     update_mixed_freq_ui()
-    pin_on_change('ir_export_window_mode', onchange=update_ir_export_window_mode_ui)
-    pin_on_change('filter_type', onchange=update_mixed_freq_ui)
+    update_ir_window_shape_ui()
+    update_ir_lr_window_ui()
 
-    # Rerender manual field ONLY when mode changes (Auto/Manual)
+    # --- orchestrators (avoid racing handlers) ---
+
+    def _refresh_ir_window_controls(_=None):
+    # --- HARD POLICY: BASIC mode => windowing ALWAYS auto ---
+        try:
+            m = str(_pin_get('mode', 'BASIC') or 'BASIC').strip().upper()
+            if m == "BASIC":
+                if str(pin.get('ir_export_window_mode', '') or '').lower() != 'auto':
+                    pin_update('ir_export_window_mode', value='auto')
+        except Exception:
+            pass
+
+        # 1) sanitize/export-mode first (may force value back to "auto")
+        update_ir_export_window_mode_ui()
+
+        # 2) dependent scopes
+        update_ir_window_shape_ui()
+        update_ir_tukey_ui()
+        update_ir_lr_window_ui()
+
+
+    def _on_filter_type_change(_=None):
+        # Mixed freq depends on filter_type
+        update_mixed_freq_ui()
+        # Filter type may indirectly force mode to auto -> refresh whole IR window group
+        _refresh_ir_window_controls()
+
+    # pins
+    pin_on_change('ir_export_window_mode', onchange=_refresh_ir_window_controls)
+    pin_on_change('filter_type', onchange=_on_filter_type_change)
+
+    # keep these (independent)
     pin_on_change('lvl_mode', onchange=update_lvl_ui)
-    # Rerender Tukey alpha ONLY when window shape changes
+
+    # Tukey alpha depends on shape, but our refresh covers mode/filter changes
     pin_on_change('ir_export_window_shape', onchange=update_ir_tukey_ui)
+
     # Range change: sanitize only, no rerender
     pin_on_change('lvl_min', onchange=_on_lvl_range_change)
     pin_on_change('lvl_max', onchange=_on_lvl_range_change)
     pin_on_change('lvl_manual_db', onchange=_on_lvl_range_change)
+
     pin_on_change('taps', onchange=_warn_taps_if_over_cap)
     _warn_taps_if_over_cap()
 
     # Mode description: initial render + live updates
     def _on_mode_change(_=None):
         update_mode_desc()
-        # Auto-set IR export window mode by selected mode defaults
         try:
             m = str(_pin_get('mode', 'BASIC') or 'BASIC').strip().upper()
             v = (MODE_DEFAULTS.get(m, {}) or {}).get('ir_export_window_mode', None)
             if isinstance(v, str) and v.strip():
                 pin_update('ir_export_window_mode', value=v.strip())
+                _refresh_ir_window_controls()
         except Exception:
             pass
+
 
     pin_on_change('mode', onchange=_on_mode_change)
     _on_mode_change()
@@ -819,8 +843,10 @@ put_markdown("---"),
     pin_on_change('fs', onchange=update_taps_auto_info)
     pin_on_change('taps', onchange=update_taps_auto_info)
     update_taps_auto_info()
+
     pin_on_change('max_boost', onchange=_warn_max_boost_if_over_cap)
     _warn_max_boost_if_over_cap()
+
     put_markdown("---")
 
     

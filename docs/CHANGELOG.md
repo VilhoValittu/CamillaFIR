@@ -1,6 +1,23 @@
 # Changelog
 
 All notable changes to **CamillaFIR** are documented in this file.
+
+---
+
+
+## [2.9.2] - 2026-02-07
+
+### UI
+- **IR windowing hard restrictions clarified and enforced**
+  - In **Basic mode**, IR export windowing is now **always forced to Auto**.
+    - The windowing mode selector is locked and cannot be changed.
+    - A persistent warning message is shown to explain the restriction.
+  - When **Filter type = Asymmetric**, IR export windowing is also **locked to Auto**
+    in both Basic and Advanced modes.
+  - Prevents confusing transient UI states where windowing controls appeared
+    editable even though the value was internally forced back to Auto.
+  - Ensures UI behavior always matches DSP policy and exported configuration.
+
 ---
 
 ## [2.9.1] - 2026-02-06

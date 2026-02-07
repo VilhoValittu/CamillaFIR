@@ -119,7 +119,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "global_gain_db": 0.0,
 
         "enable_mag_correction": True,
-        "mag_c_min": 18.0,
+        "mag_c_min": 10.0,
         "mag_c_max": 200.0,
         "max_boost_db": 3.0,
         "max_cut_db": 30.0,
@@ -172,7 +172,7 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
 
         "filter_smooth": (1, 24),
         "reg_strength": (10.0, 60.0),
-
+        "ir_export_window_mode": ("auto", "auto"),  # force auto in BASIC (UI + pin sanitize)
         "enable_tdc": (True, True),
         "tdc_strength": (0.0, 70.0),
         "tdc_max_reduction_db": (0.0, 12.0),

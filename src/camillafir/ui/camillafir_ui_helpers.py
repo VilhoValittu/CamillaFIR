@@ -121,6 +121,22 @@ def update_ir_tukey_ui(_=None):
             return default
 
     try:
+        # Allow IR window controls ONLY when filter_type is Linear or Asymmetric
+        ft = str(_p("filter_type", "") or "").strip().lower()
+        try:
+            ft_linear_label = str(t("ft_linear") or "").strip().lower()
+        except Exception:
+            ft_linear_label = "linear"
+        is_linear = (ft == ft_linear_label) or ("linear" in ft)
+
+        try:
+            ft_asym_label = str(t("ft_asymmetric") or "").strip().lower()
+        except Exception:
+            ft_asym_label = "asymmetric"
+        is_asym_filter = (ft == ft_asym_label) or ("asym" in ft)
+
+        allow_ir = bool(is_linear or is_asym_filter)
+
         sh = str(_p("ir_export_window_shape", "hann") or "hann").strip().lower()
         is_tukey = (sh == "tukey")
 
@@ -134,6 +150,10 @@ def update_ir_tukey_ui(_=None):
         a = float(np.clip(a, 0.0, 1.0))
 
         with use_scope("ir_tukey_alpha_scope", clear=True):
+            # If IR controls not allowed for this filter type, hide the whole alpha control
+            if not allow_ir:
+                return
+
             w = put_input(
                 "ir_export_tukey_alpha",
                 label=t("ir_export_tukey_alpha"),
@@ -159,6 +179,13 @@ def update_ir_export_window_mode_ui(_=None):
             return default
 
     try:
+        # HARD POLICY: BASIC mode => windowing ALWAYS auto (UI + pin sanitize)
+        try:
+            m = str(_p("mode", "BASIC") or "BASIC").strip().upper()
+        except Exception:
+            m = "BASIC"
+        is_basic = (m == "BASIC")
+
         ft = str(_p("filter_type", "") or "").strip().lower()
 
         try:
@@ -168,8 +195,43 @@ def update_ir_export_window_mode_ui(_=None):
 
         is_linear = (ft == ft_linear_label) or ("linear" in ft)
 
+        # Allow IR window controls ONLY when filter_type is Linear or Asymmetric
+        try:
+            ft_asym_label = str(t("ft_asymmetric") or "").strip().lower()
+        except Exception:
+            ft_asym_label = "asymmetric"
+        is_asym_filter = (ft == ft_asym_label) or ("asym" in ft)
+        allow_ir = bool(is_linear or is_asym_filter)
+        # POLICY: Asymmetric filter type => IR export window mode must be Auto
+        # (left_ms still matters for asymmetric filter placement, but windowing mode stays Auto)
+        lock_window_mode = bool(is_basic or (not allow_ir) or is_asym_filter)
+
         # Current value (from pins, may come from loaded config)
         cur = str(_p("ir_export_window_mode", "auto") or "auto").strip().lower()
+
+        # BASIC: force auto no matter what user tries
+        if is_basic and cur != "auto":
+            try:
+                pin_update("ir_export_window_mode", value="auto")
+            except Exception:
+                pass
+            cur = "auto"
+        # Asymmetric filter: force auto no matter what user tries
+        if is_asym_filter and cur != "auto":
+            try:
+                pin_update("ir_export_window_mode", value="auto")
+            except Exception:
+                pass
+            cur = "auto"
+
+        # If IR controls not allowed for this filter type, force mode to auto
+        if (not allow_ir) and (cur != "auto"):
+            try:
+                pin_update("ir_export_window_mode", value="auto")
+            except Exception:
+                pass
+            cur = "auto"
+
 
         # If not linear, force away from rew_asym
         if (not is_linear) and (cur == "rew_asym"):
@@ -180,7 +242,7 @@ def update_ir_export_window_mode_ui(_=None):
             cur = "auto"
 
         with use_scope("ir_export_window_mode_scope", clear=True):
-            put_select(
+            w = put_select(
                 "ir_export_window_mode",
                 label=t("ir_export_window_mode"),
                 options=[
@@ -190,10 +252,12 @@ def update_ir_export_window_mode_ui(_=None):
                 value=cur,
                 help_text=t("ir_export_window_help"),
             )
-
+            # Lock the whole control when policy requires Auto-only
+            if lock_window_mode:
+                w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
             # Disable/enable the rew_asym option at DOM level (greys out in native select)
             # NOTE: do this after put_select so the element exists.
-            js_disable = "true" if (not is_linear) else "false"
+            js_disable = "true" if (lock_window_mode or (not is_linear)) else "false"
             put_html(f"""
 <script>
 (function() {{
@@ -224,11 +288,10 @@ def update_ir_export_window_mode_ui(_=None):
                 
             except Exception:
                 pass
-            #    msg_fi = "Asymmetric toimii vain Linear Phase -suodattimien kanssa"
-            #    msg_en = "Asymmetricworks only with Linear Phase filters"
 
-            opacity = "1.0" if (not is_linear) else "0.55"
-            color = "#ffb74d" if (not is_linear) else "#9aa0a6"
+            emph = bool(is_basic or (not is_linear))
+            opacity = "1.0" if emph else "0.55"
+            color = "#ffb74d" if emph else "#9aa0a6"
 
             put_html(f"""
 <div style="
@@ -245,7 +308,130 @@ def update_ir_export_window_mode_ui(_=None):
   </span>
 </div>
 """)
+    except Exception:
+        pass
 
+def update_ir_lr_window_ui(_=None):
+    """
+    UI helper:
+      - Controls visible always, but enabled only when filter_type is Linear or Asymmetric.
+      - Left is meaningful for:
+          * IR export window mode == 'rew_asym', OR
+          * filter_type == Asymmetric (DSP initial placement).
+      - Right is meaningful ONLY for:
+          * IR export window mode == 'rew_asym'
+    Renders into scope 'ir_lr_window_scope'.
+    """
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
+    try:
+        mode = str(_p("ir_export_window_mode", "auto") or "auto").strip().lower()
+        is_rew_asym = (mode == "rew_asym")
+
+        ft = str(_p("filter_type", "") or "").strip().lower()
+        try:
+            ft_linear_label = str(t("ft_linear") or "").strip().lower()
+        except Exception:
+            ft_linear_label = "linear"
+        is_linear = (ft == ft_linear_label) or ("linear" in ft)
+
+        try:
+            ft_asym_label = str(t("ft_asymmetric") or "").strip().lower()
+        except Exception:
+            ft_asym_label = "asymmetric"
+        is_asym_filter = (ft == ft_asym_label) or ("asym" in ft)
+
+        allow_ir = bool(is_linear or is_asym_filter)
+        enable_left = bool(allow_ir and (is_rew_asym or is_asym_filter))
+        enable_right = bool(allow_ir and is_rew_asym)
+
+        # Values (keep backward compat for right window via legacy 'ir_window')
+        try:
+            v_left = float(_p("ir_window_left", 10.0) or 10.0)
+        except Exception:
+            v_left = 10.0
+
+        try:
+            v_right = _p("ir_window_right", None)
+            if v_right is None or v_right == "":
+                v_right = _p("ir_window", 500.0)
+            v_right = float(v_right or 500.0)
+        except Exception:
+            v_right = 500.0
+
+        with use_scope("ir_lr_window_scope", clear=True):
+            w_left = put_input(
+                "ir_window_left",
+                label=t("ir_window_left_label"),
+                type=FLOAT,
+                value=v_left,
+                help_text=t("ir_matala"),
+            )
+            w_right = put_input(
+                "ir_window_right",
+                label=t("ir_window_right_label"),
+                type=FLOAT,
+                value=v_right,
+                help_text=t("ir_korkea"),
+            )
+
+            if not enable_left:
+                w_left.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
+            if not enable_right:
+                w_right.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
+
+            # Optional: show generic hint only when both are locked
+            if (not enable_left) and (not enable_right):
+                try:
+                    msg = t("ir_lr_window_hint")
+                except Exception:
+                    msg = ""
+                if str(msg or "").strip():
+                    put_html(
+                        f"<div style='margin-top:6px; font-size:12.5px; color:#9aa0a6;'>"
+                        f"{msg}"
+                        f"</div>"
+                    )
+    except Exception:
+        pass
+
+
+
+
+def update_ir_window_shape_ui(_=None):
+    """
+    UI helper: grey out IR window shape selector when IR window mode == Auto.
+    """
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
+    try:
+        mode = str(_p("ir_export_window_mode", "auto") or "auto").strip().lower()
+        m = str(_p("mode", "BASIC") or "BASIC").strip().upper()
+        is_basic = (m == "BASIC")
+        is_auto = (mode == "auto") or is_basic
+
+        with use_scope("ir_export_window_shape_scope", clear=True):
+            w = put_select(
+                'ir_export_window_shape',
+                label=t('ir_export_window_shape'),
+                options=[
+                    {'label': t('ir_export_window_shape_hann'), 'value': 'hann'},
+                    {'label': t('ir_export_window_shape_tukey'), 'value': 'tukey'},
+                ],
+                value=str(_p('ir_export_window_shape', 'hann') or 'hann').strip().lower(),
+                help_text=t('ir_export_window_shape_help'),
+            )
+
+            if is_auto:
+                w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
     except Exception:
         pass
 
