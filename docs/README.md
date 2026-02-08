@@ -296,4 +296,27 @@ with certain Chromium-based browsers.
 
 ## Screenshot
 
+
+
+## UI overview
+
+### 1. Files
+![Files view](ui_1.png)
+
+### 2. Basic
+![Basic mode](ui_2.png)
+
+### 3. Target
+![Target settings](ui_3.png)
+
+### 4. Advanced
+![Advanced settings](ui_4.png)
+
+### 5. Windowing and TDC
+![Windowing and TDC](ui_5.png)
+
+### 6. XO
+![Crossover (XO)](ui_6.png)
+
+### TDC
 ![Effect of Temporal Decay Control](tdc_impulse_example.png)
