@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*.*.*"   # e.g. v2.8.3
+      - "!v*-beta*"
+      - "!v*-rc*"
 
 permissions:
   contents: write

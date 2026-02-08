@@ -42,7 +42,7 @@ from .phase import (
     limit_phase_deg,
 )
 
-#CamillaFIR DSP Engine v1.1.2
+#CamillaFIR DSP Engine v1.1.3_beta (2026-02-08)
 
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
