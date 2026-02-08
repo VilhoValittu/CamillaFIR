@@ -1,6 +1,19 @@
 # Changelog
 
 All notable changes to **CamillaFIR** are documented in this file.
+
+---
+
+## [2.9.5] - 2026-02-08
+
+### UI
+- **Low-bass cut is now toggleable (ON/OFF)**
+  - Added an enable checkbox for `low_bass_cut_hz`.
+  - When disabled, the Hz input remains visible but is **greyed out (locked)** and cannot be edited.
+  - Disabled state uses an **empty value** for the cutoff field to represent “off” (instead of `None`),
+    improving UI → pipeline compatibility.
+  - UI logic lives in a dedicated helper (`update_low_bass_cut_ui`) and renders inside a scope for clean updates.
+
 ---
 
 ## [2.9.4] - 2026-02-08

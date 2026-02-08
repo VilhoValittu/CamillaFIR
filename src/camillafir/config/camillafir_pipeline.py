@@ -16,7 +16,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "mag_c_min", "mag_c_max", "max_boost", "max_cut_db", "max_slope_db_per_oct",
         "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "phase_safe_2058", "mag_correct",
         "lvl_mode", "reg_strength", "normalize_opt", "align_opt",
-        "stereo_link", "exc_prot", "exc_freq", "low_bass_cut_hz", "hpf_enable", "hpf_freq",
+        "stereo_link", "exc_prot", "exc_freq", "low_bass_cut_hz", "low_bass_cut_enable", "hpf_enable", "hpf_freq",
         "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_export_window_mode", "ir_window_mode",
         "ir_export_window_shape", "ir_export_tukey_alpha",
         "local_path_l", "local_path_r", "fmt", "lvl_manual_db",
@@ -40,7 +40,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "mag_correct", "normalize_opt", "align_opt", "multi_rate_opt",
         "stereo_link", "exc_prot", "hpf_enable", "df_smoothing",
         "comparison_mode", "bass_first_ai", "phase_safe_2058",
-        "enable_tdc", "enable_afdw",
+        "enable_tdc", "enable_afdw", "low_bass_cut_enable",
     ]:
         try:
             if isinstance(data.get(k, None), list):
@@ -297,7 +297,12 @@ def build_filter_config(
         if isinstance(v, str) and v.strip() == "":
             return float(default)
         return _as_float(v, default)
-
+    lb_en = bool(data.get("low_bass_cut_enable", True))
+    lb_raw = data.get("low_bass_cut_hz", "")
+    if (not lb_en) or (lb_raw in (None, "", "None")):
+        lb_hz = 0.0
+    else:
+        lb_hz = _as_float(lb_raw, 40.0)
     df_smoothing = bool(_pin_get("df_smoothing", data.get("df_smoothing", False)))
     enable_afdw = bool(_pin_get("enable_afdw", data.get("enable_afdw", False)))
     enable_tdc = bool(_pin_get("enable_tdc", data.get("enable_tdc", False)))
@@ -333,7 +338,7 @@ def build_filter_config(
         do_normalize=bool(data["normalize_opt"]),
         exc_prot=bool(data["exc_prot"]),
         exc_freq=data["exc_freq"],
-        low_bass_cut_hz=_as_float_allow_zero(data.get("low_bass_cut_hz", 40.0), 40.0),
+        low_bass_cut_hz=float(lb_hz),
         ir_window_ms=data.get("ir_window_right", 500.0),
         ir_window_ms_left=data.get("ir_window_left", 10.0),
         ir_export_window_mode=data.get("ir_export_window_mode", "auto"),

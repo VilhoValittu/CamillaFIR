@@ -1,6 +1,6 @@
 # camillafir_ui_helpers.py
 import numpy as np
-
+import math
 from pywebio.output import *  # needed because this PyWebIO build doesn't expose put_input/put_select as named exports
 from pywebio.input import FLOAT
 from pywebio.pin import pin, pin_update, put_input, put_select
@@ -468,6 +468,85 @@ def update_mixed_freq_ui(_=None):
                 w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
     except Exception:
         pass
+    
+def update_low_bass_cut_ui(*, pin, pin_update, get_val, t):
+    """
+    UI helper: Low-bass cut toggle.
+    OFF -> low_bass_cut_hz = ""   (empty)
+    ON  -> low_bass_cut_hz = float
+
+    Renders into scope: 'low_bass_cut_scope'
+    Uses existing pins:
+      - low_bass_cut_enable (checkbox list or bool)
+      - low_bass_cut_hz     (float or "")
+    """
+
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
+    # Enable: checkbox commonly returns [] / [True]
+    try:
+        en_raw = _p("low_bass_cut_enable", None)
+        if isinstance(en_raw, (list, tuple, set)):
+            enabled = (len(en_raw) > 0)
+        else:
+            enabled = bool(en_raw) if en_raw is not None else bool(get_val("low_bass_cut_enable", True))
+    except Exception:
+        enabled = bool(get_val("low_bass_cut_enable", True))
+
+    cur = _p("low_bass_cut_hz", "")
+
+    # Remember last numeric for nice UX when OFF
+    last = _p("low_bass_cut_hz_last", get_val("low_bass_cut_hz", 40.0))
+
+    # --- sanitize stored pin value ---
+    try:
+        if not enabled:
+            # OFF => force empty string, keep last remembered value
+            if cur not in ("", None):
+                try:
+                    # store last good numeric before blanking
+                    pin_update("low_bass_cut_hz_last", value=float(cur))
+                except Exception:
+                    pass
+                pin_update("low_bass_cut_hz", value="")
+            disp = float(last or 40.0)
+        else:
+            # ON => ensure numeric, restore from last/default if currently blank
+            if cur in ("", None):
+                v0 = float(last or 40.0)
+                pin_update("low_bass_cut_hz", value=v0)
+                cur = v0
+            disp = float(cur)
+            if not math.isfinite(disp):
+                disp = float(last or 40.0)
+                pin_update("low_bass_cut_hz", value=disp)
+            # refresh last
+            pin_update("low_bass_cut_hz_last", value=float(disp))
+    except Exception:
+        disp = 40.0
+
+    # --- render ---
+    with use_scope("low_bass_cut_scope", clear=True):
+        w = put_input(
+            "low_bass_cut_hz",
+            label=f"{t('low_bass_cut_hz')} (Hz)",
+            type=FLOAT,
+            value=float(disp),
+            help_text=t("low_bass_cut_hz_help"),
+        )
+
+        if not enabled:
+            # truly not usable when OFF
+            w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
+            put_html(
+                "<div style='margin-top:6px; color:#9aa0a6; font-size:13px;'>OFF</div>"
+            )
+
+
 
 
 def apply_mode_defaults_to_ui(_=None):

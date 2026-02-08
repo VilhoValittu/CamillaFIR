@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v2.9.4 Feedback needed! Thanks at advance. camillafir.py@gmail.com
+## v2.9.5 Feedback needed! Thanks at advance. camillafir.py@gmail.com
 
 ### Phase correction safety (v2.9.0)
 

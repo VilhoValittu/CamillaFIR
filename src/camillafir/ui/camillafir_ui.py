@@ -37,6 +37,7 @@ from .camillafir_ui_helpers import (
     update_mixed_freq_ui,
     update_ir_window_shape_ui,
     update_ir_lr_window_ui,
+    update_low_bass_cut_ui,
 )
 from ..config.camillafir_pipeline import (
     collect_ui_data,
@@ -586,15 +587,14 @@ put_markdown("---"),
 
         # spacing between the two tools
         put_html("<div style='height:12px'></div>"),
-
+        put_markdown("---"),
         # 2) Low-bass boost lock (policy limiter)
-        put_input(
-            'low_bass_cut_hz',
-            label=t('low_bass_cut_hz'),
-            type=FLOAT,
-            value=get_val('low_bass_cut_hz', 40.0),
-            help_text=t('low_bass_cut_hz_help')
+        put_checkbox(
+            'low_bass_cut_enable',
+            options=[{'label': t('low_bass_cut_hz'), 'value': True}],
+            value=[True] if get_val('low_bass_cut_enable', True) else [],
         ),
+        put_scope('low_bass_cut_scope'),
 
         # micro-hint (small, grey)
         put_html(
@@ -776,6 +776,13 @@ put_markdown("---"),
     update_mixed_freq_ui()
     update_ir_window_shape_ui()
     update_ir_lr_window_ui()
+    update_low_bass_cut_ui(
+    pin=pin,
+    pin_update=pin_update,
+    get_val=get_val,
+    t=t,
+    )
+
 
     # --- orchestrators (avoid racing handlers) ---
 
@@ -807,6 +814,15 @@ put_markdown("---"),
     # pins
     pin_on_change('ir_export_window_mode', onchange=_refresh_ir_window_controls)
     pin_on_change('filter_type', onchange=_on_filter_type_change)
+    pin_on_change(
+    'low_bass_cut_enable',
+    onchange=lambda _: update_low_bass_cut_ui(
+        pin=pin,
+        pin_update=pin_update,
+        get_val=get_val,
+        t=t,
+        )
+    )
 
     # keep these (independent)
     pin_on_change('lvl_mode', onchange=update_lvl_ui)
