@@ -31,12 +31,13 @@ REW-style windowing:
 - affects onset delay, symmetry, and tail behavior
 - does **not** change the underlying frequency or phase response of the FIR
 
-Supported modes:
+Supported modes (UI):
 
 - `auto` – automatic window selection (default)
-- `off` – no IR windowing
-- `rew_sym` – REW-style symmetric (zero-phase–like) window
 - `rew_asym` – REW-style asymmetric (causal) window
+
+Legacy config values (`off`, `rew_sym`) are still accepted when set directly in config files,
+but are no longer exposed in the UI.
 
 ---
 

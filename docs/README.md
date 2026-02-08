@@ -43,9 +43,9 @@
 
 - **Supported window modes**
   - `auto` – automatic window selection (default)
-  - `off` – no IR windowing
-  - `rew_sym` – REW-style symmetric window
   - `rew_asym` – REW-style asymmetric (causal) window
+  - Legacy config values (`off`, `rew_sym`) are still accepted when set directly in config files,
+    but are no longer exposed in the UI.
 
 - **IR windowing type included in exported filenames**
   - ZIP and FIR WAV filenames include a short window tag for traceability and A/B comparison.
