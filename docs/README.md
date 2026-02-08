@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v2.9.3 Feedback needed! Thanks at advance. camillafir.py@gmail.com
+## v2.9.4 Feedback needed! Thanks at advance. camillafir.py@gmail.com
 
 ### Phase correction safety (v2.9.0)
 
@@ -206,6 +206,46 @@ installed on the machine where CamillaFIR runs.
 Ubuntu:
     sudo apt install chromium-browser
 
+---
+
+## Known issues
+
+### Browser-related memory pressure (Windows, Vivaldi)
+
+On some Windows systems, CamillaFIR may terminate with a NumPy `MemoryError`
+**only when used via the Vivaldi browser**, even on machines with plenty of RAM
+(e.g. 24 GB).
+
+Example symptom:
+```
+Unable to allocate ~2 MB for a NumPy array
+```
+
+**Notes:**
+- The CamillaFIR standalone executable is **64-bit**.
+- This is **not** caused by insufficient system memory.
+- The issue appears to be related to **process-level memory pressure or fragmentation**
+  caused by Vivaldi (Chromium-based) when used together with the Web UI.
+- Other browsers (Chrome, Edge, Firefox) have **not** shown this behavior in testing.
+
+**Workarounds:**
+- Use another browser (Chrome, Edge, Firefox) for the Web UI.
+- Close unused Vivaldi tabs or extensions.
+- If the error occurs, simply rerun the process using a different browser.
+
+**Robustness note:**  
+In rare browser-induced memory pressure situations, adaptive smoothing features
+(A-FDW / FDW) may be skipped internally to prevent a full processing failure.
+
+### Technical background (brief)
+
+CamillaFIR performs high-resolution frequency-domain DSP using NumPy.
+In rare cases, browser-induced memory pressure can prevent NumPy from allocating
+even small contiguous buffers, despite sufficient total RAM being available.
+This is a known class of issues on Windows when combining heavy DSP workloads
+with certain Chromium-based browsers.
+ 
+ 
 
 ---
 

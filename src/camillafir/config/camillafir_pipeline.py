@@ -288,6 +288,15 @@ def build_filter_config(
             return int(float(v))
         except Exception:
             return int(default)
+    def _as_float_allow_zero(v, default: float) -> float:
+        """
+        Like _as_float, but treats None/"" as missing. IMPORTANT: 0 is valid (OFF).
+        """
+        if v is None:
+            return float(default)
+        if isinstance(v, str) and v.strip() == "":
+            return float(default)
+        return _as_float(v, default)
 
     df_smoothing = bool(_pin_get("df_smoothing", data.get("df_smoothing", False)))
     enable_afdw = bool(_pin_get("enable_afdw", data.get("enable_afdw", False)))
@@ -324,7 +333,7 @@ def build_filter_config(
         do_normalize=bool(data["normalize_opt"]),
         exc_prot=bool(data["exc_prot"]),
         exc_freq=data["exc_freq"],
-        low_bass_cut_hz=float(data.get("low_bass_cut_hz", 40.0) or 40.0),
+        low_bass_cut_hz=_as_float_allow_zero(data.get("low_bass_cut_hz", 40.0), 40.0),
         ir_window_ms=data.get("ir_window_right", 500.0),
         ir_window_ms_left=data.get("ir_window_left", 10.0),
         ir_export_window_mode=data.get("ir_export_window_mode", "auto"),

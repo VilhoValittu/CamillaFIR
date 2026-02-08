@@ -2,6 +2,8 @@ import numpy as np
 import scipy.ndimage
 import logging
 
+
+
 logger = logging.getLogger("CamillaFIR.dsp")
 
 def psychoacoustic_smoothing(
@@ -39,6 +41,7 @@ def apply_fdw_smoothing(freqs, phases, cycles):
     dummy_mags = np.zeros_like(freqs)
     _, smoothed_phase_deg = apply_smoothing_std(freqs, dummy_mags, np.rad2deg(phase_u), oct_width)
     return np.deg2rad(smoothed_phase_deg)
+
 
 def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycles=5.0):
     """
@@ -127,6 +130,7 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
         pass
 
     return out
+
 
 def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
     """Standardized octave smoothing with logarithmic sampling."""

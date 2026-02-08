@@ -159,7 +159,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 
         "do_normalize": False,
         "exc_prot": False,
-        "low_bass_cut_hz": 15.0,
+        "low_bass_cut_hz": 0.0,
     },
 }
 

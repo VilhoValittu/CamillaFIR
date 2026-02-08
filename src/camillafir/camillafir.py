@@ -77,8 +77,9 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.9.3"
+VERSION = "v2.9.4"
 # Change log:
+# v.2.9.4 [CFG] Fixed low_bass_cut_hz value not saving correctly in config.
 # v.2.9.3 [UI] Fixed typo at psychoacoustic plot smoothing code (1/48 / 1/3 ---> 1/6 / 1/3)
 # v.2.9.2 [UI] hard-lock IR windowing to Auto in Basic & Asymmetric filter modes
 # v.2.9.1 [UI] Cleared functions (mixed phase & ir-windowing)

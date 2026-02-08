@@ -1,12 +1,19 @@
 # Changelog
 
 All notable changes to **CamillaFIR** are documented in this file.
+---
+
+## [2.9.4] - 2026-02-08
+
+### CFG
+-  Fixed low_bass_cut_hz value not saving correctly in config.
 
 ---
+
 ## [2.9.3] - 2026-02-08
 
 ### UI
-- # Fixed typo at psychoacoustic plot smoothing code (1/48 / 1/3 ---> 1/6 / 1/3)
+-  Fixed typo at psychoacoustic plot smoothing code (1/48 / 1/3 ---> 1/6 / 1/3)
 
 ---
 

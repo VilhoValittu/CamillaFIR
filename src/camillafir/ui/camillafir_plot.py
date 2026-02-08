@@ -19,8 +19,20 @@ from ..dsp.camillafir_dsp import apply_smoothing_std, psychoacoustic_smoothing, 
 PHASE_SMOOTH_OCT = 5.5
 GD_SMOOTH_OCT    = 3.0
 
-# Version 1.2.0
+# Version 1.2.1
 
+def _float_allow_zero(v, default: float) -> float:
+    """
+    Parse float, allowing 0 (OFF). Only None/"" => default.
+    """
+    if v is None:
+        return float(default)
+    if isinstance(v, str) and v.strip() == "":
+        return float(default)
+    try:
+        return float(v)
+    except Exception:
+        return float(default)
 
 def _maybe_shift_to_abs(mags_db, avg_t_db):
     """
@@ -302,7 +314,7 @@ def format_summary_content(settings, l_stats, r_stats):
     # optional (new): separate boost/cut slope; if missing, fall back to legacy
     max_slope_boost = float(settings.get('max_slope_boost_db_per_oct', 0.0) or 0.0) or max_slope
     max_slope_cut   = float(settings.get('max_slope_cut_db_per_oct', 0.0) or 0.0) or max_slope
-    low_bass_cut_hz = float(settings.get('low_bass_cut_hz', 40.0) or 40.0)
+    low_bass_cut_hz = _float_allow_zero(settings.get('low_bass_cut_hz', 40.0), 40.0)
     if max_slope_boost != max_slope_cut:
 
         if abs(max_slope_boost - max_slope_cut) > 1e-9:

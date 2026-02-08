@@ -115,6 +115,23 @@ def interpolate_response(input_freqs, input_values, target_freqs):
     """Interpolate response linearly to target frequencies."""
     return np.interp(target_freqs, input_freqs, input_values)
 
+def _cfg_float_allow_zero(cfg, key: str, default: float) -> float:
+    """
+    Read cfg.<key> as float. IMPORTANT: 0 is valid and must not fall back.
+    Only None/"" => default.
+    """
+    try:
+        v = getattr(cfg, key, default)
+    except Exception:
+        v = default
+    if v is None:
+        return float(default)
+    if isinstance(v, str) and v.strip() == "":
+        return float(default)
+    try:
+        return float(v)
+    except Exception:
+        return float(default)
 
 #----------- Filtteri ---------------------
 
@@ -704,7 +721,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         # < low_hz: allow ONLY attenuation (no boost),
         # and use stronger cuts if needed (min(final_g, raw_g)),
         # so regularization / confidence doesn't zero out clear room mode peaks.
-        low_hz = float(getattr(cfg, "low_bass_cut_hz", 40.0))
+        low_hz = _cfg_float_allow_zero(cfg, "low_bass_cut_hz", 40.0)
         low_mask = mask_c & (freq_axis > 0) & (freq_axis <= low_hz)
         if np.any(low_mask):
             low_cut = np.minimum(final_g[low_mask], raw_g[low_mask])  # valitse negatiivisempi (vahvempi cut)
@@ -1323,7 +1340,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
                     # Keep low-bass 'no boost + stronger cut' policy intact
                     try:
-                        low_hz = float(getattr(cfg, "low_bass_cut_hz", 40.0) or 40.0)
+                        low_hz = _cfg_float_allow_zero(cfg, "low_bass_cut_hz", 40.0)
                         low_mask = mask_c & (freq_axis > 0) & (freq_axis <= low_hz)
                         if np.any(low_mask):
                             # no boost below low_hz
@@ -1872,7 +1889,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'max_boost_db_user': float(getattr(cfg, 'max_boost_db_user', getattr(cfg, 'max_boost_db', 0.0)) or 0.0),
         'max_safe_boost_db': float(getattr(cfg, 'max_safe_boost_db', 0.0) or 0.0),
         'max_cut_db': float(abs(float(getattr(cfg, 'max_cut_db', 15.0) or 15.0))),
-        'low_bass_cut_hz': float(getattr(cfg, 'low_bass_cut_hz', 40.0) or 40.0),
+        'low_bass_cut_hz': _cfg_float_allow_zero(cfg, "low_bass_cut_hz", 40.0),
         'exc_prot': bool(getattr(cfg, 'exc_prot', False)),
         'exc_freq': float(getattr(cfg, 'exc_freq', 0.0) or 0.0),
         'max_slope_db_per_oct': float(getattr(cfg, 'max_slope_db_per_oct', 0.0) or 0.0),
