@@ -8,8 +8,8 @@ def psychoacoustic_smoothing(
     freqs,
     mags,
     *,
-    low_bw=1/48.0,     # tarkka basso
-    high_bw=1/3.0,     # sileä yläpää
+    low_bw=1/6.0,     # tarkka basso 1/48
+    high_bw=1/3.0,     # sileä yläpää 1/3
     f_lo=120.0,
     f_hi=600.0,
 ):

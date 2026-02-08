@@ -884,7 +884,7 @@ def _view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
     """Plot-only smoothing (never affects DSP math).
     plot_smoothing_level:
       - "Psychoacoustic" => psychoacoustic_smoothing()
-      - int N => standard octave smoothing width = 1/N
+      - int N            => standard octave smoothing width = 1/N
     """
     f = np.asarray(freqs, dtype=float)
     m = np.asarray(mags, dtype=float)
@@ -893,18 +893,21 @@ def _view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
         return m
 
     psl = plot_smoothing_level
+
     # Psychoacoustic mode by name (string)
-    if isinstance(psl, str) and ("psy" in psl.strip().lower()):   
+    if isinstance(psl, str) and ("psy" in psl.strip().lower()):
         return psychoacoustic_smoothing(f, m)
-    # Standard smoothing: parse level (int)
+
+    # Standard smoothing: only if it parses cleanly to int
     try:
         lvl = int(psl)
     except Exception:
-        lvl = 48
+        # Unknown value -> don't surprise user with hardcoded 1/48
+        return m
+
     lvl = max(1, lvl)
     out, _ = apply_smoothing_std(f, m, np.zeros_like(m), 1.0 / float(lvl))
     return out
-
 
 
 def generate_prediction_plot(

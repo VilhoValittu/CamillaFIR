@@ -406,7 +406,7 @@ def main():
                 {'label': '1/48 Octave', 'value': 48},
                 {'label': '1/96 Octave', 'value': 96},
             ],
-            value=get_val('plot_smoothing_level', get_val('plot_smoothing_level', 'Psychoacoustic')),
+            value=get_val('plot_smoothing_level', 'Psychoacoustic'),
             help_text=t('smooth_help')
         ),
         # Row 3: Mode selection and target level (split into two parts for readability)

@@ -3,7 +3,12 @@
 All notable changes to **CamillaFIR** are documented in this file.
 
 ---
+## [2.9.3] - 2026-02-08
 
+### UI
+- # Fixed typo at psychoacoustic plot smoothing code (1/48 / 1/3 ---> 1/6 / 1/3)
+
+---
 
 ## [2.9.2] - 2026-02-07
 
