@@ -3,6 +3,7 @@ import scipy.signal
 import scipy.fft
 import math
 import scipy.ndimage
+import scipy.integrate
 import copy
 import logging
 import hashlib
@@ -54,6 +55,126 @@ from .phase import (
 #1.1.0 More presice leveling tilt for magnitude calculation
 #1.1.1 Added tukey windowing option
 #1.1.2 Added more safety checks and fixed edge cases in various blocks (leveling, TDC, bass-first, etc.)
+
+# ---------------------------
+# Confidence-weighted target pull
+# ---------------------------
+def apply_confidence_weighted_target_pull(
+    target_db,
+    measured_db,
+    confidence_mask,
+    *,
+    conf_floor: float = 0.15,
+    conf_ceil: float = 0.95,
+):
+    """
+    Blend target towards measured response based on confidence.
+
+    High confidence  -> behavior unchanged (target dominates)
+    Low confidence   -> target is pulled towards measured
+
+    This is a DSP-only safety refinement. No user controls by design.
+    """
+    try:
+        t = np.asarray(target_db, dtype=float)
+        m = np.asarray(measured_db, dtype=float)
+        c = np.asarray(confidence_mask, dtype=float) if confidence_mask is not None else None
+
+        if c is None or t.size < 8 or t.shape != m.shape or t.shape != c.shape:
+            return t  # safe fallback
+
+        if conf_ceil <= conf_floor + 1e-9:
+            return t
+
+        c = np.clip(c, conf_floor, conf_ceil)
+        # Normalize confidence to 0..1:
+        #   1.0 => keep target
+        #   0.0 => use measured
+        w = (c - conf_floor) / (conf_ceil - conf_floor)
+        w = np.clip(w, 0.0, 1.0)
+
+        return (w * t) + ((1.0 - w) * m)
+    except Exception:
+        return np.asarray(target_db, dtype=float)
+
+# ---------------------------
+# GD-gradient limiter (DSP-only safety)
+# ---------------------------
+def _limit_gd_gradient_ms_per_oct(freq_axis, phase_rad, *, mask=None, max_grad_ms_per_oct=8.0):
+    """
+    Limit the *rate of change* of group delay (ms) versus log-frequency (octaves).
+    This prevents abrupt GD "kinks" that can smear transients.
+
+    - Works on the provided phase curve only.
+    - Intended for the *correction* component (excess/room phase), not XO/HPF phase.
+    - No user control by design.
+    """
+    f = np.asarray(freq_axis, dtype=float)
+    ph = np.asarray(phase_rad, dtype=float)
+    if f.size < 16 or ph.size != f.size:
+        return ph
+
+    m = (np.asarray(mask, dtype=bool) if mask is not None else np.ones_like(f, dtype=bool))
+    # Need positive freqs for log axis
+    m = m & (f > 0.0)
+    if not np.any(m):
+        return ph
+
+    # Work on a contiguous band: use first..last true index
+    idx = np.where(m)[0]
+    i0, i1 = int(idx[0]), int(idx[-1])
+    ff = f[i0:i1+1]
+    pp = ph[i0:i1+1]
+
+    if ff.size < 16:
+        return ph
+
+    # Unwrap locally
+    pp_u = np.unwrap(pp)
+
+    # GD(ms) = - dphi/df / (2π) * 1000
+    df = np.gradient(ff) + 1e-12
+    gd_ms = (-np.gradient(pp_u) / (2.0 * np.pi * df)) * 1000.0
+    gd_ms = np.nan_to_num(gd_ms, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Gradient in ms/oct: d(GD)/d(log2 f)
+    log2f = np.log2(np.maximum(ff, 1e-9))
+    dlog = np.gradient(log2f) + 1e-12
+    gd_grad = np.gradient(gd_ms) / dlog
+
+    lim = float(max(0.1, max_grad_ms_per_oct))
+    gd_grad_l = np.clip(gd_grad, -lim, lim)
+
+    # Reconstruct a limited GD curve by integrating gradient over log2f.
+    # Keep the original GD at the band center as an anchor.
+    k0 = int(ff.size // 2)
+    gd0 = float(gd_ms[k0])
+    # integrate from center outwards for stability
+    gd_l = np.empty_like(gd_ms)
+    gd_l[k0] = gd0
+    # forward
+    for k in range(k0 + 1, ff.size):
+        gd_l[k] = gd_l[k-1] + gd_grad_l[k-1] * (log2f[k] - log2f[k-1])
+    # backward
+    for k in range(k0 - 1, -1, -1):
+        gd_l[k] = gd_l[k+1] - gd_grad_l[k+1] * (log2f[k+1] - log2f[k])
+
+    # Convert limited GD back to phase by integrating dphi/df = -2π * GD/1000
+    dphi_df = -2.0 * np.pi * (gd_l / 1000.0)
+    # anchor phase at band center to preserve overall alignment
+    phi_l = np.empty_like(pp_u)
+    phi_l[k0] = float(pp_u[k0])
+    # forward integration (trapezoid)
+    for k in range(k0 + 1, ff.size):
+        phi_l[k] = phi_l[k-1] + 0.5 * (dphi_df[k-1] + dphi_df[k]) * (ff[k] - ff[k-1])
+    for k in range(k0 - 1, -1, -1):
+        phi_l[k] = phi_l[k+1] - 0.5 * (dphi_df[k+1] + dphi_df[k]) * (ff[k+1] - ff[k])
+
+    out = ph.copy()
+    out[i0:i1+1] = phi_l
+    return out
+
+
 def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto_headroom_db=0.0, logger_obj=None):
     """
     Lightweight stage checkpoint for debugging gain evolution.
@@ -162,6 +283,9 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # Stats accumulator used by various mid-pipeline blocks (phase clamp, residual pass, etc.)
     # Note: Some blocks write into `st` long before the final `stats` dict is built.
     st: dict = {}
+
+    # Safety: define target_mags early (comparison-mode may reference it before the final target is built)
+    target_mags = np.zeros_like(freq_axis, dtype=float)
 
     # --- 3. SMOOTHING ---
     # IMPORTANT:
@@ -338,6 +462,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     else:
         # fallback: flat 0 dB target
         target_mags = np.zeros_like(freq_axis, dtype=float)
+    
     # NOTE (HPF):
     # Do NOT bake HPF into target curve. HPF is applied as a real magnitude filter later
     # (gain_db += hpf_db), which keeps magnitude+phase consistent and avoids double-HPF.
@@ -561,6 +686,32 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         
         raw_g = target_mags - (m_anal - calc_offset_db)
 
+
+        # --- Confidence-weighted correction pull (DSP-only) ---
+        # IMPORTANT: do NOT pull towards 0 dB ("no correction"), as that can under-correct broadly.
+        # Instead pull towards a safe, smooth correction curve.
+        try:
+            g_safe = psychoacoustic_smoothing(
+                freq_axis,
+                raw_g,
+                low_bw=1/12.0,   # keep LF/mid reasonably detailed
+                high_bw=1/3.0,   # smooth HF to avoid chasing unreliable detail
+                f_lo=200.0,
+                f_hi=2000.0,
+            )
+        except Exception:
+            g_safe = raw_g
+
+        try:
+            raw_g = apply_confidence_weighted_target_pull(
+                target_db=raw_g,
+                measured_db=g_safe,        # <- key change: pull towards safe correction, not zeros
+                confidence_mask=conf_mask,
+                conf_floor=0.15,
+                conf_ceil=0.95,
+            )
+        except Exception:
+            pass
         base_sigma = 60 // (_filter_smooth / 12 if _filter_smooth > 0 else 1)
 
         # Raw_g smoothing:
@@ -647,7 +798,8 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         
         if afdw_on:
             try:
-                c = np.clip(conf_mask, 0.0, 1.0)
+                conf_for_afdw = (bf_conf_for_smoothing if (use_bassfirst and bf_conf_for_smoothing is not None) else conf_mask)
+                c = np.clip(conf_for_afdw, 0.0, 1.0)
                 adaptive_cycles = float(afdw_min) + (c * (float(afdw_base) - float(afdw_min)))
                 bw = 2.0 / np.maximum(adaptive_cycles, 1.0)
                 # clamp to same range used by the continuous blender
@@ -660,6 +812,19 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 bw_max_idx = np.where(bw == np.max(bw))[0]
                 afdw_bw_min_hz = float(freq_axis[int(bw_min_idx[len(bw_min_idx)//2])])
                 afdw_bw_max_hz = float(freq_axis[int(bw_max_idx[len(bw_max_idx)//2])])
+
+                # Feed dashboard: A-FDW Effective BW (oct)
+                try:
+                    if isinstance(st, dict):
+                        st["afdw_bw_oct"] = np.asarray(afdw_bw_oct, dtype=float).tolist()
+                        st["cmp_afdw_bw_oct"] = st["afdw_bw_oct"]
+                        st["afdw_bw_min_oct"] = float(afdw_bw_min_oct)
+                        st["afdw_bw_mean_oct"] = float(afdw_bw_mean_oct)
+                        st["afdw_bw_max_oct"] = float(afdw_bw_max_oct)
+                        st["afdw_bw_min_hz"] = float(afdw_bw_min_hz)
+                        st["afdw_bw_max_hz"] = float(afdw_bw_max_hz)
+                except Exception:
+                    pass
             except Exception:
                 pass
 
@@ -1556,6 +1721,23 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
         phase_lim_hz = float(getattr(cfg, "phase_limit", 1000.0))
         phase_mask = (freq_axis > 0) & (freq_axis <= phase_lim_hz)
+
+        # Soft fade-out at the upper edge of phase_mask to reduce FIR ringing
+        # from hard truncation (DSP-only safety, no user control).
+        try:
+            fade_oct = 1.0 / 6.0  # ~1/6 octave taper near phase_lim_hz
+            f1 = float(phase_lim_hz)
+            f0_fade = f1 / (2.0 ** fade_oct)
+            if f0_fade < (f1 - 1.0):
+                x = (freq_axis - f0_fade) / (f1 - f0_fade + 1e-12)
+                x = np.clip(x, 0.0, 1.0)
+                w_hi = 0.5 * (1.0 + np.cos(np.pi * x))  # 1 -> 0
+                w_hi = np.where(freq_axis <= f0_fade, 1.0, w_hi)
+                w_hi = np.where(freq_axis >= f1, 0.0, w_hi)
+            else:
+                w_hi = np.ones_like(freq_axis, dtype=float)
+        except Exception:
+            w_hi = np.ones_like(freq_axis, dtype=float)
         bass_f2 = float(np.clip(phase_lim_hz, 20.0, 400.0))
 
         # Excess phase = measured - theoretical
@@ -1586,6 +1768,12 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         s2 = smoothstep01(x2)
         w[seg2] = w1 + (w2 - w1) * s2
         phase_weight[bass_band] = np.maximum(phase_weight[bass_band], w)
+
+        # Apply the upper-edge taper weight to the phase correction weight
+        try:
+            phase_weight *= w_hi
+        except Exception:
+            pass
 
         extra_phase = -excess_phase * phase_weight
 
@@ -1622,6 +1810,25 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         except Exception:
             pass
 
+        # --- GD-gradient limiter (DSP-only safety) ---
+        # Limits abrupt changes of group delay induced by the correction phase.
+        # Apply only inside the same correction band (phase_mask).
+        try:
+            _gd_grad_lim = 8.0  # ms/oct (fixed safety default)
+            extra_phase = _limit_gd_gradient_ms_per_oct(
+                freq_axis,
+                extra_phase,
+                mask=phase_mask,
+                max_grad_ms_per_oct=_gd_grad_lim,
+            )
+            try:
+                if isinstance(st, dict):
+                    st["gd_grad_limit_ms_per_oct"] = float(_gd_grad_lim)
+            except Exception:
+                pass
+        except Exception:
+            pass
+        
         low_phase = (-theo_xo) + extra_phase
 
         if 'Mixed' in cfg.filter_type_str:
