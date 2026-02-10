@@ -1,12 +1,11 @@
 import numpy as np
 import scipy.signal
 import scipy.fft
-import math
 import scipy.ndimage
 import scipy.integrate
 import copy
+import math
 import logging
-import hashlib
 logger = logging.getLogger("CamillaFIR.dsp")
 from . import bassfirst as bf
 from camillafir.config.models import FilterConfig
@@ -17,10 +16,10 @@ from .analysis import (
     calculate_rt60,
     calculate_rt60_bands,
     _third_oct_centers,
-    calculate_group_delay,
 )
 from .smoothing import (
     psychoacoustic_smoothing,
+    psycho_smooth_safe_gain,
     apply_fdw_smoothing,
     apply_adaptive_fdw,
     apply_smoothing_std,
@@ -42,7 +41,7 @@ from .phase import (
     limit_phase_deg,
 )
 
-#CamillaFIR DSP Engine v1.1.3_beta (2026-02-08)
+#CamillaFIR DSP Engine v1.1.3_beta2 (2026-02-10)
 
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
@@ -64,8 +63,13 @@ def apply_confidence_weighted_target_pull(
     measured_db,
     confidence_mask,
     *,
-    conf_floor: float = 0.15,
-    conf_ceil: float = 0.95,
+    conf_floor: float = 0.07, # 0.15 default old default
+    conf_ceil: float = 0.95, # 0.95 default
+    freq_axis=None,
+    freq_limit_hz: float | None = 400.0,   # only apply pull below this; None => all freqs
+    gamma_cut: float = 0.70,               # <1 => less conservative for cuts (keep target more)
+    gamma_boost: float = 1.20,             # >1 => more conservative for boosts
+    return_telemetry: bool = False,
 ):
     """
     Blend target towards measured response based on confidence.
@@ -85,6 +89,15 @@ def apply_confidence_weighted_target_pull(
 
         if conf_ceil <= conf_floor + 1e-9:
             return t
+        # Optional: apply pull only up to a frequency limit (reduces "over-cautious" behavior in mids/highs)
+        if freq_limit_hz is not None and freq_axis is not None:
+            f = np.asarray(freq_axis, dtype=float)
+            if f.shape == t.shape:
+                pull_mask = (f > 0.0) & (f <= float(freq_limit_hz))
+            else:
+                pull_mask = None
+        else:
+            pull_mask = None
 
         c = np.clip(c, conf_floor, conf_ceil)
         # Normalize confidence to 0..1:
@@ -93,9 +106,36 @@ def apply_confidence_weighted_target_pull(
         w = (c - conf_floor) / (conf_ceil - conf_floor)
         w = np.clip(w, 0.0, 1.0)
 
-        return (w * t) + ((1.0 - w) * m)
+        # Asymmetric caution:
+        # - cuts can be more aggressive (less pull to "safe")
+        # - boosts stay more conservative
+        is_cut = (t < 0.0)
+        gc = float(gamma_cut) if np.isfinite(float(gamma_cut)) and float(gamma_cut) > 0 else 1.0
+        gb = float(gamma_boost) if np.isfinite(float(gamma_boost)) and float(gamma_boost) > 0 else 1.0
+        w_eff = np.where(is_cut, w ** gc, w ** gb)
+        w_eff = np.clip(w_eff, 0.0, 1.0)
+
+        out = (w_eff * t) + ((1.0 - w_eff) * m)
+
+        # If a pull mask is used, leave the rest untouched (full target)
+        if pull_mask is not None:
+            out = np.where(pull_mask, out, t)
+        if not return_telemetry:
+            return out
+
+        # Telemetry: how much pull was applied (1-w_eff), and where
+        try:
+            if pull_mask is None:
+                pm = np.ones_like(w_eff, dtype=bool)
+            else:
+                pm = np.asarray(pull_mask, dtype=bool)
+            pull_strength = np.clip(1.0 - w_eff, 0.0, 1.0)  # 0=no pull, 1=full pull to measured_db
+            return out, {"w_eff": w_eff, "pull_mask": pm, "pull_strength": pull_strength}
+        except Exception:
+            return out, {"w_eff": w_eff, "pull_mask": None, "pull_strength": None}
     except Exception:
-        return np.asarray(target_db, dtype=float)
+        out = np.asarray(target_db, dtype=float)
+        return (out, None) if return_telemetry else out
 
 # ---------------------------
 # GD-gradient limiter (DSP-only safety)
@@ -318,14 +358,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     m_plot_db = None
     if is_psy:
         try:
-            m_plot_db = psychoacoustic_smoothing(
-                freq_axis,
-                m_interp,
-                heavy_bw=1/3.0,
-                light_bw=1/48.0,
-                f_lo=200.0,
-                f_hi=2000.0,
-            )
+            m_plot_db = psychoacoustic_smoothing(freq_axis, m_interp)
         except Exception:
             m_plot_db = None
 
@@ -672,6 +705,242 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
     # --- 8. KORJAUS ---
     if cfg.enable_mag_correction:
+        # Optional debug: stage stats (no UI; enable via config)
+        debug_stage_stats = bool(getattr(cfg, "debug_stage_stats", True))
+
+        def _log_stats(name: str, x: np.ndarray, mask: np.ndarray | None = None, ref: np.ndarray | None = None):
+            """
+            Lightweight stats: peak boost/cut, RMS, and delta vs ref.
+            Only logs when debug_stage_stats is enabled.
+            """
+            if not debug_stage_stats:
+                return
+            try:
+                a = np.asarray(x, dtype=float)
+                if mask is not None:
+                    m = np.asarray(mask, dtype=bool)
+                    if m.shape == a.shape and np.any(m):
+                        v = a[m]
+                    else:
+                        v = a
+                else:
+                    v = a
+                v = v[np.isfinite(v)]
+                if v.size < 4:
+                    return
+                v_max = float(np.max(v))
+                v_min = float(np.min(v))
+                v_rms = float(np.sqrt(np.mean(v * v)))
+                msg = f"StageStats: {name}: max={v_max:.3f} dB, min={v_min:.3f} dB, rms={v_rms:.3f} dB"
+                if ref is not None:
+                    r = np.asarray(ref, dtype=float)
+                    if mask is not None and m.shape == r.shape and np.any(m):
+                        dv = (a - r)[m]
+                    else:
+                        dv = (a - r)
+                    dv = dv[np.isfinite(dv)]
+                    if dv.size >= 4:
+                        d_abs_max = float(np.max(np.abs(dv)))
+                        d_rms = float(np.sqrt(np.mean(dv * dv)))
+                        msg += f" | Δmax={d_abs_max:.3f} dB, Δrms={d_rms:.3f} dB"
+                logger.info(msg)
+            except Exception:
+                pass
+        def _apply_confpull_post_slope(
+            gain_db_in: np.ndarray,
+            mask_c_in: np.ndarray,
+            measured_ref_db: np.ndarray | None = None
+        ):
+            """
+            Apply confidence-weighted target pull AFTER slope limiting.
+            This makes ConfPull actually affect the final filter (previously slope limiter dominated).
+            Pulls towards a STABLE reference (raw_safe from raw_g) when provided..
+            """
+            try:
+                if gain_db_in is None or mask_c_in is None:
+                    return gain_db_in
+                if not (isinstance(gain_db_in, np.ndarray) and isinstance(mask_c_in, np.ndarray)):
+                    return gain_db_in
+                if gain_db_in.size < 16 or gain_db_in.shape != mask_c_in.shape:
+                    return gain_db_in
+                if not np.any(mask_c_in):
+                    return gain_db_in
+
+                # Tunables (cfg override; safe defaults if not present)
+                _conf_floor = float(getattr(cfg, "conf_pull_floor", 0.05) or 0.05)
+                _conf_ceil  = float(getattr(cfg, "conf_pull_ceil", 0.95) or 0.95)
+                _conf_max_hz = getattr(cfg, "conf_pull_max_hz", 200.0)
+                _conf_max_hz = None if _conf_max_hz is None else float(_conf_max_hz)
+                _gamma_cut = float(getattr(cfg, "conf_pull_gamma_cut", 0.55) or 0.55)
+                _gamma_boost = float(getattr(cfg, "conf_pull_gamma_boost", 1.35) or 1.35)
+
+                # NEW: confidence smoothing + bass-floor (same behavior as earlier versions, but now applied post-slope)
+                _conf_sigma = float(getattr(cfg, "conf_pull_conf_smooth_sigma", 2.0) or 2.0)
+                _bass_floor_hz = float(getattr(cfg, "conf_pull_bass_floor_hz", 120.0) or 120.0)
+                _bass_floor_min = float(getattr(cfg, "conf_pull_bass_floor_min", 0.25) or 0.25)
+
+                if not np.isfinite(_conf_sigma) or _conf_sigma < 0.0:
+                    _conf_sigma = 0.0
+                if not np.isfinite(_bass_floor_hz) or _bass_floor_hz < 0.0:
+                    _bass_floor_hz = 0.0
+                if not np.isfinite(_bass_floor_min) or _bass_floor_min < 0.0:
+                    _bass_floor_min = 0.0
+                _bass_floor_min = float(np.clip(_bass_floor_min, 0.0, 1.0))
+
+                # Prepare confidence for pull (shape must match gain_db)
+                conf_for_pull = conf_mask
+                try:
+                    c0 = np.asarray(conf_mask, dtype=float)
+                    if c0.shape == gain_db_in.shape:
+                        if _conf_sigma > 0.0:
+                            c0 = scipy.ndimage.gaussian_filter1d(c0, sigma=float(_conf_sigma))
+                        c0 = np.clip(c0, 0.0, 1.0)
+                        if _bass_floor_hz > 0.0 and _bass_floor_min > 0.0:
+                            f0 = np.asarray(freq_axis, dtype=float)
+                            bm = (f0 > 0.0) & (f0 <= float(_bass_floor_hz))
+                            if np.any(bm):
+                                c0[bm] = np.maximum(c0[bm], float(_bass_floor_min))
+                        conf_for_pull = np.clip(c0, 0.0, 1.0)
+                except Exception:
+                    conf_for_pull = conf_mask
+
+                # Build measured reference:
+                # Prefer a STABLE "raw_safe" reference from raw_g (measured_ref_db).
+                # Fallback: old behavior using safe smoothing of gain_db_in.
+                try:
+                    if measured_ref_db is not None:
+                        g_ref = np.asarray(measured_ref_db, dtype=float)
+                        if g_ref.shape != gain_db_in.shape:
+                            g_ref = None
+                    else:
+                        g_ref = None
+                except Exception:
+                    g_ref = None
+
+                if g_ref is None:
+                    # Fallback: safe smoothing of already-limited gain curve (old behavior)
+                    try:
+                        g_in = np.asarray(gain_db_in, dtype=float).copy()
+                        idx = np.where(mask_c_in)[0]
+                        i0, i1 = int(idx[0]), int(idx[-1])
+                        if i0 > 0:
+                            g_in[:i0] = g_in[i0]
+                        if i1 < (g_in.size - 1):
+                            g_in[i1+1:] = g_in[i1]
+                        g_ref = psycho_smooth_safe_gain(freq_axis, g_in)
+                    except Exception:
+                        g_ref = np.asarray(gain_db_in, dtype=float)
+
+                # Always: only use reference in correction band; outside keep target
+                g_ref = np.where(mask_c_in, np.asarray(g_ref, dtype=float), gain_db_in)
+
+                # Apply pull (request telemetry for logs/stats)
+                out = apply_confidence_weighted_target_pull(
+                    target_db=gain_db_in,
+                    measured_db=g_ref,
+                    confidence_mask=conf_for_pull,
+                    conf_floor=_conf_floor,
+                    conf_ceil=_conf_ceil,
+                    freq_axis=freq_axis,
+                    freq_limit_hz=_conf_max_hz,
+                    gamma_cut=_gamma_cut,
+                    gamma_boost=_gamma_boost,
+                    return_telemetry=True,
+                )
+
+                if isinstance(out, tuple) and len(out) == 2:
+                    gain_out, _tel = out
+                else:
+                    gain_out, _tel = out, None
+
+                # Enforce: only affect correction band
+                gain_out = np.where(mask_c_in, np.asarray(gain_out, dtype=float), gain_db_in)
+
+                # Telemetry log (Post-slope)
+                try:
+                    if isinstance(_tel, dict):
+                        _w_eff = _tel.get("w_eff", None)
+                        _pm = _tel.get("pull_mask", None)
+                        _ps = _tel.get("pull_strength", None)
+                    else:
+                        _w_eff = _pm = _ps = None
+
+                    if _w_eff is not None:
+                        _w_eff = np.asarray(_w_eff, dtype=float)
+                    if _ps is not None:
+                        _ps = np.asarray(_ps, dtype=float)
+                    if _pm is not None:
+                        _pm = np.asarray(_pm, dtype=bool)
+
+                    # Combine pull_mask with correction mask so stats match "where it matters"
+                    if (_pm is None) or (_pm.shape != mask_c_in.shape):
+                        _pm2 = mask_c_in
+                    else:
+                        _pm2 = (_pm & mask_c_in)
+
+                    if (_w_eff is not None) and (_w_eff.shape == _pm2.shape) and np.any(_pm2):
+                        wv = _w_eff[_pm2]
+                        if _ps is not None and (_ps.shape == _pm2.shape):
+                            pv = _ps[_pm2]
+                        else:
+                            pv = np.clip(1.0 - wv, 0.0, 1.0)
+
+                        act = pv > 0.05
+                        n_mask = int(np.count_nonzero(_pm2))
+                        n_act = int(np.count_nonzero(act))
+                        act_pct = 100.0 * n_act / max(1, n_mask)
+
+                        w_mean = float(np.mean(wv))
+                        w_min = float(np.min(wv))
+                        w_p10 = float(np.percentile(wv, 10))
+                        w_p50 = float(np.percentile(wv, 50))
+                        w_p90 = float(np.percentile(wv, 90))
+
+                        p_mean = float(np.mean(pv))
+                        p_max = float(np.max(pv))
+
+                        f_pull_max = None
+                        try:
+                            idxs = np.where(_pm2)[0]
+                            k = int(np.argmax(pv))
+                            idxm = int(idxs[k])
+                            f_pull_max = float(freq_axis[idxm])
+                        except Exception:
+                            f_pull_max = None
+
+                        freq_txt = f", max@{f_pull_max:.1f}Hz" if f_pull_max is not None else ""
+
+                        logger.info(
+                            "ConfPullPost: "
+                            f"mask_bins={n_mask}, active_bins={n_act} ({act_pct:.1f}%), "
+                            f"w_eff(mean={w_mean:.3f}, p10={w_p10:.3f}, p50={w_p50:.3f}, "
+                            f"p90={w_p90:.3f}, min={w_min:.3f}), "
+                            f"pull_strength(mean={p_mean:.3f}, max={p_max:.3f}{freq_txt}), "
+                            f"floor={_conf_floor:.3f}, ceil={_conf_ceil:.3f}, "
+                            f"max_hz={_conf_max_hz}, gamma_cut={_gamma_cut:.2f}, gamma_boost={_gamma_boost:.2f}"
+                        )
+
+                        if isinstance(st, dict):
+                            st["conf_pull_post_floor"] = float(_conf_floor)
+                            st["conf_pull_post_ceil"] = float(_conf_ceil)
+                            st["conf_pull_post_max_hz"] = None if _conf_max_hz is None else float(_conf_max_hz)
+                            st["conf_pull_post_gamma_cut"] = float(_gamma_cut)
+                            st["conf_pull_post_gamma_boost"] = float(_gamma_boost)
+                            st["conf_pull_post_active_pct"] = float(act_pct)
+                            st["conf_pull_post_w_eff_mean"] = float(w_mean)
+                            st["conf_pull_post_strength_mean"] = float(p_mean)
+                            st["conf_pull_post_strength_max"] = float(p_max)
+                            st["conf_pull_post_strength_max_hz"] = float(f_pull_max) if f_pull_max is not None else None
+                            st["conf_pull_post_conf_smooth_sigma"] = float(_conf_sigma)
+                            st["conf_pull_post_bass_floor_hz"] = float(_bass_floor_hz)
+                            st["conf_pull_post_bass_floor_min"] = float(_bass_floor_min)
+                except Exception:
+                    pass
+
+                return gain_out
+            except Exception:
+                return gain_db_in
+
         # Filter smoothing (DSP only). Backward compatible with old config key.
         try:
             _filter_smooth = float(getattr(cfg, "filter_smooth", getattr(cfg, "smoothing_level", 12)) or 12)
@@ -684,34 +953,10 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         afdw_base = float(getattr(cfg, "fdw_cycles", 15.0))
         afdw_min = max(3.0, afdw_base / 3.0)
         
+        # NOTE: ConfPull moved to POST-SLOPE (gain_db stage), because slope limiter dominated
+        # and made early raw_g pulls mostly invisible in final filters.
         raw_g = target_mags - (m_anal - calc_offset_db)
-
-
-        # --- Confidence-weighted correction pull (DSP-only) ---
-        # IMPORTANT: do NOT pull towards 0 dB ("no correction"), as that can under-correct broadly.
-        # Instead pull towards a safe, smooth correction curve.
-        try:
-            g_safe = psychoacoustic_smoothing(
-                freq_axis,
-                raw_g,
-                low_bw=1/12.0,   # keep LF/mid reasonably detailed
-                high_bw=1/3.0,   # smooth HF to avoid chasing unreliable detail
-                f_lo=200.0,
-                f_hi=2000.0,
-            )
-        except Exception:
-            g_safe = raw_g
-
-        try:
-            raw_g = apply_confidence_weighted_target_pull(
-                target_db=raw_g,
-                measured_db=g_safe,        # <- key change: pull towards safe correction, not zeros
-                confidence_mask=conf_mask,
-                conf_floor=0.15,
-                conf_ceil=0.95,
-            )
-        except Exception:
-            pass
+        _log_stats("raw_g_pre_confpull", raw_g, mask_c if "mask_c" in locals() else None)
         base_sigma = 60 // (_filter_smooth / 12 if _filter_smooth > 0 else 1)
 
         # Raw_g smoothing:
@@ -759,13 +1004,23 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 df = np.gradient(freq_axis) + 1e-12
                 gd_ms_local = (-np.gradient(ph_u) / (2*np.pi*df)) * 1000.0
 
-                # Same gd_diff idea as analyze_acoustic_confidence (sigma_bins/Hz not critical here)
-                gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms_local, sigma=20)
+                # GD-diff should be deterministic across different freq_axis resolutions (fs/taps).
+                # Use Hz-based smoothing width (converted to bins) instead of fixed sigma-in-bins.
+                try:
+                    _gd_sigma_hz = float(getattr(cfg, "bass_first_gd_sigma_hz", 2.0) or 2.0)
+                except Exception:
+                    _gd_sigma_hz = 2.0
+                if not np.isfinite(_gd_sigma_hz) or _gd_sigma_hz <= 0.0:
+                    _gd_sigma_hz = 2.0
+                sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=float(_gd_sigma_hz), fallback_bins=20.0)
+                gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms_local, sigma=float(sigma_bins))
                 gd_diff_local = np.abs(gd_ms_local - gd_smooth)
                 # Limit bass-first effect at very low latency REW Asym to avoid unstable LF behavior.
                 # NOTE: this only affects bass-first masks (A-FDW confidence shaping), not the main correction band.
                 # Limit bass-first effect at very low latency REW Asym to avoid unstable LF behavior.
                 _bf_mode_f2 = float(getattr(cfg, "bass_first_mode_max_hz", 200.0) or 200.0)
+                _win_mode = "auto"
+                _left_ms = 0.0
                 try:
                     _win_mode = str(getattr(cfg, "ir_export_window_mode", "auto") or "auto").strip().lower()
                     _left_ms = float(getattr(cfg, "ir_window_left", getattr(cfg, "ir_window_ms_left", 0.0)) or 0.0)
@@ -784,7 +1039,9 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                     gd_ms=gd_ms_local,
                     gd_diff=gd_diff_local,
                     is_wav_source=bool(getattr(cfg, "is_wav_source", False)),
-                    mode_f2=_bf_mode_f2
+                    mode_f2=_bf_mode_f2,
+                    rew_asym=(_win_mode == "rew_asym"),
+                    left_ms=_left_ms,
                 )
                 bf_conf_for_smoothing = bf.fuse_conf_for_smoothing(
                     freq_axis=freq_axis,
@@ -836,6 +1093,24 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 min_cycles=afdw_min
             )
         mask_c = (freq_axis >= (0 if cfg.hpf_settings else cfg.mag_c_min)) & (freq_axis <= cfg.mag_c_max)
+
+        # --- Build STABLE measured reference for ConfPullPost: raw_safe from raw_g ---
+        # Use edge-hold inside correction band before smoothing to avoid pulling towards 0 dB outside band.
+        raw_safe_ref = None
+        try:
+            g0 = np.asarray(raw_g, dtype=float).copy()
+            idx = np.where(mask_c)[0]
+            if idx.size >= 2:
+                i0, i1 = int(idx[0]), int(idx[-1])
+                if i0 > 0:
+                    g0[:i0] = g0[i0]
+                if i1 < (g0.size - 1):
+                    g0[i1+1:] = g0[i1]
+            raw_safe_ref = psycho_smooth_safe_gain(freq_axis, g0)
+            # Keep reference only in correction band (outside is irrelevant / can confuse)
+            raw_safe_ref = np.where(mask_c, np.asarray(raw_safe_ref, dtype=float), 0.0)
+        except Exception:
+            raw_safe_ref = None
         # When A-FDW is ON, don't multiply final_g by eff_conf,
         # because A-FDW already applies "caution" to shape (smoothing).
         # This avoids double caution (shape softens + amplitude attenuates).
@@ -854,6 +1129,8 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         else:
             eff_conf = np.where(freq_axis < 100, np.maximum(conf_mask, 0.6), conf_mask)
             gain_apply = (final_g * eff_conf).copy()
+        _gain_apply_pre_limits = gain_apply.copy()
+        _log_stats("gain_apply_pre_limits", gain_apply, mask_c)
         # --- REW ASYM ultra-low latency safety (gain side) ---
         # If latency target is extremely small, prevent LF boosts (cuts still allowed)
         # to avoid unstable correction / ripple in bass.
@@ -882,15 +1159,40 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         except Exception:
             pass
 
-        # --- 8C. Low-bass CUT allowance (targeted fix for 32 Hz-like modes) ---
-        # < low_hz: allow ONLY attenuation (no boost),
-        # and use stronger cuts if needed (min(final_g, raw_g)),
-        # so regularization / confidence doesn't zero out clear room mode peaks.
-        low_hz = _cfg_float_allow_zero(cfg, "low_bass_cut_hz", 40.0)
+        # --- 8C. Low-bass CUT allowance ---
+        # < low_hz: allow ONLY attenuation (no boost).
+        # IMPORTANT: do NOT force "min(final_g, raw_g)" by default, because that can
+        # collapse different settings into identical low-frequency filters.
+        low_cut_enable = True
+        try:
+            # optional config flag (default ON if missing)
+            low_cut_enable = bool(getattr(cfg, "low_bass_cut_enable", True))
+        except Exception:
+            low_cut_enable = True
+
+        low_hz = _cfg_float_allow_zero(cfg, "low_bass_cut_hz", 0.0)
+        # strength: 0.0 => just "no boost" (preserve differences)
+        #           1.0 => old aggressive behavior (prefer stronger cuts)
+        try:
+            low_cut_strength = float(getattr(cfg, "low_bass_cut_strength", 0.0) or 0.0)
+        except Exception:
+            low_cut_strength = 0.0
+        if not np.isfinite(low_cut_strength):
+            low_cut_strength = 0.0
+        low_cut_strength = float(np.clip(low_cut_strength, 0.0, 1.0))
+
         low_mask = mask_c & (freq_axis > 0) & (freq_axis <= low_hz)
-        if np.any(low_mask):
-            low_cut = np.minimum(final_g[low_mask], raw_g[low_mask])  # valitse negatiivisempi (vahvempi cut)
-            low_cut = np.minimum(low_cut, 0.0)                       # ei koskaan boostia
+        if low_cut_enable and np.any(low_mask):
+            # Base policy: keep computed correction but never boost in very low bass
+            low_cut = np.minimum(gain_apply[low_mask], 0.0)
+
+            # Optional aggressiveness: blend toward "stronger of (final_g, raw_g)" cuts
+            # (this approximates the old behavior but avoids always dominating)
+            if low_cut_strength > 0.0:
+                stronger_cut = np.minimum(final_g[low_mask], raw_g[low_mask])
+                stronger_cut = np.minimum(stronger_cut, 0.0)
+                low_cut = (1.0 - low_cut_strength) * low_cut + (low_cut_strength) * stronger_cut
+
             gain_apply[low_mask] = low_cut
 
         # --- CHECKPOINT 2: after_lowbass_policy ---
@@ -903,6 +1205,12 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 auto_headroom_db=0.0,
                 logger_obj=logger
             )
+            logger.info(
+                f"CFG CHECK: conf_pull_floor={cfg.conf_pull_floor}, "
+                f"gamma_cut={cfg.conf_pull_gamma_cut}, "
+                f"low_bass_cut_strength={cfg.low_bass_cut_strength}"
+)
+
         except Exception:
             pass
 
@@ -1014,6 +1322,10 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         gain_db[mask_c] = tmp[mask_c]
 
         # --- 8E. Slope/octave limiter (gain curve steepness) ---
+        #----------
+        # Confidence pull is applied post-slope using a stable raw_safe reference, 
+        # ensuring it affects the final filter rather than being overridden by slope limiting.”
+        #---------
         # Note: done before exc_prot and run exc_prot again at the end,
         # so slope limiting cannot "leak" boost into protection zones.
         max_slope = float(getattr(cfg, "max_slope_db_per_oct", 24.0) or 0.0)  # legacy (symmetric)
@@ -1044,6 +1356,16 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 # Never break the pipeline due to slope limiting
                 pass
             gain_db[mask_c] = g2[mask_c]
+            _log_stats("gain_db_post_slope", gain_db, mask_c)
+
+            # --- ConfPull POST-SLOPE (makes A/B settings visible in final filter) ---
+            try:
+                _pre = gain_db.copy()
+                gain_db = _apply_confpull_post_slope(gain_db, mask_c, measured_ref_db=raw_safe_ref)
+                _log_stats("gain_db_post_confpull", gain_db, mask_c, ref=_pre)
+            except Exception:
+                pass
+
 
             try:
                 logger.info(
@@ -1659,6 +1981,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # - If normalization is ON, we apply a small headroom so the FIR does not clip.
     current_peak_gain = float(np.max(gain_db + cfg.global_gain_db))
     auto_headroom_db = 0.0
+    _log_stats("gain_db_pre_headroom", gain_db, mask_c)
 
     if bool(getattr(cfg, "do_normalize", False)) and current_peak_gain > 0.0:
         auto_headroom_db = -current_peak_gain - 0.1

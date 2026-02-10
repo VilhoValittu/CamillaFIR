@@ -546,6 +546,136 @@ def update_low_bass_cut_ui(*, pin, pin_update, get_val, t):
                 "<div style='margin-top:6px; color:#9aa0a6; font-size:13px;'>OFF</div>"
             )
 
+def update_afdw_cycles_ui(*, pin, get_val, t):
+    """
+    UI helper: grey out FDW cycles input when A-FDW is disabled.
+    Renders into scope: 'afdw_cycles_scope'
+    """
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
+    # PyWebIO checkbox can be [] or [True]
+    try:
+        en_raw = _p("enable_afdw", None)
+        if isinstance(en_raw, (list, tuple, set)):
+            enabled = (len(en_raw) > 0)
+        else:
+            enabled = bool(en_raw) if en_raw is not None else bool(get_val("enable_afdw", True))
+    except Exception:
+        enabled = bool(get_val("enable_afdw", True))
+
+    # Current value
+    try:
+        v = float(_p("fdw_cycles", get_val("fdw_cycles", 10.0)) or 10.0)
+    except Exception:
+        v = float(get_val("fdw_cycles", 10.0) or 10.0)
+
+    with use_scope("afdw_cycles_scope", clear=True):
+        w = put_input(
+            "fdw_cycles",
+            label=t("fdw"),
+            type=FLOAT,
+            value=v,
+            help_text=t("fdw_help"),
+        )
+        if not enabled:
+            w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
+            put_html(
+                f"<div style='margin-top:6px; color:#9aa0a6; font-size:13px;'>"
+                f"{t('afdw_disabled_hint') if 'afdw_disabled_hint' else 'OFF'}"
+                f"</div>"
+            )
+
+def update_tdc_controls_ui(*, pin, get_val, t, apply_tdc_preset):
+    """
+    UI helper: grey out all TDC controls when TDC is disabled.
+    Renders into scope: 'tdc_controls_scope'
+    """
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
+    # Checkbox value can be [] or [True]
+    try:
+        en_raw = _p("enable_tdc", None)
+        if isinstance(en_raw, (list, tuple, set)):
+            enabled = (len(en_raw) > 0)
+        else:
+            enabled = bool(en_raw) if en_raw is not None else bool(get_val("enable_tdc", True))
+    except Exception:
+        enabled = bool(get_val("enable_tdc", True))
+
+    def _f(name, default):
+        try:
+            v = _p(name, get_val(name, default))
+            return float(v if v is not None else default)
+        except Exception:
+            return float(default)
+
+    strength = _f("tdc_strength", 50.0)
+    max_red  = _f("tdc_max_reduction_db", 9.0)
+    slope    = _f("tdc_slope_db_per_oct", 6.0)
+
+    with use_scope("tdc_controls_scope", clear=True):
+        w = put_html("<div id='tdc_box' style='margin-top:6px'>")  # wrapper start
+
+        # Presets row (ONLY buttons)
+        put_row([
+            put_buttons(
+                [
+                    {"label": t("tdc_preset_safe"),       "value": "Safe"},
+                    {"label": t("tdc_preset_normal"),     "value": "Normal"},
+                    {"label": t("tdc_preset_aggressive"), "value": "Aggressive"},
+                ],
+                onclick=lambda preset: apply_tdc_preset(preset),
+                small=True,
+            ),
+        ])
+
+        # Help texts as compact blocks below (no row layout)
+        put_html(f"<div style='opacity:0.65; font-size:12px; line-height:1.25; margin-top:6px'>{t('tdc_preset_help')}</div>")
+        put_html(f"<div style='opacity:0.70; font-size:12px; line-height:1.25; margin-top:4px'>{t('tdc_summary_hint')}</div>")
+
+        # Inputs row
+        put_row([
+            put_input(
+                "tdc_strength",
+                label=t("tdc_strength"),
+                type=FLOAT,
+                value=float(get_val("tdc_strength", 50.0) or 50.0), # type: ignore
+                help_text=t("tdc_help"),
+            ),
+            put_input(
+                "tdc_max_reduction_db",
+                label=t("tdc_max_reduction_db"),
+                type=FLOAT,
+                value=float(get_val("tdc_max_reduction_db", 9.0) or 9.0),
+                help_text=t("tdc_max_reduction_db_help"),
+            ),
+            put_input(
+                "tdc_slope_db_per_oct",
+                label=t("tdc_slope_db_per_oct"),
+                type=FLOAT,
+                value=float(get_val("tdc_slope_db_per_oct", 6.0) or 6.0),
+                help_text=t("tdc_slope_db_per_oct_help"),
+            ),
+        ])
+
+        put_html("</div>")  # wrapper end
+
+    # Re-acquire wrapper as one output for styling
+    # (PyWebIO limitation: we style the whole scope content instead)
+    if not enabled:
+        # style the whole scope (works reliably)
+        put_html("<script>document.getElementById('tdc_box').style.opacity='0.55';"
+                 "document.getElementById('tdc_box').style.pointerEvents='none';"
+                 "document.getElementById('tdc_box').style.filter='grayscale(1)';</script>")
+
 
 
 
@@ -779,3 +909,74 @@ def put_guide_section():
         for g_key, g_title in guides
     ]
     put_collapse("❓ CamillaFIR User Guides", content)
+
+def update_confidence_pull_ui(*, pin, get_val, t):
+    """
+    UI helper: Confidence-based target pull (Advanced only).
+    Creates pins so pipeline/DSP can actually see user values.
+    Renders into scope: 'conf_pull_scope'
+    """
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
+    try:
+        mode = str(_p("mode", "BASIC") or "BASIC").strip().upper()
+        if mode != "ADVANCED":
+            with use_scope("conf_pull_scope", clear=True):
+                return
+
+        with use_scope("conf_pull_scope", clear=True):
+            put_markdown("#### 🎯 Confidence Pull (Advanced)")
+            put_html(
+                f"<div style='opacity:0.7; font-size:12px; margin-bottom:6px'>"
+                f"{t('tdc_confidence_pull_help')}</div>"
+                )
+
+            put_row([
+                put_input(
+                    "conf_pull_floor",
+                    label=t("conf_pull_floor"),
+                    type=FLOAT,
+                    value=float(get_val("conf_pull_floor", 0.05)),
+                    help_text=t("conf_pull_floor_help"),
+                ),
+                put_input(
+                    "conf_pull_max_hz",
+                    label=t("conf_pull_max_hz"),
+                    type=FLOAT,
+                    value=float(get_val("conf_pull_max_hz", 200.0)),
+                    help_text=t("conf_pull_max_hz_help"),
+                ),
+            ])
+
+            put_row([
+                put_input(
+                    "conf_pull_gamma_cut",
+                    label=t("conf_pull_gamma_cut"),
+                    type=FLOAT,
+                    value=float(get_val("conf_pull_gamma_cut", 0.55)),
+                    help_text=t("conf_pull_gamma_cut_help"),
+                ),
+                put_input(
+                    "conf_pull_gamma_boost",
+                    label=t("conf_pull_gamma_boost"),
+                    type=FLOAT,
+                    value=float(get_val("conf_pull_gamma_boost", 1.35)),
+                    help_text=t("conf_pull_gamma_boost_help"),
+                ),
+            ])
+
+            put_row([
+                put_input(
+                    "low_bass_cut_strength",
+                    label=t("low_bass_cut_strength"),
+                    type=FLOAT,
+                    value=float(get_val("low_bass_cut_strength", 0.0)),
+                    help_text=t("low_bass_cut_strength_help"),
+                ),
+            ])
+    except Exception:
+        pass

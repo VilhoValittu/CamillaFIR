@@ -8,6 +8,9 @@ from .camillafir_analysis import (
     calculate_rt60_bands,
     _third_oct_centers,
 )
+# NOTE:
+# Legacy helper. Not used in current DSP or UI pipelines.
+# Kept only for backward compatibility / external scripts.
 
 def calculate_group_delay(freqs, phases_deg):
     """Calculates group delay (ms) from phase gradient."""

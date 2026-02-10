@@ -71,6 +71,7 @@ def load_config() -> dict:
         "tdc_slope_db_per_oct": 6.0,
         "bass_first_ai": True,
         "bass_first_mode_max_hz": 200.0,
+        "debug_stage_stats": True,
     }
 
     if os.path.exists(CONFIG_FILE):

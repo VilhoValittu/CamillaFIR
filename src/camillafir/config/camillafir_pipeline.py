@@ -1,6 +1,7 @@
 # camillafir_pipeline.py
 from __future__ import annotations
 
+from asyncio.log import logger
 from typing import Any, Dict, List, Optional, Tuple
 import logging
 import math
@@ -26,6 +27,11 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "tdc_slope_db_per_oct", "enable_afdw", "df_smoothing", "comparison_mode",
         "bass_first_ai", "bass_first_mode_max_hz",
         "local_path_house",
+        "conf_pull_floor", "conf_pull_ceil", "conf_pull_max_hz",
+        "conf_pull_gamma_cut", "conf_pull_gamma_boost",
+        "conf_pull_conf_smooth_sigma",
+        "conf_pull_bass_floor_hz", "conf_pull_bass_floor_min",
+        "low_bass_cut_strength",
     ]
 
     data: Dict[str, Any] = {}
@@ -297,6 +303,36 @@ def build_filter_config(
         if isinstance(v, str) and v.strip() == "":
             return float(default)
         return _as_float(v, default)
+
+    def _as_float_or_none(v, default: Optional[float]) -> Optional[float]:
+        """Parse float or return None (accepts None / '' / 'None')."""
+        if v is None:
+            return default
+        if isinstance(v, str):
+            s = v.strip()
+            if s == "" or s.lower() == "none":
+                return default
+        try:
+            x = float(v)
+        except Exception:
+            return default
+        if not math.isfinite(x):
+            return default
+        return float(x)
+
+    # --- NEW: read confidence-pull + low-bass-cut-strength from UI data (with safe defaults) ---
+    conf_pull_floor = _as_float_allow_zero(data.get("conf_pull_floor", None), 0.05)
+    conf_pull_ceil  = _as_float_allow_zero(data.get("conf_pull_ceil", None), 0.95)
+    conf_pull_max_hz = _as_float_or_none(data.get("conf_pull_max_hz", None), 200.0)
+    conf_pull_gamma_cut   = _as_float_allow_zero(data.get("conf_pull_gamma_cut", None), 0.55)
+    conf_pull_gamma_boost = _as_float_allow_zero(data.get("conf_pull_gamma_boost", None), 1.35)
+
+    conf_pull_conf_smooth_sigma = _as_float_allow_zero(data.get("conf_pull_conf_smooth_sigma", None), 2.0)
+    conf_pull_bass_floor_hz     = _as_float_allow_zero(data.get("conf_pull_bass_floor_hz", None), 120.0)
+    conf_pull_bass_floor_min    = _as_float_allow_zero(data.get("conf_pull_bass_floor_min", None), 0.25)
+
+    low_bass_cut_strength = _as_float_allow_zero(data.get("low_bass_cut_strength", None), 0.0)
+    low_bass_cut_strength = float(max(0.0, min(1.0, low_bass_cut_strength)))
     lb_en = bool(data.get("low_bass_cut_enable", True))
     lb_raw = data.get("low_bass_cut_hz", "")
     if (not lb_en) or (lb_raw in (None, "", "None")):
@@ -362,8 +398,21 @@ def build_filter_config(
         trans_width=data.get("trans_width", 100.0),
         bass_first_ai=bool(data.get("bass_first_ai", False)),
         bass_first_mode_max_hz=float(data.get("bass_first_mode_max_hz", 200.0) or 200.0),
-    )
+        # --- NEW: confidence pull + low-bass-cut-strength plumbing into cfg (safe defaults; UI may not provide keys yet) ---
+        conf_pull_floor=float(_as_float_allow_zero(data.get("conf_pull_floor", None), 0.05)),
+        conf_pull_ceil=float(_as_float_allow_zero(data.get("conf_pull_ceil", None), 0.95)),
+        conf_pull_max_hz=_as_float_or_none(data.get("conf_pull_max_hz", None), 200.0),
+        conf_pull_gamma_cut=float(_as_float_allow_zero(data.get("conf_pull_gamma_cut", None), 0.55)),
+        conf_pull_gamma_boost=float(_as_float_allow_zero(data.get("conf_pull_gamma_boost", None), 1.35)),
+        conf_pull_conf_smooth_sigma=float(_as_float_allow_zero(data.get("conf_pull_conf_smooth_sigma", None), 2.0)),
+        conf_pull_bass_floor_hz=float(_as_float_allow_zero(data.get("conf_pull_bass_floor_hz", None), 120.0)),
+        conf_pull_bass_floor_min=float(_as_float_allow_zero(data.get("conf_pull_bass_floor_min", None), 0.25)),
+        low_bass_cut_enable=bool(data.get("low_bass_cut_enable", True)),
+        low_bass_cut_strength=float(max(0.0, min(1.0, _as_float_allow_zero(data.get("low_bass_cut_strength", None), 0.0)))),
 
+    )
+    logger.info(f"UI raw: conf_pull_floor pin={data.get('conf_pull_floor')}, low_bass_cut_strength pin={data.get('low_bass_cut_strength')}")
+    
     # Optional experimental features (avoid breaking older FilterConfig constructors)
     try:
         setattr(cfg, "enable_residual_pass", bool(data.get("enable_residual_pass", False)))

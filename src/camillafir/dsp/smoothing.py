@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.ndimage
 import logging
+from dataclasses import dataclass
 
 
 
@@ -10,10 +11,10 @@ def psychoacoustic_smoothing(
     freqs,
     mags,
     *,
-    low_bw=1/6.0,     # tarkka basso 1/48
-    high_bw=1/3.0,     # sileä yläpää 1/3
-    f_lo=120.0,
-    f_hi=600.0,
+    low_bw=1/48.0,    # LF: keep reasonably detailed (less smoothing)
+    high_bw=1/1.0,    # HF: very smooth (safety/reference)
+    f_lo=200.0,
+    f_hi=2000.0,
 ):
     f = np.asarray(freqs, dtype=float)
     m = np.asarray(mags, dtype=float)
@@ -31,6 +32,19 @@ def psychoacoustic_smoothing(
     w = np.clip(w, 0.0, 1.0)
 
     return (1.0 - w) * m_low + w * m_high
+
+def psycho_smooth_safe_gain(freqs, mags):
+    """DSP safety preset for a 'safe' correction reference curve."""
+    return psychoacoustic_smoothing(
+        freqs, mags,
+        low_bw=1/48.0,     # keep LF/mid reasonably detailed
+        high_bw=1/1.0,     # smooth HF
+        f_lo=200.0,
+        f_hi=2000.0,
+    )
+    """DSP safety preset for a 'safe' correction reference curve.
+    Kept as a named helper for readability, but matches psychoacoustic_smoothing defaults.
+    """
 
 
 def apply_fdw_smoothing(freqs, phases, cycles):

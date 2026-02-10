@@ -29,6 +29,7 @@ def _freq_prior(freqs, f1=120.0, f2=200.0):
 
 def build_bassfirst_masks(freq_axis, m_raw_db, phase_rad_unwrapped, gd_ms, gd_diff,
                           is_wav_source=False, mode_f1=120.0, mode_f2=200.0,
+                          rew_asym: bool = False, left_ms: float = 0.0,
                           gd_t0=1.0, gd_t1=6.0,
                           mag_a0=1.5, mag_a1=8.0,
                           q0=2.0, q1=10.0,
@@ -103,7 +104,15 @@ def build_bassfirst_masks(freq_axis, m_raw_db, phase_rad_unwrapped, gd_ms, gd_di
     # Disable / fade-in bass-first effect below 30 Hz to avoid unstable behavior
     # with asymmetric IR windowing + A-FDW at very low frequencies.
     try:
-        if rew_asym and left_ms < 15.0:
+        _rew_asym = bool(rew_asym)
+        try:
+            _left_ms = float(left_ms)
+        except Exception:
+            _left_ms = 0.0
+        if not np.isfinite(_left_ms):
+            _left_ms = 0.0
+
+        if _rew_asym and (_left_ms < 15.0):
             f1, f2 = 60.0, 80.0
         else:
             f1, f2 = 20.0, 30.0

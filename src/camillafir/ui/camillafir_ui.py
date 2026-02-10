@@ -38,6 +38,9 @@ from .camillafir_ui_helpers import (
     update_ir_window_shape_ui,
     update_ir_lr_window_ui,
     update_low_bass_cut_ui,
+    update_afdw_cycles_ui,
+    update_tdc_controls_ui,
+    update_confidence_pull_ui,
 )
 from ..config.camillafir_pipeline import (
     collect_ui_data,
@@ -401,7 +404,7 @@ def main():
             'plot_smoothing_level',
             label=t('smooth_type'),
             options=[
-                {'label': 'Psychoacoustic', 'value': 'Psychoacoustic'},
+                {'label': t('smooth_safe_reference'), 'value': 'Psychoacoustic'},
                 {'label': '1/12 Octave', 'value': 12},
                 {'label': '1/24 Octave', 'value': 24},
                 {'label': '1/48 Octave', 'value': 48},
@@ -409,7 +412,9 @@ def main():
             ],
             value=get_val('plot_smoothing_level', 'Psychoacoustic'),
             help_text=t('smooth_help')
-        ),
+        ),  
+
+        
         # Row 3: Mode selection and target level (split into two parts for readability)
         # Level match range (help_text goes to the right place directly under fields)
         put_row([
@@ -614,8 +619,12 @@ put_markdown("---"),
         put_row([
             put_checkbox('hpf_enable', options=[{'label': t('hpf_enable'), 'value': True}], value=[True] if get_val('hpf_enable', False) else []), 
             put_input('hpf_freq', label=t('hpf_freq'), type=FLOAT, value=get_val('hpf_freq', 20.0), help_text=t('hpf_freq_help')), 
-            put_select('hpf_slope', label=t('hpf_slope'), options=slope_opts, value=get_val('hpf_slope', 24)) # type: ignore
-        ])
+            put_select('hpf_slope', label=t('hpf_slope'), options=slope_opts, value=get_val('hpf_slope', 24)), # type: ignore
+        ]),
+
+        put_markdown("---"),
+        put_scope("conf_pull_scope"),
+
     ]
 
 #--- #5 Window & TDC
@@ -641,8 +650,8 @@ put_markdown("---"),
         put_markdown("---"),
 
         # A-FDW
-        put_markdown("#### ⏳ Adaptive Frequency-Domain Windowing (A-FDW)"),
-        put_checkbox('enable_afdw', options=[{'label': t('enable_afdw'), 'value': True}], 
+
+        put_checkbox('enable_afdw', options=[{'label': '⏳ Adaptive Frequency-Domain Windowing (A-FDW)', 'value': True}], 
              value=[True] if get_val('enable_afdw', True) else [], help_text=t('afdw_help')),
         
         put_row([
@@ -660,57 +669,20 @@ put_markdown("---"),
         put_html(f"<div style='opacity:0.65; font-size:13px'>{t('afdw_preset_help')}</div>"),
 
         put_row([
-            put_input('fdw_cycles', label=t('fdw'), type=FLOAT, value=get_val('fdw_cycles', 8.0), help_text=t('fdw_help'))
+            put_scope("afdw_cycles_scope"),
         ]),
         put_markdown("---"),
         # --- TDC aka Trinnov-mode (PyWebIO)
 
-        put_markdown("#### ⏳ Temporal Decay Control (TDC)"),
-        put_row([
-            put_buttons(
-                [
-                    {"label": t("tdc_preset_safe"), "value": "Safe"},
-                    {"label": t("tdc_preset_normal"), "value": "Normal"},
-                    {"label": t("tdc_preset_aggressive"), "value": "Aggressive"},
-                ],
-                onclick=lambda preset: apply_tdc_preset(preset),
-                small=True,
-            ),
-        ]),
-        put_html(f"<div style='opacity:0.65; font-size:13px'>{t('tdc_preset_help')}</div>"),
-        put_html(f"<div style='opacity:0.70; font-size:13px; margin-top:6px'>{t('tdc_summary_hint')}</div>"),
-
-
         put_checkbox(
             'enable_tdc',
-            options=[{'label': t('enable_tdc'), 'value': True}],
+            options=[{'label': '⏳ Temporal Decay Control (TDC)', 'value': True}],
             value=[True] if get_val('enable_tdc', True) else [],
             help_text=t('tdc_help')
         ),
 
-        put_row([
-            put_input(
-                'tdc_strength',
-                label=t('tdc_strength'),
-                type=FLOAT,
-                value=get_val('tdc_strength', 50.0),
-                help_text=t('tdc_help')
-            ),
-            put_input(
-                'tdc_max_reduction_db',
-                label=t('tdc_max_reduction_db'),
-                type=FLOAT,
-                value=get_val('tdc_max_reduction_db', 9.0),
-                help_text=t('tdc_max_reduction_db_help')
-            ),
-            put_input(
-                'tdc_slope_db_per_oct',
-                label=t('tdc_slope_db_per_oct'),
-                type=FLOAT,
-                value=get_val('tdc_slope_db_per_oct', 6.0),
-                help_text=t('tdc_slope_db_per_oct_help')
-            ),
-        ]),
+
+        put_scope("tdc_controls_scope"),
     ]
 #--- #6 XO
     tab_xo = [
@@ -782,7 +754,7 @@ put_markdown("---"),
     get_val=get_val,
     t=t,
     )
-
+    update_confidence_pull_ui(pin=pin, get_val=get_val, t=t)
 
     # --- orchestrators (avoid racing handlers) ---
 
@@ -803,6 +775,8 @@ put_markdown("---"),
         update_ir_window_shape_ui()
         update_ir_tukey_ui()
         update_ir_lr_window_ui()
+        update_afdw_cycles_ui(pin=pin, get_val=get_val, t=t)
+        update_tdc_controls_ui(pin=pin, get_val=get_val, t=t, apply_tdc_preset=apply_tdc_preset)
 
 
     def _on_filter_type_change(_=None):
@@ -823,7 +797,11 @@ put_markdown("---"),
         t=t,
         )
     )
+    pin_on_change("enable_tdc", onchange=lambda _: update_tdc_controls_ui(pin=pin, get_val=get_val, t=t, apply_tdc_preset=apply_tdc_preset))
 
+    pin_on_change(
+    'mode',
+    onchange=lambda _: update_confidence_pull_ui(pin=pin, get_val=get_val, t=t))
     # keep these (independent)
     pin_on_change('lvl_mode', onchange=update_lvl_ui)
 
@@ -834,8 +812,9 @@ put_markdown("---"),
     pin_on_change('lvl_min', onchange=_on_lvl_range_change)
     pin_on_change('lvl_max', onchange=_on_lvl_range_change)
     pin_on_change('lvl_manual_db', onchange=_on_lvl_range_change)
-
     pin_on_change('taps', onchange=_warn_taps_if_over_cap)
+    pin_on_change('enable_afdw', onchange=lambda _: update_afdw_cycles_ui(pin=pin, get_val=get_val, t=t))
+
     _warn_taps_if_over_cap()
 
     # Mode description: initial render + live updates

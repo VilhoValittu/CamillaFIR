@@ -91,3 +91,19 @@ class FilterConfig:
     exc_prot: bool = False          # Ekskursiosuojaus (basson suojelu)
     exc_freq: float = 40.0          # Suojataajuus
     low_bass_cut_hz: float = 40.0  # Below this frequency only cuts allowed (no boosts)
+
+    # --- CONFIDENCE PULL (DSP) ---
+    conf_pull_floor: float = 0.15
+    conf_pull_ceil: float = 0.95
+    conf_pull_max_hz: Optional[float] = 200.0
+    conf_pull_gamma_cut: float = 0.55
+    conf_pull_gamma_boost: float = 1.35
+
+    # Confidence preprocessing for pull
+    conf_pull_conf_smooth_sigma: float = 2.0
+    conf_pull_bass_floor_hz: float = 120.0
+    conf_pull_bass_floor_min: float = 0.25
+
+    # Low-bass cut policy
+    low_bass_cut_enable: bool = True
+    low_bass_cut_strength: float = 1.0

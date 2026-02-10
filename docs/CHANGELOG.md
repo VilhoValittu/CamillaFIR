@@ -4,6 +4,19 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [v2.9.6-beta.3]
+
+### UI
+- Renamed *Psychoacoustic* smoothing to **CamillaFIR Reference**
+  - Clarifies that this smoothing is a CamillaFIR-specific reference/safety view
+  - Not equivalent to REW-style psychoacoustic smoothing
+- Added user-configurable parameters for Confidence Pull
+
+### DSP
+- Improved Bass-first behavior and alignment with confidence handling
+
+---
+
 ## [2.9.5] - 2026-02-08
 
 ### UI

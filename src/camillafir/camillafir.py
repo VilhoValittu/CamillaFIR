@@ -77,7 +77,7 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.9.5"
+VERSION = "v2.9.6-beta3"
 # Change log:
 # v.2.9.5 [UI] add low-bass cut toggle + lock Hz field when disabled.
 # v.2.9.4 [CFG] Fixed low_bass_cut_hz value not saving correctly in config.
