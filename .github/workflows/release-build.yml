@@ -54,25 +54,25 @@ jobs:
 
       # ---------------- Build per OS ----------------
 
-      - name: Build (Windows, onefile)
+      - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          pyinstaller --clean --noconfirm --onefile CamillaFIR_standalone.spec
+          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
           Get-ChildItem -Recurse dist | Select-Object FullName
 
-      - name: Build (Linux, onedir)
+      - name: Build (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          pyinstaller --clean --noconfirm --onedir CamillaFIR_standalone.spec
+          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
           find dist -maxdepth 3 -type f | head -n 200
 
-      - name: Build (macOS, onefile)
+      - name: Build (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          pyinstaller --clean --noconfirm --onefile CamillaFIR_standalone.spec
+          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
           find dist -maxdepth 3 -type f | head -n 200
 
       # ---------------- Packaging per OS ----------------
@@ -83,15 +83,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path out | Out-Null
 
-          $exe1 = "dist\CamillaFIR.exe"
-          $exe2 = "dist\CamillaFIR"
-
-          if (Test-Path $exe1) {
-            Compress-Archive -Path $exe1 -DestinationPath "out\CamillaFIR_${{ env.VERSION }}_windows.zip"
-          } elseif (Test-Path $exe2) {
-            Compress-Archive -Path $exe2 -DestinationPath "out\CamillaFIR_${{ env.VERSION }}_windows.zip"
+          if (Test-Path "dist\CamillaFIR") {
+            Compress-Archive -Path "dist\CamillaFIR\*" -DestinationPath "out\CamillaFIR_${{ env.VERSION }}_windows.zip"
           } else {
-            Write-Error "Could not find CamillaFIR executable in dist/"
+            Write-Error "Could not find dist\\CamillaFIR folder (onedir build expected)."
           }
 
       - name: Package Linux build (tar.gz, onedir)
@@ -125,12 +120,12 @@ jobs:
           tar -C dist -czf out/CamillaFIR_${VERSION}_linux.tar.gz CamillaFIR
 
 
-      - name: Package macOS build (tar.gz)
+      - name: Package macOS build (tar.gz, onedir)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           mkdir -p out
-          chmod +x dist/CamillaFIR || true
+          chmod +x dist/CamillaFIR/CamillaFIR || true
           tar -C dist -czf out/CamillaFIR_${VERSION}_macos.tar.gz CamillaFIR
 
       - name: Upload build artifact
