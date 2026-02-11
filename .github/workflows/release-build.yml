@@ -1,4 +1,4 @@
-name: Release CamillaFIR (Beta/RC)
+name: Release CamillaFIR
 
 on:
   push:
@@ -125,19 +125,19 @@ jobs:
           tar -C dist -czf out/CamillaFIR_${VERSION}_linux.tar.gz CamillaFIR
 
 
-                  - name: Package macOS build (tar.gz)
-                    if: runner.os == 'macOS'
-                    shell: bash
-                    run: |
-                      mkdir -p out
-                      chmod +x dist/CamillaFIR || true
-                      tar -C dist -czf out/CamillaFIR_${VERSION}_macos.tar.gz CamillaFIR
+      - name: Package macOS build (tar.gz)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p out
+          chmod +x dist/CamillaFIR || true
+          tar -C dist -czf out/CamillaFIR_${VERSION}_macos.tar.gz CamillaFIR
 
-                  - name: Upload build artifact
-                    uses: actions/upload-artifact@v4
-                    with:
-                      name: CamillaFIR-${{ env.VERSION }}-${{ runner.os }}
-                      path: out/*
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CamillaFIR-${{ env.VERSION }}-${{ runner.os }}
+          path: out/*
 
   release:
     name: Create GitHub Release
