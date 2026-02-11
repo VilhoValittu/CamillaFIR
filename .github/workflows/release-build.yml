@@ -1,6 +1,5 @@
 name: Release CamillaFIR
 
-
 on:
   push:
     tags:
@@ -44,7 +43,6 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # Optional: makes it easy to show exact release version inside the app
       - name: Generate build_version.py
         shell: bash
         run: |
@@ -53,9 +51,20 @@ jobs:
           TAG = "${{ env.TAG }}"
           EOF
 
-      - name: Build using PyInstaller spec
+      # -------- Build per OS (SPEC selection) --------
+
+      - name: Build (Linux) using linux spec
+        if: runner.os == 'Linux'
         shell: bash
         run: |
+          rm -rf build dist
+          pyinstaller --clean --noconfirm CamillaFIR_linux.spec
+
+      - name: Build (Windows/macOS) using standalone spec
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          rm -rf build dist
           pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
 
       # -------- Packaging per OS --------
@@ -73,15 +82,14 @@ jobs:
         run: |
           mkdir -p out
           chmod +x dist/CamillaFIR/CamillaFIR || true
-          # Create run.sh
+
           cat > dist/CamillaFIR/run.sh << 'EOF'
-          #!/usr/bin/env bash
+          #!/usr/bin/env sh
           DIR="$(cd "$(dirname "$0")" && pwd)"
           exec "$DIR/CamillaFIR" "$@"
           EOF
           chmod +x dist/CamillaFIR/run.sh
 
-          # Create README
           cat > dist/CamillaFIR/README.txt << 'EOF'
           CamillaFIR Linux portable build
 
@@ -91,6 +99,7 @@ jobs:
           If needed, ensure executable permissions:
               chmod +x CamillaFIR
           EOF
+
           tar -C dist -czf out/CamillaFIR_${VERSION}_linux.tar.gz CamillaFIR
 
       - name: Package macOS build
@@ -132,11 +141,8 @@ jobs:
         run: |
           python - << 'PY'
           import os, re, pathlib
-
           version = os.environ.get("VERSION", "").strip()
           tag = os.environ.get("TAG", "").strip()
-
-          # Prefer docs/CHANGELOG.md (case-sensitive on Linux/macOS)
           candidates = ["docs/CHANGELOG.md", "docs/changelog.md", "CHANGELOG.md", "changelog.md"]
           changelog = None
           for p in candidates:
@@ -144,43 +150,29 @@ jobs:
               if pp.exists():
                   changelog = pp
                   break
-
           out = pathlib.Path("RELEASE_NOTES.md")
-
           if not tag:
               tag = f"v{version}" if version else "release"
-
           if changelog is None:
               out.write_text(f"# {tag}\n\nNo changelog found.\n", encoding="utf-8")
               raise SystemExit(0)
-
           text = changelog.read_text(encoding="utf-8", errors="ignore")
-
-          # Matches headings like:
-          # ## 2.8.3
-          # ## v2.8.3
-          # ## [2.8.3] - 2026-02-01
-          # ## [v2.8.3]
           pat = re.compile(
               r"^##\s*(?:\[\s*)?(?:v)?"
               + re.escape(version)
               + r"(?:\s*\])?(?:\s*-.*)?\s*$",
               re.IGNORECASE | re.MULTILINE
           )
-
           m = pat.search(text)
           if not m:
               out.write_text(
-                  f"# {tag}\n\n"
-                  f"Version {version} not found in {changelog.as_posix()}.\n",
+                  f"# {tag}\n\nVersion {version} not found in {changelog.as_posix()}.\n",
                   encoding="utf-8"
               )
               raise SystemExit(0)
-
           start = m.end()
           m2 = re.search(r"^##\s+", text[start:], flags=re.MULTILINE)
           end = start + (m2.start() if m2 else len(text[start:]))
-
           body = text[start:end].strip() or "No details listed for this version."
           out.write_text(f"# {tag}\n\n{body}\n", encoding="utf-8")
           PY
