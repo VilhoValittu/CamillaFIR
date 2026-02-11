@@ -5,8 +5,6 @@
 #
 # Entry point: src/camillafir/__main__.py
 # Data: i18n + plotly.js (UI assets)
-#
-# NOTE: This spec builds an "onedir" bundle via COLLECT(...)
 
 from PyInstaller.utils.hooks import collect_data_files
 

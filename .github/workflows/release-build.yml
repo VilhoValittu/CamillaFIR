@@ -1,9 +1,10 @@
 name: Release CamillaFIR
 
+
 on:
   push:
     tags:
-      - "v*.*.*"      # e.g. v2.8.3
+      - "v*.*.*"   # e.g. v2.8.3
       - "v*-beta*"
       - "v*-rc*"
 
@@ -52,52 +53,26 @@ jobs:
           TAG = "${{ env.TAG }}"
           EOF
 
-      # ---------------- Build per OS ----------------
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
-          Get-ChildItem -Recurse dist | Select-Object FullName
-
-      - name: Build (Linux)
-        if: runner.os == 'Linux'
+      - name: Build using PyInstaller spec
         shell: bash
         run: |
           pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
-          find dist -maxdepth 3 -type f | head -n 200
 
-      - name: Build (macOS)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
-          find dist -maxdepth 3 -type f | head -n 200
+      # -------- Packaging per OS --------
 
-      # ---------------- Packaging per OS ----------------
-
-      - name: Package Windows build (zip)
+      - name: Package Windows build
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path out | Out-Null
+          Compress-Archive -Path dist\CamillaFIR\* -DestinationPath out\CamillaFIR_${{ env.VERSION }}_windows.zip
 
-          if (Test-Path "dist\CamillaFIR") {
-            Compress-Archive -Path "dist\CamillaFIR\*" -DestinationPath "out\CamillaFIR_${{ env.VERSION }}_windows.zip"
-          } else {
-            Write-Error "Could not find dist\\CamillaFIR folder (onedir build expected)."
-          }
-
-      - name: Package Linux build (tar.gz, onedir)
+      - name: Package Linux build
         if: runner.os == 'Linux'
         shell: bash
         run: |
           mkdir -p out
-
-          # Ensure binary is executable
-          chmod +x dist/CamillaFIR/CamillaFIR
-
+          chmod +x dist/CamillaFIR/CamillaFIR || true
           # Create run.sh
           cat > dist/CamillaFIR/run.sh << 'EOF'
           #!/usr/bin/env bash
@@ -116,11 +91,9 @@ jobs:
           If needed, ensure executable permissions:
               chmod +x CamillaFIR
           EOF
-
           tar -C dist -czf out/CamillaFIR_${VERSION}_linux.tar.gz CamillaFIR
 
-
-      - name: Package macOS build (tar.gz, onedir)
+      - name: Package macOS build
         if: runner.os == 'macOS'
         shell: bash
         run: |
@@ -163,6 +136,7 @@ jobs:
           version = os.environ.get("VERSION", "").strip()
           tag = os.environ.get("TAG", "").strip()
 
+          # Prefer docs/CHANGELOG.md (case-sensitive on Linux/macOS)
           candidates = ["docs/CHANGELOG.md", "docs/changelog.md", "CHANGELOG.md", "changelog.md"]
           changelog = None
           for p in candidates:
@@ -182,6 +156,11 @@ jobs:
 
           text = changelog.read_text(encoding="utf-8", errors="ignore")
 
+          # Matches headings like:
+          # ## 2.8.3
+          # ## v2.8.3
+          # ## [2.8.3] - 2026-02-01
+          # ## [v2.8.3]
           pat = re.compile(
               r"^##\s*(?:\[\s*)?(?:v)?"
               + re.escape(version)
