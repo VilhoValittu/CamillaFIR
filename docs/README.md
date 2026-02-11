@@ -188,12 +188,17 @@ python -m venv venv
 # Linux/macOS:
 #   source venv/bin/activate
 pip install -r requirements.txt
+# Linux:
+#   pip install -r requirements-linux.txt
 
-#Linux
+# Linux
 sudo apt update
 sudo apt install -y chromium-browser
 
 python src/camillafir/camillafir.py
+# Linux
+#   python3 src/camillafir/camillafir.py
+
 ```
 
 The UI opens in your browser (default: `http://localhost:8080`).
