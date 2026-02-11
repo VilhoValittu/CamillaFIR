@@ -77,8 +77,9 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v2.9.6-beta3"
+VERSION = "v.3.0.0"
 # Change log:
+# v.3.0.0 See CHANGELOG.md for details.
 # v.2.9.5 [UI] add low-bass cut toggle + lock Hz field when disabled.
 # v.2.9.4 [CFG] Fixed low_bass_cut_hz value not saving correctly in config.
 # v.2.9.3 [UI] Fixed typo at psychoacoustic plot smoothing code (1/48 / 1/3 ---> 1/6 / 1/3)

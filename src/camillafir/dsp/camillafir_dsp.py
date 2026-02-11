@@ -41,7 +41,7 @@ from .phase import (
     limit_phase_deg,
 )
 
-#CamillaFIR DSP Engine v1.1.3_beta2 (2026-02-10)
+#CamillaFIR DSP Engine v1.1.4 (2026-02-11)
 
 #1.0.2 Fix comma mistake at HPF
 #1.03 Fix at phase calculation that caused "spikes"
@@ -63,7 +63,7 @@ def apply_confidence_weighted_target_pull(
     measured_db,
     confidence_mask,
     *,
-    conf_floor: float = 0.07, # 0.15 default old default
+    conf_floor: float = 0.07, # 0.15  old default
     conf_ceil: float = 0.95, # 0.95 default
     freq_axis=None,
     freq_limit_hz: float | None = 400.0,   # only apply pull below this; None => all freqs
@@ -276,6 +276,44 @@ def interpolate_response(input_freqs, input_values, target_freqs):
     """Interpolate response linearly to target frequencies."""
     return np.interp(target_freqs, input_freqs, input_values)
 
+def analysis_smoothing_lf_to_hf(
+    freqs,
+    mags,
+    *,
+    low_bw=1/48.0,   # LF: detailed
+    high_bw=1/3.0,   # HF: safer / smoother
+    f_lo=230.0,      # start crossfade
+    f_hi=500.0,      # end crossfade
+):
+    """
+    DSP analysis smoothing for measured magnitude (NOT plot smoothing).
+
+    Behavior:
+      - f <= f_lo  : low_bw (detailed)
+      - f >= f_hi  : high_bw (very smooth / safer)
+      - between    : log-frequency crossfade
+    """
+    f = np.asarray(freqs, dtype=float)
+    m = np.asarray(mags, dtype=float)
+    if f.size < 8 or m.size != f.size:
+        return np.copy(m)
+
+    dummy = np.zeros_like(m)
+    try:
+        m_low, _  = apply_smoothing_std(f, m, dummy, float(low_bw))
+        m_high, _ = apply_smoothing_std(f, m, dummy, float(high_bw))
+    except Exception:
+        # Safe fallback: no smoothing change
+        return np.copy(m)
+
+    ff = np.maximum(f, 1.0)
+    lo = float(max(f_lo, 1.0))
+    hi = float(max(f_hi, lo * 1.01))
+    w = (np.log10(ff) - np.log10(lo)) / (np.log10(hi) - np.log10(lo))
+    w = np.clip(w, 0.0, 1.0)
+
+    return (1.0 - w) * m_low + w * m_high
+
 def _cfg_float_allow_zero(cfg, key: str, default: float) -> float:
     """
     Read cfg.<key> as float. IMPORTANT: 0 is valid and must not fall back.
@@ -331,7 +369,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # IMPORTANT:
     # Tasoitusresoluutio (smoothing_level) must NOT affect analysis/leveling.
     # Keep analysis smoothing FIXED; smoothing_level is used later only for filter shaping.
-    analysis_bw = 1/24.0
+    
     is_psy = 'psy' in str(cfg.plot_smoothing_level).lower()
     
 
@@ -339,8 +377,12 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     # Keep DSP math stable: analysis/correction uses STANDARD smoothing only.
     # Psychoacoustic mode affects only what we *show* in UI (plots/score),
     # not confidence/leveling/correction curve generation.
-    m_smooth_std, _ = apply_smoothing_std(
-        f_in, m_in, np.zeros_like(m_in), float(analysis_bw)
+    # NEW: frequency-dependent analysis smoothing:
+    #   0..230 Hz: 1/48
+    #   230..500 Hz: log crossfade
+    #   >500 Hz: 1/3
+    m_smooth_std = analysis_smoothing_lf_to_hf(
+        f_in, m_in, low_bw=1/48.0, high_bw=1/3.0, f_lo=230.0, f_hi=400.0
     )
     
     # FIX: Dynamic phase smoothing based on sample rate

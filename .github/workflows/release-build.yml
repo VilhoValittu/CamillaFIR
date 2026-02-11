@@ -1,10 +1,9 @@
 name: Release CamillaFIR (Beta/RC)
 
-
 on:
   push:
     tags:
-      - "v*.*.*"   # e.g. v2.8.3
+      - "v*.*.*"      # e.g. v2.8.3
       - "v*-beta*"
       - "v*-rc*"
 
@@ -53,41 +52,92 @@ jobs:
           TAG = "${{ env.TAG }}"
           EOF
 
-      - name: Build using PyInstaller spec
+      # ---------------- Build per OS ----------------
+
+      - name: Build (Windows, onefile)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pyinstaller --clean --noconfirm --onefile CamillaFIR_standalone.spec
+          Get-ChildItem -Recurse dist | Select-Object FullName
+
+      - name: Build (Linux, onedir)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
+          pyinstaller --clean --noconfirm --onedir CamillaFIR_standalone.spec
+          find dist -maxdepth 3 -type f | head -n 200
 
-      # -------- Packaging per OS --------
+      - name: Build (macOS, onefile)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          pyinstaller --clean --noconfirm --onefile CamillaFIR_standalone.spec
+          find dist -maxdepth 3 -type f | head -n 200
 
-      - name: Package Windows build
+      # ---------------- Packaging per OS ----------------
+
+      - name: Package Windows build (zip)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path out | Out-Null
-          Compress-Archive -Path dist\CamillaFIR\* -DestinationPath out\CamillaFIR_${{ env.VERSION }}_windows.zip
 
-      - name: Package Linux build
+          $exe1 = "dist\CamillaFIR.exe"
+          $exe2 = "dist\CamillaFIR"
+
+          if (Test-Path $exe1) {
+            Compress-Archive -Path $exe1 -DestinationPath "out\CamillaFIR_${{ env.VERSION }}_windows.zip"
+          } elseif (Test-Path $exe2) {
+            Compress-Archive -Path $exe2 -DestinationPath "out\CamillaFIR_${{ env.VERSION }}_windows.zip"
+          } else {
+            Write-Error "Could not find CamillaFIR executable in dist/"
+          }
+
+      - name: Package Linux build (tar.gz, onedir)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           mkdir -p out
-          chmod +x dist/CamillaFIR/CamillaFIR || true
+
+          # Ensure binary is executable
+          chmod +x dist/CamillaFIR/CamillaFIR
+
+          # Create run.sh
+          cat > dist/CamillaFIR/run.sh << 'EOF'
+          #!/usr/bin/env bash
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          exec "$DIR/CamillaFIR" "$@"
+          EOF
+          chmod +x dist/CamillaFIR/run.sh
+
+          # Create README
+          cat > dist/CamillaFIR/README.txt << 'EOF'
+          CamillaFIR Linux portable build
+
+          Start with:
+              ./run.sh
+
+          If needed, ensure executable permissions:
+              chmod +x CamillaFIR
+          EOF
+
           tar -C dist -czf out/CamillaFIR_${VERSION}_linux.tar.gz CamillaFIR
 
-      - name: Package macOS build
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          mkdir -p out
-          chmod +x dist/CamillaFIR/CamillaFIR || true
-          tar -C dist -czf out/CamillaFIR_${VERSION}_macos.tar.gz CamillaFIR
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CamillaFIR-${{ env.VERSION }}-${{ runner.os }}
-          path: out/*
+                  - name: Package macOS build (tar.gz)
+                    if: runner.os == 'macOS'
+                    shell: bash
+                    run: |
+                      mkdir -p out
+                      chmod +x dist/CamillaFIR || true
+                      tar -C dist -czf out/CamillaFIR_${VERSION}_macos.tar.gz CamillaFIR
+
+                  - name: Upload build artifact
+                    uses: actions/upload-artifact@v4
+                    with:
+                      name: CamillaFIR-${{ env.VERSION }}-${{ runner.os }}
+                      path: out/*
 
   release:
     name: Create GitHub Release
@@ -118,7 +168,6 @@ jobs:
           version = os.environ.get("VERSION", "").strip()
           tag = os.environ.get("TAG", "").strip()
 
-          # Prefer docs/CHANGELOG.md (case-sensitive on Linux/macOS)
           candidates = ["docs/CHANGELOG.md", "docs/changelog.md", "CHANGELOG.md", "changelog.md"]
           changelog = None
           for p in candidates:
@@ -138,11 +187,6 @@ jobs:
 
           text = changelog.read_text(encoding="utf-8", errors="ignore")
 
-          # Matches headings like:
-          # ## 2.8.3
-          # ## v2.8.3
-          # ## [2.8.3] - 2026-02-01
-          # ## [v2.8.3]
           pat = re.compile(
               r"^##\s*(?:\[\s*)?(?:v)?"
               + re.escape(version)

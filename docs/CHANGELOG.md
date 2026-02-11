@@ -4,16 +4,48 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
-## [v2.9.6-beta.3]
+## [3.0.0] - 2026-02-11
+
+Major DSP engine update and smoothing redesign.
 
 ### UI
 - Renamed *Psychoacoustic* smoothing to **CamillaFIR Reference**
   - Clarifies that this smoothing is a CamillaFIR-specific reference/safety view
   - Not equivalent to REW-style psychoacoustic smoothing
-- Added user-configurable parameters for Confidence Pull
+  - View-only (does not affect DSP calculation)
+
+- Added user-configurable parameters for **Confidence Pull**
+  - Available in Advanced mode only
+  - Floor threshold
+  - Max frequency limit
+  - Cut aggressiveness
+  - Boost conservativeness
+  - Recommended defaults included in help text
 
 ### DSP
-- Improved Bass-first behavior and alignment with confidence handling
+- Replaced legacy fixed 1/24 octave smoothing in filter calculation
+  - New adaptive smoothing:
+    - 0–230 Hz: 1/48 octave
+    - 230–500 Hz: gradual transition
+    - >500 Hz: 1/3 octave
+  - Improves LF precision while stabilizing mid/high frequency correction
+
+- Improved Bass-first behavior
+  - Better alignment with confidence weighting
+  - More predictable low-frequency correction shaping
+
+- Refined confidence pull handling
+  - More stable behavior in low-confidence regions
+  - Reduced over-aggressive boosts in uncertain bands
+
+### Build
+- Linux build switched to `onedir` distribution
+  - Improves portability and runtime reliability
+  - Avoids common single-file extraction issues
+
+### Behavior changes
+- Adjusted default Confidence Floor (0.15 → 0.07)
+  - Correction operates more freely before safety pull engages
 
 ---
 
