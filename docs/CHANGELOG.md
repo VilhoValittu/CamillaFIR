@@ -4,6 +4,20 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.0.1] - 2026-02-14
+
+### DSP
+- GD-gradient limiter redesigned
+  - Bass-focused (20–250 Hz)
+  - Soft limiting (tanh) replaces hard clipping
+  - Relaxed slope limit: 8 → 30 ms/oct
+  - Conditionally enabled (bypassed when A-FDW + Bass-first stabilization are active, except in high-risk windowing modes)
+
+### UI
+- Fixed A-FDW plot rendering issue with measurement sample rates >48 kHz
+
+---
+
 ## [3.0.0] - 2026-02-11
 
 Major DSP engine update and smoothing redesign.
