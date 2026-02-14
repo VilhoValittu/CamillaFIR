@@ -140,14 +140,20 @@ def apply_confidence_weighted_target_pull(
 # ---------------------------
 # GD-gradient limiter (DSP-only safety)
 # ---------------------------
-def _limit_gd_gradient_ms_per_oct(freq_axis, phase_rad, *, mask=None, max_grad_ms_per_oct=8.0):
+def _limit_gd_gradient_ms_per_oct(
+    freq_axis,
+    phase_rad,
+    *,
+    mask=None,
+    max_grad_ms_per_oct=30.0,   # was 20.0 -> a bit freer
+    f_min=20.0,
+    f_max=250.0,
+    grad_smooth_sigma=0.8,      # 0 disables
+    soft_limit=True,            # tanh instead of hard clip
+):
     """
     Limit the *rate of change* of group delay (ms) versus log-frequency (octaves).
-    This prevents abrupt GD "kinks" that can smear transients.
-
-    - Works on the provided phase curve only.
-    - Intended for the *correction* component (excess/room phase), not XO/HPF phase.
-    - No user control by design.
+    "Livelier" tuning: act mainly as a spike guard in bass, not as a global phase shaper.
     """
     f = np.asarray(freq_axis, dtype=float)
     ph = np.asarray(phase_rad, dtype=float)
@@ -155,21 +161,18 @@ def _limit_gd_gradient_ms_per_oct(freq_axis, phase_rad, *, mask=None, max_grad_m
         return ph
 
     m = (np.asarray(mask, dtype=bool) if mask is not None else np.ones_like(f, dtype=bool))
-    # Need positive freqs for log axis
-    m = m & (f > 0.0)
+    # Need positive freqs for log axis + focus band (bass only by default)
+    m = m & (f > 0.0) & (f >= float(f_min)) & (f <= float(f_max))
     if not np.any(m):
         return ph
 
-    # Work on a contiguous band: use first..last true index
     idx = np.where(m)[0]
     i0, i1 = int(idx[0]), int(idx[-1])
     ff = f[i0:i1+1]
     pp = ph[i0:i1+1]
-
     if ff.size < 16:
         return ph
 
-    # Unwrap locally
     pp_u = np.unwrap(pp)
 
     # GD(ms) = - dphi/df / (2π) * 1000
@@ -182,29 +185,35 @@ def _limit_gd_gradient_ms_per_oct(freq_axis, phase_rad, *, mask=None, max_grad_m
     dlog = np.gradient(log2f) + 1e-12
     gd_grad = np.gradient(gd_ms) / dlog
 
-    lim = float(max(0.1, max_grad_ms_per_oct))
-    gd_grad_l = np.clip(gd_grad, -lim, lim)
+    # Remove sawtooth noise in the gradient (prevents limiter from "over-working")
+    if grad_smooth_sigma and float(grad_smooth_sigma) > 0.0:
+        try:
+            gd_grad = scipy.ndimage.gaussian_filter1d(gd_grad, sigma=float(grad_smooth_sigma))
+        except Exception:
+            pass
 
-    # Reconstruct a limited GD curve by integrating gradient over log2f.
-    # Keep the original GD at the band center as an anchor.
+    lim = float(max(0.1, max_grad_ms_per_oct))
+
+    # Soft limiter keeps natural trends; only compresses extremes
+    if soft_limit:
+        gd_grad_l = lim * np.tanh(gd_grad / lim)
+    else:
+        gd_grad_l = np.clip(gd_grad, -lim, lim)
+
+    # Reconstruct limited GD by integrating gradient over log2f (anchor at center)
     k0 = int(ff.size // 2)
     gd0 = float(gd_ms[k0])
-    # integrate from center outwards for stability
     gd_l = np.empty_like(gd_ms)
     gd_l[k0] = gd0
-    # forward
     for k in range(k0 + 1, ff.size):
         gd_l[k] = gd_l[k-1] + gd_grad_l[k-1] * (log2f[k] - log2f[k-1])
-    # backward
     for k in range(k0 - 1, -1, -1):
         gd_l[k] = gd_l[k+1] - gd_grad_l[k+1] * (log2f[k+1] - log2f[k])
 
     # Convert limited GD back to phase by integrating dphi/df = -2π * GD/1000
     dphi_df = -2.0 * np.pi * (gd_l / 1000.0)
-    # anchor phase at band center to preserve overall alignment
     phi_l = np.empty_like(pp_u)
     phi_l[k0] = float(pp_u[k0])
-    # forward integration (trapezoid)
     for k in range(k0 + 1, ff.size):
         phi_l[k] = phi_l[k-1] + 0.5 * (dphi_df[k-1] + dphi_df[k]) * (ff[k] - ff[k-1])
     for k in range(k0 - 1, -1, -1):
@@ -213,6 +222,7 @@ def _limit_gd_gradient_ms_per_oct(freq_axis, phase_rad, *, mask=None, max_grad_m
     out = ph.copy()
     out[i0:i1+1] = phi_l
     return out
+
 
 
 def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto_headroom_db=0.0, logger_obj=None):
@@ -1116,7 +1126,25 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
                 try:
                     if isinstance(st, dict):
                         st["afdw_bw_oct"] = np.asarray(afdw_bw_oct, dtype=float).tolist()
-                        st["cmp_afdw_bw_oct"] = st["afdw_bw_oct"]
+                        # Build cmp_afdw_bw_oct only if comparison grid exists; MUST match cmp_freq_axis length
+                        try:
+                            if str(locals().get("analysis_mode", "native")).lower() == "comparison":
+                                _fx_cmp = None
+                                # prefer cmp dict if present
+                                _cmp = locals().get("cmp", None)
+                                if isinstance(_cmp, dict):
+                                    _fx_cmp = _cmp.get("cmp_freq_axis", None)
+                                if _fx_cmp is None:
+                                    _fx_cmp = st.get("cmp_freq_axis", None)
+                                if _fx_cmp is None:
+                                    _fx_cmp = stats.get("cmp_freq_axis", None) if isinstance(locals().get("stats", None), dict) else None
+
+                                if _fx_cmp is not None:
+                                    fx_cmp = np.asarray(_fx_cmp, dtype=float)
+                                    bw_cmp = np.interp(fx_cmp, freq_axis, np.asarray(afdw_bw_oct, dtype=float))
+                                    st["cmp_afdw_bw_oct"] = np.asarray(bw_cmp, dtype=float).tolist()
+                        except Exception:
+                            pass
                         st["afdw_bw_min_oct"] = float(afdw_bw_min_oct)
                         st["afdw_bw_mean_oct"] = float(afdw_bw_mean_oct)
                         st["afdw_bw_max_oct"] = float(afdw_bw_max_oct)
@@ -2090,7 +2118,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         # Soft fade-out at the upper edge of phase_mask to reduce FIR ringing
         # from hard truncation (DSP-only safety, no user control).
         try:
-            fade_oct = 1.0 / 6.0  # ~1/6 octave taper near phase_lim_hz
+            fade_oct = 1.0 / 1.0  # ~1/1 octave taper near phase_lim_hz
             f1 = float(phase_lim_hz)
             f0_fade = f1 / (2.0 ** fade_oct)
             if f0_fade < (f1 - 1.0):
@@ -2179,16 +2207,51 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         # Limits abrupt changes of group delay induced by the correction phase.
         # Apply only inside the same correction band (phase_mask).
         try:
-            _gd_grad_lim = 8.0  # ms/oct (fixed safety default)
-            extra_phase = _limit_gd_gradient_ms_per_oct(
-                freq_axis,
-                extra_phase,
-                mask=phase_mask,
-                max_grad_ms_per_oct=_gd_grad_lim,
-            )
+           # Conditional enable:
+           # - With Bass-first + A-FDW, phase is already stabilized; the limiter can reduce "liveliness".
+           # - Keep it only for risky setups (ultra-short REW Asym) or legacy mode (no BF, no A-FDW).
+            _use_bassfirst = bool(locals().get("use_bassfirst", False))
+            _afdw_on = bool(locals().get("afdw_on", False))
+
+            # REW Asym tight-left detection (phase can get fragile)
+            try:
+                _win_mode = str(getattr(cfg, "ir_export_window_mode", "auto") or "auto").strip().lower()
+            except Exception:
+                _win_mode = "auto"
+            try:
+                _left_ms = float(getattr(cfg, "ir_window_left", getattr(cfg, "ir_window_ms_left", 0.0)) or 0.0)
+            except Exception:
+                _left_ms = 0.0
+            if not np.isfinite(_left_ms):
+                _left_ms = 0.0
+
+            _rew_asym_tight = (_win_mode == "rew_asym" and _left_ms > 0.0 and _left_ms < 15.0)
+            _legacy_mode = (not _use_bassfirst) and (not _afdw_on)
+
+            _gd_grad_enable = bool(_rew_asym_tight or _legacy_mode)
+
+            # Choose limiter strength (ms/oct)
+            # - tight REW Asym: strict
+            # - legacy: moderate (still safer than "always on 8")
+            if _gd_grad_enable:
+                _gd_grad_lim = 8.0 if _rew_asym_tight else 20.0
+
+                extra_phase = _limit_gd_gradient_ms_per_oct(
+                    freq_axis,
+                    extra_phase,
+                    mask=phase_mask,
+                    max_grad_ms_per_oct=_gd_grad_lim,
+                )
+
             try:
                 if isinstance(st, dict):
-                    st["gd_grad_limit_ms_per_oct"] = float(_gd_grad_lim)
+                    st["gd_grad_limiter_enabled"] = bool(_gd_grad_enable)
+                    st["gd_grad_limit_ms_per_oct"] = float(_gd_grad_lim) if _gd_grad_enable else None
+                    st["gd_grad_limiter_reason"] = (
+                        "rew_asym_tight_left" if _rew_asym_tight else
+                        ("legacy_no_bassfirst_no_afdw" if _legacy_mode else
+                         "skipped_bassfirst_or_afdw")
+                    )
             except Exception:
                 pass
         except Exception:

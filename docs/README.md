@@ -1,8 +1,10 @@
 # CamillaFIR by Vilho Valittu
 
-## v3.0.0 Feedback needed! Thanks at advance. camillafir.py@gmail.com
+## v3.0.1
+Stable release – feedback welcome: camillafir.py@gmail.com
 
-### Phase correction safety (v2.9.0)
+
+### Phase correction safety (introduced in v2.9.0)
 
 - **Internal phase correction clamp (±45°)**
   - Room-induced *excess phase* correction is now internally limited to **±45 degrees**.
@@ -94,7 +96,58 @@ Instead of treating everything as “EQ”, it separates three physical phenomen
 
 - **Propagation delay (Time-of-Flight / TOF):** removed explicitly before phase analysis
 - **Excess phase distortion:** corrected with FIR phase reconstruction (Linear / Minimum / Mixed / Asymmetric)
-- **Room-induced energy storage (room modes):** reduced with **Temporal Decay Control (TDC)** (time-domain, not amplitude EQ)
+In addition, phase reconstruction includes a **conditional group-delay stabilization stage**
+to prevent artificial phase “kinks” while preserving transient liveliness.
+
+ ---
+ 
+## DSP Processing Overview
+
+Below is a simplified high-level view of the internal signal-processing flow:
+
+```
+REW Measurement (Magnitude + Phase)
+            │
+           ▼
+    TOF Detection & Removal
+            │
+            ▼
+    Confidence & Reflection Analysis
+            │
+            ▼
+    Target Curve Construction
+            │
+            ▼
+    Level Matching (Smart / Manual)
+            │
+            ▼
+    Magnitude Correction
+      (Boost/Cut/Slope limits,
+       A-FDW, Confidence Pull)
+            │
+            ▼
+    Phase Reconstruction
+      (Linear / Minimum / Mixed / Asymmetric)
+            │
+            ▼
+    Conditional GD Stabilization
+      (Bass-focused, soft-limited)
+            │
+            ▼
+    Optional Temporal Decay Control (TDC)
+            │
+            ▼
+    FIR Synthesis & Multi-rate Export
+```
+
+Design philosophy:
+
+- Magnitude safety and confidence logic handle **what** is corrected.
+- Phase reconstruction handles **when** energy arrives.
+- TDC handles **how long** energy persists.
+- GD stabilization prevents numerical or reconstruction artefacts
+  without acting as a wideband phase shaper.
+
 
 ---
 

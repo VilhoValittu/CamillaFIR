@@ -1010,8 +1010,20 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
     set_processbar('bar', 0.8)
     print("plot_smoothing_level =", data.get("plot_smoothing_level"))
     print("filter_smooth =", data.get("filter_smooth"))
+    
+
     psl = data.get('plot_smoothing_level', 'Psychoacoustic')
-    psl_str = psl if isinstance(psl, str) else f"1/{int(psl)} octave"
+
+    if isinstance(psl, str):
+        if psl == "Psychoacoustic":
+            psl_str = t("smooth_safe_reference")
+        else:
+            psl_str = psl
+    else:
+        psl_str = f"1/{int(psl)} octave"
+
+    print("psl_str =", psl_str)
+
     with use_scope('results', clear=True):
         if l_st_f is None or r_st_f is None:
             put_error("Error: No results captured.")
