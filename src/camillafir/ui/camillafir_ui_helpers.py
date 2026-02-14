@@ -1,4 +1,5 @@
 # camillafir_ui_helpers.py
+import logging
 import numpy as np
 import math
 from pywebio.output import *  # needed because this PyWebIO build doesn't expose put_input/put_select as named exports
@@ -8,6 +9,8 @@ from pywebio.pin import pin, pin_update, put_input, put_select
 from ..resources.i8n.camillafir_i18n import t
 from .camillafir_modes import MODE_DEFAULTS
 from .camillafir_utils import scale_taps_with_fs
+
+logger = logging.getLogger("CamillaFIR")
 
 def _warn_max_boost_if_over_cap(_=None):
     """

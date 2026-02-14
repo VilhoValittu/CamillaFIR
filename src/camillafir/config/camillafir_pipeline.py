@@ -38,7 +38,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     for k in p_keys:
         try:
             data[k] = pin[k]
-        except Exception:
+        except KeyError:
             data[k] = None
 
     # normalize checkbox pins saved as [] / [True]
@@ -58,17 +58,17 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     for i in range(1, 6):
         try:
             data[f"xo{i}_f"] = pin[f"xo{i}_f"]
-        except Exception:
+        except KeyError:
             data[f"xo{i}_f"] = None
         try:
             data[f"xo{i}_s"] = pin[f"xo{i}_s"]
-        except Exception:
+        except KeyError:
             data[f"xo{i}_s"] = None
 
     # numeric clamps (same behavior as camillafir.py)
     try:
         data["max_cut_db"] = abs(float(data.get("max_cut_db", 15.0) or 15.0))
-    except Exception:
+    except (TypeError, ValueError):
         data["max_cut_db"] = 15.0
 
     for k, dv in [
@@ -79,7 +79,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     ]:
         try:
             data[k] = max(0.0, float(data.get(k, dv) or dv))
-        except Exception:
+        except (TypeError, ValueError):
             data[k] = dv
 
     v_raw = data.get("ir_export_window_mode", None)
