@@ -26,7 +26,7 @@ def _normalize_hc_mode_key(v) -> str:
     n = s.lower().replace(" ", "")
     # "upload"/"custom" options in various languages (keep simple + safe)
     if "custom" in n or "lataa" in n or "upload" in n:
-        return "Custom"
+        return "Upload"
     if "cinema" in n:
         return "Cinema"
     if "flat" in n:
@@ -214,12 +214,18 @@ def load_house_curve(data: dict, *, parse_measurements_from_path=None):
     """
     hc_f, hc_m = None, None
     hc_source = "Preset"
+    # Decide mode ONCE (stable)
+    mode_key = _normalize_hc_mode_key(data.get("hc_mode"))
+    want_upload = (mode_key == "Upload")
+
 
     # 1) Upload
     try:
-        if getattr(pin, "hc_custom_file", None):
-            hc_f, hc_m = load_target_curve(pin.hc_custom_file["content"])
-            hc_source = "Upload"
+        if want_upload and getattr(pin, "hc_custom_file", None):
+            up = pin.hc_custom_file
+            hc_f, hc_m = load_target_curve(up["content"])
+            if hc_f is not None and hc_m is not None:
+                hc_source = "Upload"
     except Exception:
         pass
 
@@ -235,11 +241,23 @@ def load_house_curve(data: dict, *, parse_measurements_from_path=None):
             except Exception:
                 hc_f, hc_m = None, None
 
-    # 3) Preset fallback
+    # 3) Preset fallback (ONLY real presets)
     if hc_f is None:
-        preset_key = _normalize_hc_mode_key(data.get("hc_mode"))
-        preset_key = "Flat" if preset_key == "Custom" else preset_key
-        hc_f, hc_m = get_house_curve_by_name(preset_key)
-        hc_source = f"Preset ({preset_key})"
+        preset_key = mode_key
+        # If Upload selected but file missing/unparsable: choose Flat (and be explicit)
+        if preset_key == "Upload":
+            preset_key = "Flat"
+            hc_source = "Upload (no file)"
+
+        # If Upload/Custom selected but no file loaded -> DO NOT silently fallback to Harman
+        if preset_key in ("Custom", "Upload"):
+            # Return flat instead of misleading Harman
+            hc_f, hc_m = get_house_curve_by_name("Flat")
+            hc_source = "Upload (no file)"
+        else:
+            hc_f, hc_m = get_house_curve_by_name(preset_key)
+        if hc_source == "Preset":
+            hc_source = f"Preset ({preset_key})"
+
 
     return hc_f, hc_m, hc_source

@@ -10,14 +10,17 @@ from textwrap import dedent
 
 import numpy as np
 import scipy.io.wavfile
-
+import tempfile
 from pywebio import config
 from pywebio.input import *
 from pywebio.output import *
 from pywebio.pin import *
 from pywebio.session import set_env
 import pywebio.output as pwo
-from pywebio.output import put_html
+from pywebio.output import put_html, put_image, put_row, put_markdown
+import importlib.resources as pkgres
+import base64
+from pywebio.pin import put_input, put_select, put_file_upload, pin_on_change, pin_update, pin
 
 from ..config.camillafir_config import load_config, save_config
 from ..resources.i8n.camillafir_i18n import t
@@ -41,6 +44,7 @@ from .camillafir_ui_helpers import (
     update_afdw_cycles_ui,
     update_tdc_controls_ui,
     update_confidence_pull_ui,
+    update_target_preview_ui,
 )
 from ..config.camillafir_pipeline import (
     collect_ui_data,
@@ -293,13 +297,104 @@ def _inject_dark_css():
 </style>
 """)
 
+def put_logo_header(t):
+    with pkgres.files("camillafir.ui.assets").joinpath("camillafir_logo.png").open("rb") as f:
+        img_bytes = f.read()
+
+    img_b64 = base64.b64encode(img_bytes).decode()
+
+    put_html(f"""
+<div style="
+    display:flex;
+    align-items:center;
+    gap:18px;
+    margin: 18px 0 18px 0;
+">
+    <img src="data:image/png;base64,{img_b64}"
+         style="height:96px; width:auto;" />
+
+    <div style="display:flex; flex-direction:column;">
+        <div style="
+            font-size:32px;
+            font-weight:650;
+            color:#ffffff;
+            line-height:1.1;
+        ">
+            CamillaFIR
+        </div>
+
+        <div style="
+            font-size:14px;
+            color:#9aa4b2;
+            margin-top:6px;
+            letter-spacing:0.4px;
+        ">
+            {VERSION}
+        </div>
+    </div>
+</div>
+""")
+
+def update_engine_metrics_ui(*, pin=pin, pin_update=pin_update):
+    """
+    Renders FIR engine metrics into scope: 'engine_metrics_scope'
+    - Latency (ms) (Linear-phase group delay approx = taps/2)
+    - Bin resolution (Hz) = fs / taps
+    This is UI-only and safe (never raises).
+    """
+    try:
+        try:
+            fs_v = pin["fs"]
+            taps_v = pin["taps"]
+        except Exception:
+            return
+
+        if fs_v in (None, "") or taps_v in (None, ""):
+            return
+
+        fs_f = float(fs_v)
+        taps_i = int(float(taps_v))
+        if fs_f <= 0 or taps_i <= 0:
+            return
+
+        latency_ms = (taps_i / 2.0) / fs_f * 1000.0
+        bin_hz = fs_f / float(taps_i)
+
+        # light “badges”
+        lat_txt = f"{latency_ms:.0f} ms"
+        res_txt = f"{bin_hz:.3f} Hz/bin"
+
+        with use_scope("engine_metrics_scope", clear=True):
+            put_html(
+                f"""
+                <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+                  <div style="padding:6px 10px; border:1px solid rgba(255,255,255,0.14); border-radius:999px;
+                              background: rgba(255,255,255,0.04); font-size:12px; color:#cbd5e1;">
+                    ⏱ Latency (Linear): <b style="color:#fff">{lat_txt}</b>
+                  </div>
+                  <div style="padding:6px 10px; border:1px solid rgba(255,255,255,0.14); border-radius:999px;
+                              background: rgba(255,255,255,0.04); font-size:12px; color:#cbd5e1;">
+                    🔎 Resolution: <b style="color:#fff">{res_txt}</b>
+                  </div>
+                </div>
+                """
+            )
+    except Exception:
+        return
 
 @config(theme="dark")
 def main():
     set_env(output_max_width='1850px') 
     _inject_dark_css()
-    put_markdown(f"# 🎛️ {PROGRAM_NAME} {VERSION}")
-    put_markdown(f"### {t('subtitle')}")
+    put_logo_header(t)
+    put_html('<hr style="border:1px solid #1f2937; margin: 0 0 14px 0;">')
+
+    # About / Credits (collapsible)
+    put_collapse(
+        t('about_title'),
+        [put_markdown(t('about_body'))]
+    )
+
     put_guide_section(); put_markdown("---")
     d = load_config(); get_val = lambda k, def_v: d.get(k, def_v)
     hc_opts = [
@@ -315,7 +410,7 @@ def main():
         {'label': t('hc_bk'),            'value': 'BK'},
         {'label': t('hc_flat'),          'value': 'Flat'},
         {'label': t('hc_cinema'),        'value': 'Cinema'},
-        {'label': t('hc_mode_upload'),   'value': 'Custom'},
+        {'label': t('hc_mode_upload'),   'value': 'Upload'},
     ]
     fs_opts = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]; 
     taps_opts = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]; slope_opts = [6, 12, 18, 24, 36, 48]
@@ -333,10 +428,16 @@ def main():
             f"{t('input_files_help')}"
             f"</div>"
         ),
-        put_file_upload('file_l', label=t('upload_l'), accept='.txt,.wav'), 
-        put_input('local_path_l', label=t('path_l'), value=get_val('local_path_l', ''), help_text=t('path_help')),
-        put_file_upload('file_r', label=t('upload_r'), accept='.txt,.wav'), 
-        put_input('local_path_r', label=t('path_r'), value=get_val('local_path_r', ''), help_text=t('path_help')),
+        put_file_upload('file_l', label=t('upload_l'), accept='.txt,.wav'),
+        put_file_upload('file_r', label=t('upload_r'), accept='.txt,.wav'),
+        put_collapse(
+            "Local paths (optional)",
+            [
+                put_input('local_path_l', label=t('path_l'), value=get_val('local_path_l', ''), help_text=t('path_help')),
+                put_input('local_path_r', label=t('path_r'), value=get_val('local_path_r', ''), help_text=t('path_help')),
+            ],
+            open=False,
+        ),
         put_select('fmt', label=t('fmt'), options=['WAV', 'TXT'], value=get_val('fmt', 'WAV'), help_text=t('fmt_help')),
         put_radio('layout', label=t('layout'), options=[t('layout_mono'), t('layout_stereo')], value=get_val('layout', t('layout_stereo')), inline=True),
         put_checkbox('multi_rate_opt', options=[{'label': t('multi_rate'), 'value': True}], value=[True] if get_val('multi_rate_opt', False) else [], help_text=t('multi_rate_help')),
@@ -351,7 +452,11 @@ def main():
 
     tab_basic = [
         put_markdown(f"### ⚙️ {t('tab_basic')}"),
-        put_markdown(t('---')),
+        put_markdown("---"),
+
+        # =========================
+        # MODE
+        # =========================
         # Mode + Apply defaults (manual apply is safer UX)
         put_row([
             put_select(
@@ -372,20 +477,27 @@ def main():
         ]),
         put_markdown(f"_{t('mode_apply_defaults_help')}_"),
         put_scope('mode_desc_scope'),
-
         put_markdown("---"),
 
-        # Row 1: Sample rate and Taps
+        # =========================
+        # FIR ENGINE
+        # =========================
+        put_markdown("#### 🧱 FIR Engine"),
         put_row([
             put_select('fs', label=t('fs'), options=fs_opts, value=get_val('fs', 44100), help_text=t('fs_help')),  # type: ignore
             put_select('taps', label=t('taps'), options=taps_opts, value=get_val('taps', 65536), help_text=t('taps_help'))
         ]),
         put_markdown(f"_{t('taps_warn_over')}_"),
 
-        # Auto-taps info (shown only when multi_rate_opt enabled)
+        put_scope('engine_metrics_scope'),
         put_scope('taps_auto_info_scope_basic'),
         
-        # Row 2: Filter type and Mixed frequency
+        put_markdown("---"),
+
+        # =========================
+        # PHASE STRATEGY
+        # =========================
+        put_markdown("#### 🧭 Filter type"),
         put_row([
             put_select(
                 'filter_type',
@@ -397,26 +509,17 @@ def main():
             put_scope("update_mixed_freq_scope"),
         ]),
         
-        put_input('gain', label=t('gain'), type=FLOAT, value=get_val('gain', 0.0), help_text=t('gain_help')),
-        
-        put_select('lvl_algo', label=t('lvl_algo'), options=['Median', 'Average'], value=get_val('lvl_algo', 'Median'), help_text=t('lvl_algo_help')),
-        put_select(
-            'plot_smoothing_level',
-            label=t('smooth_type'),
-            options=[
-                {'label': t('smooth_safe_reference'), 'value': 'Psychoacoustic'},
-                {'label': '1/12 Octave', 'value': 12},
-                {'label': '1/24 Octave', 'value': 24},
-                {'label': '1/48 Octave', 'value': 48},
-                {'label': '1/96 Octave', 'value': 96},
-            ],
-            value=get_val('plot_smoothing_level', 'Psychoacoustic'),
-            help_text=t('smooth_help')
-        ),  
+        put_markdown("---"),
 
-        
-        # Row 3: Mode selection and target level (split into two parts for readability)
-        # Level match range (help_text goes to the right place directly under fields)
+        # =========================
+        # LEVELING & GAIN
+        # =========================
+        put_markdown("#### 🎚 Leveling & Gain"),
+        put_row([
+            put_select('lvl_algo', label=t('lvl_algo'), options=['Median', 'Average'], value=get_val('lvl_algo', 'Median'), help_text=t('lvl_algo_help')),
+            put_input('gain', label=t('gain'), type=FLOAT, value=get_val('gain', 0.0), help_text=t('gain_help')),
+        ]),
+
         put_row([
             put_input(
                 'lvl_min',
@@ -434,7 +537,7 @@ def main():
             ),
         ]),
 
-        # lvl_mode + lvl_manual_db (shown always, but locked in Auto mode)
+        
         put_row([
             put_select(
                 'lvl_mode',
@@ -447,82 +550,117 @@ def main():
             ),
             put_scope('lvl_manual_scope'),
         ]),
-
-
-        
-            ]
+]
 #--- #3 Target
     
     tab_target = [
         put_markdown(f"### 🎯 {t('tab_target')}"),
-        put_markdown(t('---')),
+        put_markdown("---"),
+        put_markdown("#### 👀 Target preview"),
+        put_scope("target_preview_scope"),
+        put_markdown("---"),
         put_select(
             'hc_mode',
             label=t('hc_mode'),
             options=hc_opts,
             value=_normalize_hc_mode_key(get_val('hc_mode', 'Harman6')),
-            help_text=t('hc_mode_help')
+            help_text=t('hc_mode_help'),
+            
         ),
+
         
-        
-        put_file_upload('hc_custom_file', label=t('hc_custom'), accept='.txt', help_text=t('hc_custom_help')),
+        put_file_upload(
+            'hc_custom_file',
+            label=t('hc_custom'),
+            accept='.txt',
+            help_text=t('hc_custom_help'),
+            
+        ),
         put_markdown("---"),
         put_checkbox('mag_correct', options=[{'label': t('enable_corr'), 'value': True}], value=[True] if get_val('mag_correct', True) else []),
-        put_markdown("---"),
+                put_html(f"""
+            <div style="
+                margin-top:28px;
+                margin-bottom:12px;
+                font-size:15px;
+                font-weight:600;
+                color:#b8c2cc;
+                letter-spacing:0.5px;
+            ">
+                {t("magnitude_correction_limits")}
+            </div>
+            """),
         put_row([
-            put_input('mag_c_min', label=t('min_freq'), type=FLOAT, value=get_val('mag_c_min', 10.0), help_text=t('hc_range_help')), 
-            put_input('mag_c_max', label=t('max_freq'), type=FLOAT, value=get_val('mag_c_max', 200.0), help_text=t('hc_range_help'))
+            put_input(
+                'mag_c_min', label=t('min_freq'), type=FLOAT,
+                value=get_val('mag_c_min', 10.0),
+                help_text=t('hc_range_help'),
+                
+            ),
+            put_input(
+                'mag_c_max', label=t('max_freq'), type=FLOAT,
+                value=get_val('mag_c_max', 200.0),
+                help_text=t('hc_range_help'),
+                
+            )
         ]),
-        put_input('max_boost', label=t('max_boost'), type=FLOAT, value=get_val('max_boost', 5.0), help_text=_max_boost_help_with_cap()),
-        put_row([
-            put_input('max_cut_db', label=t('max_cut_db'), type=FLOAT, value=get_val('max_cut_db', 30.0),
-                      help_text=t('max_cut_db_help')),
-            put_input('max_slope_db_per_oct', label=t('max_slope_db_per_oct'), type=FLOAT, value=get_val('max_slope_db_per_oct', 12.0),
-                      help_text=t('max_slope_db_per_oct_help'))
-        ]),
-        put_row([
-            put_input('max_slope_boost_db_per_oct', label=t('max_slope_boost_db_per_oct'), type=FLOAT,
-                      value=get_val('max_slope_boost_db_per_oct', 0.0),
-                      help_text=t('max_slope_boost_db_per_oct_help')),
-            put_input('max_slope_cut_db_per_oct', label=t('max_slope_cut_db_per_oct'), type=FLOAT,
-                      value=get_val('max_slope_cut_db_per_oct', 0.0),
-                      help_text=t('max_slope_cut_db_per_oct_help'))
-         ]),
-        
-        put_input('trans_width', type=NUMBER, label="1/1 Transition Width (Hz)", value=100, help_text=t('trans_width')),
         put_markdown("---"),
-        put_select(
-                    'filter_smooth',
-                    label=t('smoothing_level'),
-                    options=[
-                        {'label': '1/1 Octave', 'value': 1},
-                        {'label': '1/3 Octave', 'value': 3},
-                        {'label': '1/6 Octave', 'value': 6},
-                        {'label': '1/12 Octave (Standard)', 'value': 12},
-                        {'label': '1/24 Octave (Fine)', 'value': 24},
-                        {'label': '1/48 Octave (Ultra)', 'value': 48},
-                        {'label': '1/96 Octave (HC)', 'value': 96},
-                    ],
-                    value=get_val('filter_smooth', get_val('smoothing_level', 12)),
-                    help_text=t('smoothing_level_help'),
-                ),
-        put_text(t('smoothing_level_saw')),
         
-        put_input('phase_limit', label=t('phase_limit'), type=FLOAT, value=get_val('phase_limit', 1000.0), help_text=t('phase_limit_help')),
-        
-        put_checkbox(
-            'phase_safe_2058',
-            options=[{'label': t('phase_safe_2058'), 'value': True}],
-            value=[True] if get_val('phase_safe_2058', False) else [],
-            help_text=t('phase_safe_2058_help')
+        put_input(
+            'max_boost',
+            label=t('max_boost'),
+            type=FLOAT,
+            value=get_val('max_boost', 5.0),
+            help_text=t('max_boost_help'),  # vain normaali teksti tähän
         ),
+
+        put_html(
+            f"<div style='color:#b00020; font-weight:600; font-size:13px; margin-top:4px;'>"
+            f"⚠ {t('max_boost_help_cap').format(value=f'{MAX_SAFE_BOOST:.1f}')}"
+            f"</div>"
+        ),
+
         
+        
+                
     ]
+    def _on_hc_mode_change(v):
+            if _normalize_hc_mode_key(v) != "Upload":
+                pin_update("hc_custom_file", value=None)
+
+    pin_on_change("hc_mode", _on_hc_mode_change)
+
 #--- #4 Advanced
     tab_adv = [
         put_markdown(f"### 🛠️ {t('tab_adv')}"),
 
             put_markdown("---"),
+
+            # =========================
+            # PLOTS (visual only)
+            # =========================
+            put_collapse(
+                "📈 Plots (visual only)",
+                [
+                    put_select(
+                        'plot_smoothing_level',
+                        label=t('smooth_type'),
+                        options=[
+                            {'label': t('smooth_safe_reference'), 'value': 'Psychoacoustic'},
+                            {'label': '1/12 Octave', 'value': 12},
+                            {'label': '1/24 Octave', 'value': 24},
+                            {'label': '1/48 Octave', 'value': 48},
+                            {'label': '1/96 Octave', 'value': 96},
+                        ],
+                        value=get_val('plot_smoothing_level', 'Psychoacoustic'),
+                        help_text=t('smooth_help')
+                    ),
+                ],
+                open=False,
+            ),
+
+            put_markdown("---"),
+
             put_markdown(f"#### 🧠 {t('bass_first_title')}"),
             put_checkbox(
                 'bass_first_ai',
@@ -538,7 +676,56 @@ def main():
                 help_text=t('bass_first_max_hz_help')
             ),
             
-put_markdown("---"),
+        put_markdown("---"),
+            # =========================
+            # CORRECTION SHAPING (rails)
+            # =========================
+            put_markdown("### 🧩 Correction Shaping (Rails)"),
+            
+            put_row([
+                put_input('max_slope_db_per_oct', label=t('max_slope_db_per_oct'), type=FLOAT,
+                          value=get_val('max_slope_db_per_oct', 12.0),
+                          help_text=t('max_slope_db_per_oct_help')),
+                put_input('max_cut_db', label=t('max_cut_db'), type=FLOAT, value=get_val('max_cut_db', 30.0),
+                  help_text=t('max_cut_db_help')),
+            ]),
+            put_row([
+                put_input('max_slope_boost_db_per_oct', label=t('max_slope_boost_db_per_oct'), type=FLOAT,
+                          value=get_val('max_slope_boost_db_per_oct', 0.0),
+                          help_text=t('max_slope_boost_db_per_oct_help')),
+                put_input('max_slope_cut_db_per_oct', label=t('max_slope_cut_db_per_oct'), type=FLOAT,
+                          value=get_val('max_slope_cut_db_per_oct', 0.0),
+                          help_text=t('max_slope_cut_db_per_oct_help')),
+                
+            ]),
+            put_markdown("---"),
+            put_row([
+                    put_input('trans_width', type=NUMBER, label="Transition Width (Hz)", value=get_val('trans_width', 100),
+                          help_text=t('trans_width')),
+            ]),
+            put_markdown("---"),
+            put_select(
+                'filter_smooth',
+                label=t('smoothing_level'),
+                options=[
+                    {'label': '1/1 Octave', 'value': 1},
+                    {'label': '1/3 Octave', 'value': 3},
+                    {'label': '1/6 Octave', 'value': 6},
+                    {'label': '1/12 Octave (Standard)', 'value': 12},
+                    {'label': '1/24 Octave (Fine)', 'value': 24},
+                    {'label': '1/48 Octave (Ultra)', 'value': 48},
+                    {'label': '1/96 Octave (HC)', 'value': 96},
+                ],
+                value=get_val('filter_smooth', get_val('smoothing_level', 12)),
+                help_text=t('smoothing_level_help'),
+            ),
+            put_text(t('smoothing_level_saw')),
+
+            put_input('phase_limit', label=t('phase_limit'), type=FLOAT,
+                      value=get_val('phase_limit', 1000.0),
+                      help_text=t('phase_limit_help')),
+
+            put_markdown("---"),
 
         put_checkbox('df_smoothing', options=[{'label': f"{t('df_smoothing_label')} {t('badge_experimental')}", 'value': True}],
              value=[True] if get_val('df_smoothing', False) else [],
@@ -721,6 +908,15 @@ put_markdown("---"),
         {'title': t('tab_window_tdc'), 'content': tab_window_tdc},
         {'title': t('tab_xo'), 'content': tab_xo},
     ])
+    update_target_preview_ui(None)
+    # After tabs exist in DOM, render engine metrics
+    def _render_engine_metrics_later():
+        try:
+            update_engine_metrics_ui(pin=pin, pin_update=pin_update)
+        except Exception:
+            pass
+
+    _render_engine_metrics_later()
 
     # Only sanitize range when BOTH ends are valid numbers.
     # Do NOT call update_lvl_ui() here (it rerenders the scope and can reset inputs).
@@ -755,6 +951,7 @@ put_markdown("---"),
     t=t,
     )
     update_confidence_pull_ui(pin=pin, get_val=get_val, t=t)
+    update_target_preview_ui()
 
     # --- orchestrators (avoid racing handlers) ---
 
@@ -786,6 +983,12 @@ put_markdown("---"),
         _refresh_ir_window_controls()
 
     # pins
+    # --- Target preview live updates ---
+    pin_on_change('hc_mode', onchange=lambda _: update_target_preview_ui())
+    pin_on_change('hc_custom_file', onchange=lambda _: update_target_preview_ui())
+    pin_on_change('mag_c_min', onchange=lambda _: update_target_preview_ui())
+    pin_on_change('mag_c_max', onchange=lambda _: update_target_preview_ui())
+
     pin_on_change('ir_export_window_mode', onchange=_refresh_ir_window_controls)
     pin_on_change('filter_type', onchange=_on_filter_type_change)
     pin_on_change(
@@ -837,6 +1040,8 @@ put_markdown("---"),
     pin_on_change('multi_rate_opt', onchange=update_taps_auto_info)
     pin_on_change('fs', onchange=update_taps_auto_info)
     pin_on_change('taps', onchange=update_taps_auto_info)
+    pin_on_change('fs', onchange=lambda _: update_engine_metrics_ui(pin=pin, pin_update=pin_update))
+    pin_on_change('taps', onchange=lambda _: update_engine_metrics_ui(pin=pin, pin_update=pin_update))
     update_taps_auto_info()
 
     pin_on_change('max_boost', onchange=_warn_max_boost_if_over_cap)

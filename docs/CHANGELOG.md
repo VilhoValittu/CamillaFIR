@@ -4,6 +4,15 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.0.2] - 2026-02-15
+
+### UI
+- Simplified and reorganized UI structure for clearer workflow
+- Added real-time house curve preview
+- Added project logo to the interface
+
+---
+
 ## [3.0.1] - 2026-02-14
 
 ### DSP

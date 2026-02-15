@@ -15,6 +15,8 @@ datas = [
     ("src/camillafir/resources/i8n/translations.json", "i8n"),
     # plotly.js (expected at _MEIPASS/assets/plotly.min.js)
     ("src/camillafir/resources/plotly/plotly.min.js", "assets"),
+    # UI logo (expected at _MEIPASS/camillafir/ui/assets/camillafir_logo.png)
+    ("src/camillafir/ui/assets/camillafir_logo.png", "camillafir/ui/assets"),
 ]
 
 # PyWebIO loads some components dynamically; keep these minimal hidden imports.

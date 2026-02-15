@@ -15,7 +15,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     p_keys = [
         "mode", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
         "mag_c_min", "mag_c_max", "max_boost", "max_cut_db", "max_slope_db_per_oct",
-        "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "phase_safe_2058", "mag_correct",
+        "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "mag_correct",
         "lvl_mode", "reg_strength", "normalize_opt", "align_opt",
         "stereo_link", "exc_prot", "exc_freq", "low_bass_cut_hz", "low_bass_cut_enable", "hpf_enable", "hpf_freq",
         "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_export_window_mode", "ir_window_mode",
@@ -367,7 +367,7 @@ def build_filter_config(
         max_slope_boost_db_per_oct=data.get("max_slope_boost_db_per_oct", 0.0),
         max_slope_cut_db_per_oct=data.get("max_slope_cut_db_per_oct", 0.0),
         phase_limit=data["phase_limit"],
-        phase_safe_2058=bool(data.get("phase_safe_2058", False)),
+        phase_safe_2058=False,  # TUPE/2058 mode forced OFF (hidden from UI)
         enable_mag_correction=bool(data.get("mag_correct", True)),
         lvl_mode=data["lvl_mode"],
         reg_strength=float(data.get("reg_strength", 30.0)),

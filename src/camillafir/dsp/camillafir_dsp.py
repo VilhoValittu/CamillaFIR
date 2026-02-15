@@ -1008,6 +1008,13 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         # NOTE: ConfPull moved to POST-SLOPE (gain_db stage), because slope limiter dominated
         # and made early raw_g pulls mostly invisible in final filters.
         raw_g = target_mags - (m_anal - calc_offset_db)
+        try:
+            mm = mask_c if "mask_c" in locals() else None
+            if mm is not None and np.any(mm):
+                dv = raw_g[mm]
+                logger.info(f"RAW_G(mask): max={float(np.max(dv)):.3f} min={float(np.min(dv)):.3f} rms={float(np.sqrt(np.mean(dv*dv))):.3f}")
+        except Exception:
+            pass
         _log_stats("raw_g_pre_confpull", raw_g, mask_c if "mask_c" in locals() else None)
         base_sigma = 60 // (_filter_smooth / 12 if _filter_smooth > 0 else 1)
 

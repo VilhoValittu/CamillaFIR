@@ -14,3 +14,4 @@ filters/
 tools/
 tests/
 pytest.ini
+src/camillafir/bass_integration/

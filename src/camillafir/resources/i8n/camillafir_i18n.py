@@ -26,8 +26,10 @@ def load_translations() -> dict:
     try:
         with open(TRANS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
-        return {}
+    except Exception as e:
+        print("❌ Failed to load translations:", TRANS_FILE)
+        print("Reason:", e)
+        raise
 
 
 TRANSLATIONS = load_translations()
@@ -45,3 +47,4 @@ def t(key: str) -> str:
     if key == "zoom_hint":
         return "(Vinkki: Voit zoomata hiirellä kuvaajaa)" if lang == "fi" else "(Hint: Use mouse to zoom)"
     return TRANSLATIONS.get(lang, TRANSLATIONS.get("en", {})).get(key, key)
+

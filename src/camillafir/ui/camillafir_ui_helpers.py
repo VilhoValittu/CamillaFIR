@@ -1,13 +1,31 @@
 # camillafir_ui_helpers.py
 import numpy as np
 import math
+import tempfile
+import re
 from pywebio.output import *  # needed because this PyWebIO build doesn't expose put_input/put_select as named exports
 from pywebio.input import FLOAT
-from pywebio.pin import pin, pin_update, put_input, put_select
+from pywebio.pin import pin, pin_update, put_input, put_select, put_file_upload, pin_on_change, pin_update
 
 from ..resources.i8n.camillafir_i18n import t
-from .camillafir_modes import MODE_DEFAULTS
+from .camillafir_modes import MODE_DEFAULTS, MODE_CLAMPS
 from .camillafir_utils import scale_taps_with_fs
+
+# --- House curve loaders for target preview ---
+try:
+    from .camillafir_housecurve import (
+        _normalize_hc_mode_key,
+        get_house_curve_by_name,
+        load_target_curve,
+        load_house_curve,
+    )
+except Exception:
+    _normalize_hc_mode_key = None
+    get_house_curve_by_name = None
+    load_target_curve = None
+    load_house_curve = None
+
+MAX_SAFE_BOOST = 8.0
 
 def _warn_max_boost_if_over_cap(_=None):
     """
@@ -92,11 +110,15 @@ def _toast(msg, *, duration=5, color=None):
 def _max_boost_help_with_cap():
     try:
         return (
-            f"{t('max_boost_help')}"
+            f"{t('max_boost_help')}\n\n"
             f"{t('max_boost_help_cap').format(value=f'{MAX_SAFE_BOOST:.1f}')}"
         )
     except Exception:
-        return t('max_boost_help')
+        return (
+            f"{t('max_boost_help')}\n\n"
+            f"{t('max_boost_help_cap').format(value=f'{MAX_SAFE_BOOST:.1f}')}"
+        )
+
 
 def update_mode_desc(_=None):
     """UI helper: show a short description under Mode selection."""
@@ -883,6 +905,180 @@ def apply_afdw_preset(name: str):
         pass
 
 
+def _pretty_plot_smoothing(v, t):
+    # UI naming: Psychoacoustic == CamillaFIR Reference
+    if isinstance(v, str) and v.strip().lower() == "psychoacoustic":
+        return t("smooth_safe_reference")  # "CamillaFIR Reference"
+    return str(v)
+
+def _fmt_mode_value(key: str, defaults: dict, clamps: dict):
+    """
+    Return a human-friendly markdown string for a mode default,
+    including clamp info when available.
+    """
+    v = defaults.get(key, None)
+    if key == "plot_smoothing_level":
+        v_str = _pretty_plot_smoothing(v)
+    else:
+        v_str = str(v)
+
+    # Optional clamp display
+    lim = clamps.get(key, None) if isinstance(clamps, dict) else None
+    if isinstance(lim, tuple) and len(lim) == 2:
+        lo, hi = lim
+        # bool clamps are (True, True) etc.
+        if isinstance(lo, bool) and isinstance(hi, bool):
+            return f"**{v_str}**"
+        return f"**{v_str}** _(clamped to {lo}–{hi})_"
+    return f"**{v_str}**"
+
+def _build_modes_guide_parts(t):
+    """
+    Returns: intro_md, basic_md, advanced_md, tip_md
+    Values are read live from camillafir_modes.MODE_DEFAULTS / MODE_CLAMPS.
+    Text is localized via translations.json keys.
+    """
+    # Import live policy
+    from ui.camillafir_modes import MODE_DEFAULTS, MODE_CLAMPS
+
+    d_basic = MODE_DEFAULTS.get("BASIC", {})
+    c_basic = MODE_CLAMPS.get("BASIC", {})
+    d_adv   = MODE_DEFAULTS.get("ADVANCED", {})
+    c_adv   = MODE_CLAMPS.get("ADVANCED", {})
+
+    def clamp_suffix(key, clamps):
+        lim = clamps.get(key)
+        if isinstance(lim, tuple) and len(lim) == 2:
+            lo, hi = lim
+            # localized " (clamped lo–hi)"
+            return t("guide_modes_clamped_suffix").format(lo=lo, hi=hi)
+        return ""
+
+    # Localized intro
+    intro = t("guide_modes_intro") + "\n"
+
+    # BASIC markdown
+    basic_lines = []
+    basic_lines.append(t("guide_modes_basic_goal") + "\n")
+    basic_lines.append(t("guide_modes_defaults_live"))
+
+    basic_lines.append(
+        t("guide_modes_line_max_boost_cut").format(
+            boost=d_basic.get("max_boost_db"),
+            boost_clamp=clamp_suffix("max_boost_db", c_basic),
+            cut=d_basic.get("max_cut_db"),
+            cut_clamp=clamp_suffix("max_cut_db", c_basic),
+        )
+    )
+    basic_lines.append(
+        t("guide_modes_line_correction_band").format(
+            lo=d_basic.get("mag_c_min"),
+            hi=d_basic.get("mag_c_max"),
+        )
+    )
+    basic_lines.append(
+        t("guide_modes_line_phase_limit").format(
+            hz=d_basic.get("phase_limit"),
+            clamp=clamp_suffix("phase_limit", c_basic),
+        )
+    )
+    basic_lines.append(
+        t("guide_modes_line_plot_smoothing").format(
+            name=_pretty_plot_smoothing(d_basic.get("plot_smoothing_level"), t)
+        )
+    )
+    basic_lines.append(
+        t("guide_modes_line_filter_smoothing").format(
+            n=d_basic.get("filter_smooth"),
+            clamp=clamp_suffix("filter_smooth", c_basic),
+        )
+    )
+    basic_lines.append(
+        t("guide_modes_line_tdc").format(
+            on=t("common_on") if d_basic.get("enable_tdc") else t("common_off"),
+            strength=d_basic.get("tdc_strength"),
+            maxred=d_basic.get("tdc_max_reduction_db"),
+            slope=d_basic.get("tdc_slope_db_per_oct"),
+        )
+    )
+    basic_lines.append(
+        t("guide_modes_line_afdw").format(
+            on=t("common_on") if d_basic.get("enable_afdw") else t("common_off"),
+            cycles=d_basic.get("fdw_cycles"),
+            clamp=clamp_suffix("fdw_cycles", c_basic),
+        )
+    )
+    basic_lines.append(
+        t("guide_modes_line_bass_first").format(
+            on=t("common_on") if d_basic.get("bass_first_ai") else t("common_off"),
+            hz=d_basic.get("bass_first_mode_max_hz"),
+        )
+    )
+    basic_lines.append(
+        t("guide_modes_line_leveling").format(
+            mode=d_basic.get("lvl_mode"),
+            algo=d_basic.get("lvl_algo"),
+            lo=d_basic.get("lvl_min"),
+            hi=d_basic.get("lvl_max"),
+            stereo=t("common_on") if d_basic.get("stereo_link") else t("common_off"),
+        )
+    )
+    basic_lines.append(
+        t("guide_modes_line_low_bass").format(
+            hz=d_basic.get("low_bass_cut_hz"),
+            clamp=clamp_suffix("low_bass_cut_hz", c_basic),
+        )
+    )
+    basic_md = "\n".join(basic_lines)
+
+    # ADVANCED markdown
+    adv_lines = []
+    adv_lines.append(t("guide_modes_adv_goal") + "\n")
+    adv_lines.append(t("guide_modes_defaults_live"))
+
+    adv_lines.append(
+        t("guide_modes_line_max_boost_cut_adv").format(
+            boost=d_adv.get("max_boost_db"),
+            cut=d_adv.get("max_cut_db"),
+        )
+    )
+    adv_lines.append(
+        t("guide_modes_line_correction_band").format(
+            lo=d_adv.get("mag_c_min"),
+            hi=d_adv.get("mag_c_max"),
+        )
+    )
+    adv_lines.append(
+        t("guide_modes_line_phase_limit_adv").format(
+            hz=d_adv.get("phase_limit"),
+        )
+    )
+    adv_lines.append(
+        t("guide_modes_line_slope_limits").format(
+            g=d_adv.get("max_slope_db_per_oct"),
+            b=d_adv.get("max_slope_boost_db_per_oct"),
+            c=d_adv.get("max_slope_cut_db_per_oct"),
+        )
+    )
+    adv_lines.append(
+        t("guide_modes_line_leveling_window").format(
+            lo=d_adv.get("lvl_min"),
+            hi=d_adv.get("lvl_max"),
+            stereo=t("common_on") if d_adv.get("stereo_link") else t("common_off"),
+        )
+    )
+    adv_lines.append(
+        t("guide_modes_line_low_bass_adv").format(
+            hz=d_adv.get("low_bass_cut_hz"),
+        )
+    )
+    adv_md = "\n".join(adv_lines)
+
+    tip = t("guide_modes_tip")
+    return intro, basic_md, adv_md, tip
+
+
+
 def put_guide_section():
     guides = [
         ("guide_modes", t("guide_modes_title")),
@@ -901,14 +1097,34 @@ def put_guide_section():
         ("guide_summary", t("guide_summary_title")),
     ]
 
-    content = [
-        put_collapse(
-            t(g_key + "_title") if t(g_key + "_title") != (g_key + "_title") else g_title,
-            [put_markdown(t(g_key + "_body") if t(g_key + "_body") != (g_key + "_body") else "Info text here")],
+    content = []
+    for g_key, g_title in guides:
+        title = t(g_key + "_title") if t(g_key + "_title") != (g_key + "_title") else g_title
+
+        if g_key == "guide_modes":
+            intro, basic_md, adv_md, tip = _build_modes_guide_parts(t)
+            content.append(
+                put_collapse(
+                    title,
+                    [
+                        put_markdown(intro),
+                        put_collapse(t("mode_basic_label"), [put_markdown(basic_md)], open=False),
+                        put_collapse(t("mode_advanced_label"), [put_markdown(adv_md)], open=False),
+                        put_markdown(tip),
+                    ],
+                    open=False,
+                )
+            )
+            continue
+
+        body = t(g_key + "_body") if t(g_key + "_body") != (g_key + "_body") else "Info text here"
+        content.append(
+            put_collapse(title, [put_markdown(body)], open=False)
         )
-        for g_key, g_title in guides
-    ]
-    put_collapse("❓ CamillaFIR User Guides", content)
+
+    # Optional outer collapse (if you want everything under one)
+    put_collapse(t("guide_section_title"), content, open=False)
+
 
 def update_confidence_pull_ui(*, pin, get_val, t):
     """
@@ -940,7 +1156,7 @@ def update_confidence_pull_ui(*, pin, get_val, t):
                     "conf_pull_floor",
                     label=t("conf_pull_floor"),
                     type=FLOAT,
-                    value=float(get_val("conf_pull_floor", 0.05)),
+                    value=float(get_val("conf_pull_floor", 0.05)), # type: ignore
                     help_text=t("conf_pull_floor_help"),
                 ),
                 put_input(
@@ -957,7 +1173,7 @@ def update_confidence_pull_ui(*, pin, get_val, t):
                     "conf_pull_gamma_cut",
                     label=t("conf_pull_gamma_cut"),
                     type=FLOAT,
-                    value=float(get_val("conf_pull_gamma_cut", 0.55)),
+                    value=float(get_val("conf_pull_gamma_cut", 0.55)), # type: ignore
                     help_text=t("conf_pull_gamma_cut_help"),
                 ),
                 put_input(
@@ -974,9 +1190,243 @@ def update_confidence_pull_ui(*, pin, get_val, t):
                     "low_bass_cut_strength",
                     label=t("low_bass_cut_strength"),
                     type=FLOAT,
-                    value=float(get_val("low_bass_cut_strength", 0.0)),
+                    value=float(get_val("low_bass_cut_strength", 0.0)), # type: ignore
                     help_text=t("low_bass_cut_strength_help"),
                 ),
             ])
     except Exception:
         pass
+
+
+def update_target_preview_ui(_=None):
+    """
+    Small, fast target preview for Target tab.
+    - Uses Plotly HTML (no Kaleido).
+    - Supports built-in curves and uploaded custom target file.
+    """
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
+    def _norm_key(x: str) -> str:
+        s = str(x or "").strip()
+        if not s:
+            return ""
+        # Prefer project’s canonical normalizer when available
+        try:
+            if callable(_normalize_hc_mode_key):
+                return str(_normalize_hc_mode_key(s))
+        except Exception:
+            pass
+        return s
+    try:
+        import numpy as np
+        import plotly.graph_objects as go
+        import plotly.io as pio
+
+        hc_mode_raw = str(_p("hc_mode", "Harman6") or "Harman6")
+        hc_mode = _norm_key(hc_mode_raw)
+
+        mag_c_min = float(_p("mag_c_min", 10.0) or 10.0)
+        mag_c_max = float(_p("mag_c_max", 200.0) or 200.0)
+
+        # Log frequency grid for preview
+        f = np.logspace(np.log10(10.0), np.log10(20000.0), 600)
+
+        y = None
+        src = "builtin"
+
+        # Detect upload selection (be tolerant to naming)
+        key_l = str(hc_mode).strip().lower()
+        is_upload = key_l in ("upload", "custom", "hc_mode_upload") or ("upload" in key_l)
+        def _parse_target_bytes_fallback(b: bytes):
+            """
+            Preview-only fallback parser for 2-column target files:
+              <freq_hz> <mag_db>
+            Tolerant to extra whitespace and empty lines.
+            """
+
+            try:
+                s = b.decode("utf-8", errors="ignore")
+            except Exception:
+                s = str(b)
+
+            freqs = []
+            mags = []
+            for line in s.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith("#") or line.startswith(";") or line.startswith("//"):
+                    continue
+                parts = line.replace(",", ".").split()
+                if len(parts) < 2:
+                    continue
+                try:
+                    freqs.append(float(parts[0]))
+                    mags.append(float(parts[1]))
+                except Exception:
+                    continue
+
+            if len(freqs) < 2:
+                raise ValueError("No valid (freq, mag) pairs found")
+
+            ff = np.asarray(freqs, dtype=float)
+            yy = np.asarray(mags, dtype=float)
+            mask = np.isfinite(ff) & np.isfinite(yy) & (ff > 0)
+            ff = ff[mask]
+            yy = yy[mask]
+            if ff.size < 2:
+                raise ValueError("Not enough valid samples after filtering")
+            idx = np.argsort(ff)
+            return ff[idx], yy[idx]
+
+
+        if is_upload:
+            up = _p("hc_custom_file", None)
+            
+            # Handle both dict and [dict] variants
+            if isinstance(up, list) and len(up) > 0:
+                up = up[0]
+
+            if isinstance(up, dict) and (up.get("content") is not None):
+
+                try:
+                    # Prefer the same loader used by pipeline
+                    if callable(load_target_curve):
+                        tf_f, tf_y = load_target_curve(up["content"])
+                    else:
+                        raise RuntimeError("load_target_curve not available")
+
+                    # load_target_curve() returns (None, None) on failure -> make it fail loudly
+                    if tf_f is None or tf_y is None:
+                        raise ValueError("load_target_curve() returned no data")
+
+                    tf_f = np.asarray(tf_f, dtype=float)
+                    tf_y = np.asarray(tf_y, dtype=float)
+                    if tf_f.size >= 2 and tf_y.size == tf_f.size:
+                        y = np.interp(f, tf_f, tf_y, left=tf_y[0], right=tf_y[-1])
+                        src = "upload"
+                    else:
+                        raise ValueError("Target data malformed (size mismatch)")
+                except Exception as e1:
+                    # Fallback: parse the uploaded bytes directly (preview-only)
+                    try:
+                        tf_f, tf_y = _parse_target_bytes_fallback(up.get("content", b""))
+                        y = np.interp(f, tf_f, tf_y, left=tf_y[0], right=tf_y[-1])
+                        src = "upload"
+                    except Exception as e2:
+                        with use_scope("target_preview_scope", clear=True):
+                            put_html(
+                                "<div style='opacity:0.85; font-size:13px; padding:8px 0;'>"
+                                "⚠️ Custom target could not be parsed.<br>"
+                                f"<span style='opacity:0.75'>Loader error: {str(e1)}</span><br>"
+                                f"<span style='opacity:0.75'>Fallback error: {str(e2)}</span>"
+                                "</div>"
+                            )
+                        return
+
+            # If upload mode selected but no file yet
+            if not (isinstance(up, dict) and up.get("content") is not None):
+                with use_scope("target_preview_scope", clear=True):
+                    put_html(
+                        "<div style='opacity:0.8; font-size:13px; padding:8px 0;'>"
+                        "⚠️ Custom target selected, but no file loaded yet."
+                        "</div>"
+                    )
+                return
+
+        if y is None:
+            # Built-in curve path: try get_house_curve_by_name() in a duck-typed way
+            hc = None
+            try:
+                if callable(get_house_curve_by_name):
+                    hc = get_house_curve_by_name(hc_mode)
+            except Exception:
+                hc = None
+
+            # Fallback: some implementations expose a file-backed loader
+            if hc is None:
+                try:
+                    if callable(load_house_curve):
+                        hc = load_house_curve(hc_mode)
+                except Exception:
+                    hc = None
+            if callable(hc):
+                y = np.asarray(hc(f), dtype=float)
+            elif isinstance(hc, (tuple, list)) and len(hc) >= 2:
+                hf = np.asarray(hc[0], dtype=float)
+                hy = np.asarray(hc[1], dtype=float)
+                if hf.size >= 2 and hy.size == hf.size:
+                    y = np.interp(f, hf, hy, left=hy[0], right=hy[-1])
+            elif isinstance(hc, dict):
+                # Accept several common dict shapes
+                for fk, mk in (("freqs", "mags"), ("f", "y"), ("freq", "mag"), ("hz", "db")):
+                    if (fk in hc) and (mk in hc):
+                        hf = np.asarray(hc[fk], dtype=float)
+                        hy = np.asarray(hc[mk], dtype=float)
+                        if hf.size >= 2 and hy.size == hf.size:
+                            y = np.interp(f, hf, hy, left=hy[0], right=hy[-1])
+                            break
+
+        if y is None:
+            with use_scope("target_preview_scope", clear=True):
+                put_html(
+                    "<div style='opacity:0.8; font-size:13px; padding:8px 0;'>"
+                    "⚠️ Target preview could not be generated (unknown curve format). "
+                    "Try switching the target curve or re-uploading the custom file."
+                    "</div>"
+                )
+            return
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=f, y=y, mode="lines", name=f"Target ({hc_mode_raw})"))
+
+        # Correction band markers
+        fig.add_vline(x=max(1.0, mag_c_min), line_width=1, opacity=0.35)
+        fig.add_vline(x=max(1.0, mag_c_max), line_width=1, opacity=0.35)
+
+        fig.update_xaxes(
+            type="log",
+            title_text="Hz",
+            range=[math.log10(10.0), math.log10(20000.0)],
+            fixedrange=True,
+        )
+        fig.update_yaxes(
+            title_text="dB",
+            range=[-30, 20],
+            fixedrange=True,
+        )
+        fig.update_layout(
+            height=320,
+            width=1800,
+            margin=dict(l=40, r=20, t=30, b=35),
+            showlegend=True,
+            template="plotly_dark",
+            uirevision="target_preview_lock"
+        )
+
+        html = pio.to_html(fig, include_plotlyjs="cdn", full_html=False)
+
+        with use_scope("target_preview_scope", clear=True):
+            put_html(
+                f"<div style='opacity:0.85; font-size:12.5px; margin:6px 0 8px 0;'>"
+                f"Preview source: <b>{src}</b> &nbsp;|&nbsp; Correction band: "
+                f"<b>{mag_c_min:.0f}</b>–<b>{mag_c_max:.0f}</b> Hz"
+                f"</div>"
+            )
+            put_html(html)
+
+    except Exception as e:
+        with use_scope("target_preview_scope", clear=True):
+            put_html(
+                "<div style='opacity:0.8; font-size:13px; padding:8px 0;'>"
+                "⚠️ Target preview failed. See console/log for details."
+                "</div>"
+            )
+        try:
+            print("update_target_preview_ui error:", repr(e))
+        except Exception:
+            pass

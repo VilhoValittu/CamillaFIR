@@ -61,7 +61,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "mag_c_min": 25.0,
         "mag_c_max": 250.0,
         "max_boost_db": 3.0,
-        "max_cut_db": 30.0,
+        "max_cut_db": 15.0,
 
         # Phase: allow, but still bounded by other rails
         "phase_safe_2058": False,
@@ -111,6 +111,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "do_normalize": False,
         "exc_prot": True,
         "low_bass_cut_hz": 50.0,
+        "low_bass_cut_enable": True,
     },
 
     # ADVANCED = your “expert” profile: minimal policy, no clamps
@@ -142,7 +143,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "enable_tdc": True,
         "tdc_strength": 50.0,
         "tdc_max_reduction_db": 12.0,
-        "tdc_slope_db_per_oct": 0.0,
+        "tdc_slope_db_per_oct": 6.0,
         "enable_afdw": True,
         "ir_window_right": 500.0,
         "ir_window_left": 10.0,
@@ -159,7 +160,8 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 
         "do_normalize": False,
         "exc_prot": False,
-        "low_bass_cut_hz": 0.0,
+        "low_bass_cut_hz": 20.0,
+        "low_bass_cut_enable": True,
     },
 }
 
@@ -185,6 +187,7 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
         "mag_c_max": (18.0, 300.0),
         "phase_limit": (200.0, 1000.0),
         "low_bass_cut_hz": (20.0, 100.0),
+        "low_bass_cut_enable": (True, True),
     },
 
     # ADVANCED: no clamps

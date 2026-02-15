@@ -77,8 +77,10 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v.3.0.1"
+VERSION = "v.3.0.2"
 # Change log:
+# v.3.0.2 See CHANGELOG.md for details.
+# v.3.0.1 See CHANGELOG.md for details.
 # v.3.0.0 See CHANGELOG.md for details.
 # v.2.9.5 [UI] add low-bass cut toggle + lock Hz field when disabled.
 # v.2.9.4 [CFG] Fixed low_bass_cut_hz value not saving correctly in config.
@@ -200,6 +202,14 @@ def process_run():
     )
     data['hc_source'] = hc_source
     logger.info(f"House curve source: {hc_source}")
+    try:
+        if hc_f is not None and hc_m is not None:
+            logger.info(
+                f"HC: n={len(hc_f)} f=[{hc_f[0]:.2f}..{hc_f[-1]:.2f}] "
+                f"m=[{float(np.min(hc_m)):.2f}..{float(np.max(hc_m)):.2f}] mean={float(np.mean(hc_m)):.2f}"
+            )
+    except Exception:
+        pass
     # 4) XO + HPF
     xos, hpf = build_xos_hpf(data)
     try:
