@@ -25,7 +25,7 @@ except Exception:
     load_target_curve = None
     load_house_curve = None
 
-MAX_SAFE_BOOST = 8.0
+
 
 def _warn_max_boost_if_over_cap(_=None):
     """
@@ -939,7 +939,7 @@ def _build_modes_guide_parts(t):
     Text is localized via translations.json keys.
     """
     # Import live policy
-    from ui.camillafir_modes import MODE_DEFAULTS, MODE_CLAMPS
+    
 
     d_basic = MODE_DEFAULTS.get("BASIC", {})
     c_basic = MODE_CLAMPS.get("BASIC", {})
