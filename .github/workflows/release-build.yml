@@ -304,19 +304,15 @@ jobs:
         run: ls -R artifacts
 
       
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          name: CamillaFIR ${{ env.VERSION }}
-          body_path: RELEASE_NOTES.md
-          files: |
-            artifacts/**/*.zip
-            artifacts/**/*.tar.gz
-          draft: false
-          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
-          fail_on_unmatched_files: true
-          overwrite_files: true
+      - name: Create GitHub Release
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          gh release create "${{ env.TAG }}" \
+            artifacts/**/*.zip \
+            artifacts/**/*.tar.gz \
+            --title "CamillaFIR ${{ env.VERSION }}" \
+            --notes-file RELEASE_NOTES.md \
+            $([[ "${{ env.IS_PRERELEASE }}" == "true" ]] && echo "--prerelease")
             
