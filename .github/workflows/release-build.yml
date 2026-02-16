@@ -79,7 +79,7 @@ jobs:
 
       # -------- macOS universal2 build (arm64 + x86_64 -> lipo) --------
 
-      - name: macOS: Install Rosetta (needed for x86_64 on Apple Silicon runners)
+      - name: macOS Install Rosetta (needed for x86_64 on Apple Silicon runners)
         if: runner.os == 'macOS'
         shell: bash
         run: |
