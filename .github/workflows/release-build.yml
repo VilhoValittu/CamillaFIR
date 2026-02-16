@@ -284,5 +284,6 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: |
             artifacts/**/*
+          overwrite: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
