@@ -1,11 +1,14 @@
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 name: Release CamillaFIR
 
 on:
   push:
     tags:
-      - "v*.*.*"   # e.g. v2.8.3
-      - "v*-beta*"
-      - "v*-rc*"
+      - "v*"
+
 
 permissions:
   contents: write
@@ -285,9 +288,7 @@ jobs:
           body = text[start:end].strip() or "No details listed for this version."
           out.write_text(f"# {tag}\n\n{body}\n", encoding="utf-8")
           PY
-      - name: Sleep to avoid GitHub rate limits
-        shell: bash
-        run: sleep 120    # Wait 2 minutes
+
       
       
       - name: Publish GitHub Release
