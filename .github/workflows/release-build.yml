@@ -285,6 +285,11 @@ jobs:
           body = text[start:end].strip() or "No details listed for this version."
           out.write_text(f"# {tag}\n\n{body}\n", encoding="utf-8")
           PY
+      - name: Sleep to avoid GitHub rate limits
+        shell: bash
+        run: sleep 120    # Wait 2 minutes
+      
+      
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -296,6 +301,7 @@ jobs:
           draft: false
           prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           fail_on_unmatched_files: false
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
             
