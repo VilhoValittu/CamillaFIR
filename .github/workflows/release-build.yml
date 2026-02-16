@@ -275,7 +275,6 @@ jobs:
           body = text[start:end].strip() or "No details listed for this version."
           out.write_text(f"# {tag}\n\n{body}\n", encoding="utf-8")
           PY
-      
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -286,5 +285,7 @@ jobs:
             artifacts/**/*
           draft: false
           prerelease: false
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            
