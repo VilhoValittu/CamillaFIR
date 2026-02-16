@@ -4,6 +4,17 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.0.3] - 2026-02-16
+
+### UI
+- Added warnings if correction range is too wide
+
+### macOS
+- Switched to universal2 build (Intel + Apple Silicon support)
+- Fixes "Bad CPU type in executable" on older Intel Macs
+
+---
+
 ## [3.0.2] - 2026-02-15
 
 ### UI

@@ -98,7 +98,7 @@ def _toast(msg, *, duration=5, color=None):
     Works even if toast is unavailable or UI context is missing.
     """
     try:
-        fn = getattr(pwo, "toast", None)
+        fn = globals().get("toast", None)
         if callable(fn):
             if color is None:
                 fn(msg, duration=duration)

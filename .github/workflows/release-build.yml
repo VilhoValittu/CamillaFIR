@@ -31,6 +31,7 @@ jobs:
           echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
       - name: Set up Python
+        if: runner.os != 'macOS'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -43,8 +44,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-linux.txt
           pip install pyinstaller
-      - name: Install Python dependencies (Windows/macOS)
-        if: runner.os != 'Linux'
+      - name: Install Python dependencies (Windows)
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           python -m pip install --upgrade pip
@@ -69,12 +70,134 @@ jobs:
           rm -rf build dist
           pyinstaller --clean --noconfirm CamillaFIR_linux.spec
 
-      - name: Build (Windows/macOS) using standalone spec
-        if: runner.os != 'Linux'
+      - name: Build (Windows) using standalone spec
+        if: runner.os == 'Windows'
         shell: bash
         run: |
           rm -rf build dist
           pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
+
+      # -------- macOS universal2 build (arm64 + x86_64 -> lipo) --------
+
+      - name: macOS: Install Rosetta (needed for x86_64 on Apple Silicon runners)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            softwareupdate --install-rosetta --agree-to-license || true
+          fi
+
+      - name: Set up Python (macOS arm64)
+        if: runner.os == 'macOS'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: "arm64"
+          cache: "pip"
+
+      - name: Install Python dependencies (macOS arm64)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build (macOS arm64)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          rm -rf build_arm dist_arm
+          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec \
+            --workpath build_arm --distpath dist_arm
+
+      - name: Set up Python (macOS x86_64)
+        if: runner.os == 'macOS'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: "x64"
+          cache: "pip"
+
+      - name: Install Python dependencies (macOS x86_64)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build (macOS x86_64)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          rm -rf build_x86 dist_x86
+          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec \
+            --workpath build_x86 --distpath dist_x86
+
+      - name: Create universal2 executable (lipo)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          rm -rf dist_universal
+          mkdir -p dist_universal
+          rsync -a dist_arm/CamillaFIR/ dist_universal/CamillaFIR/
+
+          lipo -create \
+            dist_arm/CamillaFIR/CamillaFIR \
+            dist_x86/CamillaFIR/CamillaFIR \
+            -output dist_universal/CamillaFIR/CamillaFIR
+
+          chmod +x dist_universal/CamillaFIR/CamillaFIR || true
+          file dist_universal/CamillaFIR/CamillaFIR
+          lipo -archs dist_universal/CamillaFIR/CamillaFIR
+
+      - name: Smoke test (macOS universal2 sanity)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BIN="dist_universal/CamillaFIR/CamillaFIR"
+
+          echo "== file =="
+          file "$BIN"
+
+          echo "== lipo -archs =="
+          lipo -archs "$BIN" | tee /tmp/archs.txt
+          grep -q "arm64" /tmp/archs.txt
+          grep -q "x86_64" /tmp/archs.txt
+
+          echo "== otool -L (top deps) =="
+          otool -L "$BIN" | head -n 40
+
+      - name: Smoke test (macOS launch for 5s)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="dist_universal/CamillaFIR/CamillaFIR"
+
+          echo "Starting CamillaFIR briefly..."
+          ( "$BIN" >/tmp/camillafir_smoke.log 2>&1 & echo $! > /tmp/camillafir.pid )
+
+          sleep 5
+
+          PID="$(cat /tmp/camillafir.pid)"
+          if ps -p "$PID" >/dev/null 2>&1; then
+            echo "Process still alive after 5s (good). Stopping..."
+            kill "$PID" || true
+            sleep 2
+            kill -9 "$PID" || true
+          else
+            echo "Process exited early — printing log:"
+            sed -n '1,200p' /tmp/camillafir_smoke.log
+            exit 1
+          fi
+
+          echo "Log (first 200 lines):"
+          sed -n '1,200p' /tmp/camillafir_smoke.log
+
 
       # -------- Packaging per OS --------
 
@@ -116,8 +239,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p out
-          chmod +x dist/CamillaFIR/CamillaFIR || true
-          tar -C dist -czf out/CamillaFIR_${VERSION}_macos.tar.gz CamillaFIR
+          chmod +x dist_universal/CamillaFIR/CamillaFIR || true
+          tar -C dist_universal -czf out/CamillaFIR_${VERSION}_macos_universal2.tar.gz CamillaFIR
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

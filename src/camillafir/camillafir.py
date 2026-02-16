@@ -77,7 +77,7 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v.3.0.2"
+VERSION = "v.3.0.3"
 # Change log:
 # v.3.0.2 See CHANGELOG.md for details.
 # v.3.0.1 See CHANGELOG.md for details.
@@ -136,8 +136,8 @@ def _irwin_tag(mode: typing.Any) -> str:
     return "auto"
 
 def process_run():
-
     from .ui.camillafir_ui import update_status as status_cb
+
 
     def _status(msg):
         if callable(status_cb):
@@ -145,8 +145,40 @@ def process_run():
                 status_cb(msg)
             except Exception:
                 pass
-    # 1) UI -> data dict (new unified collector)
+
+    # 1) UI -> data dict
     data = collect_ui_data(pin)
+
+    # 1.5) System Health gate
+    try:
+        from .ui.system_health import compute_health, format_health_summary
+
+        mode = str(data.get("mode") or "BASIC").strip().upper()
+        hr = compute_health(data, mode)
+
+        def _health_color(level: str, mode_u: str) -> str | None:
+            if level == "warn":
+                return "warn" if mode_u == "BASIC" else "info"
+            if level == "crit":
+                return "error"
+            return None
+
+        if hr.blocked:
+            msg = format_health_summary(hr) or "Fix errors before running (blocked in BASIC)."
+            _toast(msg, duration=15, color=_health_color("crit", mode))
+            return
+
+        # Show summary at START when there are warnings (and also crits in ADVANCED)
+        if hr.overall in ("warn", "crit"):
+            msg = format_health_summary(hr)
+            if msg:
+                _toast(msg, duration=20, color=_health_color(hr.overall, mode))
+
+    except Exception:
+        pass
+
+
+
     # Sanitize IR export window mode (config.json may contain null)
     _iw = data.get('ir_export_window_mode')
     if not isinstance(_iw, str) or _iw.strip() == "":

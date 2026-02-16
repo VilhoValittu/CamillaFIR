@@ -31,7 +31,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "conf_pull_gamma_cut", "conf_pull_gamma_boost",
         "conf_pull_conf_smooth_sigma",
         "conf_pull_bass_floor_hz", "conf_pull_bass_floor_min",
-        "low_bass_cut_strength",
+        "low_bass_cut_strength", "hc_custom_file",
     ]
 
     data: Dict[str, Any] = {}
