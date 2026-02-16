@@ -183,6 +183,11 @@ jobs:
     runs-on: macos-14
     needs: [macos_arm64, macos_x86_64]
     steps:
+      - name: Extract version from tag
+        shell: bash
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
       - uses: actions/download-artifact@v4
         with:
           name: macos_arm64
@@ -208,7 +213,7 @@ jobs:
 
       - run: |
           mkdir -p out
-          tar -C dist_universal -czf out/CamillaFIR_${{ github.ref_name }}_macos_universal2.tar.gz CamillaFIR
+          tar -C dist_universal -czf out/CamillaFIR_${VERSION}_macos_universal2.tar.gz CamillaFIR
 
       - uses: actions/upload-artifact@v4
         with:
@@ -229,6 +234,11 @@ jobs:
         run: |
           echo "TAG=${GITHUB_REF_NAME}" >> $GITHUB_ENV
           echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+          if [[ "${GITHUB_REF_NAME}" == *-beta* || "${GITHUB_REF_NAME}" == *-rc* ]]; then
+            echo "IS_PRERELEASE=true" >> $GITHUB_ENV
+          else
+            echo "IS_PRERELEASE=false" >> $GITHUB_ENV
+          fi
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
@@ -284,7 +294,7 @@ jobs:
           files: |
             artifacts/**/*
           draft: false
-          prerelease: false
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
