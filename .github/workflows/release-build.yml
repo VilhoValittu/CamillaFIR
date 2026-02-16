@@ -300,6 +300,8 @@ jobs:
         run: |
           gh release delete "${{ env.TAG }}" --yes || true
 
+      - name: Debug artifact tree
+        run: ls -R artifacts
 
       
       - name: Publish GitHub Release
@@ -309,8 +311,8 @@ jobs:
           name: CamillaFIR ${{ env.VERSION }}
           body_path: RELEASE_NOTES.md
           files: |
-            artifacts/**/out/*.zip
-            artifacts/**/out/*.tar.gz
+            artifacts/**/*.zip
+            artifacts/**/*.tar.gz
           draft: false
           prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           fail_on_unmatched_files: true
