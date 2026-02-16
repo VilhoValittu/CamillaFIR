@@ -289,7 +289,18 @@ jobs:
           out.write_text(f"# {tag}\n\n{body}\n", encoding="utf-8")
           PY
 
-      
+
+      # If a previous run partially created the release / assets, softprops may hit
+      # "Not Found - update a release asset". Deleting the existing release makes
+      # the workflow idempotent.
+      - name: Delete existing GitHub Release (if any)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          gh release delete "${{ env.TAG }}" --yes || true
+
+
       
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -298,10 +309,11 @@ jobs:
           name: CamillaFIR ${{ env.VERSION }}
           body_path: RELEASE_NOTES.md
           files: |
-            artifacts/**/*
+            artifacts/**/out/*.zip
+            artifacts/**/out/*.tar.gz
           draft: false
           prerelease: ${{ env.IS_PRERELEASE == 'true' }}
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
