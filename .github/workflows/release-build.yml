@@ -287,3 +287,5 @@ jobs:
           overwrite: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        retry-max-attempts: 3
+        retry-on: rate-limit-error
