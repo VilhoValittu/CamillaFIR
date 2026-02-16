@@ -45,7 +45,7 @@ jobs:
           pip install -r requirements-linux.txt
           pip install pyinstaller
       
-          - name: Install Python dependencies (Windows)
+      - name: Install Python dependencies (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
