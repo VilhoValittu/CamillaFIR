@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-latest, ubuntu-latest]
 
     steps:
       - name: Checkout repository
@@ -31,7 +31,6 @@ jobs:
           echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
       - name: Set up Python
-        if: runner.os != 'macOS'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -53,7 +52,6 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-
       - name: Generate build_version.py
         shell: bash
         run: |
@@ -61,8 +59,6 @@ jobs:
           VERSION = "${{ env.VERSION }}"
           TAG = "${{ env.TAG }}"
           EOF
-
-      # -------- Build per OS (SPEC selection) --------
 
       - name: Build (Linux) using linux spec
         if: runner.os == 'Linux'
@@ -78,7 +74,44 @@ jobs:
           rm -rf build dist
           pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
 
-      # -------- macOS universal2 build (arm64 + x86_64 -> lipo) --------
+      - name: Package Windows build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Compress-Archive -Path dist\CamillaFIR\* -DestinationPath out\CamillaFIR_${{ env.VERSION }}_windows.zip
+
+      - name: Package Linux build
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p out
+          chmod +x dist/CamillaFIR/CamillaFIR || true
+
+          cat > dist/CamillaFIR/run.sh << 'EOF'
+          #!/usr/bin/env sh
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          exec "$DIR/CamillaFIR" "$@"
+          EOF
+          chmod +x dist/CamillaFIR/run.sh
+
+          cat > dist/CamillaFIR/README.txt << 'EOF'
+          CamillaFIR Linux portable build
+
+          Start with:
+              ./run.sh
+
+          If needed, ensure executable permissions:
+              chmod +x CamillaFIR
+          EOF
+
+          tar -C dist -czf out/CamillaFIR_${VERSION}_linux.tar.gz CamillaFIR
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CamillaFIR-${{ env.VERSION }}-${{ runner.os }}
+          path: out/*
 
   macos_arm64:
     name: macOS arm64 build
@@ -107,7 +140,6 @@ jobs:
         with:
           name: macos_arm64
           path: dist/CamillaFIR
-
 
   macos_x86_64:
     name: macOS x86_64 build (Rosetta)
@@ -146,8 +178,6 @@ jobs:
           name: macos_x86_64
           path: dist/CamillaFIR
 
-
-
   macos_universal2:
     name: macOS universal2
     runs-on: macos-14
@@ -185,60 +215,9 @@ jobs:
           name: macos_universal2
           path: out/*.tar.gz
 
-
-
-      # -------- Packaging per OS --------
-
-      - name: Package Windows build
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path out | Out-Null
-          Compress-Archive -Path dist\CamillaFIR\* -DestinationPath out\CamillaFIR_${{ env.VERSION }}_windows.zip
-
-      - name: Package Linux build
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          mkdir -p out
-          chmod +x dist/CamillaFIR/CamillaFIR || true
-
-          cat > dist/CamillaFIR/run.sh << 'EOF'
-          #!/usr/bin/env sh
-          DIR="$(cd "$(dirname "$0")" && pwd)"
-          exec "$DIR/CamillaFIR" "$@"
-          EOF
-          chmod +x dist/CamillaFIR/run.sh
-
-          cat > dist/CamillaFIR/README.txt << 'EOF'
-          CamillaFIR Linux portable build
-
-          Start with:
-              ./run.sh
-
-          If needed, ensure executable permissions:
-              chmod +x CamillaFIR
-          EOF
-
-          tar -C dist -czf out/CamillaFIR_${VERSION}_linux.tar.gz CamillaFIR
-
-      - name: Package macOS build
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          mkdir -p out
-          chmod +x dist_universal/CamillaFIR/CamillaFIR || true
-          tar -C dist_universal -czf out/CamillaFIR_${VERSION}_macos_universal2.tar.gz CamillaFIR
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CamillaFIR-${{ env.VERSION }}-${{ runner.os }}
-          path: out/*
-
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, macos_universal2]
     runs-on: ubuntu-latest
 
     steps:
