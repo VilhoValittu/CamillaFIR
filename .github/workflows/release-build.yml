@@ -306,9 +306,8 @@ jobs:
       
       - name: Create GitHub Release
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
+          echo "${{ secrets.RELEASE_TOKEN }}" | gh auth login --with-token
           gh release create "${{ env.TAG }}" \
             artifacts/**/*.zip \
             artifacts/**/*.tar.gz \
