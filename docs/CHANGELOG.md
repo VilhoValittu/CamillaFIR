@@ -4,6 +4,23 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.0.5] - 2026-02-18
+
+### DSP
+- Removed unused imports
+- Changed A-FDW smoothing 2/3 --> 1/3 to make more precise correction on bass
+- Fixed summary export fallback error handling (`except Exception as e`) in DSP effective params block
+
+### UI
+- Clarified summary.txt content
+- Added an Executive Summary section (Score, Match, Confidence, RT60, Worst Event) at the top
+- Reduced settings noise by showing only core settings in Summary
+- Removed duplicate acoustic events section from Summary
+- Standardized Summary output to English-only wording
+- Replaced symbol-heavy labels with plain text (`dt`, `Path delta`, `n/a`) for cleaner cross-platform text output
+
+---
+
 ## [3.0.4] - 2026-02-18
 
 ### DSP

@@ -72,11 +72,6 @@ def load_config() -> dict:
         "bass_first_ai": True,
         "bass_first_mode_max_hz": 200.0,
         "debug_stage_stats": True,
-        "mixed_causal_ms": 80.0,
-        "mixed_auto_allow_late_shift": True,
-        "mixed_excess_strength": 0.55,
-        "mixed_excess_smooth_oct": 0.35,
-        "mixed_pre_kill_ratio": 0.18,
     }
 
     if os.path.exists(CONFIG_FILE):
@@ -97,7 +92,6 @@ def load_config() -> dict:
                 "df_smoothing",
                 "comparison_mode",
                 "phase_safe_2058",
-                "ir_export_window_mode",
             ]:
                 if k in saved and isinstance(saved[k], list):
                     saved[k] = bool(saved[k])
@@ -115,7 +109,6 @@ def save_config(data: dict) -> None:
             k: v for k, v in (data or {}).items()
             if (
                 not str(k).startswith("file_")
-                and str(k) != "ir_export_window_mode"
                 and v is not None
             )
         }

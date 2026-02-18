@@ -196,8 +196,8 @@ def calc_ai_summary_from_stats(stats: dict) -> dict:
 
 def _calc_target_match(stats):
     """
-    Palauttaa (rms_db, match_pct) tai (None, None) jos ei dataa.
-    Sama logiikka kuin Summary.txt:ssä.
+    Returns (rms_db, match_pct) or (None, None) when data is insufficient.
+    Uses the same logic as Summary.txt.
     """
     def _as_np(stats, key):
         v = stats.get(key, None)
@@ -268,7 +268,7 @@ def calc_target_match_from_stats(stats: dict):
 
 
 def format_summary_content(settings, l_stats, r_stats):
-    """Creates Summary.txt containing RT60, confidence, target match, and acoustic score."""
+    """Creates a compact English-only Summary.txt with key results first."""
     from datetime import datetime
     import numpy as np
 
@@ -276,468 +276,237 @@ def format_summary_content(settings, l_stats, r_stats):
     l_stats = l_stats or {}
     r_stats = r_stats or {}
 
-    lines = [
-        "=== CamillaFIR - Filter Generation Summary ===",
-        f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-    ]
+    def _safe_float(v, default=0.0):
+        try:
+            x = float(v)
+            if np.isfinite(x):
+                return x
+        except Exception:
+            pass
+        return float(default)
 
-    # --- Settings ---
-    lines.append("--- Settings ---")
-    for k, v in settings.items():
-        if 'file' not in str(k):
-            lines.append(f"{k}: {v}")
+    def _fmt_score(v):
+        return "n/a" if v is None else f"{float(v):.1f}/100"
 
-    # --- Temporal Decay Control (TDC) ---
-    try:
-        tdc_enabled = bool(settings.get("enable_tdc", False))
-        lines.append("\n--- Temporal Decay Control (TDC) ---")
-        lines.append(f"TDC enabled: {'YES' if tdc_enabled else 'NO'}")
-        if tdc_enabled:
-            lines.append(f"TDC strength: {float(settings.get('tdc_strength', 0)):.0f} %")
-            lines.append(f"TDC max reduction: {float(settings.get('tdc_max_reduction_db', 0)):.1f} dB")
-            slope = float(settings.get('tdc_slope_db_per_oct', 0))
-            if slope > 0:
-                lines.append(f"TDC slope limit: {slope:.1f} dB/oct")
-    except Exception:
-        pass
+    def _fmt_match(match_pct, rms_db):
+        if match_pct is None or rms_db is None:
+            return "n/a"
+        return f"{float(match_pct):.1f}% (RMS {float(rms_db):.2f} dB)"
 
-    lines.append("\n--- Acoustic Intelligence (v2.6.3) ---")
-    lines.append(f"Analysis mode L: {str((l_stats or {}).get('analysis_mode','native'))} | R: {str((r_stats or {}).get('analysis_mode','native'))}")
-    if (l_stats or {}).get('analysis_mode','native') == 'comparison':
-        lines.append(f"Comparison grid (L): fs={float(l_stats.get('cmp_ref_fs', 0) or 0):.0f} taps={float(l_stats.get('cmp_ref_taps', 0) or 0):.0f}")
-    if (r_stats or {}).get('analysis_mode','native') == 'comparison':
-        lines.append(f"Comparison grid (R): fs={float(r_stats.get('cmp_ref_fs', 0) or 0):.0f} taps={float(r_stats.get('cmp_ref_taps', 0) or 0):.0f}")
-    # --- Correction guards (reporting) ---
-    # These can come from settings or be missing (if UI hasn't set them yet).
-    max_cut_db = float(settings.get('max_cut_db', 15.0) or 15.0)
-    max_slope = float(settings.get('max_slope_db_per_oct', 12.0) or 12.0)
-    # optional (new): separate boost/cut slope; if missing, fall back to legacy
-    max_slope_boost = float(settings.get('max_slope_boost_db_per_oct', 0.0) or 0.0) or max_slope
-    max_slope_cut   = float(settings.get('max_slope_cut_db_per_oct', 0.0) or 0.0) or max_slope
-    low_bass_cut_hz = _float_allow_zero(settings.get('low_bass_cut_hz', 40.0), 40.0)
-    if max_slope_boost != max_slope_cut:
+    def _fmt_range(rng):
+        if not isinstance(rng, (list, tuple)) or len(rng) < 2:
+            return "n/a"
+        try:
+            return f"{float(rng[0]):.0f}-{float(rng[1]):.0f} Hz"
+        except Exception:
+            return "n/a"
 
-        if abs(max_slope_boost - max_slope_cut) > 1e-9:
-            lines.append(
-                f"Max cut: -{max_cut_db:.1f} dB | "
-                f"Slope: boost {max_slope_boost:.1f} / cut {max_slope_cut:.1f} dB/oct | "
-                f"Low-bass cut: <{low_bass_cut_hz:.1f} Hz (cuts only)"
-            )
-        else:
-            lines.append(
-                f"Max cut: -{max_cut_db:.1f} dB | "
-                f"Max slope: {max_slope:.1f} dB/oct | "
-                f"Low-bass cut: <{low_bass_cut_hz:.1f} Hz (cuts only)"
-            )
-
-    # --- Phase correction clamp (reporting; always-on safety) ---
     def _phase_clamp_line(side: str, st: dict) -> str:
-        st = st or {}
         lim = st.get("phase_corr_clamp_deg", None)
         bef = st.get("phase_corr_max_before_deg", None)
-        aft = st.get("phase_corr_max_after_deg", None)
-        if lim is None or bef is None or aft is None:
-            # If stats are missing (older runs), stay silent.
-            return ""
-        try:
-            lim = float(lim)
-            bef = float(bef)
-            aft = float(aft)
-        except Exception:
-            return ""
-
-        clipped = bool(st.get("phase_corr_clipped", False))
-        if clipped:
-            return f"{side} Phase Correction Clamp: max={bef:.1f}° -> {lim:.1f}°"
-        return f"{side} Phase Correction Clamp: max={bef:.1f}° (limit {lim:.1f}°)"
-
-    _pL = _phase_clamp_line("L", l_stats)
-    _pR = _phase_clamp_line("R", r_stats)
-    if _pL:
-        lines.append(_pL)
-    if _pR:
-        lines.append(_pR)
-
-    # --- A-FDW debug: active + effective BW range ---
-    def _bw_frac(bw_oct: float) -> str:
-        # represent ~1/N if close
-        try:
-            if bw_oct <= 0:
-                return "-"
-            n = int(round(1.0 / float(bw_oct)))
-            if n <= 0:
-                return "-"
-            # show only for sensible small denominators
-            if n in (3, 6, 12, 24, 48):
-                return f"~1/{n}"
-            return f"~1/{n}"
-        except Exception:
-            return "-"
+        if lim is None or bef is None:
+            return f"{side}: n/a"
+        return f"{side}: max {float(bef):.1f} deg -> clamp {float(lim):.1f} deg"
 
     def _afdw_line(side: str, st: dict) -> str:
-        st = st or {}
-        active = bool(st.get("afdw_active", False))
+        active = bool(st.get("afdw_active", False)) or bool(settings.get("enable_afdw", False))
         if not active:
-            # fall back to settings toggle if stats missing
-            active = bool((settings or {}).get("enable_afdw", False))
-        if not active:
-            return f"{side} A-FDW active: NO"
-
+            return f"{side}: OFF"
         mn = st.get("afdw_bw_min_oct", None)
         me = st.get("afdw_bw_mean_oct", None)
         mx = st.get("afdw_bw_max_oct", None)
-        fmn = st.get("afdw_bw_min_hz", None)
-        fmx = st.get("afdw_bw_max_hz", None)
         if mn is None or me is None or mx is None:
-            return f"{side} A-FDW active: YES (effective BW not available)"
-
-        return (
-            f"{side} A-FDW active: YES | "
-            f"BW(min/mean/max)={float(mn):.4f}/{float(me):.4f}/{float(mx):.4f} oct "
-            f"({ _bw_frac(float(mn)) } / { _bw_frac(float(me)) } / { _bw_frac(float(mx)) }) | "
-            f"min@{float(fmn or 0.0):.0f}Hz max@{float(fmx or 0.0):.0f}Hz"
-        )
-
-    lines.append("\n--- A-FDW Debug (effective bandwidth) ---")
-    lines.append(_afdw_line("Left", l_stats))
-    lines.append(_afdw_line("Right", r_stats))
-
-
-    # ---------------- XO / HPF diagnostics ----------------
-    def _xo_freqs_from_summary(st):
-        # Parse freqs from "500.0Hz/12dB/oct, 2800.0Hz/12dB/oct"
-        out = []
-        try:
-            s = str((st or {}).get("xo_summary", "") or "")
-            for part in s.split(","):
-                part = part.strip()
-                if "Hz" in part:
-                    out.append(float(part.split("Hz")[0]))
-        except Exception:
-            pass
-        return out
-
-    def _xo_items_fc(st, key_tpl, unit):
-        freqs = _xo_freqs_from_summary(st)
-        items = []
-        for i in range(1, 6):
-            k = key_tpl.format(i=i)
-            if k not in (st or {}):
-                continue
-            try:
-                v = float(st.get(k))
-            except Exception:
-                continue
-            if i <= len(freqs):
-                lbl = f"{int(round(freqs[i-1]))}Hz"
-            else:
-                lbl = f"XO{i}"
-            items.append(f"{lbl}:{v:+.2f}{unit}")
-        return " | ".join(items) if items else "—"
-
-    def _xo_gd_class(st):
-        # Same thresholds as UI badge (ms): <0.7 LOW, 0.7–1.5 MED, >1.5 HIGH
-        vals = []
-        for i in range(1, 6):
-            k = f"xo{i}_dgd_ms@fc"
-            if k in (st or {}):
-                try:
-                    vals.append(abs(float(st.get(k))))
-                except Exception:
-                    pass
-        if not vals:
-            return ""
-        worst = max(vals)
-        if worst < 0.7:
-            return "LOW"
-        if worst < 1.5:
-            return "MED"
-        return "HIGH"
-
-    # Formatting helpers for Summary.txt (keep output compact + readable)
-    def _fmt_deg(v, default: str = "—") -> str:
-        try:
-            if v is None:
-                return default
-            x = float(v)
-            if not np.isfinite(x):
-                return default
-            return f"{x:.1f}°"
-        except Exception:
-            return default
-
-    def _fmt_ms(v, default: str = "—") -> str:
-        try:
-            if v is None:
-                return default
-            x = float(v)
-            if not np.isfinite(x):
-                return default
-            return f"{x:.2f} ms"
-        except Exception:
-            return default
-
-    def _fmt_hz(v, default: str = "—") -> str:
-        try:
-            if v is None:
-                return default
-            x = float(v)
-            if not np.isfinite(x):
-                return default
-            return f"{x:.0f} Hz"
-        except Exception:
-            return default
-
-    # XO phase model
-    lines.append("\n--- XO & Phase models ---")
-    lines.append("")
-    lines.append(
-        f"XO phase model: "
-        f"L {l_stats.get('xo_summary','—')} | "
-        f"R {r_stats.get('xo_summary','—')}"
-    )
-    lines.append("")
-
-    # XO Δφ@fc (wrapped)
-    lines.append(
-        f"XO Δφ@fc (wrapped): "
-        f"L {_xo_items_fc(l_stats, 'xo{i}_dphi_wrapped_deg@fc', '°')} | "
-        f"R {_xo_items_fc(r_stats, 'xo{i}_dphi_wrapped_deg@fc', '°')}"
-    )
-    lines.append("")
-
-    # XO ΔGD@fc + class
-    gd_class = _xo_gd_class(l_stats) or _xo_gd_class(r_stats)
-    gd_class_disp = gd_class if gd_class else "—"
-    lines.append(
-        f"XO ΔGD@fc: "
-        f"L {_xo_items_fc(l_stats, 'xo{i}_dgd_ms@fc', ' ms')} | "
-        f"R {_xo_items_fc(r_stats, 'xo{i}_dgd_ms@fc', ' ms')}"
-        )
-    lines.append(f"XO transient impact: {gd_class_disp}")
-    lines.append("")
-
-    # XO effect (theoretical raw)
-    lines.append("XO effect (theoretical raw):")
-    lines.append(
-        "L: "
-        f"max Δφ {_fmt_deg(l_stats.get('xo_diff_raw_max_phase_deg', None))} "
-        f"@ {_fmt_hz(l_stats.get('xo_diff_raw_max_phase_hz', None))} "
-        f"(XO {_fmt_hz(l_stats.get('xo_diff_raw_max_phase_xo_fc_hz', None))}) | "
-        f"max ΔGD {_fmt_ms(l_stats.get('xo_diff_raw_max_gd_ms', None))} "
-        f"@ {_fmt_hz(l_stats.get('xo_diff_raw_max_gd_hz', None))} "
-        f"(XO {_fmt_hz(l_stats.get('xo_diff_raw_max_gd_xo_fc_hz', None))})"
-    )
-    lines.append(
-        "R: "
-        f"max Δφ {_fmt_deg(r_stats.get('xo_diff_raw_max_phase_deg', None))} "
-        f"@ {_fmt_hz(r_stats.get('xo_diff_raw_max_phase_hz', None))} "
-        f"(XO {_fmt_hz(r_stats.get('xo_diff_raw_max_phase_xo_fc_hz', None))}) | "
-        f"max ΔGD {_fmt_ms(r_stats.get('xo_diff_raw_max_gd_ms', None))} "
-        f"@ {_fmt_hz(r_stats.get('xo_diff_raw_max_gd_hz', None))} "
-        f"(XO {_fmt_hz(r_stats.get('xo_diff_raw_max_gd_xo_fc_hz', None))})"
-    )
-    lines.append("")
-
-    # HPF effect (theoretical raw)
-    lines.append("HPF effect (theoretical raw):")
-    lines.append(
-        "L: "
-        f"max Δφ {_fmt_deg(l_stats.get('hpf_diff_raw_max_phase_deg', None))} "
-        f"@ {_fmt_hz(l_stats.get('hpf_diff_raw_max_phase_hz', None))} | "
-        f"max ΔGD {_fmt_ms(l_stats.get('hpf_diff_raw_max_gd_ms', None))} "
-        f"@ {_fmt_hz(l_stats.get('hpf_diff_raw_max_gd_hz', None))}"
-    )
-    lines.append(
-        "R: "
-        f"max Δφ {_fmt_deg(r_stats.get('hpf_diff_raw_max_phase_deg', None))} "
-        f"@ {_fmt_hz(r_stats.get('hpf_diff_raw_max_phase_hz', None))} | "
-        f"max ΔGD {_fmt_ms(r_stats.get('hpf_diff_raw_max_gd_ms', None))} "
-        f"@ {_fmt_hz(r_stats.get('hpf_diff_raw_max_gd_hz', None))}"
-    )
-    lines.append("")
-
-    # Phase clamp (keep consistent with UI)
-    lines.append(
-        f"Phase correction clamp: "
-        f"L max={l_stats.get('phase_corr_max_before_deg','—')}° -> "
-        f"{l_stats.get('phase_corr_clamp_deg','—')}° | "
-        f"R max={r_stats.get('phase_corr_max_before_deg','—')}° -> "
-        f"{r_stats.get('phase_corr_clamp_deg','—')}°"
-    )
-    lines.append("")
-
-    # ---- Helpers ----
-    def _as_np(stats, key):
-        v = stats.get(key, None)
-        if v is None:
-            return None
-        try:
-            return np.asarray(v, dtype=float)
-        except Exception:
-            return None
-        
-
-    def _pick(stats, base_key: str):
-        if not stats:
-            return base_key
-        mode = str(stats.get("analysis_mode", "native") or "native").lower()
-        if mode == "comparison":
-            ck = "cmp_" + base_key
-            if ck in stats and stats.get(ck) is not None:
-                return ck
-            return base_key
-        return base_key
-
-
-    def _band_rt60_line(stats):
-        rt = float(stats.get('rt60_val', 0.0) or 0.0)
-        band_avg = float(stats.get('rt60_band_avg', 0.0) or 0.0)
-        return rt, band_avg
+            return f"{side}: ON (effective bandwidth not available)"
+        return f"{side}: ON | BW min/mean/max = {float(mn):.4f}/{float(me):.4f}/{float(mx):.4f} oct"
 
     def _fmt_bands(bands):
         if not bands:
             return "-"
-        # show some familiar bands
         picks = [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0]
         keys = [float(k) for k in bands.keys()]
         out = []
         for p in picks:
             k = min(keys, key=lambda x: abs(x - p))
-            # bands keys can be float or str -> try both
             if k in bands:
                 val = bands[k]
             elif str(k) in bands:
                 val = bands[str(k)]
             else:
-                # fallback: find closest key including string keys
                 kk = min(bands.keys(), key=lambda x: abs(float(x) - p))
                 val = bands[kk]
                 k = float(kk)
             out.append(f"{k:.0f}Hz:{float(val):.2f}s")
         return " | ".join(out) if out else "-"
 
-    
+    def _worst_event(st: dict) -> str:
+        refs = st.get("reflections", []) or []
+        if not refs:
+            return "None"
+        try:
+            w = max(refs, key=lambda x: float(x.get("gd_error", 0.0) or 0.0))
+        except Exception:
+            return "None"
+        freq = _safe_float(w.get("freq", 0.0), 0.0)
+        gd_ms = _safe_float(w.get("gd_error", 0.0), 0.0)
+        typ = str(w.get("type", "Event") or "Event")
+        return f"{typ} at {freq:.0f} Hz ({gd_ms:.2f} ms)"
 
     def _calc_acoustic_score(conf_pct, match_pct, rt60_s=None, rt60_reliability=None):
-        """
-        Local wrapper for legacy Summary.txt.
-        Delegates to module-level calc_acoustic_score (v2).
-        """
         try:
             return globals()["calc_acoustic_score"](
                 float(conf_pct),
                 float(match_pct),
                 rt60_s=rt60_s,
-                rt60_rel=rt60_reliability
+                rt60_rel=rt60_reliability,
             )
         except Exception:
             conf_pct = float(np.clip(float(conf_pct), 0.0, 100.0))
             match_pct = float(np.clip(float(match_pct), 0.0, 100.0))
             return float(np.clip(0.60 * match_pct + 0.40 * conf_pct, 0.0, 100.0))
-    # --- RT60 + Confidence ---
-    l_rt, l_band_avg = _band_rt60_line(l_stats)
-    r_rt, r_band_avg = _band_rt60_line(r_stats)
-    lines.append("\n--- RT60 ---")
-    lines.append("")
-    lines.append(f"Left RT60 (wideband): {l_rt:.2f}s | Right RT60 (wideband): {r_rt:.2f}s")
-    if (l_band_avg > 0) or (r_band_avg > 0):
-        lines.append(f"RT60 band avg (125–4kHz): L {l_band_avg:.2f}s | R {r_band_avg:.2f}s")
 
-    l_bands = l_stats.get('rt60_bands', {}) or {}
-    r_bands = r_stats.get('rt60_bands', {}) or {}
-    if l_bands or r_bands:
-        lines.append(f"Band RT60 L: {_fmt_bands(l_bands)}")
-        lines.append(f"Band RT60 R: {_fmt_bands(r_bands)}")
-
-    l_conf = float(l_stats.get('cmp_avg_confidence', l_stats.get('avg_confidence', 0.0)) or 0.0)
-    r_conf = float(r_stats.get('cmp_avg_confidence', r_stats.get('avg_confidence', 0.0)) or 0.0)
-    lines.append(f"Left Confidence: {l_conf:.1f}% | Right: {r_conf:.1f}%")
-
-    # Offset method
-    l_om = (l_stats or {}).get('cmp_offset_method', (l_stats or {}).get('offset_method', '')) or ''
-    r_om = (r_stats or {}).get('cmp_offset_method', (r_stats or {}).get('offset_method', '')) or ''
-    if l_om or r_om:
-        lines.append(f"Offset method: L {l_om or '-'} | R {r_om or '-'}")
-    # Level window (diagnostiikka)
-    l_win = l_stats.get('cmp_smart_scan_range', l_stats.get('smart_scan_range', None))
-    r_win = r_stats.get('cmp_smart_scan_range', r_stats.get('smart_scan_range', None))
-    l_mw = float(l_stats.get('cmp_meas_level_db_window', l_stats.get('meas_level_db_window', 0.0)) or 0.0)
-    r_mw = float(r_stats.get('cmp_meas_level_db_window', r_stats.get('meas_level_db_window', 0.0)) or 0.0)
-    l_tw = float(l_stats.get('cmp_target_level_db_window', l_stats.get('target_level_db_window', 0.0)) or 0.0)
-    r_tw = float(r_stats.get('cmp_target_level_db_window', r_stats.get('target_level_db_window', 0.0)) or 0.0)
-    if l_win or r_win:
-        lines.append(f"Level window L: {l_win} | meas≈{l_mw:.2f} dB, target≈{l_tw:.2f} dB")
-        lines.append(f"Level window R: {r_win} | meas≈{r_mw:.2f} dB, target≈{r_tw:.2f} dB")
-
-    # --- Target Curve Match ---
+    l_rt = _safe_float(l_stats.get("rt60_val", 0.0), 0.0)
+    r_rt = _safe_float(r_stats.get("rt60_val", 0.0), 0.0)
+    l_band_avg = _safe_float(l_stats.get("rt60_band_avg", 0.0), 0.0)
+    r_band_avg = _safe_float(r_stats.get("rt60_band_avg", 0.0), 0.0)
+    l_conf = _safe_float(l_stats.get("cmp_avg_confidence", l_stats.get("avg_confidence", 0.0)), 0.0)
+    r_conf = _safe_float(r_stats.get("cmp_avg_confidence", r_stats.get("avg_confidence", 0.0)), 0.0)
     l_rms, l_match = _calc_target_match(l_stats)
     r_rms, r_match = _calc_target_match(r_stats)
 
-    lines.append("\n--- Target Curve Match ---")
-    if l_rms is not None:
-        lines.append(f"Left Match:  {l_match:.1f}% | RMS error: {l_rms:.2f} dB")
-    else:
-        lines.append("Left Match:  (insufficient data)")
-    if r_rms is not None:
-        lines.append(f"Right Match: {r_match:.1f}% | RMS error: {r_rms:.2f} dB")
-    else:
-        lines.append("Right Match: (insufficient data)")
-
-    # --- Acoustic Score ---
-    lines.append("\n--- Acoustic Score ---")
-    if (l_match is not None):
+    l_score = None
+    if l_match is not None:
         l_score = _calc_acoustic_score(
-            l_conf, l_match,
-            (l_stats or {}).get("rt60_val", None),
-            (l_stats or {}).get("rt60_reliability", None)
+            l_conf,
+            l_match,
+            l_stats.get("rt60_val", None),
+            l_stats.get("rt60_reliability", None),
         )
-        lines.append(f"Left Acoustic Score:  {l_score:.1f}/100")
-    else:
-        lines.append("Left Acoustic Score:  (insufficient data)")
-    if (r_match is not None):
+    r_score = None
+    if r_match is not None:
         r_score = _calc_acoustic_score(
-            r_conf, r_match,
-            (r_stats or {}).get("rt60_val", None),
-            (r_stats or {}).get("rt60_reliability", None)
+            r_conf,
+            r_match,
+            r_stats.get("rt60_val", None),
+            r_stats.get("rt60_reliability", None),
         )
-        lines.append(f"Right Acoustic Score: {r_score:.1f}/100")
+
+    lines = [
+        "=== CamillaFIR - Filter Generation Summary ===",
+        f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "--- Executive Summary ---",
+        f"Acoustic Score: L {_fmt_score(l_score)} | R {_fmt_score(r_score)}",
+        f"Target Match:   L {_fmt_match(l_match, l_rms)} | R {_fmt_match(r_match, r_rms)}",
+        f"Confidence:     L {l_conf:.1f}% | R {r_conf:.1f}%",
+        f"RT60 Wideband:  L {l_rt:.2f}s | R {r_rt:.2f}s",
+        f"Worst Event:    L {_worst_event(l_stats)} | R {_worst_event(r_stats)}",
+        "",
+        "--- Core Settings ---",
+    ]
+
+    keys = [
+        "mode",
+        "fs",
+        "taps",
+        "filter_type",
+        "mixed_freq",
+        "mag_c_min",
+        "mag_c_max",
+        "max_boost",
+        "max_cut_db",
+        "max_slope_db_per_oct",
+        "hpf_enable",
+        "hpf_freq",
+        "hpf_slope",
+        "enable_tdc",
+        "tdc_strength",
+        "enable_afdw",
+        "comparison_mode",
+        "stereo_link",
+        "bass_first_ai",
+    ]
+    for k in keys:
+        if k in settings:
+            lines.append(f"{k}: {settings.get(k)}")
+
+    lines.append("\n--- Analysis Mode ---")
+    lines.append(
+        f"Analysis mode: L {str(l_stats.get('analysis_mode', 'native'))} | "
+        f"R {str(r_stats.get('analysis_mode', 'native'))}"
+    )
+    if str(l_stats.get("analysis_mode", "native")) == "comparison":
+        lines.append(
+            f"Comparison grid (L): fs={_safe_float(l_stats.get('cmp_ref_fs', 0), 0):.0f} "
+            f"taps={_safe_float(l_stats.get('cmp_ref_taps', 0), 0):.0f}"
+        )
+    if str(r_stats.get("analysis_mode", "native")) == "comparison":
+        lines.append(
+            f"Comparison grid (R): fs={_safe_float(r_stats.get('cmp_ref_fs', 0), 0):.0f} "
+            f"taps={_safe_float(r_stats.get('cmp_ref_taps', 0), 0):.0f}"
+        )
+
+    max_cut_db = _safe_float(settings.get("max_cut_db", 15.0), 15.0)
+    max_slope = _safe_float(settings.get("max_slope_db_per_oct", 12.0), 12.0)
+    max_slope_boost = _safe_float(settings.get("max_slope_boost_db_per_oct", 0.0), 0.0) or max_slope
+    max_slope_cut = _safe_float(settings.get("max_slope_cut_db_per_oct", 0.0), 0.0) or max_slope
+    low_bass_cut_hz = _float_allow_zero(settings.get("low_bass_cut_hz", 40.0), 40.0)
+
+    lines.append("\n--- Correction Guards ---")
+    lines.append(f"Max cut: -{max_cut_db:.1f} dB")
+    if abs(max_slope_boost - max_slope_cut) > 1e-9:
+        lines.append(f"Slope: boost {max_slope_boost:.1f} dB/oct | cut {max_slope_cut:.1f} dB/oct")
     else:
-        lines.append("Right Acoustic Score: (insufficient data)")
+        lines.append(f"Max slope: {max_slope:.1f} dB/oct")
+    lines.append(f"Low-bass cut policy: <{low_bass_cut_hz:.1f} Hz (cuts only)")
 
-    # --- Events ---
-    def print_refs(refs):
-        if not refs:
-            return "   (None detected)"
-        r_txt = []
-        for ref in sorted(refs, key=lambda x: float(x.get('gd_error', 0) or 0), reverse=True)[:10]:
-            f = float(ref.get('freq', 0) or 0)
-            e = float(ref.get('gd_error', 0) or 0)
-            d = float(ref.get('dist', 0) or 0)
-            t = str(ref.get('type', 'Event') or 'Event')
-            r_txt.append(f" - {f:>5.0f} Hz: {t:<10} | Virhe: {e:>6.2f}ms | Etäisyys: {d:>5.2f}m")
-        return "\n".join(r_txt)
+    lines.append("\n--- Temporal Decay Control (TDC) ---")
+    tdc_enabled = bool(settings.get("enable_tdc", False))
+    lines.append(f"TDC enabled: {'YES' if tdc_enabled else 'NO'}")
+    if tdc_enabled:
+        lines.append(f"TDC strength: {_safe_float(settings.get('tdc_strength', 0), 0):.0f} %")
+        lines.append(f"TDC max reduction: {_safe_float(settings.get('tdc_max_reduction_db', 0), 0):.1f} dB")
+        slope = _safe_float(settings.get("tdc_slope_db_per_oct", 0), 0)
+        if slope > 0:
+            lines.append(f"TDC slope limit: {slope:.1f} dB/oct")
 
-    lines.append("\nDetected Acoustic Events (Left):")
-    lines.append(print_refs(l_stats.get('reflections', []) or []))
-    lines.append("\nDetected Acoustic Events (Right):")
-    lines.append(print_refs(r_stats.get('reflections', []) or []))
+    lines.append("\n--- A-FDW ---")
+    lines.append(_afdw_line("Left", l_stats))
+    lines.append(_afdw_line("Right", r_stats))
 
-    # --- Alignment & Peaks ---
-    lines.append("\n--- Alignment & Peaks ---")
-    lines.append(f"L Peak (pre-norm): {float(l_stats.get('peak_before_norm', 0) or 0):.2f} dB")
-    lines.append(f"R Peak (pre-norm): {float(r_stats.get('peak_before_norm', 0) or 0):.2f} dB")
-    lines.append(f"Global Offset applied: {float(l_stats.get('offset_db', 0) or 0):.2f} dB")
+    lines.append("\n--- XO and Phase ---")
+    lines.append(f"XO phase model: L {l_stats.get('xo_summary', '-')} | R {r_stats.get('xo_summary', '-')}")
+    lines.append(_phase_clamp_line("L", l_stats))
+    lines.append(_phase_clamp_line("R", r_stats))
 
-    # --- Applied gain (UI / CamillaDSP mastergain) ---
-    try:
-        ui_gain_db = float((settings or {}).get('gain', 0.0) or 0.0)
-    except Exception:
-        ui_gain_db = 0.0
-    lines.append(f"Applied global gain / mastergain: {ui_gain_db:.2f} dB")
+    lines.append("\n--- RT60 and Confidence ---")
+    lines.append(f"RT60 wideband: L {l_rt:.2f}s | R {r_rt:.2f}s")
+    if (l_band_avg > 0.0) or (r_band_avg > 0.0):
+        lines.append(f"RT60 band average (125-4kHz): L {l_band_avg:.2f}s | R {r_band_avg:.2f}s")
+    l_bands = l_stats.get("rt60_bands", {}) or {}
+    r_bands = r_stats.get("rt60_bands", {}) or {}
+    if l_bands or r_bands:
+        lines.append(f"Band RT60 L: {_fmt_bands(l_bands)}")
+        lines.append(f"Band RT60 R: {_fmt_bands(r_bands)}")
+    lines.append(f"Confidence: L {l_conf:.1f}% | R {r_conf:.1f}%")
+
+    l_om = l_stats.get("cmp_offset_method", l_stats.get("offset_method", "")) or "-"
+    r_om = r_stats.get("cmp_offset_method", r_stats.get("offset_method", "")) or "-"
+    lines.append(f"Offset method: L {l_om} | R {r_om}")
+    l_win = l_stats.get("cmp_smart_scan_range", l_stats.get("smart_scan_range", None))
+    r_win = r_stats.get("cmp_smart_scan_range", r_stats.get("smart_scan_range", None))
+    lines.append(f"Level window: L {_fmt_range(l_win)} | R {_fmt_range(r_win)}")
+
+    lines.append("\n--- Target Curve Match ---")
+    lines.append(f"Left:  {_fmt_match(l_match, l_rms)}")
+    lines.append(f"Right: {_fmt_match(r_match, r_rms)}")
+
+    lines.append("\n--- Alignment and Peaks ---")
+    lines.append(f"L peak (pre-norm): {_safe_float(l_stats.get('peak_before_norm', 0), 0):.2f} dB")
+    lines.append(f"R peak (pre-norm): {_safe_float(r_stats.get('peak_before_norm', 0), 0):.2f} dB")
+    lines.append(f"Global offset applied: {_safe_float(l_stats.get('offset_db', 0), 0):.2f} dB")
+    lines.append(f"Applied global gain / mastergain: {_safe_float(settings.get('gain', 0.0), 0.0):.2f} dB")
 
     return "\n".join(lines)
-
 # ======================================================================
 # FINAL OVERRIDE: Comparison-mode wrapper (locks analysis grid to 44.1 kHz)
 # This is appended at EOF on purpose so it always wins even if the file
@@ -849,7 +618,7 @@ def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 655
     bw = out.get("afdw_bw_oct", None)
     bw_cmp = _interp(bw) if bw is not None and np.asarray(bw).shape == f.shape else None
     if bw_cmp is not None:
-        out["cmp_afdw_bw_oct"] = np.clip(bw_cmp, 1.0/96.0, 2.0/3.0).tolist()
+        out["cmp_afdw_bw_oct"] = np.clip(bw_cmp, 1.0/96.0, 1.0/3.0).tolist()
         out["cmp_offset_db"] = float(cmp_offset_db)
 
     # Keep scan range in Hz (same numbers), but provide cmp_ key so legacy code can use it.
@@ -1034,7 +803,7 @@ def generate_prediction_plot(
                 _r = target_stats.get('match_range', None)
 
             if isinstance(_r, (list, tuple)) and len(_r) == 2:
-                win_label = f"{int(round(_r[0]))}–{int(round(_r[1]))} Hz"
+                win_label = f"{int(round(_r[0]))}-{int(round(_r[1]))} Hz"
             else:
                 win_label = "level window"
 
@@ -1189,7 +958,7 @@ def generate_prediction_plot(
 
                     if fx.size == bw.size and fx.size > 16:
                         bw_vis = np.interp(f_vis, fx, bw)
-                        bw_vis = np.clip(bw_vis, 1.0/96.0, 2.0/3.0)
+                        bw_vis = np.clip(bw_vis, 1.0/96.0, 1.0/3.0)
                         bw_vis_smooth = scipy.ndimage.gaussian_filter1d(bw_vis, sigma=5.0)
                         fig.add_trace(
                             go.Scatter(
@@ -1237,12 +1006,12 @@ def generate_prediction_plot(
         # Y-axis for A-FDW BW panel
         if bw_vis is not None and len(bw_vis) > 0:
             bw_lo = max(1.0/96.0, float(np.min(bw_vis)) * 0.9)
-            bw_hi = min(2.0/3.0,  float(np.max(bw_vis)) * 1.1)
+            bw_hi = min(1.0/3.0,  float(np.max(bw_vis)) * 1.1)
             if bw_hi - bw_lo < 1e-6:
-                bw_lo, bw_hi = (1.0/96.0, 2.0/3.0)
+                bw_lo, bw_hi = (1.0/96.0, 1.0/3.0)
             fig.update_yaxes(range=[bw_lo, bw_hi], row=5, col=1) 
         else:
-            fig.update_yaxes(range=[1.0/96.0, 2.0/3.0], row=5, col=1)
+            fig.update_yaxes(range=[1.0/96.0, 1.0/3.0], row=5, col=1)
 
         fig.update_yaxes(title_text="oct", row=5, col=1)
 
@@ -1336,6 +1105,6 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
         plt.tight_layout(); buf = io.BytesIO(); fig.savefig(buf, format='png', dpi=120); plt.close(fig); buf.seek(0)
         return buf.getvalue()
     except Exception as e:
-        print(f"Virhe visualisoinnissa ({title}): {e}")
+        print(f"Visualization error ({title}): {e}")
         return b""
     

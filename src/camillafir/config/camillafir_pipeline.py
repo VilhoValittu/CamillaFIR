@@ -18,7 +18,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "mag_correct",
         "lvl_mode", "reg_strength", "normalize_opt", "align_opt",
         "stereo_link", "exc_prot", "exc_freq", "low_bass_cut_hz", "low_bass_cut_enable", "hpf_enable", "hpf_freq",
-        "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_export_window_mode", "ir_window_mode",
+        "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_window_right", "ir_export_window_mode", "ir_window_mode",
         "ir_export_window_shape", "ir_export_tukey_alpha",
         "local_path_l", "local_path_r", "fmt", "lvl_manual_db",
         "lvl_min", "lvl_max", "lvl_algo", "fdw_cycles",
@@ -31,7 +31,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "conf_pull_gamma_cut", "conf_pull_gamma_boost",
         "conf_pull_conf_smooth_sigma",
         "conf_pull_bass_floor_hz", "conf_pull_bass_floor_min",
-        "low_bass_cut_strength", "hc_custom_file", "mixed_causal_ms",
+        "low_bass_cut_strength", "hc_custom_file",
     ]
 
     data: Dict[str, Any] = {}
@@ -40,6 +40,12 @@ def collect_ui_data(pin) -> Dict[str, Any]:
             data[k] = pin[k]
         except Exception:
             data[k] = None
+
+    # Keep backward compatibility between legacy 'ir_window' and canonical 'ir_window_right'.
+    if data.get("ir_window_right", None) in (None, ""):
+        data["ir_window_right"] = data.get("ir_window", 500.0)
+    if data.get("ir_window", None) in (None, ""):
+        data["ir_window"] = data.get("ir_window_right", 500.0)
 
     # normalize checkbox pins saved as [] / [True]
     for k in [
@@ -409,11 +415,6 @@ def build_filter_config(
         conf_pull_bass_floor_min=float(_as_float_allow_zero(data.get("conf_pull_bass_floor_min", None), 0.25)),
         low_bass_cut_enable=bool(data.get("low_bass_cut_enable", True)),
         low_bass_cut_strength=float(max(0.0, min(1.0, _as_float_allow_zero(data.get("low_bass_cut_strength", None), 0.0)))),
-        mixed_causal_ms=80.0,
-        mixed_auto_allow_late_shift=True,
-        mixed_excess_strength = 0.55,
-        mixed_excess_smooth_oct = 0.35,
-        mixed_pre_kill_ratio = 0.18,
     )
     logger.info(f"UI raw: conf_pull_floor pin={data.get('conf_pull_floor')}, low_bass_cut_strength pin={data.get('low_bass_cut_strength')}")
     

@@ -4,6 +4,7 @@ import logging
 import os
 from . import camillafir_plot as plots
 from ..config.camillafir_convolver_configs import generate_hlc_config, generate_raspberry_yaml
+from ..dsp.smoothing import AFDW_BW_MAX_OCT, AFDW_BW_MIN_OCT
 logger = logging.getLogger("CamillaFIR")
 
 TEST_MODE = 1
@@ -20,6 +21,8 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
         fdw_oct_width = (2.0 / fdw_cycles) if fdw_cycles > 0 else 0.0
         afdw_min = max(3.0, fdw_cycles / 3.0)
         afdw_min_oct_width = (2.0 / afdw_min) if afdw_min > 0 else 0.0
+        fdw_oct_width = float(max(AFDW_BW_MIN_OCT, min(AFDW_BW_MAX_OCT, fdw_oct_width)))
+        afdw_min_oct_width = float(max(AFDW_BW_MIN_OCT, min(AFDW_BW_MAX_OCT, afdw_min_oct_width)))
 
         df_on = bool(data.get('df_smoothing', False))
         df_ref = 44100.0 / 65536.0
@@ -55,7 +58,7 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
         summary_content += f"DF smoothing: {'ON' if df_on else 'OFF'}\n"
         if df_on:
             summary_content += f"DF smoothing sigma: {sigma_bins:.1f} bins -> {sigma_hz:.2f} Hz\n"
-    except Exception:
+    except Exception as e:
         summary_content += "\n=== DSP EFFECTIVE PARAMS (THIS SAMPLE RATE) ===\n"
         summary_content += f"Could not compute effective params: {type(e).__name__}: {e}\n"
 
@@ -67,26 +70,26 @@ def _append_acoustic_events(summary_content, l_st, r_st):
         if reflections:
             summary_content += f"\n=== ACOUSTIC EVENTS ({side}) ===\n"
             summary_content += (
-                "Note: 'Path Δ' is an equivalent path-length from Δt.\n"
+                "Note: 'Path delta' is an equivalent path-length from dt.\n"
                 "Reflections: time-of-flight equivalent extra path.\n"
                 "Resonances: not a physical distance.\n"
             )
-            summary_content += f"{'Freq (Hz)':<10} {'Type':<12} {'Δt (ms)':<12} {'Path Δ (m)':<10}\n"
+            summary_content += f"{'Freq (Hz)':<10} {'Type':<12} {'dt (ms)':<12} {'Path delta (m)':<14}\n"
             summary_content += "-" * 50 + "\n"
             for rev in reflections:
                 freq = float(rev.get('freq', 0) or 0)
                 ev_type = str(rev.get('type', 'Event') or 'Event')
                 gd_error = float(rev.get('gd_error', 0) or 0)
                 dist = float(rev.get('dist', 0) or 0)
-                # Keep numeric output stable; allow "—" if resonance distance is meaningless
+                # Keep numeric output stable; allow "n/a" if resonance distance is meaningless
                 try:
                     et = ev_type.strip().lower()
                 except Exception:
                     et = ""
                 if "reson" in et:
-                    summary_content += f"{freq:<10} {ev_type:<12} {gd_error:<12} {'—':<10}\n"
+                    summary_content += f"{freq:<10} {ev_type:<12} {gd_error:<12} {'n/a':<14}\n"
                 else:
-                    summary_content += f"{freq:<10} {ev_type:<12} {gd_error:<12} {dist:<10}\n"
+                    summary_content += f"{freq:<10} {ev_type:<12} {gd_error:<12} {dist:<14}\n"
         # Always report headroom/normalization per side (even if no events)
         summary_content += f"\n=== HEADROOM MANAGEMENT ({side}) ===\n"
         summary_content += f"Normalize: {'ON' if bool(st.get('do_normalize', False)) else 'OFF'}\n"
@@ -182,7 +185,7 @@ def _append_acoustic_events(summary_content, l_st, r_st):
             floor_applied = bool(st.get('bass_first_conf_floor_applied', False))
             if (rm_max is not None) or (rel_mean is not None) or (rel_min is not None) or (conf_eff_mean is not None):
                 summary_content += (
-                    f"BF masks (20–200): "
+                    f"BF masks (20-200): "
                     f"roommode_max={float(rm_max or 0.0):.3f}, "
                     f"rel_mean(raw)={float(rel_mean or 0.0):.3f}, "
                     f"rel_min(raw)={float(rel_min or 0.0):.3f}, "
@@ -247,7 +250,7 @@ def _write_fs_outputs(
             win = st.get("smart_scan_range", None)
             if isinstance(win, (list, tuple)) and len(win) >= 2:
                 try:
-                    summary_content += f"Window: {float(win[0]):.0f}–{float(win[1]):.0f} Hz\n"
+                    summary_content += f"Window: {float(win[0]):.0f}-{float(win[1]):.0f} Hz\n"
                 except Exception:
                     pass
             try:
@@ -265,7 +268,7 @@ def _write_fs_outputs(
                     summary_content += f"Tilt slope: {tilt_f:+.2f} dB/oct\n"
                     if abs(tilt_f) > 1.5:
                         summary_content += (
-                            "⚠️  Large broadband tilt detected. "
+                            "Warning: Large broadband tilt detected. "
                             "May indicate measurement/target mismatch or strong room tilt.\n"
                         )
                 except Exception:

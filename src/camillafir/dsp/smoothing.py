@@ -1,11 +1,14 @@
 import numpy as np
-import scipy.ndimage
 import logging
-from dataclasses import dataclass
 
 
 
 logger = logging.getLogger("CamillaFIR.dsp")
+
+# Keep A-FDW effective bandwidth bounded to the same practical range
+# used by correction telemetry/UI to avoid hidden over-smoothing.
+AFDW_BW_MIN_OCT = 1.0 / 96.0
+AFDW_BW_MAX_OCT = 1.0 / 3.0
 
 def psychoacoustic_smoothing(
     freqs,
@@ -47,16 +50,6 @@ def psycho_smooth_safe_gain(freqs, mags):
     """
 
 
-def apply_fdw_smoothing(freqs, phases, cycles):
-    """Apply frequency-dependent windowing (FDW) to phase."""
-    safe_cycles = max(cycles, 1.0)
-    phase_u = np.unwrap(np.deg2rad(phases))
-    oct_width = 2.0 / safe_cycles
-    dummy_mags = np.zeros_like(freqs)
-    _, smoothed_phase_deg = apply_smoothing_std(freqs, dummy_mags, np.rad2deg(phase_u), oct_width)
-    return np.deg2rad(smoothed_phase_deg)
-
-
 def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycles=5.0):
     """
     Apply adaptive magnitude smoothing based on confidence.
@@ -87,9 +80,9 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
     oct_widths = 2.0 / np.maximum(adaptive_cycles, 1.0)  # larger => heavier smoothing
 
     # Fixed set of octave widths to blend between (ascending for searchsorted)
-    bw_list = np.array([1.0/96.0, 1.0/48.0, 1.0/24.0, 1.0/12.0, 1.0/6.0, 1.0/3.0, 2.0/3.0], dtype=float)
+    bw_list = np.array([1.0/96.0, 1.0/48.0, 1.0/24.0, 1.0/12.0, 1.0/6.0, 1.0/3.0], dtype=float)
 
-    # Precompute smoothed curves for each BW (fast: only 5 passes)
+    # Precompute smoothed curves for each BW (fast: only 6 passes)
     sm_stack = []
     dummy = np.zeros_like(m)
     for bw in bw_list:
@@ -98,7 +91,7 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
     sm_stack = np.vstack(sm_stack)  # shape: (K, N)
 
     # Clamp target widths to available range
-    t = np.clip(oct_widths, bw_list[0], bw_list[-1])
+    t = np.clip(oct_widths, AFDW_BW_MIN_OCT, AFDW_BW_MAX_OCT)
 
     # Find neighbors in bw_list: bw_lo <= t <= bw_hi
     # hi in [1..K-1], lo = hi-1

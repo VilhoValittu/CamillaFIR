@@ -1,13 +1,6 @@
 import numpy as np
 
 
-def soft_clip_boost(gain_db, max_boost):
-    """Softly clips boosts using tanh function to prevent exceeding max_boost abruptly."""
-    if gain_db <= 0:
-        return gain_db
-    return max_boost * np.tanh(gain_db / max_boost)
-
-
 def soft_clip_gain(gain_db, max_boost_db, max_cut_db):
     """
     Soft limiter for both boost and cut.

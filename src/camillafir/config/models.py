@@ -55,7 +55,6 @@ class FilterConfig:
     # Backward-compatible aliases (some UI paths used these names):
     ir_window_right: float = 500.0
     ir_window_left: float = 120.0
-    mixed_causal_ms: float = 80.0
     mixed_split_freq: float = 180.0 # Mixed Phase filter split frequency
     trans_width: float = 100.0      # Transition width at upper limit
     mixed_transition_mode: str = "width_based"   # width_based|legacy
@@ -70,10 +69,6 @@ class FilterConfig:
     bass_first_smooth_floor_hi: float = 0.35
     bass_first_k_mode_cut: float = 0.6
     bass_first_k_mode_boost: float = 0.9
-    mixed_auto_allow_late_shift: bool = True
-    mixed_excess_strength: float = 0.55
-    mixed_excess_smooth_oct: float = 0.35
-    mixed_pre_kill_ratio: float = 0.18
     # Input/source hint for analysis heuristics (affects Bass-first reliability masking)
     # True when the measurement data comes from WAV/IR-derived response rather than REW text/API.
     is_wav_source: bool = False

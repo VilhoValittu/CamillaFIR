@@ -4,17 +4,21 @@ import numpy as np
 import scipy.ndimage
 
 from . import bassfirst as bf
-from .analysis import _sigma_bins_from_hz, calculate_rt60, calculate_rt60_bands, _third_oct_centers
+from .analysis import _sigma_bins_from_hz, calculate_rt60, calculate_rt60_bands
 from .camillafir_leveling import compute_leveling
 from .limits import (
     build_slope_limit_envelope,
     limit_slope_per_octave,
     limit_slope_per_octave_asym,
-    soft_clip_boost,
     soft_clip_gain,
 )
 from .phase import get_min_phase_impulse
-from .smoothing import apply_adaptive_fdw, apply_fdw_smoothing, psycho_smooth_safe_gain
+from .smoothing import (
+    AFDW_BW_MAX_OCT,
+    AFDW_BW_MIN_OCT,
+    apply_adaptive_fdw,
+    psycho_smooth_safe_gain,
+)
 from .tdc import apply_smart_tdc
 
 
@@ -638,7 +642,7 @@ def run_correction_stage(
                 adaptive_cycles = float(afdw_min) + (c * (float(afdw_base) - float(afdw_min)))
                 bw = 2.0 / np.maximum(adaptive_cycles, 1.0)
                 # clamp to same range used by the continuous blender
-                bw = np.clip(bw, 1.0/96.0, 1.0/3.0)
+                bw = np.clip(bw, AFDW_BW_MIN_OCT, AFDW_BW_MAX_OCT)
                 afdw_bw_oct = bw
                 afdw_bw_min_oct = float(np.min(bw))
                 afdw_bw_mean_oct = float(np.mean(bw))
