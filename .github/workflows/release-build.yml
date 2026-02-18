@@ -122,6 +122,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Extract version from tag
+        shell: bash
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -139,21 +144,27 @@ jobs:
           file dist/CamillaFIR/CamillaFIR
           lipo -archs dist/CamillaFIR/CamillaFIR || true
 
+      - name: Package macOS arm64 build
+        shell: bash
+        run: |
+          mkdir -p out
+          tar -C dist -czf out/CamillaFIR_${VERSION}_macos_arm64.tar.gz CamillaFIR
+
       - uses: actions/upload-artifact@v4
         with:
           name: macos_arm64
-          path: dist/CamillaFIR
+          path: out/*.tar.gz
 
   macos_x86_64:
-    name: macOS x86_64 build (Rosetta)
-    runs-on: macos-latest
+    name: macOS x86_64 build
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rosetta
+      - name: Extract version from tag
         shell: bash
         run: |
-          softwareupdate --install-rosetta --agree-to-license || true
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
 
       - uses: actions/setup-python@v5
         with:
@@ -161,71 +172,35 @@ jobs:
           architecture: "x64"
           cache: "pip"
 
-      - name: Install deps (force x86_64)
+      - name: Install deps
         shell: bash
         run: |
-          arch -x86_64 python -m pip install --upgrade pip
-          arch -x86_64 pip install -r requirements.txt
-          arch -x86_64 pip install pyinstaller
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
 
-      - name: Build (force x86_64)
+      - name: Build x86_64
         shell: bash
         run: |
           rm -rf build dist
-          arch -x86_64 pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
+          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
           file dist/CamillaFIR/CamillaFIR
           lipo -archs dist/CamillaFIR/CamillaFIR || true
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos_x86_64
-          path: dist/CamillaFIR
-
-  macos_universal2:
-    name: macOS universal2
-    runs-on: macos-14
-    needs: [macos_arm64, macos_x86_64]
-    steps:
-      - name: Extract version from tag
+      - name: Package macOS x86_64 build
         shell: bash
         run: |
-          echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: macos_arm64
-          path: inputs/arm64/CamillaFIR
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: macos_x86_64
-          path: inputs/x86_64/CamillaFIR
-
-      - run: |
-          rm -rf dist_universal
-          mkdir -p dist_universal
-          rsync -a inputs/arm64/CamillaFIR/ dist_universal/CamillaFIR/
-
-          lipo -create \
-            inputs/arm64/CamillaFIR/CamillaFIR \
-            inputs/x86_64/CamillaFIR/CamillaFIR \
-            -output dist_universal/CamillaFIR/CamillaFIR
-
-          echo "Universal architectures:"
-          lipo -archs dist_universal/CamillaFIR/CamillaFIR
-
-      - run: |
           mkdir -p out
-          tar -C dist_universal -czf out/CamillaFIR_${VERSION}_macos_universal2.tar.gz CamillaFIR
+          tar -C dist -czf out/CamillaFIR_${VERSION}_macos_x86_64.tar.gz CamillaFIR
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos_universal2
+          name: macos_x86_64
           path: out/*.tar.gz
 
   release:
     name: Create GitHub Release
-    needs: [build, macos_universal2]
+    needs: [build, macos_arm64, macos_x86_64]
     runs-on: ubuntu-latest
 
     steps:
