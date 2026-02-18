@@ -77,7 +77,7 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v.3.0.3"
+VERSION = "v.3.0.4"
 # Change log:
 # v.3.0.2 See CHANGELOG.md for details.
 # v.3.0.1 See CHANGELOG.md for details.
@@ -328,8 +328,8 @@ def process_run():
 
            # IR window length values come from UI keys (ms). DSP expects *_ms fields.
             try:
-                setattr(cfg, 'ir_window', float(data.get('ir_window', getattr(cfg, 'ir_window', 0.0)) or 0.0))
-                setattr(cfg, 'ir_window_left', float(data.get('ir_window_left', getattr(cfg, 'ir_window_left', 0.0)) or 0.0))
+                setattr(cfg, 'ir_window', float(data.get('ir_window', getattr(cfg, 'ir_window', 500.0)) or 500.0))
+                setattr(cfg, 'ir_window_left', float(data.get('ir_window_left', getattr(cfg, 'ir_window_left', 120.0)) or 120.0))
             except Exception:
                 pass
 

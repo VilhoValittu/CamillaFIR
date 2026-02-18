@@ -91,7 +91,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         # --- IR WINDOW / MIXED ---
         "ir_export_window_mode": "auto",
         "ir_window_right": 500.0,
-        "ir_window_left": 10.0,
+        "ir_window_left": 120.0,
         "mixed_split_freq": 300.0,
         "trans_width": 100.0,
 
@@ -146,7 +146,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "tdc_slope_db_per_oct": 6.0,
         "enable_afdw": True,
         "ir_window_right": 500.0,
-        "ir_window_left": 10.0,
+        "ir_window_left": 120.0,
         "ir_export_window_mode": "auto",
         "bass_first_ai": True,
         "bass_first_mode_max_hz": 200.0,

@@ -373,7 +373,7 @@ def update_ir_lr_window_ui(_=None):
 
         # Values (keep backward compat for right window via legacy 'ir_window')
         try:
-            v_left = float(_p("ir_window_left", 10.0) or 10.0)
+            v_left = float(_p("ir_window_left", 120.0) or 120.0)
         except Exception:
             v_left = 10.0
 

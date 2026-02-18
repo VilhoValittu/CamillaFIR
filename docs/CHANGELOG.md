@@ -4,6 +4,36 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.0.4] - 2026-02-18
+
+### DSP
+- Refactored DSP pipeline into focused modules for preprocessing, correction, phase/IR, and shared utilities
+  - Improves maintainability and separation of concerns
+  - Preserves existing processing flow while reducing monolithic engine complexity
+
+- Reworked Mixed Phase blend implementation
+  - Replaced crossover-FIR convolution blend with frequency-domain blending
+  - Added smooth raised-cosine transition around split frequency
+  - Added zero-padded peak alignment (no circular wrap-around)
+  - Reduces blend artifacts and improves transition stability
+
+### UI
+- Added Mixed Phase blend diagnostics to DSP info
+  - Shows per-channel blend split frequency
+  - Shows per-channel blend transition width
+
+- Expanded system health checks
+  - Adds sanity checks for leveling range, HPF settings, and Mixed Phase parameters
+  - Handles latency messaging for Min/Asym low-latency modes
+  - Improves correction-range and safety messaging clarity
+
+### Core
+- Updated default IR window fallbacks when UI values are missing
+  - `ir_window`: 500 ms
+  - `ir_window_left`: 120 ms
+
+---
+
 ## [3.0.3] - 2026-02-16
 
 ### UI

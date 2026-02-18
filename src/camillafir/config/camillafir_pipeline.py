@@ -31,7 +31,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "conf_pull_gamma_cut", "conf_pull_gamma_boost",
         "conf_pull_conf_smooth_sigma",
         "conf_pull_bass_floor_hz", "conf_pull_bass_floor_min",
-        "low_bass_cut_strength", "hc_custom_file",
+        "low_bass_cut_strength", "hc_custom_file", "mixed_causal_ms",
     ]
 
     data: Dict[str, Any] = {}
@@ -376,7 +376,7 @@ def build_filter_config(
         exc_freq=data["exc_freq"],
         low_bass_cut_hz=float(lb_hz),
         ir_window_ms=data.get("ir_window_right", 500.0),
-        ir_window_ms_left=data.get("ir_window_left", 10.0),
+        ir_window_ms_left=data.get("ir_window_left", 120.0),
         ir_export_window_mode=data.get("ir_export_window_mode", "auto"),
         enable_afdw=bool(enable_afdw),
         enable_tdc=bool(enable_tdc),
@@ -409,7 +409,11 @@ def build_filter_config(
         conf_pull_bass_floor_min=float(_as_float_allow_zero(data.get("conf_pull_bass_floor_min", None), 0.25)),
         low_bass_cut_enable=bool(data.get("low_bass_cut_enable", True)),
         low_bass_cut_strength=float(max(0.0, min(1.0, _as_float_allow_zero(data.get("low_bass_cut_strength", None), 0.0)))),
-
+        mixed_causal_ms=80.0,
+        mixed_auto_allow_late_shift=True,
+        mixed_excess_strength = 0.55,
+        mixed_excess_smooth_oct = 0.35,
+        mixed_pre_kill_ratio = 0.18,
     )
     logger.info(f"UI raw: conf_pull_floor pin={data.get('conf_pull_floor')}, low_bass_cut_strength pin={data.get('low_bass_cut_strength')}")
     

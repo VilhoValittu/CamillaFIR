@@ -50,11 +50,11 @@ def load_config() -> dict:
         "xo4_s": 12,
         "xo5_f": None,
         "xo5_s": 12,
-        "mixed_freq": 300.0,
+        "mixed_freq": 180.0,
         "phase_limit": 600.0,
         "phase_safe_2058": False,
         "ir_window_right": 500.0,
-        "ir_window_left": 10.0,
+        "ir_window_left": 120.0,
         "ir_export_window_mode": "auto",
         "ir_export_window_shape": "hann",
         "ir_export_tukey_alpha": 0.25,
@@ -72,6 +72,11 @@ def load_config() -> dict:
         "bass_first_ai": True,
         "bass_first_mode_max_hz": 200.0,
         "debug_stage_stats": True,
+        "mixed_causal_ms": 80.0,
+        "mixed_auto_allow_late_shift": True,
+        "mixed_excess_strength": 0.55,
+        "mixed_excess_smooth_oct": 0.35,
+        "mixed_pre_kill_ratio": 0.18,
     }
 
     if os.path.exists(CONFIG_FILE):

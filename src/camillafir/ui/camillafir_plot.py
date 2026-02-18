@@ -12,8 +12,8 @@ import plotly.io as pio
 from plotly.subplots import make_subplots
 from datetime import datetime
 # Tuodaan tarvittavat funktiot DSP-moduulista
-from ..dsp.camillafir_dsp import apply_smoothing_std, psychoacoustic_smoothing, calculate_rt60
-
+from ..dsp.smoothing import apply_smoothing_std, psychoacoustic_smoothing
+from ..dsp.analysis import calculate_rt60
 # Plot-only phase smoothing strength (octave-fraction style).
 # Higher = smoother-looking phase/GD. Does NOT affect DSP/filter generation.
 PHASE_SMOOTH_OCT = 5.5

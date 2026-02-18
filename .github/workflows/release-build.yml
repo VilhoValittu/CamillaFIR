@@ -118,7 +118,7 @@ jobs:
 
   macos_arm64:
     name: macOS arm64 build
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -140,15 +140,15 @@ jobs:
 
       - run: |
           rm -rf build dist
-          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
-          file dist/CamillaFIR/CamillaFIR
-          lipo -archs dist/CamillaFIR/CamillaFIR || true
+          pyinstaller --clean --noconfirm CamillaFIR_macos.spec
+          file dist/CamillaFIR.app/Contents/MacOS/CamillaFIR
+          lipo -archs dist/CamillaFIR.app/Contents/MacOS/CamillaFIR || true
 
       - name: Package macOS arm64 build
         shell: bash
         run: |
           mkdir -p out
-          tar -C dist -czf out/CamillaFIR_${VERSION}_macos_arm64.tar.gz CamillaFIR
+          tar -C dist -czf out/CamillaFIR_${VERSION}_macos_arm64.tar.gz CamillaFIR.app
 
       - uses: actions/upload-artifact@v4
         with:
@@ -157,7 +157,7 @@ jobs:
 
   macos_x86_64:
     name: macOS x86_64 build
-    runs-on: macos-13
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -165,6 +165,11 @@ jobs:
         shell: bash
         run: |
           echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: Ensure Rosetta is available
+        shell: bash
+        run: |
+          /usr/sbin/softwareupdate --install-rosetta --agree-to-license || true
 
       - uses: actions/setup-python@v5
         with:
@@ -175,23 +180,23 @@ jobs:
       - name: Install deps
         shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          arch -x86_64 python -m pip install --upgrade pip
+          arch -x86_64 pip install -r requirements.txt
+          arch -x86_64 pip install pyinstaller
 
       - name: Build x86_64
         shell: bash
         run: |
           rm -rf build dist
-          pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
-          file dist/CamillaFIR/CamillaFIR
-          lipo -archs dist/CamillaFIR/CamillaFIR || true
+          arch -x86_64 pyinstaller --clean --noconfirm CamillaFIR_macos.spec
+          file dist/CamillaFIR.app/Contents/MacOS/CamillaFIR
+          lipo -archs dist/CamillaFIR.app/Contents/MacOS/CamillaFIR || true
 
       - name: Package macOS x86_64 build
         shell: bash
         run: |
           mkdir -p out
-          tar -C dist -czf out/CamillaFIR_${VERSION}_macos_x86_64.tar.gz CamillaFIR
+          tar -C dist -czf out/CamillaFIR_${VERSION}_macos_x86_64.tar.gz CamillaFIR.app
 
       - uses: actions/upload-artifact@v4
         with:

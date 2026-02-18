@@ -55,21 +55,95 @@ def calculate_theoretical_phase(freq_axis, crossovers, hpf_freq=None, hpf_slope=
     return limit_phase_deg(total_phase_rad, max_phase_deg)
 
 
-def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=300):
-    """Combines Linear Phase bass with Minimum Phase treble."""
-    ntaps = len(ir_lin)
-    fir_lp = scipy.signal.firwin(2047, split_freq, fs=fs, pass_zero=True, window="blackman")
-    fir_hp = -fir_lp
-    fir_hp[1023] += 1.0
+def _shift_zeropad(x: np.ndarray, shift: int) -> np.ndarray:
+    """Shift by integer samples with zero padding (no wrap-around)."""
+    x = np.asarray(x)
+    y = np.zeros_like(x)
+    if shift == 0:
+        return x.copy()
+    if shift > 0:
+        # move right
+        y[shift:] = x[:-shift]
+    else:
+        # move left
+        s = -shift
+        y[:-s] = x[s:]
+    return y
 
-    idx_lin = np.argmax(np.abs(ir_lin))
-    idx_min = np.argmax(np.abs(ir_min))
+def _raised_cosine_lp(freqs: np.ndarray, f0: float, f1: float) -> np.ndarray:
+    """
+    Low-pass weight:
+      1 below f0
+      0 above f1
+      raised-cosine transition between [f0, f1]
+    """
+    w = np.ones_like(freqs, dtype=float)
+    w[freqs >= f1] = 0.0
+    mid = (freqs > f0) & (freqs < f1)
+    if np.any(mid):
+        x = (freqs[mid] - f0) / (f1 - f0)
+        w[mid] = 0.5 * (1.0 + np.cos(np.pi * x))  # 1 -> 0
+    return w
+
+def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=120.0, transition_hz=120.0):
+    """
+    Combine linear-phase bass with minimum-phase treble.
+
+    New implementation (replaces old):
+    - Frequency-domain blending (no extra crossover FIR convolution)
+    - Smooth transition band around split_freq
+    - Proper peak alignment without circular wrap-around
+    """
+    ir_lin = np.asarray(ir_lin, dtype=float)
+    ir_min = np.asarray(ir_min, dtype=float)
+
+    n = len(ir_lin)
+    if len(ir_min) != n:
+        raise ValueError("ir_lin and ir_min must have the same length")
+
+    if n < 8:
+        return ir_lin.copy()
+
+    # Align peaks (integer) WITHOUT wrap-around
+    idx_lin = int(np.argmax(np.abs(ir_lin)))
+    idx_min = int(np.argmax(np.abs(ir_min)))
     shift = idx_lin - idx_min
-    ir_min_aligned = np.roll(ir_min, shift)
+    ir_min_aligned = _shift_zeropad(ir_min, shift)
 
-    filt_bass = scipy.signal.fftconvolve(ir_lin, fir_lp, mode="same")
-    filt_treble = scipy.signal.fftconvolve(ir_min_aligned, fir_hp, mode="same")
-    return filt_bass + filt_treble
+    # FFTs
+    H_lin = np.fft.rfft(ir_lin)
+    H_min = np.fft.rfft(ir_min_aligned)
+    freqs = np.fft.rfftfreq(n, d=1.0 / float(fs))
+
+    # Smooth blend band
+    transition_hz = float(transition_hz)
+    if transition_hz <= 0:
+        # hard split (still frequency-domain, no extra FIR)
+        W_lp = (freqs <= float(split_freq)).astype(float)
+    else:
+        f0 = max(0.0, float(split_freq) - transition_hz / 2.0)
+        f1 = float(split_freq) + transition_hz / 2.0
+        W_lp = _raised_cosine_lp(freqs, f0, f1)
+
+    W_hp = 1.0 - W_lp
+
+    # Phase-only style blend:
+    # - blend phase trajectories directly (avoids complex-vector cancellation notches)
+    # - blend magnitudes separately for smooth handover
+    phi_lin = np.unwrap(np.angle(H_lin))
+    phi_min = np.unwrap(np.angle(H_min))
+    phi = (W_lp * phi_lin) + (W_hp * phi_min)
+
+    mag_lin = np.abs(H_lin)
+    mag_min = np.abs(H_min)
+    mag = np.maximum((W_lp * mag_lin) + (W_hp * mag_min), 1e-12)
+    H = mag * np.exp(1j * phi)
+
+    # Back to time domain
+    ir = np.fft.irfft(H, n=n)
+
+    return ir
+    
 
 
 def remove_time_of_flight(freq_axis, phase_rad):

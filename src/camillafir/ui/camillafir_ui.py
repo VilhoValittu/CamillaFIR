@@ -1526,6 +1526,15 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
                 f"{_xo_fc_gd_badge(l_st_f) or _xo_fc_gd_badge(r_st_f)}"
             )
 
+            def _mixed_blend_str(st: dict, key: str) -> str:
+                try:
+                    v = (st or {}).get(key, None)
+                    if v is None:
+                        return "—"
+                    return f"{float(v):.1f}"
+                except Exception:
+                    return "—"
+
             put_markdown(dedent(f"""
             - **Lenght:** {data['taps']} taps ({data['taps']/data['fs']*1000:.1f} ms)
             - **Resolution:** {data['fs']/data['taps']:.2f} Hz
@@ -1533,6 +1542,8 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             - **FDW:** {data['fdw_cycles']}
             - **House curve:** {data['hc_mode']} — {data.get('hc_source', 'Unknown')} ({data['mag_c_min']}-{data['mag_c_max']} Hz)
             - **Filter type:** {data['filter_type']}
+            - **Mixed blend split:** L {_mixed_blend_str(l_st_f, "mixed_blend_split_hz")} Hz | R {_mixed_blend_str(r_st_f, "mixed_blend_split_hz")} Hz
+            - **Mixed blend transition:** L {_mixed_blend_str(l_st_f, "mixed_blend_transition_hz")} Hz | R {_mixed_blend_str(r_st_f, "mixed_blend_transition_hz")} Hz
             - **XO phase model:** L {_xo_phase_model_str(l_st_f)} | R {_xo_phase_model_str(r_st_f)}
             - **XO Δφ@fc (wrapped):** L {_xo_fc_wrapped_str(l_st_f)} | R {_xo_fc_wrapped_str(r_st_f)}
             - {_xo_gd_line}

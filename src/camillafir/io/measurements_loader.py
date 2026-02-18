@@ -57,7 +57,7 @@ def load_measurements_lr(data: dict, *, logger=None):
     """
     # UI-driven IR windows (ms) + smoothing for WAV parsing
     try:
-        pre_ms = float(data.get("ir_window_left", 10.0) or 10.0)
+        pre_ms = float(data.get("ir_window_left", 120.0) or 120.0)
     except Exception:
         pre_ms = 10.0
     try:

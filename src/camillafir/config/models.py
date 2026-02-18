@@ -51,19 +51,29 @@ class FilterConfig:
     ir_export_window_shape: str = "hann"  # hann/tukey (export window edge shape)
     ir_export_tukey_alpha: float = 0.25   # 0..1 (only used when shape=tukey)
     ir_window_ms: float = 500.0          # Right-side window length (ms)
-    ir_window_ms_left: float = 50.0      # Left-side (pre) window (ms)
+    ir_window_ms_left: float = 120.0      # Left-side (pre) window (ms)
     # Backward-compatible aliases (some UI paths used these names):
     ir_window_right: float = 500.0
-    ir_window_left: float = 10.0
-
-    mixed_split_freq: float = 300.0 # Mixed Phase filter split frequency
+    ir_window_left: float = 120.0
+    mixed_causal_ms: float = 80.0
+    mixed_split_freq: float = 180.0 # Mixed Phase filter split frequency
     trans_width: float = 100.0      # Transition width at upper limit
+    mixed_transition_mode: str = "width_based"   # width_based|legacy
+    mixed_confidence_blend_enable: bool = False
+    mixed_confidence_power: float = 1.5
+    mixed_phase_budget_lf_deg: float = 45.0
+    mixed_phase_budget_hf_deg: float = 22.5
+    mixed_min_tilt_comp_enable: bool = True
     bass_first_ai: bool = False
     bass_first_mode_max_hz: float = 200.0
     bass_first_smooth_floor_lo: float = 0.75
     bass_first_smooth_floor_hi: float = 0.35
     bass_first_k_mode_cut: float = 0.6
     bass_first_k_mode_boost: float = 0.9
+    mixed_auto_allow_late_shift: bool = True
+    mixed_excess_strength: float = 0.55
+    mixed_excess_smooth_oct: float = 0.35
+    mixed_pre_kill_ratio: float = 0.18
     # Input/source hint for analysis heuristics (affects Bass-first reliability masking)
     # True when the measurement data comes from WAV/IR-derived response rather than REW text/API.
     is_wav_source: bool = False
