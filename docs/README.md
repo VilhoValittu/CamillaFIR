@@ -261,8 +261,68 @@ The UI opens in your browser (default: `http://localhost:8080`).
 Plotly PNG export uses Kaleido, which requires a Chromium-based browser
 installed on the machine where CamillaFIR runs.
 
-Ubuntu:
-    sudo apt install chromium-browser
+---
+
+### 🐧 Ubuntu / Debian
+
+```bash
+sudo apt install chromium-browser
+```
+
+If `chromium-browser` is not available:
+
+```bash
+sudo apt install chromium
+```
+
+---
+
+### 🪟 Windows
+
+Install one of the following:
+
+- Google Chrome (recommended)  
+  https://www.google.com/chrome/
+
+After installation, no additional configuration is usually required.  
+Kaleido automatically detects the browser if it is in the system PATH
+(default installer settings are typically sufficient).
+
+If PNG export fails, verify:
+
+- The browser is installed
+- It has been launched at least once
+- Restart the system if PATH issues occur
+
+---
+
+### 🍎 macOS
+
+Install one of the following:
+
+- Google Chrome  
+  https://www.google.com/chrome/
+
+You can also install Chromium using Homebrew:
+
+```bash
+brew install --cask chromium
+```
+
+After installation, restart CamillaFIR.
+
+---
+
+### If PNG export still does not work
+
+Upgrade Kaleido:
+
+```bash
+pip install -U kaleido
+```
+
+If problems persist, ensure that a Chromium-based browser is properly
+installed and accessible by the system.
 
 ---
 
