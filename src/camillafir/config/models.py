@@ -9,7 +9,7 @@ class FilterConfig:
     fs: int = 44100                 # Sample rate
     num_taps: int = 65536           # Filter length (taps)
     filter_type_str: str = "Linear Phase" # Filter type (Linear, Min, Mixed, Asymmetric)
-    global_gain_db: float = 0.0     # Overall gain
+    global_gain_db: float = 0.0     # Legacy global gain (auto-level uses auto_gain_margin_db in pipeline)
     
     # --- 2. CORRECTION LIMITS (MAGNITUDE & PHASE) ---
     mag_c_min: float = 10.0         # Magnitude correction lower limit

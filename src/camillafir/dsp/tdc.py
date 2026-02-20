@@ -27,6 +27,26 @@ def apply_smart_tdc(
     adjusted_target = np.copy(target_mags)
     tdc_reduction_db = np.zeros_like(adjusted_target)
 
+    # Keep user controls intuitive:
+    # - strength <= 0 => no TDC effect
+    # - max_total_reduction_db <= 0 => no TDC effect
+    try:
+        strength = float(base_strength)
+    except Exception:
+        strength = 0.0
+    if not np.isfinite(strength):
+        strength = 0.0
+    strength = float(np.clip(strength, 0.0, 3.0))
+
+    try:
+        max_red = float(max_total_reduction_db)
+    except Exception:
+        max_red = 9.0
+    if not np.isfinite(max_red):
+        max_red = 9.0
+    if strength <= 0.0 or max_red <= 0.0:
+        return adjusted_target
+
     # rt60_info can be:
     #  - float (old usage)
     #  - dict: {center_hz: rt60_s, .} (new: per-band)
@@ -78,7 +98,7 @@ def apply_smart_tdc(
 
         if excess_ratio > 0.8:
             # Dynaaminen kerroin
-            dynamic_mult = np.clip(excess_ratio * base_strength, 0.2, 3.0)
+            dynamic_mult = np.clip(excess_ratio * strength, 0.0, 3.0)
 
             # Kapeampi ja kohdistetumpi kaistanleveys (BW)
             bw = f_res / max(error_ms / 15.0, 1e-9)
@@ -97,8 +117,7 @@ def apply_smart_tdc(
 
     # --- Safety brakes ---
     # 1) Hard cap total reduction (per bin)
-    if max_total_reduction_db and max_total_reduction_db > 0:
-        tdc_reduction_db = np.minimum(tdc_reduction_db, float(max_total_reduction_db))
+    tdc_reduction_db = np.minimum(tdc_reduction_db, max_red)
 
     # 2) Optional slope limiting in dB/oct to keep the curve smooth/predictable
     try:
@@ -113,8 +132,7 @@ def apply_smart_tdc(
         logger.debug("TDC slope limiting failed; continuing without it.", exc_info=True)
 
     # Re-apply hard cap after optional smoothing, so max reduction stays guaranteed.
-    if max_total_reduction_db and max_total_reduction_db > 0:
-        tdc_reduction_db = np.minimum(tdc_reduction_db, float(max_total_reduction_db))
+    tdc_reduction_db = np.minimum(tdc_reduction_db, max_red)
 
     adjusted_target -= tdc_reduction_db
     return adjusted_target

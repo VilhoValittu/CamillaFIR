@@ -16,3 +16,4 @@ tests/
 pytest.ini
 src/camillafir/bass_integration/
 specs.txt
+analysis/

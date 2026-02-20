@@ -431,7 +431,7 @@ def main():
         put_file_upload('file_l', label=t('upload_l'), accept='.txt,.wav'),
         put_file_upload('file_r', label=t('upload_r'), accept='.txt,.wav'),
         put_collapse(
-            "Local paths (optional)",
+            t("ui_local_paths_optional"),
             [
                 put_input('local_path_l', label=t('path_l'), value=get_val('local_path_l', ''), help_text=t('path_help')),
                 put_input('local_path_r', label=t('path_r'), value=get_val('local_path_r', ''), help_text=t('path_help')),
@@ -482,7 +482,7 @@ def main():
         # =========================
         # FIR ENGINE
         # =========================
-        put_markdown("#### 🧱 FIR Engine"),
+        put_markdown(f"#### \U0001F9F1 {t('ui_fir_engine')}"),
         put_row([
             put_select('fs', label=t('fs'), options=fs_opts, value=get_val('fs', 44100), help_text=t('fs_help')),  # type: ignore
             put_select('taps', label=t('taps'), options=taps_opts, value=get_val('taps', 65536), help_text=t('taps_help'))
@@ -497,7 +497,7 @@ def main():
         # =========================
         # PHASE STRATEGY
         # =========================
-        put_markdown("#### 🧭 Filter type"),
+        put_markdown(f"#### \U0001F9ED {t('ui_filter_type')}"),
         put_row([
             put_select(
                 'filter_type',
@@ -514,7 +514,7 @@ def main():
         # =========================
         # LEVELING & GAIN
         # =========================
-        put_markdown("#### 🎚 Leveling & Gain"),
+        put_markdown(f"#### \U0001F39A {t('ui_leveling_gain')}"),
         put_row([
             put_select('lvl_algo', label=t('lvl_algo'), options=['Median', 'Average'], value=get_val('lvl_algo', 'Median'), help_text=t('lvl_algo_help')),
             put_input('gain', label=t('gain'), type=FLOAT, value=get_val('gain', 0.0), help_text=t('gain_help')),
@@ -556,7 +556,7 @@ def main():
     tab_target = [
         put_markdown(f"### 🎯 {t('tab_target')}"),
         put_markdown("---"),
-        put_markdown("#### 👀 Target preview"),
+        put_markdown(f"#### \U0001F440 {t('ui_target_preview')}"),
         put_scope("target_preview_scope"),
         put_markdown("---"),
         put_select(
@@ -640,7 +640,7 @@ def main():
             # PLOTS (visual only)
             # =========================
             put_collapse(
-                "📈 Plots (visual only)",
+                f"\U0001F4C8 {t('ui_plots_visual_only')}",
                 [
                     put_select(
                         'plot_smoothing_level',
@@ -680,7 +680,7 @@ def main():
             # =========================
             # CORRECTION SHAPING (rails)
             # =========================
-            put_markdown("### 🧩 Correction Shaping (Rails)"),
+            put_markdown(f"### \U0001F9E9 {t('ui_correction_shaping_rails')}"),
             
             put_row([
                 put_input('max_slope_db_per_oct', label=t('max_slope_db_per_oct'), type=FLOAT,
@@ -737,11 +737,7 @@ def main():
         
         
 
-        put_row([
-            put_checkbox('normalize_opt', options=[{'label': t('enable_norm'), 'value': True}], value=[True] if get_val('normalize_opt', True) else [], help_text=t('norm_help')), 
-            put_checkbox('align_opt', options=[{'label': t('enable_align'), 'value': True}], value=[True] if get_val('align_opt', True) else [], help_text=t('align_help')), 
-            put_checkbox('stereo_link', options=[{'label': t('enable_link'), 'value': True}], value=[True] if get_val('stereo_link', False) else [], help_text=t('link_help'))
-        ]),
+        put_checkbox('stereo_link', options=[{'label': t('enable_link'), 'value': True}], value=[True] if get_val('stereo_link', False) else [], help_text=t('link_help')),
         
         # --- Bass Safety (Advanced tab) ---
 put_markdown("### 🛡️ Bass Safety"),
@@ -1293,7 +1289,11 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
                  f"−{float(data.get('tdc_max_reduction_db', 0)):.1f} dB)"
                  if bool(data.get('enable_tdc', False)) else "OFF"
              )
-            ]
+            ],
+            ['Auto Gain Margin', f"{float(l_st_f.get('gain_margin_db', data.get('gain', 0.0)) or 0.0):.2f} dB", f"{float(r_st_f.get('gain_margin_db', data.get('gain', 0.0)) or 0.0):.2f} dB"],
+            ['Applied Auto Gain', f"{float(l_st_f.get('auto_global_gain_db', 0.0) or 0.0):.2f} dB", f"{float(r_st_f.get('auto_global_gain_db', 0.0) or 0.0):.2f} dB"],
+            ['Extra Headroom', f"{float(l_st_f.get('auto_headroom_db', 0.0) or 0.0):.2f} dB", f"{float(r_st_f.get('auto_headroom_db', 0.0) or 0.0):.2f} dB"],
+            ['Final Max (post gain)', f"{float(l_st_f.get('final_max_db', 0.0) or 0.0):.2f} dB", f"{float(r_st_f.get('final_max_db', 0.0) or 0.0):.2f} dB"],
         ])
 
         put_markdown(f"###  {t('rep_header')}")

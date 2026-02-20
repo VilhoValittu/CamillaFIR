@@ -4,6 +4,37 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.0.6] - 2026-02-20
+
+### DSP
+- Added true fractional-octave gain smoothing (`1/N` on log-frequency axis) and switched non-DF smoothing to use it in correction + phase residual shaping
+- Added post-shape filter smoothing and clamp-aware final smoothing so `filter_smooth` / `reg_strength` remain visible even when clamp rails are active
+- Added clamp-dominance diagnostics (`NONE`/`LOW`/`MEDIUM`/`HIGH`) with clipped-bin ratio stats for easier tuning and A/B interpretation
+- Refined Smart Scan leveling window search to be target-independent and ripple-focused (log-frequency detrended stability scoring)
+- Hardened TDC control handling: explicit zero support, safe clamping for `tdc_strength`, and no-op behavior when strength/max reduction are disabled
+- Kept theoretical + minimum phase paths unclamped and limited only excess-phase correction with adaptive per-bin clamp (`15..45 deg`) based on confidence and frequency
+- Improved Minimum+OFF IR export behavior with zero-padded causal peak shift, optional strict-off forcing, short anti-wrap tail taper, and DC-removal skip in OFF mode
+- Reworked output gain handling to auto-level model (`auto_global_gain = -(realized max boost + margin)`) with normalize left as optional extra safety trim
+- Added stereo-link shared auto gain override so left/right channels use one common attenuation in linked processing
+
+### UI
+- Clarified Filter Type help text and Asymmetric note to separate causal filter-type behavior from IR export windowing behavior
+- Improved help readability by separating base filter-type help and Asymmetric note with a clear line break
+- Renamed `gain` control to Auto Headroom Margin and surfaced margin/applied auto gain/headroom/final max diagnostics in results + summary output
+- Removed manual align toggle from UI (time alignment is now always-on by policy) and kept only stereo-link toggle
+- Added plot-only auto-gain compensation so predicted/filter curves remain visually comparable despite output attenuation
+- Localized multiple section headers and target preview source labels (EN/FI)
+
+### Core
+- Updated pipeline parsing to sanitize and clamp `tdc_strength` before passing configuration forward
+- Pipeline now forces `align_opt=True`, clamps gain margin to non-negative values, and maps UI `gain` to `auto_gain_margin_db`
+- YAML export now writes `master_gain_db=0.0` and relies on DSP auto-gain path for output level management
+
+### Docs
+- Bumped docs version references to `v3.0.6` and moved UI screenshots/TDC image paths under `docs/pics/`
+
+---
+
 ## [3.0.5] - 2026-02-18
 
 ### DSP

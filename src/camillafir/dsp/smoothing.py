@@ -49,6 +49,39 @@ def psycho_smooth_safe_gain(freqs, mags):
     Kept as a named helper for readability, but matches psychoacoustic_smoothing defaults.
     """
 
+def smooth_gain_fractional_octave(freqs, gain_db, filter_smooth, *, mult=1.0):
+    """
+    Smooth gain curve using true fractional-octave width on log-frequency axis.
+
+    Args:
+      filter_smooth: denominator N for 1/N octave smoothing (e.g. 12 -> 1/12 oct).
+      mult: optional width multiplier (>1 broadens smoothing; used by residual pass).
+    """
+    f = np.asarray(freqs, dtype=float)
+    g = np.asarray(gain_db, dtype=float)
+    if f.size < 8 or g.size != f.size:
+        return np.copy(g)
+
+    try:
+        fs = float(filter_smooth)
+    except Exception:
+        fs = 12.0
+    if not np.isfinite(fs) or fs <= 0.0:
+        fs = 12.0
+
+    try:
+        m = float(mult)
+    except Exception:
+        m = 1.0
+    if not np.isfinite(m) or m <= 0.0:
+        m = 1.0
+
+    # 1/N octave, widened by mult (e.g. mult=2 => approx 1/(N/2) octave).
+    octave_fraction = float(np.clip(m / fs, 1.0 / 192.0, 1.0))
+    dummy_phase = np.zeros_like(g)
+    sm, _ = apply_smoothing_std(f, g, dummy_phase, octave_fraction=octave_fraction)
+    return sm
+
 
 def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycles=5.0):
     """

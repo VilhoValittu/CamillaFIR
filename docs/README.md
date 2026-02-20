@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v3.0.5
+## v3.0.6
 Stable release – feedback welcome: camillafir.py@gmail.com
 
 
@@ -419,22 +419,22 @@ with certain Chromium-based browsers.
 ## UI overview
 
 ### 1. Files
-![Files view](ui_1.png)
+![Files view](pics/ui_1.png)
 
 ### 2. Basic
-![Basic mode](ui_2.png)
+![Basic mode](pics/ui_2.png)
 
 ### 3. Target
-![Target settings](ui_3.png)
+![Target settings](pics/ui_3.png)
 
 ### 4. Advanced
-![Advanced settings](ui_4.png)
+![Advanced settings](pics/ui_4.png)
 
 ### 5. Windowing and TDC
-![Windowing and TDC](ui_5.png)
+![Windowing and TDC](pics/ui_5.png)
 
 ### 6. XO
-![Crossover (XO)](ui_6.png)
+![Crossover (XO)](pics/ui_6.png)
 
 ### TDC
-![Effect of Temporal Decay Control](tdc_impulse_example.png)
+![Effect of Temporal Decay Control](pics/tdc_impulse_example.png)

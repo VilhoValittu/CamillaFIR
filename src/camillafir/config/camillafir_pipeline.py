@@ -60,6 +60,9 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         except Exception:
             pass
 
+    # Policy: auto time alignment is always enabled and not user-configurable.
+    data["align_opt"] = True
+
     # XO pins
     for i in range(1, 6):
         try:
@@ -87,6 +90,12 @@ def collect_ui_data(pin) -> Dict[str, Any]:
             data[k] = max(0.0, float(data.get(k, dv) or dv))
         except Exception:
             data[k] = dv
+
+    # `gain` is used as auto headroom margin (dB), so keep it non-negative.
+    try:
+        data["gain"] = max(0.0, float(data.get("gain", 0.0) or 0.0))
+    except Exception:
+        data["gain"] = 0.0
 
     v_raw = data.get("ir_export_window_mode", None)
     if v_raw is None or (isinstance(v_raw, str) and v_raw.strip() == ""):
@@ -364,7 +373,7 @@ def build_filter_config(
         **({"comparison_mode": bool(comparison_mode)} if hasattr(FilterConfig_cls, "comparison_mode") else {}),
         filter_type_str=data["filter_type"],
         mixed_split_freq=data["mixed_freq"],
-        global_gain_db=data["gain"],
+        global_gain_db=0.0,
         mag_c_min=data["mag_c_min"],
         mag_c_max=data["mag_c_max"],
         max_boost_db=data["max_boost"],
@@ -416,6 +425,10 @@ def build_filter_config(
         low_bass_cut_enable=bool(data.get("low_bass_cut_enable", True)),
         low_bass_cut_strength=float(max(0.0, min(1.0, _as_float_allow_zero(data.get("low_bass_cut_strength", None), 0.0)))),
     )
+    try:
+        setattr(cfg, "auto_gain_margin_db", float(max(0.0, _as_float_allow_zero(data.get("gain", None), 0.0))))
+    except Exception:
+        pass
     logger.info(f"UI raw: conf_pull_floor pin={data.get('conf_pull_floor')}, low_bass_cut_strength pin={data.get('low_bass_cut_strength')}")
     
     # Optional experimental features (avoid breaking older FilterConfig constructors)

@@ -504,7 +504,11 @@ def format_summary_content(settings, l_stats, r_stats):
     lines.append(f"L peak (pre-norm): {_safe_float(l_stats.get('peak_before_norm', 0), 0):.2f} dB")
     lines.append(f"R peak (pre-norm): {_safe_float(r_stats.get('peak_before_norm', 0), 0):.2f} dB")
     lines.append(f"Global offset applied: {_safe_float(l_stats.get('offset_db', 0), 0):.2f} dB")
-    lines.append(f"Applied global gain / mastergain: {_safe_float(settings.get('gain', 0.0), 0.0):.2f} dB")
+    lines.append(f"Auto gain margin setting: {_safe_float(settings.get('gain', 0.0), 0.0):.2f} dB")
+    lines.append(
+        f"Applied auto gain: L {_safe_float(l_stats.get('auto_global_gain_db', 0.0), 0.0):.2f} dB | "
+        f"R {_safe_float(r_stats.get('auto_global_gain_db', 0.0), 0.0):.2f} dB"
+    )
 
     return "\n".join(lines)
 # ======================================================================
@@ -742,6 +746,19 @@ def generate_prediction_plot(
 
         p_lin = np.interp(f_lin, orig_freqs, orig_phases)
         total_spec = 10**(m_lin_clean/20.0) * np.exp(1j * np.deg2rad(p_lin)) * h_filt
+
+        # Plot-only compensation for automatic output attenuation.
+        # Keep UI visuals comparable to pre-auto-level behavior:
+        # - show realized EQ boost/cut shape
+        # - avoid "Predicted" curve dropping due to auto output level
+        plot_level_comp_db = 0.0
+        try:
+            if target_stats is not None:
+                ag = float(target_stats.get("auto_global_gain_db", 0.0) or 0.0)
+                if np.isfinite(ag):
+                    plot_level_comp_db = -ag
+        except Exception:
+            plot_level_comp_db = 0.0
         
         # Calculate other curves (Heavy)
         p_sm = _view_mags_for_plot(
@@ -749,6 +766,8 @@ def generate_prediction_plot(
             20*np.log10(np.abs(total_spec)+1e-12),
             plot_smoothing_level=plot_smoothing_level,
         )
+        if plot_level_comp_db != 0.0:
+            p_sm = p_sm + float(plot_level_comp_db)
         #spec_sm phase smoothing for plots
         # Phase: heavier smoothing for readability
         spec_sm_phase = smooth_complex(f_lin, total_spec, PHASE_SMOOTH_OCT)
@@ -758,6 +777,8 @@ def generate_prediction_plot(
         spec_sm_gd = smooth_complex(f_lin, total_spec, GD_SMOOTH_OCT)
         gd_sm = calculate_clean_gd(f_lin, spec_sm_gd)
         filt_db = 20 * np.log10(np.abs(h_filt) + 1e-12)
+        if plot_level_comp_db != 0.0:
+            filt_db = filt_db + float(plot_level_comp_db)
 
         # 2. OPTIMOINTI (Resampling visualisointia varten)
         VIS_POINTS = 4000

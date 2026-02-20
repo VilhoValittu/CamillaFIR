@@ -373,6 +373,8 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
 
     impulse = phase_ir["impulse"]
     gain_db = phase_ir["gain_db"]
+    auto_global_gain_db = phase_ir.get("auto_global_gain_db", 0.0)
+    gain_margin_db = phase_ir.get("gain_margin_db", 0.0)
     auto_headroom_db = phase_ir["auto_headroom_db"]
     current_peak_gain = phase_ir["current_peak_gain"]
     final_gain_total = phase_ir["final_gain_total"]
@@ -416,6 +418,8 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'delay_samples': float((delay_slope * cfg.fs) / (2 * np.pi)) if 'delay_slope' in locals() else 0.0,
         'peak_before_norm': float(20*np.log10(max_peak + 1e-12)),
         'do_normalize': bool(getattr(cfg, 'do_normalize', False)),
+        'gain_margin_db': float(gain_margin_db),
+        'auto_global_gain_db': float(auto_global_gain_db),
         'auto_headroom_db': float(auto_headroom_db),
         'peak_gain_db': float(current_peak_gain),
         'final_max_db': float(np.max(final_gain_total)),
@@ -599,7 +603,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         exc_on = bool(getattr(cfg, 'exc_prot', False))
         exc_f_cfg = float(getattr(cfg, 'exc_freq', 0.0) or 0.0)
         do_norm = bool(getattr(cfg, 'do_normalize', False))
-        g_global = float(getattr(cfg, 'global_gain_db', 0.0) or 0.0)
+        g_global = float(stats.get('auto_global_gain_db', getattr(cfg, 'global_gain_db', 0.0)) or 0.0)
 
         boost_bins_post = int(stats.get('boost_bins', 0) or 0)
         boost_bins_cand = int(stats.get('boost_candidate_bins', 0) or 0)
@@ -699,12 +703,31 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
     off_r = float((r_st1 or {}).get("offset_db", 0.0) or 0.0)
     off_shared = 0.5 * (off_l + off_r)
 
+    # Shared auto level for stereo-link:
+    # derive one common attenuation from realized max boost across L/R (pass1).
+    shared_auto_gain_db = None
+    try:
+        margin_db = float(getattr(cfg1, "auto_gain_margin_db", getattr(cfg1, "global_gain_db", 0.0)) or 0.0)
+    except Exception:
+        margin_db = 0.0
+    if (not np.isfinite(margin_db)) or (margin_db < 0.0):
+        margin_db = 0.0
+    try:
+        peak_l = float((l_st1 or {}).get("peak_gain_db", 0.0) or 0.0)
+        peak_r = float((r_st1 or {}).get("peak_gain_db", 0.0) or 0.0)
+        peak_shared = max(0.0, peak_l, peak_r)
+        shared_auto_gain_db = -(peak_shared + margin_db)
+    except Exception:
+        shared_auto_gain_db = None
+
     # --- Pass 2: force common window + common offset ---
     cfg2 = copy.deepcopy(cfg)
     try:
         cfg2.stereo_link = False  # we force explicitly; do not let per-call stereo state interfere
         cfg2.lvl_force_window = (float(win[0]), float(win[1]))
         cfg2.lvl_force_offset_db = float(off_shared)
+        if shared_auto_gain_db is not None and np.isfinite(shared_auto_gain_db):
+            cfg2.auto_gain_db_override = float(shared_auto_gain_db)
     except Exception:
         pass
 
@@ -717,10 +740,14 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
             l_st2["offset_method"] = str(l_st2.get("offset_method", "")) + " (StereoLinkShared)"
             l_st2["stereo_link_shared_offset_db"] = float(off_shared)
             l_st2["stereo_link_shared_window"] = [float(win[0]), float(win[1])]
+            if shared_auto_gain_db is not None and np.isfinite(shared_auto_gain_db):
+                l_st2["stereo_link_shared_auto_gain_db"] = float(shared_auto_gain_db)
         if isinstance(r_st2, dict):
             r_st2["offset_method"] = str(r_st2.get("offset_method", "")) + " (StereoLinkShared)"
             r_st2["stereo_link_shared_offset_db"] = float(off_shared)
             r_st2["stereo_link_shared_window"] = [float(win[0]), float(win[1])]
+            if shared_auto_gain_db is not None and np.isfinite(shared_auto_gain_db):
+                r_st2["stereo_link_shared_auto_gain_db"] = float(shared_auto_gain_db)
     except Exception:
         pass
 

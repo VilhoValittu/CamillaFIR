@@ -77,11 +77,10 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v.3.0.4"
+VERSION = "v.3.0.6"
 # Change log:
-# v.3.0.2 See CHANGELOG.md for details.
-# v.3.0.1 See CHANGELOG.md for details.
-# v.3.0.0 See CHANGELOG.md for details.
+
+# v.3.0.0 onwards --> See CHANGELOG.md for details.
 # v.2.9.5 [UI] add low-bass cut toggle + lock Hz field when disabled.
 # v.2.9.4 [CFG] Fixed low_bass_cut_hz value not saving correctly in config.
 # v.2.9.3 [UI] Fixed typo at psychoacoustic plot smoothing code (1/48 / 1/3 ---> 1/6 / 1/3)
@@ -134,6 +133,26 @@ def _irwin_tag(mode: typing.Any) -> str:
     if m in ("auto", "off"):
         return m
     return "auto"
+
+def _shift_zeropad_1d(x: np.ndarray, shift: int) -> np.ndarray:
+    """
+    Shift a 1D signal by integer samples with zero padding (no circular wrap).
+    Positive shift moves content to the right (adds delay).
+    """
+    arr = np.asarray(x)
+    n = int(arr.size)
+    s = int(shift)
+    if n == 0 or s == 0:
+        return arr.copy()
+    out = np.zeros_like(arr)
+    if s > 0:
+        if s < n:
+            out[s:] = arr[:-s]
+    else:
+        s = -s
+        if s < n:
+            out[:-s] = arr[s:]
+    return out
 
 def process_run():
     from .ui.camillafir_ui import update_status as status_cb
@@ -403,7 +422,7 @@ def process_run():
                     logger.warning(f"Comparison-mode stats failed: {e}")
 
             # ------------------------------------------------------------------
-            # Time alignment
+            # Time alignment (always enabled by policy)
             #
             # TXT-compatible behavior: if generate_filter() produced explicit
             # delay estimates (delay_samples), prefer those for alignment.
@@ -412,28 +431,29 @@ def process_run():
             #
             # If delay_samples are missing, fall back to the legacy peak-pick.
             # ------------------------------------------------------------------
-            if data['align_opt']:
+            d_s = None
+
+            # Prefer delay_samples (TXT-compatible)
+            try:
+                dl = l_st.get('delay_samples', None) if isinstance(l_st, dict) else None
+                dr = r_st.get('delay_samples', None) if isinstance(r_st, dict) else None
+                if dl is not None and dr is not None:
+                    dl_i = int(round(float(dl)))
+                    dr_i = int(round(float(dr)))
+                    # delay_samples sign convention: larger physical delay -> more negative.
+                    # To match legacy peak-pick behavior, use dr - dl.
+                    d_s = dr_i - dl_i
+            except Exception:
                 d_s = None
 
-                # Prefer delay_samples (TXT-compatible)
-                try:
-                    dl = l_st.get('delay_samples', None) if isinstance(l_st, dict) else None
-                    dr = r_st.get('delay_samples', None) if isinstance(r_st, dict) else None
-                    if dl is not None and dr is not None:
-                        dl_i = int(round(float(dl)))
-                        dr_i = int(round(float(dr)))
-                        d_s = dl_i - dr_i
-                except Exception:
-                    d_s = None
+            # Fallback: align by impulse peak
+            if d_s is None:
+                d_s = int(np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp)))
 
-                # Fallback: align by impulse peak
-                if d_s is None:
-                    d_s = int(np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp)))
-
-                if d_s > 0:
-                    r_imp = np.roll(r_imp, d_s)
-                elif d_s < 0:
-                    l_imp = np.roll(l_imp, -d_s)
+            if d_s > 0:
+                r_imp = _shift_zeropad_1d(r_imp, d_s)
+            elif d_s < 0:
+                l_imp = _shift_zeropad_1d(l_imp, -d_s)
 
             # UI "results" view: show the same fs as the (single) dashboard fs in multi-rate.
             if fs_v == dash_fs:
@@ -480,7 +500,7 @@ def process_run():
                 int(data.get("fs") or 44100),
                 ft_short,
                 file_ts,
-                master_gain_db=float(data.get('gain', 0.0) or 0.0),
+                master_gain_db=0.0,
                 irw_tag=irw_tag,
             )
             zf.writestr(f"camilladsp_{ft_short}_{irw_tag}.yml", yaml_content)

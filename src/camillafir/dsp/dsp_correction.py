@@ -18,6 +18,7 @@ from .smoothing import (
     AFDW_BW_MIN_OCT,
     apply_adaptive_fdw,
     psycho_smooth_safe_gain,
+    smooth_gain_fractional_octave,
 )
 from .tdc import apply_smart_tdc
 
@@ -80,10 +81,13 @@ def run_correction_stage(
         rt60_for_tdc = rt60_bands if rt60_bands else current_rt60
         # Safety brakes: cap total TDC reduction and keep it smooth (avoid deep, stacked notches)
         # Configurable TDC safety brakes for easy A/B testing
-        tdc_max_red = float(getattr(cfg, "tdc_max_reduction_db", 9.0) or 9.0)
-        tdc_slope = float(getattr(cfg, "tdc_slope_db_per_oct", 0.0) or 0.0)
+        tdc_strength = _cfg_float_allow_zero(cfg, "tdc_strength", 50.0)
+        tdc_max_red = _cfg_float_allow_zero(cfg, "tdc_max_reduction_db", 9.0)
+        tdc_slope = _cfg_float_allow_zero(cfg, "tdc_slope_db_per_oct", 0.0)
 
         # Clamp to sane values (never explode)
+        if tdc_strength < 0: tdc_strength = 0.0
+        if tdc_strength > 100: tdc_strength = 100.0
         if tdc_max_red < 0: tdc_max_red = 0.0
         if tdc_max_red > 24: tdc_max_red = 24.0
         if tdc_slope < 0: tdc_slope = 0.0
@@ -94,7 +98,7 @@ def run_correction_stage(
             target_mags,
             reflections,
             rt60_for_tdc,
-            cfg.tdc_strength / 100.0,
+            tdc_strength / 100.0,
             max_total_reduction_db=tdc_max_red,
             max_slope_db_per_oct=tdc_slope
         )
@@ -542,8 +546,8 @@ def run_correction_stage(
         base_sigma = 60 // (_filter_smooth / 12 if _filter_smooth > 0 else 1)
 
         # Raw_g smoothing:
-        # - legacy: sigma in bins scales directly with fs (can over-smooth at high fs)
-        # - df_smoothing: keep smoothing width constant in Hz (reference: 44.1k/65536 behavior)
+        # - df_smoothing ON: keep legacy Gaussian model with constant-Hz behavior across fs/taps
+        # - df_smoothing OFF: true 1/N-octave smoothing (log-frequency), matches UI wording
         df_mode = bool(getattr(cfg, "df_smoothing", False))
         if df_mode:
             # Reference bin width ~ 44100/65536 Hz; match the old "base_sigma bins" at ref
@@ -553,9 +557,11 @@ def run_correction_stage(
             sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=sigma_hz, fallback_bins=max(2.0, float(base_sigma)))
             sm_g = scipy.ndimage.gaussian_filter1d(raw_g, sigma=float(sigma_bins))
         else:
-            sigma_scaling = cfg.fs / 44100.0
-            sigma = max(2, int(base_sigma * sigma_scaling))
-            sm_g = scipy.ndimage.gaussian_filter1d(raw_g, sigma=sigma)
+            sm_g = smooth_gain_fractional_octave(
+                freq_axis,
+                raw_g,
+                _filter_smooth,
+            )
 
         final_g = raw_g - (raw_g - sm_g) * (cfg.reg_strength / 100.0)
         # Stage probes container (per channel/run)
@@ -976,6 +982,34 @@ def run_correction_stage(
                 )
             except Exception:
                 pass
+
+        # --- 8E1. Post-shape filter smoothing ---
+        # Keep filter_smooth/reg_strength visible in the final filter, even when
+        # A-FDW + slope/confpull rails have already reshaped the curve.
+        try:
+            if np.any(mask_c):
+                g0 = np.asarray(gain_db, dtype=float).copy()
+                idx = np.where(mask_c)[0]
+                if idx.size >= 2:
+                    i0, i1 = int(idx[0]), int(idx[-1])
+                    # Edge-hold outside correction band to avoid pull toward 0 dB.
+                    if i0 > 0:
+                        g0[:i0] = g0[i0]
+                    if i1 < (g0.size - 1):
+                        g0[i1 + 1:] = g0[i1]
+
+                g_sm = smooth_gain_fractional_octave(
+                    freq_axis,
+                    g0,
+                    _filter_smooth,
+                )
+                mix = float(np.clip(float(getattr(cfg, "reg_strength", 30.0) or 30.0) / 100.0, 0.0, 1.0))
+                if mix > 0.0:
+                    _pre = gain_db.copy()
+                    gain_db[mask_c] = gain_db[mask_c] + (g_sm[mask_c] - gain_db[mask_c]) * mix
+                    _log_stats("gain_db_post_filter_smooth", gain_db, mask_c, ref=_pre)
+        except Exception:
+            pass
         
         f_start = max(cfg.mag_c_max - cfg.trans_width, cfg.mag_c_min)
         
@@ -1072,18 +1106,84 @@ def run_correction_stage(
                 hardclamp_cut_bins   = int(np.sum((_pre_hard[mask_c] < (-_max_cut2 - 1e-9)) & (gain_db[mask_c] >= (-_max_cut2 - 1e-9))))
                 hard_over_boost = max(0.0, float(np.max(_pre_hard[mask_c] - _max_boost2)))
                 hard_over_cut   = max(0.0, float(np.max((-_pre_hard[mask_c]) - _max_cut2)))
+                _band_bins = int(np.sum(mask_c))
             else:
                 hardclamp_boost_bins, hardclamp_cut_bins = 0, 0
                 hard_over_boost, hard_over_cut = 0.0, 0.0
+                _band_bins = 0
             logger.info(
                 "Clamp: hard_clamp "
                 f"(max_boost={_max_boost2:.2f} dB, max_cut={_max_cut2:.2f} dB) -> "
                 f"boost_clipped_bins={hardclamp_boost_bins}, cut_clipped_bins={hardclamp_cut_bins}, "
                 f"worst_over_boost={hard_over_boost:.2f} dB, worst_over_cut={hard_over_cut:.2f} dB"
             )
+
+            # Clamp-dominance indicator: if high, many settings (e.g. smoothing) may look similar.
+            clipped_total = int(hardclamp_boost_bins + hardclamp_cut_bins)
+            clip_pct = (100.0 * clipped_total / float(max(1, _band_bins)))
+            over_peak = float(max(hard_over_boost, hard_over_cut))
+            if over_peak >= 12.0 or clip_pct >= 15.0:
+                clamp_dominance_level = "HIGH"
+            elif over_peak >= 6.0 or clip_pct >= 5.0:
+                clamp_dominance_level = "MEDIUM"
+            elif clipped_total > 0:
+                clamp_dominance_level = "LOW"
+            else:
+                clamp_dominance_level = "NONE"
+
+            logger.info(
+                "Clamp dominance: "
+                f"{clamp_dominance_level} | "
+                f"clipped={clipped_total}/{int(_band_bins)} ({clip_pct:.2f}%), "
+                f"over_boost={hard_over_boost:.2f} dB, over_cut={hard_over_cut:.2f} dB"
+                + (" | smoothing impact may be masked" if clamp_dominance_level != "NONE" else "")
+            )
+            try:
+                if isinstance(st, dict):
+                    st["clamp_dominance_level"] = str(clamp_dominance_level)
+                    st["clamp_dominance_clip_pct"] = float(clip_pct)
+                    st["clamp_dominance_clipped_bins"] = int(clipped_total)
+                    st["clamp_dominance_band_bins"] = int(_band_bins)
+            except Exception:
+                pass
         except Exception:
             hardclamp_boost_bins, hardclamp_cut_bins = 0, 0
             hard_over_boost, hard_over_cut = 0.0, 0.0
+            clamp_dominance_level = "NONE"
+
+        # --- 8F1. Clamp-aware final smoothing ---
+        # If hard clamp is active, smooth the already-limited curve and re-apply limits.
+        # This preserves safety while making filter_smooth/reg_strength visible in final export.
+        try:
+            _clamp_active = bool((hardclamp_boost_bins > 0) or (hardclamp_cut_bins > 0))
+        except Exception:
+            _clamp_active = False
+        try:
+            if _clamp_active and np.any(mask_c):
+                g0 = np.asarray(gain_db, dtype=float).copy()
+                idx = np.where(mask_c)[0]
+                if idx.size >= 2:
+                    i0, i1 = int(idx[0]), int(idx[-1])
+                    if i0 > 0:
+                        g0[:i0] = g0[i0]
+                    if i1 < (g0.size - 1):
+                        g0[i1 + 1:] = g0[i1]
+
+                g_sm = smooth_gain_fractional_octave(
+                    freq_axis,
+                    g0,
+                    _filter_smooth,
+                )
+                mix = float(np.clip(float(getattr(cfg, "reg_strength", 30.0) or 30.0) / 100.0, 0.0, 1.0))
+                if mix > 0.0:
+                    _pre = gain_db.copy()
+                    gain_db[mask_c] = gain_db[mask_c] + (g_sm[mask_c] - gain_db[mask_c]) * mix
+                    # Re-apply hard safety limits after polish.
+                    gain_db = np.minimum(gain_db, float(getattr(cfg, "max_boost_db", 0.0) or 0.0))
+                    gain_db = np.maximum(gain_db, -max_cut_db)
+                    _log_stats("gain_db_post_final_clamp_smooth", gain_db, mask_c, ref=_pre)
+        except Exception:
+            pass
 
         # --- 8F-a. Diagnostic: post-clamp boost/cut summary ---
         try:
@@ -1151,4 +1251,5 @@ def run_correction_stage(
         "hardclamp_cut_bins": locals().get("hardclamp_cut_bins", 0),
         "hard_over_boost": locals().get("hard_over_boost", 0.0),
         "hard_over_cut": locals().get("hard_over_cut", 0.0),
+        "clamp_dominance_level": locals().get("clamp_dominance_level", "NONE"),
     }

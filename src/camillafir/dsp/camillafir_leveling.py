@@ -180,11 +180,19 @@ def find_stable_level_window(
     hpf_freq: float = 0.0,
 ) -> Tuple[float, float]:
     """
-    Finds the region where the measurement follows the target curve shape most stably.
+    Finds the most stable region from measurement data only.
+
+    IMPORTANT:
+    - `target_mags` is accepted for backward compatibility, but intentionally
+      not used in the Smart Scan window search. This keeps the selected window
+      independent from target shaping (e.g. TDC).
 
     Returns (s_min, s_max). Falls back to (f_min, f_max) if no valid window is found.
     """
     try:
+        # Backward-compatible argument; intentionally unused.
+        _ = target_mags
+
         f_min = _to_float(f_min, 0.0)
         f_max = _to_float(f_max, 0.0)
         hpf_freq = _to_float(hpf_freq, 0.0)
@@ -200,9 +208,7 @@ def find_stable_level_window(
 
         mask = (freq_axis >= safe_f_min) & (freq_axis <= float(f_max))
         f_search = freq_axis[mask]
-
-        # Look at difference to target (removes tilt effect)
-        m_search = (magnitudes - target_mags)[mask]
+        m_search = np.asarray(magnitudes, dtype=float)[mask]
 
         # Too few points => no reliable window
         if f_search.size < 50:
@@ -219,9 +225,26 @@ def find_stable_level_window(
             w_start = current_f
             w_end = current_f * (2 ** float(window_size_octaves))
             w_mask = (f_search >= w_start) & (f_search <= w_end)
-            if np.any(w_mask):
-                # std from difference curve = "stability"
-                std = float(np.std(m_search[w_mask]))
+            n_w = int(np.count_nonzero(w_mask))
+            if n_w >= 20:
+                f_w = f_search[w_mask]
+                m_w = m_search[w_mask]
+
+                # Detrend by log-frequency tilt so score reflects local ripple
+                # / stability instead of broad spectral slope.
+                x = np.log2(np.clip(f_w, 1e-9, None))
+                x0 = float(np.median(x))
+                xc = x - x0
+                y = np.asarray(m_w, dtype=float)
+                y_med = float(np.median(y))
+                denom = float(np.dot(xc, xc))
+                if denom > 1e-12:
+                    slope = float(np.dot(xc, (y - y_med)) / denom)
+                    residual = y - (slope * xc)
+                else:
+                    residual = y
+
+                std = float(np.std(residual))
 
                 # Light weighting towards center area (prevents selecting only the lowest)
                 # (small effect, but helps with strange data)

@@ -746,7 +746,6 @@ def apply_mode_defaults_to_ui(_=None):
     }
     map_chk = {
         "enable_mag_correction": "mag_correct",
-        "do_normalize": "normalize_opt",
         "exc_prot": "exc_prot",
         "enable_tdc": "enable_tdc",
         "enable_afdw": "enable_afdw",
@@ -1145,7 +1144,7 @@ def update_confidence_pull_ui(*, pin, get_val, t):
                 return
 
         with use_scope("conf_pull_scope", clear=True):
-            put_markdown("#### 🎯 Confidence Pull (Advanced)")
+            put_markdown(f"#### \U0001F3AF {t('ui_confidence_pull_advanced')}")
             put_html(
                 f"<div style='opacity:0.7; font-size:12px; margin-bottom:6px'>"
                 f"{t('tdc_confidence_pull_help')}</div>"
@@ -1236,7 +1235,7 @@ def update_target_preview_ui(_=None):
         f = np.logspace(np.log10(10.0), np.log10(20000.0), 600)
 
         y = None
-        src = "builtin"
+        src = t("target_preview_source_builtin")
 
         # Detect upload selection (be tolerant to naming)
         key_l = str(hc_mode).strip().lower()
@@ -1308,7 +1307,7 @@ def update_target_preview_ui(_=None):
                     tf_y = np.asarray(tf_y, dtype=float)
                     if tf_f.size >= 2 and tf_y.size == tf_f.size:
                         y = np.interp(f, tf_f, tf_y, left=tf_y[0], right=tf_y[-1])
-                        src = "upload"
+                        src = t("target_preview_source_upload")
                     else:
                         raise ValueError("Target data malformed (size mismatch)")
                 except Exception as e1:
@@ -1316,7 +1315,7 @@ def update_target_preview_ui(_=None):
                     try:
                         tf_f, tf_y = _parse_target_bytes_fallback(up.get("content", b""))
                         y = np.interp(f, tf_f, tf_y, left=tf_y[0], right=tf_y[-1])
-                        src = "upload"
+                        src = t("target_preview_source_upload")
                     except Exception as e2:
                         with use_scope("target_preview_scope", clear=True):
                             put_html(
@@ -1413,7 +1412,7 @@ def update_target_preview_ui(_=None):
         with use_scope("target_preview_scope", clear=True):
             put_html(
                 f"<div style='opacity:0.85; font-size:12.5px; margin:6px 0 8px 0;'>"
-                f"Preview source: <b>{src}</b> &nbsp;|&nbsp; Correction band: "
+                f"{t('target_preview_source_label')}: <b>{src}</b> &nbsp;|&nbsp; {t('target_preview_correction_band_label')}: "
                 f"<b>{mag_c_min:.0f}</b>–<b>{mag_c_max:.0f}</b> Hz"
                 f"</div>"
             )

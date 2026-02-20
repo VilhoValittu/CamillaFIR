@@ -92,10 +92,12 @@ def _append_acoustic_events(summary_content, l_st, r_st):
                     summary_content += f"{freq:<10} {ev_type:<12} {gd_error:<12} {dist:<14}\n"
         # Always report headroom/normalization per side (even if no events)
         summary_content += f"\n=== HEADROOM MANAGEMENT ({side}) ===\n"
+        summary_content += f"Auto Gain Margin: {float(st.get('gain_margin_db', 0.0)):.2f} dB\n"
+        summary_content += f"Applied Auto Gain: {float(st.get('auto_global_gain_db', 0.0)):.2f} dB\n"
         summary_content += f"Normalize: {'ON' if bool(st.get('do_normalize', False)) else 'OFF'}\n"
         summary_content += f"Peak Gain (pre-headroom): {float(st.get('peak_gain_db', 0.0)):.2f} dB\n"
         summary_content += f"Applied Headroom: {float(st.get('auto_headroom_db', 0.0)):.2f} dB\n"
-        summary_content += f"Final Max (gain+global+headroom): {float(st.get('final_max_db', 0.0)):.2f} dB\n"
+        summary_content += f"Final Max (filter+auto_gain+headroom): {float(st.get('final_max_db', 0.0)):.2f} dB\n"
         # Diagnostics for boost/cut processing
         summary_content += f"\n=== BOOST/CUT DIAGNOSTICS ({side}) ===\n"
         # max_boost diagnostics: show effective + user + safety cap if present
@@ -356,7 +358,7 @@ def _write_fs_outputs(
             fs_v,
             ft_short,
             file_ts,
-            master_gain_db=float(data.get('gain', 0.0) or 0.0),
+            master_gain_db=0.0,
             irw_tag=irw_tag,
         )
         zf.writestr(f"camilladsp_{ft_short}_{fs_v}Hz_{irw_tag}.yml", yaml_content)
