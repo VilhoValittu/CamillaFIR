@@ -4,6 +4,31 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.1.0] - 2026-02-21
+
+### DSP
+- Reworked Mixed Phase excess-phase correction with configurable LF-to-HF fade (`low_freq_full_correction_hz` -> `high_freq_no_correction_hz`) and tunable strength (`excess_phase_strength`) via config only (no UI controls)
+- Added Mixed-only safety guards for excess correction: absolute excess-delay limiter (`max_excess_delay_ms`) and pre-ringing limiter (`max_pre_ringing_db`) with adaptive down-scaling and diagnostics
+- Forced Mixed filters to a fixed startup peak position (90 ms) after window/DC steps for more consistent startup timing
+- Changed Manual leveling reference to neutral `0.0 dB` (instead of legacy `75 dB`) and applied manual bias explicitly in correction target shaping
+
+### UI
+- Expanded Target Preview to optionally overlay speaker curves (L/R/avg), align them to level window, and show correction band + level-window context
+- Improved leveling UX: BASIC now behaves as Smart Scan only, Auto/Manual level ranges are preserved separately, and Manual dB has quick `- / +` step buttons with a neutral-bias hint
+- Added dynamic BASIC clamp hints into field help texts so constrained controls clearly show active guard rails
+- Refined mode guard rails/defaults (including tighter BASIC boost/phase/FDW limits, forced BASIC stereo-link, and updated default Mixed split/IR-left values)
+- Localized System Health issue texts and summary headers through EN/FI translation keys
+
+### Core
+- Pipeline now enforces BASIC policy for leveling (`lvl_mode=Auto`) and reapplies mode clamps at run time
+- Added config/pipeline model support for Mixed excess-phase tuning fields (`excess_phase_strength`, correction fade range, pre-ringing cap, excess-delay cap`) as config-only parameters (not exposed in UI)
+- Added legacy config migration for manual leveling values saved in old absolute-dB style (auto-converted around `~75 dB` baseline)
+
+### Docs
+- Bumped docs version references to `v3.1.0`
+
+---
+
 ## [3.0.6] - 2026-02-20
 
 ### DSP

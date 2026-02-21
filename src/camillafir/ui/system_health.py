@@ -1,6 +1,9 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional
+
+from ..resources.i8n.camillafir_i18n import t
 
 Level = Literal["ok", "warn", "crit"]
 
@@ -17,6 +20,16 @@ class HealthResult:
     overall: Level
     blocked: bool  # BASIC blocks start if True
     issues: List[Issue]
+
+
+def _tr(key: str, **kwargs: Any) -> str:
+    text = t(key)
+    if kwargs:
+        try:
+            return text.format(**kwargs)
+        except Exception:
+            return text
+    return text
 
 
 def _as_float(v: Any) -> Optional[float]:
@@ -70,33 +83,36 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
         upload_ok = _has_uploaded_file(data.get("hc_custom_file", None))
         local_ok = _valid_path(data.get("local_path_house", None))
         if upload_ok or local_ok:
-            issues.append(Issue("ok", "Target curve", "Upload source provided"))
+            issues.append(Issue("ok", _tr("health_target_curve"), _tr("health_upload_source_provided")))
         else:
-            issues.append(Issue("warn", "Target curve: Upload selected", "No uploaded target file or local target path found."))
+            issues.append(
+                Issue(
+                    "warn",
+                    _tr("health_target_curve_upload_selected"),
+                    _tr("health_target_curve_upload_missing"),
+                )
+            )
     elif hc_mode:
-        issues.append(Issue("ok", "Target curve", hc_mode))
+        issues.append(Issue("ok", _tr("health_target_curve"), hc_mode))
     else:
-        issues.append(Issue("warn", "Target curve", "Not set"))
+        issues.append(Issue("warn", _tr("health_target_curve"), _tr("health_not_set")))
 
     # --- Correction range sanity ---
     mag_on = bool(data.get("mag_correct", True))
     fmin = _as_float(data.get("mag_c_min", None))
     fmax = _as_float(data.get("mag_c_max", None))
     if not mag_on:
-        issues.append(Issue("ok", "Magnitude correction", "Disabled"))
+        issues.append(Issue("ok", _tr("health_magnitude_correction"), _tr("health_disabled")))
     elif (fmin is not None) and (fmax is not None):
         if fmin >= fmax:
-            issues.append(Issue("crit", "Correction range invalid. mag_c_min must be < mag_c_max."))
+            issues.append(Issue("crit", _tr("health_correction_range_invalid")))
         else:
-            issues.append(Issue("ok", "Correction range", f"{fmin:.0f}-{fmax:.0f} Hz"))
+            issues.append(Issue("ok", _tr("health_correction_range"), f"{fmin:.0f}-{fmax:.0f} Hz"))
             # Optional user-safety warning (does NOT block)
             if fmax > 350.0:
-                issues.append(Issue(
-                    "warn",
-                    "Correction max is very high. Above ~300 Hz room correction becomes speaker/measurement dependent.",
-                ))
+                issues.append(Issue("warn", _tr("health_correction_max_very_high")))
     else:
-        issues.append(Issue("warn", "Correction range. Set mag_c_min and mag_c_max."))
+        issues.append(Issue("warn", _tr("health_correction_range_set_bounds")))
 
     # --- Engine metrics ---
     fs = _as_int(data.get("fs", None))
@@ -105,44 +121,44 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
         latency_ms = (taps / 2.0) / float(fs) * 1000.0
         bin_hz = float(fs) / float(taps)
         ftype = str(data.get("filter_type") or "").lower()
-        is_min = ("min" in ftype)
-        is_asym = ("asym" in ftype)
+        is_min = "min" in ftype
+        is_asym = "asym" in ftype
 
         if is_min or is_asym:
-            issues.append(Issue("ok", "Latency", "Low-latency mode (Min/Asym)"))
+            issues.append(Issue("ok", _tr("health_latency"), _tr("health_low_latency_mode")))
         else:
-            issues.append(Issue("ok", "Latency", f"{latency_ms:.0f} ms"))
-        issues.append(Issue("ok", "Resolution", f"{bin_hz:.2f} Hz/bin"))
+            issues.append(Issue("ok", _tr("health_latency"), f"{latency_ms:.0f} ms"))
+        issues.append(Issue("ok", _tr("health_resolution"), f"{bin_hz:.2f} Hz/bin"))
 
         if (not is_min and not is_asym) and latency_ms > 150:
-            issues.append(Issue("warn", "Taps count is high. May affect AV sync / usability."))
+            issues.append(Issue("warn", _tr("health_taps_count_high")))
     else:
-        issues.append(Issue("warn", "Engine metrics. Set fs and taps."))
+        issues.append(Issue("warn", _tr("health_engine_metrics_set")))
 
     # --- Leveling range sanity ---
     lvl_min = _as_float(data.get("lvl_min", None))
     lvl_max = _as_float(data.get("lvl_max", None))
     if (lvl_min is not None) and (lvl_max is not None):
         if lvl_min >= lvl_max:
-            issues.append(Issue("crit", "Leveling range invalid. lvl_min must be < lvl_max."))
+            issues.append(Issue("crit", _tr("health_leveling_range_invalid")))
         elif (lvl_max - lvl_min) < 200.0:
-            issues.append(Issue("warn", "Leveling range is narrow. Level estimate may be unstable."))
+            issues.append(Issue("warn", _tr("health_leveling_range_narrow")))
 
     # --- Boost safety (warn only; DSP may clamp) ---
     max_boost = _as_float(data.get("max_boost", None))
     if max_boost is None:
-        issues.append(Issue("ok", "Max boost", "Default"))
+        issues.append(Issue("ok", _tr("health_max_boost"), _tr("health_default")))
     else:
-        issues.append(Issue("ok", "Max boost", f"{max_boost:.1f} dB"))
+        issues.append(Issue("ok", _tr("health_max_boost"), f"{max_boost:.1f} dB"))
         if max_boost > 8.0:
-            issues.append(Issue("warn", "Max boost is high. Can stress drivers."))
+            issues.append(Issue("warn", _tr("health_max_boost_high")))
 
     # --- Protection hints ---
     exc_on = bool(data.get("exc_prot", False))
     if not exc_on:
-        issues.append(Issue("warn", "Excursion protection off. Recommended for bass-heavy correction."))
+        issues.append(Issue("warn", _tr("health_excursion_protection_off")))
     else:
-        issues.append(Issue("ok", "Excursion protection", "Enabled"))
+        issues.append(Issue("ok", _tr("health_excursion_protection"), _tr("health_enabled")))
 
     # --- HPF sanity ---
     hpf_on = bool(data.get("hpf_enable", False))
@@ -150,12 +166,12 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
         hpf_f = _as_float(data.get("hpf_freq", None))
         hpf_s = _as_float(data.get("hpf_slope", None))
         if (hpf_f is None) or (hpf_f <= 0.0):
-            issues.append(Issue("crit", "HPF enabled but frequency is invalid."))
+            issues.append(Issue("crit", _tr("health_hpf_freq_invalid")))
         elif (hpf_f is not None) and (fs is not None) and (fs > 0) and (hpf_f >= 0.45 * fs):
-            issues.append(Issue("warn", "HPF frequency is very high vs sample rate."))
+            issues.append(Issue("warn", _tr("health_hpf_freq_high")))
 
         if (hpf_s is None) or (hpf_s <= 0.0):
-            issues.append(Issue("crit", "HPF enabled but slope/order is invalid."))
+            issues.append(Issue("crit", _tr("health_hpf_slope_invalid")))
 
     # --- Mixed phase sanity ---
     ftype = str(data.get("filter_type") or "").lower()
@@ -164,17 +180,17 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
         trans_w = _as_float(data.get("trans_width", None))
 
         if (mixed_f is None) or (mixed_f <= 0.0):
-            issues.append(Issue("crit", "Mixed filter split frequency is invalid."))
+            issues.append(Issue("crit", _tr("health_mixed_split_invalid")))
         else:
             if mixed_f < 40.0:
-                issues.append(Issue("warn", "Mixed split is very low. Effect may be minimal."))
+                issues.append(Issue("warn", _tr("health_mixed_split_low")))
             if (fs is not None) and (fs > 0) and (mixed_f > 0.45 * fs):
-                issues.append(Issue("warn", "Mixed split is very high vs sample rate."))
+                issues.append(Issue("warn", _tr("health_mixed_split_high")))
 
         if (trans_w is not None) and (trans_w < 0.0):
-            issues.append(Issue("crit", "Transition width must be >= 0."))
+            issues.append(Issue("crit", _tr("health_transition_width_nonnegative")))
         if (mixed_f is not None) and (mixed_f > 0.0) and (trans_w is not None) and (trans_w > mixed_f):
-            issues.append(Issue("warn", "Transition width is wider than split frequency."))
+            issues.append(Issue("warn", _tr("health_transition_width_wider")))
 
     # --- Overall & BASIC gating ---
     has_crit = any(i.level == "crit" for i in issues)
@@ -189,28 +205,28 @@ def format_health_summary(hr: HealthResult, max_items: int = 3) -> str:
     """
     Production-style short summary for toast / status.
     Example:
-      ⚠ System warnings (3):
-      • Correction max is very high
-      • Latency is high
-      • Max boost is high
+      System warnings (3):
+      - Correction max is very high
+      - Latency is high
+      - Max boost is high
     """
     crits = [i for i in hr.issues if i.level == "crit"]
     warns = [i for i in hr.issues if i.level == "warn"]
 
     if crits:
-        head = f"❌ System errors ({len(crits)}):"
+        head = _tr("health_summary_errors", count=len(crits))
         items = crits[:max_items]
-        lines = [head] + [f"• {i.title}" for i in items]
+        lines = [head] + [f"- {i.title}" for i in items]
         if len(crits) > max_items:
-            lines.append(f"• …and {len(crits) - max_items} more")
+            lines.append(f"- {_tr('health_summary_more', count=len(crits) - max_items)}")
         return "\n".join(lines)
 
     if warns:
-        head = f"⚠ System warnings ({len(warns)}):"
+        head = _tr("health_summary_warnings", count=len(warns))
         items = warns[:max_items]
-        lines = [head] + [f"• {i.title}" for i in items]
+        lines = [head] + [f"- {i.title}" for i in items]
         if len(warns) > max_items:
-            lines.append(f"• …and {len(warns) - max_items} more")
+            lines.append(f"- {_tr('health_summary_more', count=len(warns) - max_items)}")
         return "\n".join(lines)
 
     return ""

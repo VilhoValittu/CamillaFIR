@@ -45,6 +45,7 @@ from .camillafir_ui_helpers import (
     update_tdc_controls_ui,
     update_confidence_pull_ui,
     update_target_preview_ui,
+    update_basic_clamp_hints_ui,
 )
 from ..config.camillafir_pipeline import (
     collect_ui_data,
@@ -509,7 +510,34 @@ def main():
             put_scope("update_mixed_freq_scope"),
         ]),
         
+
+]
+#--- #3 Target
+    
+    tab_target = [
+        put_markdown(f"### 🎯 {t('tab_target')}"),
         put_markdown("---"),
+        put_markdown(f"#### \U0001F440 {t('ui_target_preview')}"),
+        put_scope("target_preview_scope"),
+        put_markdown("---"),
+        put_select(
+            'hc_mode',
+            label=t('hc_mode'),
+            options=hc_opts,
+            value=_normalize_hc_mode_key(get_val('hc_mode', 'Harman6')),
+            help_text=t('hc_mode_help'),
+            
+        ),
+
+        
+        put_file_upload(
+            'hc_custom_file',
+            label=t('hc_custom'),
+            accept='.txt',
+            help_text=t('hc_custom_help'),
+            
+        ),
+                #put_markdown("---"),
 
         # =========================
         # LEVELING & GAIN
@@ -550,32 +578,6 @@ def main():
             ),
             put_scope('lvl_manual_scope'),
         ]),
-]
-#--- #3 Target
-    
-    tab_target = [
-        put_markdown(f"### 🎯 {t('tab_target')}"),
-        put_markdown("---"),
-        put_markdown(f"#### \U0001F440 {t('ui_target_preview')}"),
-        put_scope("target_preview_scope"),
-        put_markdown("---"),
-        put_select(
-            'hc_mode',
-            label=t('hc_mode'),
-            options=hc_opts,
-            value=_normalize_hc_mode_key(get_val('hc_mode', 'Harman6')),
-            help_text=t('hc_mode_help'),
-            
-        ),
-
-        
-        put_file_upload(
-            'hc_custom_file',
-            label=t('hc_custom'),
-            accept='.txt',
-            help_text=t('hc_custom_help'),
-            
-        ),
         put_markdown("---"),
         put_checkbox('mag_correct', options=[{'label': t('enable_corr'), 'value': True}], value=[True] if get_val('mag_correct', True) else []),
                 put_html(f"""
@@ -921,17 +923,20 @@ put_markdown("---"),
             a = pin.get('lvl_min', None)
             b = pin.get('lvl_max', None)
             if a is None or b is None:
+                update_target_preview_ui()
                 return
             # If user is mid-edit, values can be '' -> ignore until valid
             a = float(a)
             b = float(b)
             if not np.isfinite(a) or not np.isfinite(b):
+                update_target_preview_ui()
                 return
             if a > b:
                 pin_update('lvl_min', value=b)
                 pin_update('lvl_max', value=a)
         except Exception:
-            return
+            pass
+        update_target_preview_ui()
 
     # update ui (initial render)
     update_lvl_ui()
@@ -946,6 +951,7 @@ put_markdown("---"),
     get_val=get_val,
     t=t,
     )
+    update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t)
     update_confidence_pull_ui(pin=pin, get_val=get_val, t=t)
     update_target_preview_ui()
 
@@ -970,6 +976,7 @@ put_markdown("---"),
         update_ir_lr_window_ui()
         update_afdw_cycles_ui(pin=pin, get_val=get_val, t=t)
         update_tdc_controls_ui(pin=pin, get_val=get_val, t=t, apply_tdc_preset=apply_tdc_preset)
+        update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t)
 
 
     def _on_filter_type_change(_=None):
@@ -984,25 +991,39 @@ put_markdown("---"),
     pin_on_change('hc_custom_file', onchange=lambda _: update_target_preview_ui())
     pin_on_change('mag_c_min', onchange=lambda _: update_target_preview_ui())
     pin_on_change('mag_c_max', onchange=lambda _: update_target_preview_ui())
+    for _preview_pin in (
+        'file_l', 'file_r',
+        'local_path_l', 'local_path_r',
+        'lvl_min', 'lvl_max',
+        'ir_window_left', 'ir_window_right', 'ir_window',
+        'smoothing_level',
+    ):
+        pin_on_change(_preview_pin, onchange=lambda _: update_target_preview_ui())
 
     pin_on_change('ir_export_window_mode', onchange=_refresh_ir_window_controls)
     pin_on_change('filter_type', onchange=_on_filter_type_change)
     pin_on_change(
     'low_bass_cut_enable',
-    onchange=lambda _: update_low_bass_cut_ui(
-        pin=pin,
-        pin_update=pin_update,
-        get_val=get_val,
-        t=t,
+    onchange=lambda _: (
+        update_low_bass_cut_ui(
+            pin=pin,
+            pin_update=pin_update,
+            get_val=get_val,
+            t=t,
+        ),
+        update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t),
         )
     )
-    pin_on_change("enable_tdc", onchange=lambda _: update_tdc_controls_ui(pin=pin, get_val=get_val, t=t, apply_tdc_preset=apply_tdc_preset))
-
     pin_on_change(
-    'mode',
-    onchange=lambda _: update_confidence_pull_ui(pin=pin, get_val=get_val, t=t))
+        "enable_tdc",
+        onchange=lambda _: (
+            update_tdc_controls_ui(pin=pin, get_val=get_val, t=t, apply_tdc_preset=apply_tdc_preset),
+            update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t),
+        )
+    )
+
     # keep these (independent)
-    pin_on_change('lvl_mode', onchange=update_lvl_ui)
+    pin_on_change('lvl_mode', onchange=lambda _: (update_lvl_ui(), update_target_preview_ui()))
 
     # Tukey alpha depends on shape, but our refresh covers mode/filter changes
     pin_on_change('ir_export_window_shape', onchange=update_ir_tukey_ui)
@@ -1012,13 +1033,58 @@ put_markdown("---"),
     pin_on_change('lvl_max', onchange=_on_lvl_range_change)
     pin_on_change('lvl_manual_db', onchange=_on_lvl_range_change)
     pin_on_change('taps', onchange=_warn_taps_if_over_cap)
-    pin_on_change('enable_afdw', onchange=lambda _: update_afdw_cycles_ui(pin=pin, get_val=get_val, t=t))
+    pin_on_change(
+        'enable_afdw',
+        onchange=lambda _: (
+            update_afdw_cycles_ui(pin=pin, get_val=get_val, t=t),
+            update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t),
+        )
+    )
 
     _warn_taps_if_over_cap()
 
     # Mode description: initial render + live updates
     def _on_mode_change(_=None):
+        try:
+            m = str(_pin_get('mode', 'BASIC') or 'BASIC').strip().upper()
+        except Exception:
+            m = "BASIC"
+
+        # HARD POLICY: BASIC => Smart Scan only
+        try:
+            if m == "BASIC":
+                pin_update(
+                    "lvl_mode",
+                    options=[{'label': t('lvl_mode_auto'), 'value': 'Auto'}],
+                    value="Auto",
+                )
+            else:
+                cur_mode = str(_pin_get("lvl_mode", "Auto") or "Auto")
+                if cur_mode not in ("Auto", "Manual"):
+                    cur_mode = "Auto"
+                pin_update(
+                    "lvl_mode",
+                    options=[
+                        {'label': t('lvl_mode_auto'), 'value': 'Auto'},
+                        {'label': t('lvl_mode_manual'), 'value': 'Manual'},
+                    ],
+                    value=cur_mode,
+                )
+        except Exception:
+            pass
+
+        try:
+            update_confidence_pull_ui(pin=pin, get_val=get_val, t=t)
+        except Exception:
+            pass
+
         update_mode_desc()
+        try:
+            update_lvl_ui()
+            update_target_preview_ui()
+            update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t)
+        except Exception:
+            pass
         try:
             m = str(_pin_get('mode', 'BASIC') or 'BASIC').strip().upper()
             v = (MODE_DEFAULTS.get(m, {}) or {}).get('ir_export_window_mode', None)

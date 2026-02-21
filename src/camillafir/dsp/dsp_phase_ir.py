@@ -11,6 +11,62 @@ from .phase import calculate_minimum_phase, calculate_theoretical_phase, combine
 from .smoothing import smooth_gain_fractional_octave
 
 
+def _smoothstep01(x: np.ndarray) -> np.ndarray:
+    x = np.clip(np.asarray(x, dtype=float), 0.0, 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+def _mixed_excess_weight(freqs: np.ndarray, full_hz: float, none_hz: float) -> np.ndarray:
+    f = np.asarray(freqs, dtype=float)
+    w = np.zeros_like(f, dtype=float)
+    valid = np.isfinite(f) & (f > 0.0)
+    if not np.any(valid):
+        return w
+
+    f_full = float(max(20.0, full_hz))
+    f_none = float(max(f_full + 1.0, none_hz))
+
+    low = valid & (f <= f_full)
+    w[low] = 1.0
+    mid = valid & (f > f_full) & (f < f_none)
+    if np.any(mid):
+        x = (f[mid] - f_full) / (f_none - f_full)
+        w[mid] = 0.5 * (1.0 + np.cos(np.pi * x))
+    return np.clip(w, 0.0, 1.0)
+
+
+def _max_abs_group_delay_ms(freqs: np.ndarray, phase_rad: np.ndarray, mask: np.ndarray | None = None) -> float:
+    f = np.asarray(freqs, dtype=float)
+    p = np.unwrap(np.asarray(phase_rad, dtype=float))
+    if f.size < 4 or p.size != f.size:
+        return 0.0
+    w = 2.0 * np.pi * f
+    dw = np.gradient(w) + 1e-30
+    gd_ms = (-np.gradient(p) / dw) * 1000.0
+    if mask is None:
+        sel = np.isfinite(gd_ms)
+    else:
+        sel = np.asarray(mask, dtype=bool) & np.isfinite(gd_ms)
+    if not np.any(sel):
+        return 0.0
+    try:
+        return float(np.max(np.abs(gd_ms[sel])))
+    except Exception:
+        return 0.0
+
+
+def _pre_ringing_db(ir: np.ndarray) -> float:
+    x = np.asarray(ir, dtype=float)
+    if x.size < 8:
+        return float("-inf")
+    peak = int(np.argmax(np.abs(x)))
+    if peak <= 0:
+        return float("-inf")
+    pre_e = float(np.sum(np.square(x[:peak])))
+    post_e = float(np.sum(np.square(x[peak + 1:])))
+    return float(10.0 * np.log10((pre_e + 1e-30) / (post_e + 1e-30)))
+
+
 def run_phase_ir_stage(
     *,
     cfg,
@@ -599,6 +655,14 @@ def run_phase_ir_stage(
 
     is_mixed = ('Mixed' in cfg.filter_type_str)
     low_phase = None
+    mixed_split_hz = float(np.clip(
+        float(getattr(cfg, "mixed_split_freq", 300.0) or 300.0),
+        20.0,
+        float(cfg.fs) * 0.49,
+    ))
+    mixed_transition_hz = float(getattr(cfg, "trans_width", mixed_split_hz) or mixed_split_hz)
+    if not np.isfinite(mixed_transition_hz) or mixed_transition_hz < 0.0:
+        mixed_transition_hz = mixed_split_hz
 
     if bool(getattr(cfg, "phase_safe_2058", False)):
         # === 2058-SAFE PHASE MODE ===
@@ -646,36 +710,54 @@ def run_phase_ir_stage(
                 w_hi = np.ones_like(freq_axis, dtype=float)
         except Exception:
             w_hi = np.ones_like(freq_axis, dtype=float)
-        bass_f2 = float(np.clip(phase_lim_hz, 20.0, 400.0))
-
         # Excess phase = measured - theoretical
         excess_phase = (p_rad_interp - theo_xo)
 
-        # Weighting (your smoothstep bass weighting)
         phase_weight = np.zeros_like(freq_axis, dtype=float)
-        f0, w0 = 20.0, 0.30
-        f2, w2 = bass_f2, 0.00
-        f1 = float(np.clip(0.5 * f2, 80.0, 140.0))
-        w1 = float(np.clip(0.20 - 0.04 * ((f1 - 100.0) / 40.0), 0.14, 0.20))
-        if f2 <= (f1 + 1.0):
-            f2 = f1 + 1.0
+        if is_mixed:
+            full_hz = float(getattr(cfg, "low_freq_full_correction_hz", mixed_split_hz) or mixed_split_hz)
+            none_hz = float(getattr(cfg, "high_freq_no_correction_hz", phase_lim_hz) or phase_lim_hz)
+            if phase_lim_hz > 0.0:
+                none_hz = min(none_hz, phase_lim_hz)
+            if none_hz <= (full_hz + 1.0):
+                none_hz = full_hz + 1.0
 
-        def smoothstep01(x):
-            x = np.clip(x, 0.0, 1.0)
-            return x*x*(3.0 - 2.0*x)
+            phase_weight = _mixed_excess_weight(freq_axis, full_hz, none_hz)
+            phase_weight *= phase_mask.astype(float)
 
-        bass_band = phase_mask & (freq_axis >= f0) & (freq_axis <= f2)
-        f = freq_axis[bass_band]
-        w = np.empty_like(f, dtype=float)
-        seg1 = f <= f1
-        x1 = (f[seg1] - f0) / (f1 - f0)
-        s1 = smoothstep01(x1)
-        w[seg1] = w0 + (w1 - w0) * s1
-        seg2 = ~seg1
-        x2 = (f[seg2] - f1) / (f2 - f1)
-        s2 = smoothstep01(x2)
-        w[seg2] = w1 + (w2 - w1) * s2
-        phase_weight[bass_band] = np.maximum(phase_weight[bass_band], w)
+            strength = float(getattr(cfg, "excess_phase_strength", 0.9) or 0.0)
+            strength = float(np.clip(strength, 0.0, 1.0))
+            phase_weight *= strength
+
+            try:
+                if isinstance(st, dict):
+                    st["mixed_phase_strength"] = float(strength)
+                    st["mixed_phase_full_correction_hz"] = float(full_hz)
+                    st["mixed_phase_no_correction_hz"] = float(none_hz)
+            except Exception:
+                pass
+        else:
+            # Legacy weighting for non-mixed modes.
+            bass_f2 = float(np.clip(phase_lim_hz, 20.0, 400.0))
+            f0, w0 = 20.0, 0.30
+            f2, w2 = bass_f2, 0.00
+            f1 = float(np.clip(0.5 * f2, 80.0, 140.0))
+            w1 = float(np.clip(0.20 - 0.04 * ((f1 - 100.0) / 40.0), 0.14, 0.20))
+            if f2 <= (f1 + 1.0):
+                f2 = f1 + 1.0
+
+            bass_band = phase_mask & (freq_axis >= f0) & (freq_axis <= f2)
+            f = freq_axis[bass_band]
+            w = np.empty_like(f, dtype=float)
+            seg1 = f <= f1
+            x1 = (f[seg1] - f0) / (f1 - f0)
+            s1 = _smoothstep01(x1)
+            w[seg1] = w0 + (w1 - w0) * s1
+            seg2 = ~seg1
+            x2 = (f[seg2] - f1) / (f2 - f1)
+            s2 = _smoothstep01(x2)
+            w[seg2] = w1 + (w2 - w1) * s2
+            phase_weight[bass_band] = np.maximum(phase_weight[bass_band], w)
 
         # Apply the upper-edge taper so correction fades out smoothly near phase_limit
         # and does not create hard-edge ringing in time domain.
@@ -706,8 +788,14 @@ def run_phase_ir_stage(
         try:
             extra_phase_before = np.asarray(extra_phase, dtype=float).copy()
 
-            clamp_max_deg = 45.0
-            clamp_min_deg = 15.0
+            if is_mixed:
+                clamp_max_deg = float(getattr(cfg, "mixed_phase_budget_lf_deg", 45.0) or 45.0)
+                clamp_min_deg = float(getattr(cfg, "mixed_phase_budget_hf_deg", 22.5) or 22.5)
+            else:
+                clamp_max_deg = 45.0
+                clamp_min_deg = 15.0
+            if clamp_max_deg < clamp_min_deg:
+                clamp_max_deg, clamp_min_deg = clamp_min_deg, clamp_max_deg
 
             # Confidence contribution: low confidence -> closer to min clamp.
             conf_part = np.clip(conf_s, 0.0, 1.0) ** 0.85
@@ -821,11 +909,109 @@ def run_phase_ir_stage(
                 pass
         except Exception:
             pass
-    
+
+        # --- Mixed-only: absolute excess-delay guard ---
+        if is_mixed:
+            try:
+                max_excess_delay_ms = float(getattr(cfg, "max_excess_delay_ms", 2.5) or 0.0)
+            except Exception:
+                max_excess_delay_ms = 0.0
+            if np.isfinite(max_excess_delay_ms) and max_excess_delay_ms > 0.0:
+                try:
+                    max_gd_ms = _max_abs_group_delay_ms(freq_axis, extra_phase, phase_mask)
+                    if np.isfinite(max_gd_ms) and max_gd_ms > max_excess_delay_ms:
+                        gd_scale = float(np.clip(max_excess_delay_ms / max(max_gd_ms, 1e-9), 0.05, 1.0))
+                        extra_phase *= gd_scale
+                        logger.info(
+                            "Mixed phase excess-delay guard: "
+                            f"max|GD|={max_gd_ms:.2f} ms -> target<={max_excess_delay_ms:.2f} ms "
+                            f"(scale={gd_scale:.3f})"
+                        )
+                        try:
+                            if isinstance(st, dict):
+                                st["mixed_max_excess_delay_ms"] = float(max_excess_delay_ms)
+                                st["mixed_excess_delay_before_ms"] = float(max_gd_ms)
+                                st["mixed_excess_delay_scale"] = float(gd_scale)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
         low_phase = (-theo_xo) + extra_phase
 
+        # --- Mixed-only: pre-ringing guard (iteratively reduce excess correction) ---
         if is_mixed:
-            f_center = float(getattr(cfg, "mixed_split_freq", 300.0) or 300.0)
+            try:
+                max_pre_db = float(getattr(cfg, "max_pre_ringing_db", -35.0) or -35.0)
+            except Exception:
+                max_pre_db = -35.0
+            if np.isfinite(max_pre_db):
+                max_pre_db = float(min(max_pre_db, 0.0))
+                extra_guard = np.asarray(extra_phase, dtype=float).copy()
+                pre_before_db = None
+                pre_after_db = None
+                guard_scale_total = 1.0
+                h_min = total_mag * np.exp(1j * min_p)
+                ir_min = scipy.fft.irfft(h_min, n=n_fft)
+
+                for i in range(3):
+                    h_lin_guard = total_mag * np.exp(1j * ((-theo_xo) + extra_guard))
+                    ir_lin_guard = scipy.fft.irfft(h_lin_guard, n=n_fft)
+                    ir_mixed_guard = combine_mixed_phase(
+                        ir_lin_guard,
+                        ir_min,
+                        fs=float(cfg.fs),
+                        split_freq=mixed_split_hz,
+                        transition_hz=mixed_transition_hz,
+                    )
+                    pre_now_db = _pre_ringing_db(ir_mixed_guard)
+                    if i == 0:
+                        pre_before_db = float(pre_now_db)
+                    pre_after_db = float(pre_now_db)
+                    if (not np.isfinite(pre_now_db)) or (pre_now_db <= max_pre_db):
+                        break
+
+                    # Energy-ratio based scale keeps iterations stable.
+                    ratio_now = 10.0 ** (pre_now_db / 10.0)
+                    ratio_target = 10.0 ** (max_pre_db / 10.0)
+                    step_scale = float(np.clip(np.sqrt(ratio_target / max(ratio_now, 1e-30)), 0.20, 0.95))
+                    extra_guard *= step_scale
+                    guard_scale_total *= step_scale
+
+                if guard_scale_total < 0.999:
+                    extra_phase = extra_guard
+                    low_phase = (-theo_xo) + extra_phase
+                    logger.info(
+                        "Mixed phase pre-ringing guard: "
+                        f"{pre_before_db:.1f} dB -> {pre_after_db:.1f} dB "
+                        f"(limit={max_pre_db:.1f} dB, scale={guard_scale_total:.3f})"
+                    )
+                try:
+                    if isinstance(st, dict):
+                        st["mixed_max_pre_ringing_db"] = float(max_pre_db)
+                        st["mixed_pre_ringing_before_db"] = (
+                            None if pre_before_db is None else float(pre_before_db)
+                        )
+                        st["mixed_pre_ringing_after_db"] = (
+                            None if pre_after_db is None else float(pre_after_db)
+                        )
+                        st["mixed_pre_ringing_scale"] = float(guard_scale_total)
+                except Exception:
+                    pass
+
+            # Recompute correction weight metric for stats if guards changed extra phase.
+            try:
+                corr_band = phase_mask & (np.abs(excess_phase) > 1e-12)
+                if np.any(corr_band):
+                    eff = np.abs(extra_phase[corr_band]) / np.maximum(np.abs(excess_phase[corr_band]), 1e-12)
+                    if isinstance(st, dict):
+                        st["mixed_phase_eff_strength_mean"] = float(np.mean(eff))
+                        st["mixed_phase_eff_strength_max"] = float(np.max(eff))
+            except Exception:
+                pass
+
+        if is_mixed:
+            f_center = float(mixed_split_hz)
         else:
             f_center = float(getattr(cfg, "phase_limit", 1000.0) or 1000.0)
 
@@ -848,16 +1034,10 @@ def run_phase_ir_stage(
 
     # --- 10. IMPULSE GENERATION (common path) ---
     if is_mixed and low_phase is not None:
-        split_hz = float(getattr(cfg, "mixed_split_freq", 300.0) or 300.0)
-        split_hz = float(np.clip(split_hz, 20.0, float(cfg.fs) * 0.49))
-        transition_hz = float(getattr(cfg, "trans_width", split_hz) or split_hz)
-        if not np.isfinite(transition_hz) or transition_hz < 0.0:
-            transition_hz = split_hz
-
         try:
             if isinstance(st, dict):
-                st["mixed_blend_split_hz"] = float(split_hz)
-                st["mixed_blend_transition_hz"] = float(transition_hz)
+                st["mixed_blend_split_hz"] = float(mixed_split_hz)
+                st["mixed_blend_transition_hz"] = float(mixed_transition_hz)
         except Exception:
             pass
 
@@ -869,8 +1049,8 @@ def run_phase_ir_stage(
             ir_lin,
             ir_min,
             fs=float(cfg.fs),
-            split_freq=split_hz,
-            transition_hz=transition_hz,
+            split_freq=mixed_split_hz,
+            transition_hz=mixed_transition_hz,
         )
         final_phase = np.angle(scipy.fft.rfft(raw_imp))
     else:
@@ -1137,6 +1317,27 @@ def run_phase_ir_stage(
                 impulse = impulse - (dc * window)
         except Exception:
             pass
+
+    # Mixed filters: force fixed startup delay regardless of UI/window settings.
+    # Do this AFTER window/DC steps so those operations stay aligned to their window.
+    if is_mixed and n > 0:
+        mixed_forced_peak_ms = 90.0
+        desired_peak = int(np.clip(int(round(mixed_forced_peak_ms * cfg.fs / 1000.0)), 0, n - 1))
+        peak_now = int(np.argmax(np.abs(impulse)))
+        shift_samp = desired_peak - peak_now
+        if shift_samp != 0:
+            impulse = _shift_zeropad_local(np.asarray(impulse), int(shift_samp))
+        try:
+            if isinstance(st, dict):
+                st["mixed_forced_peak_ms"] = float(mixed_forced_peak_ms)
+                st["mixed_forced_peak_samples"] = int(desired_peak)
+                st["mixed_forced_shift_samples"] = int(shift_samp)
+        except Exception:
+            pass
+        logger.info(
+            f"Mixed forced peak shift applied: peak {peak_now} -> {desired_peak} "
+            f"({mixed_forced_peak_ms:.1f} ms, shift={shift_samp})"
+        )
 
 
 

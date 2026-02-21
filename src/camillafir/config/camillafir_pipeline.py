@@ -16,6 +16,8 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "mode", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
         "mag_c_min", "mag_c_max", "max_boost", "max_cut_db", "max_slope_db_per_oct",
         "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "mag_correct",
+        "excess_phase_strength", "low_freq_full_correction_hz", "high_freq_no_correction_hz",
+        "max_pre_ringing_db", "max_excess_delay_ms",
         "lvl_mode", "reg_strength", "normalize_opt", "align_opt",
         "stereo_link", "exc_prot", "exc_freq", "low_bass_cut_hz", "low_bass_cut_enable", "hpf_enable", "hpf_freq",
         "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_window_right", "ir_export_window_mode", "ir_window_mode",
@@ -60,6 +62,14 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         except Exception:
             pass
 
+    # Policy: BASIC mode always uses Smart Scan (Auto leveling mode).
+    try:
+        mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
+    except Exception:
+        mode_u = "BASIC"
+    if mode_u == "BASIC":
+        data["lvl_mode"] = "Auto"
+
     # Policy: auto time alignment is always enabled and not user-configurable.
     data["align_opt"] = True
 
@@ -84,12 +94,16 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         ("max_slope_db_per_oct", 24.0),
         ("max_slope_boost_db_per_oct", 0.0),
         ("max_slope_cut_db_per_oct", 0.0),
-        ("lvl_manual_db", 75.0),
     ]:
         try:
             data[k] = max(0.0, float(data.get(k, dv) or dv))
         except Exception:
             data[k] = dv
+    try:
+        v = float(data.get("lvl_manual_db", 0.0) or 0.0)
+        data["lvl_manual_db"] = v if math.isfinite(v) else 0.0
+    except Exception:
+        data["lvl_manual_db"] = 0.0
 
     # `gain` is used as auto headroom margin (dB), so keep it non-negative.
     try:
@@ -348,6 +362,22 @@ def build_filter_config(
 
     low_bass_cut_strength = _as_float_allow_zero(data.get("low_bass_cut_strength", None), 0.0)
     low_bass_cut_strength = float(max(0.0, min(1.0, low_bass_cut_strength)))
+    mixed_excess_phase_strength = _as_float_allow_zero(data.get("excess_phase_strength", None), 0.9)
+    mixed_low_full_hz = _as_float_allow_zero(data.get("low_freq_full_correction_hz", None), 140.0)
+    mixed_high_none_hz = _as_float_allow_zero(data.get("high_freq_no_correction_hz", None), 900.0)
+    mixed_max_pre_db = _as_float_allow_zero(data.get("max_pre_ringing_db", None), -35.0)
+    mixed_max_excess_delay_ms = _as_float_allow_zero(data.get("max_excess_delay_ms", None), 2.5)
+    mixed_kwargs = {}
+    if hasattr(FilterConfig_cls, "excess_phase_strength"):
+        mixed_kwargs["excess_phase_strength"] = float(max(0.0, min(1.0, mixed_excess_phase_strength)))
+    if hasattr(FilterConfig_cls, "low_freq_full_correction_hz"):
+        mixed_kwargs["low_freq_full_correction_hz"] = float(max(20.0, mixed_low_full_hz))
+    if hasattr(FilterConfig_cls, "high_freq_no_correction_hz"):
+        mixed_kwargs["high_freq_no_correction_hz"] = float(max(20.0, mixed_high_none_hz))
+    if hasattr(FilterConfig_cls, "max_pre_ringing_db"):
+        mixed_kwargs["max_pre_ringing_db"] = float(min(0.0, mixed_max_pre_db))
+    if hasattr(FilterConfig_cls, "max_excess_delay_ms"):
+        mixed_kwargs["max_excess_delay_ms"] = float(max(0.0, mixed_max_excess_delay_ms))
     lb_en = bool(data.get("low_bass_cut_enable", True))
     lb_raw = data.get("low_bass_cut_hz", "")
     if (not lb_en) or (lb_raw in (None, "", "None")):
@@ -365,6 +395,13 @@ def build_filter_config(
         12
     )
     comparison_mode = bool(data.get("comparison_mode", True))
+    try:
+        mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
+    except Exception:
+        mode_u = "BASIC"
+    lvl_mode = str(data.get("lvl_mode", "Auto") or "Auto")
+    if mode_u == "BASIC":
+        lvl_mode = "Auto"
     
     cfg = FilterConfig_cls(
         fs=int(fs_v),
@@ -384,7 +421,7 @@ def build_filter_config(
         phase_limit=data["phase_limit"],
         phase_safe_2058=False,  # TUPE/2058 mode forced OFF (hidden from UI)
         enable_mag_correction=bool(data.get("mag_correct", True)),
-        lvl_mode=data["lvl_mode"],
+        lvl_mode=lvl_mode,
         reg_strength=float(data.get("reg_strength", 30.0)),
         do_normalize=bool(data["normalize_opt"]),
         exc_prot=bool(data["exc_prot"]),
@@ -424,6 +461,7 @@ def build_filter_config(
         conf_pull_bass_floor_min=float(_as_float_allow_zero(data.get("conf_pull_bass_floor_min", None), 0.25)),
         low_bass_cut_enable=bool(data.get("low_bass_cut_enable", True)),
         low_bass_cut_strength=float(max(0.0, min(1.0, _as_float_allow_zero(data.get("low_bass_cut_strength", None), 0.0)))),
+        **mixed_kwargs,
     )
     try:
         setattr(cfg, "auto_gain_margin_db", float(max(0.0, _as_float_allow_zero(data.get("gain", None), 0.0))))

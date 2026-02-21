@@ -286,7 +286,7 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
     target_level_db_window = 0.0
     offset_method = "Unknown"
 
-    manual_target_db = _to_float(getattr(cfg, "lvl_manual_db", 75.0), 75.0)
+    manual_target_db = _to_float(getattr(cfg, "lvl_manual_db", 0.0), 0.0)
 
     # user-range (also used in return)
     s_min = _to_float(getattr(cfg, "lvl_min", 500.0), 500.0)

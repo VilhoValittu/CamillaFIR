@@ -141,9 +141,9 @@ def run_correction_stage(
         # Keep safe defaults; never crash later with UnboundLocalError.
         pass
 
-    # --- 7A. Align target level to the SAME leveling window (Smart Scan / Manual) ---
-    # Goal: target curve must "follow" the chosen level window, not float at an arbitrary absolute level.
-    # This makes leveling deterministic and consistent with REW/OCA-style workflows.
+    # --- 7A. Align target level to the SAME leveling window ---
+    # Keep deterministic behavior for both Auto and Manual:
+    # shift target, then recompute leveling so plotting/metadata stay consistent.
     target_shift_db = 0.0
     try:
         f = np.asarray(freq_axis, dtype=float)
@@ -534,7 +534,19 @@ def run_correction_stage(
         
         # NOTE: ConfPull moved to POST-SLOPE (gain_db stage), because slope limiter dominated
         # and made early raw_g pulls mostly invisible in final filters.
-        raw_g = target_mags - (m_anal - calc_offset_db)
+        manual_target_bias_db = 0.0
+        try:
+            lvl_mode_s = str(getattr(cfg, "lvl_mode", "Auto") or "Auto").strip().lower()
+            if "manual" in lvl_mode_s:
+                # Reference point for manual mode:
+                # 0 dB == neutral, lower/higher values bias correction down/up.
+                manual_target_bias_db = float(getattr(cfg, "lvl_manual_db", 0.0) or 0.0)
+                if isinstance(st, dict):
+                    st["manual_target_bias_db"] = float(manual_target_bias_db)
+        except Exception:
+            manual_target_bias_db = 0.0
+
+        raw_g = target_mags - (m_anal - calc_offset_db) + float(manual_target_bias_db)
         try:
             mm = mask_c if "mask_c" in locals() else None
             if mm is not None and np.any(mm):

@@ -63,6 +63,12 @@ class FilterConfig:
     mixed_phase_budget_lf_deg: float = 45.0
     mixed_phase_budget_hf_deg: float = 22.5
     mixed_min_tilt_comp_enable: bool = True
+    # Mixed-phase excess correction controls (applied only in Mixed mode).
+    excess_phase_strength: float = 0.9
+    low_freq_full_correction_hz: float = 140.0
+    high_freq_no_correction_hz: float = 900.0
+    max_pre_ringing_db: float = -35.0
+    max_excess_delay_ms: float = 2.5
     bass_first_ai: bool = False
     bass_first_mode_max_hz: float = 200.0
     bass_first_smooth_floor_lo: float = 0.75
@@ -84,7 +90,7 @@ class FilterConfig:
     # --- 6. LEVELING ---
     lvl_mode: str = "Auto"          # Mode selection (Auto, Manual)
     lvl_algo: str = "Median"        # Algoritmi (Median, Average)
-    lvl_manual_db: float = 75.0     # Manuaalinen tavoitetaso
+    lvl_manual_db: float = 0.0      # Manuaalinen tavoitetaso
     lvl_min: float = 200.0          # Tasonsovituksen hakualueen alku
     lvl_max: float = 3000.0         # Tasonsovituksen hakualueen loppu
     stereo_link: bool = False

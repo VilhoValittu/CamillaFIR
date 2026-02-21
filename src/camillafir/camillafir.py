@@ -77,7 +77,7 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v.3.0.6"
+VERSION = "v.3.1.0"
 # Change log:
 
 # v.3.0.0 onwards --> See CHANGELOG.md for details.
@@ -331,6 +331,16 @@ def process_run():
                 hc_m=hc_m,
                 pin=pin,
             )
+
+            # Enforce mode policy clamps from camillafir_modes.py for every run.
+            try:
+                mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
+            except Exception:
+                mode_u = "BASIC"
+            try:
+                apply_mode_to_cfg(cfg, mode_u, apply_defaults=False)
+            except Exception as e:
+                logger.warning(f"Mode clamp apply failed ({mode_u}): {e}")
 
             logger.info(
                 f"[{fs_v} Hz] EXPORT IR cfg: shape={cfg.ir_export_window_shape}, "

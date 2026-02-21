@@ -36,6 +36,11 @@ def _apply_clamps(cfg: FilterConfig, clamps: Dict[str, Tuple[Any, Any]]) -> None
             setattr(cfg, k, bool(lo))
             continue
 
+        # literal clamp (force exact value), e.g. ("auto", "auto")
+        if lo == hi:
+            setattr(cfg, k, lo)
+            continue
+
         # numeric clamp
         try:
             cur = getattr(cfg, k)
@@ -65,7 +70,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 
         # Phase: allow, but still bounded by other rails
         "phase_safe_2058": False,
-        "phase_limit": 600.0,
+        "phase_limit": 400.0,
 
         # --- SMOOTHING / FDW / REG ---
         "plot_smoothing_level": "Psychoacoustic",
@@ -92,7 +97,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "ir_export_window_mode": "auto",
         "ir_window_right": 500.0,
         "ir_window_left": 120.0,
-        "mixed_split_freq": 300.0,
+        "mixed_split_freq": 200.0,
         "trans_width": 100.0,
 
         # --- BASS-FIRST ---
@@ -102,7 +107,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         # --- LEVELING ---
         "lvl_mode": "Auto",
         "lvl_algo": "Median",
-        "lvl_manual_db": 75.0,
+        "lvl_manual_db": 0.0,
         "lvl_min": 500.0,
         "lvl_max": 2000.0,
         "stereo_link": True,
@@ -146,14 +151,14 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "tdc_slope_db_per_oct": 6.0,
         "enable_afdw": True,
         "ir_window_right": 500.0,
-        "ir_window_left": 120.0,
+        "ir_window_left": 85.0,
         "ir_export_window_mode": "auto",
         "bass_first_ai": True,
         "bass_first_mode_max_hz": 200.0,
 
         "lvl_mode": "Auto",
         "lvl_algo": "Median",
-        "lvl_manual_db": 75.0,
+        "lvl_manual_db": 0.0,
         "lvl_min": 200.0,
         "lvl_max": 3000.0,
         "stereo_link": True,
@@ -169,7 +174,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
     # BASIC: guard rails (hard clamps)
     "BASIC": {
-        "max_boost_db": (0.0, 6.0),
+        "max_boost_db": (0.0, 4.0),
         "max_cut_db": (0.0, 15.0),
 
         "filter_smooth": (1, 24),
@@ -181,13 +186,14 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
         "tdc_slope_db_per_oct": (0.0, 12.0),
 
         "enable_afdw": (True, True),
-        "fdw_cycles": (6.0, 16.0),
+        "fdw_cycles": (10.0, 15.0),
         # Correction band guard rails (BASIC)
         "mag_c_min": (18.0, 300.0),
         "mag_c_max": (18.0, 300.0),
-        "phase_limit": (200.0, 1000.0),
+        "phase_limit": (200.0, 450.0),
         "low_bass_cut_hz": (20.0, 100.0),
         "low_bass_cut_enable": (True, True),
+        "stereo_link": (True, True),
     },
 
     # ADVANCED: no clamps

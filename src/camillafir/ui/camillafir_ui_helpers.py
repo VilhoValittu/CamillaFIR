@@ -130,6 +130,66 @@ def update_mode_desc(_=None):
     with use_scope("mode_desc_scope", clear=True):
         put_markdown(f"**{t('mode_desc_title')}**\n\n{t(key)}")
 
+def update_basic_clamp_hints_ui(*, pin, pin_update, t):
+    """
+    Show BASIC mode clamp bounds in help_text for fields that are constrained
+    by MODE_CLAMPS["BASIC"].
+    """
+    try:
+        mode_u = str(pin.get("mode", "BASIC") or "BASIC").strip().upper()
+    except Exception:
+        mode_u = "BASIC"
+    is_basic = (mode_u == "BASIC")
+
+    clamps = MODE_CLAMPS.get("BASIC", {}) or {}
+
+    def _clamp_hint(cfg_key: str) -> str:
+        lim = clamps.get(cfg_key, None)
+        if (not is_basic) or (lim is None):
+            return ""
+        try:
+            lo, hi = lim
+        except Exception:
+            return ""
+        try:
+            suf = t("guide_modes_clamped_suffix").format(lo=lo, hi=hi)
+        except Exception:
+            suf = f" (clamped {lo}-{hi})"
+        return f"BASIC{suf}"
+
+    def _merge_help(base_help: str, cfg_key: str) -> str:
+        base = str(base_help or "").strip()
+        h = _clamp_hint(cfg_key)
+        if not h:
+            return base
+        return f"{base}\n\n{h}" if base else h
+
+    fields = [
+        ("mag_c_min", "mag_c_min", lambda: t("hc_range_help")),
+        ("mag_c_max", "mag_c_max", lambda: t("hc_range_help")),
+        ("max_boost_db", "max_boost", lambda: _max_boost_help_with_cap()),
+        ("max_cut_db", "max_cut_db", lambda: t("max_cut_db_help")),
+        ("filter_smooth", "filter_smooth", lambda: t("smoothing_level_help")),
+        ("reg_strength", "reg_strength", lambda: t("reg_help")),
+        ("phase_limit", "phase_limit", lambda: t("phase_limit_help")),
+        ("ir_export_window_mode", "ir_export_window_mode", lambda: t("ir_export_window_help")),
+        ("enable_tdc", "enable_tdc", lambda: t("tdc_help")),
+        ("tdc_strength", "tdc_strength", lambda: t("tdc_help")),
+        ("tdc_max_reduction_db", "tdc_max_reduction_db", lambda: t("tdc_max_reduction_db_help")),
+        ("tdc_slope_db_per_oct", "tdc_slope_db_per_oct", lambda: t("tdc_slope_db_per_oct_help")),
+        ("enable_afdw", "enable_afdw", lambda: t("afdw_help")),
+        ("fdw_cycles", "fdw_cycles", lambda: t("fdw_help")),
+        ("low_bass_cut_enable", "low_bass_cut_enable", lambda: t("low_bass_cut_hint")),
+        ("low_bass_cut_hz", "low_bass_cut_hz", lambda: t("low_bass_cut_hz_help")),
+        ("stereo_link", "stereo_link", lambda: t("link_help")),
+    ]
+
+    for cfg_key, pin_key, base_fn in fields:
+        try:
+            pin_update(pin_key, help_text=_merge_help(base_fn(), cfg_key))
+        except Exception:
+            pass
+
 
 def _as_pin_checkbox_list(v: bool):
     return [True] if bool(v) else []
@@ -832,23 +892,120 @@ def update_lvl_ui(_=None):
             return default
 
     try:
+        try:
+            app_mode = str(_p("mode", "BASIC") or "BASIC").strip().upper()
+        except Exception:
+            app_mode = "BASIC"
+        is_basic = (app_mode == "BASIC")
+
         mode = str(_p("lvl_mode", "Auto") or "Auto")
+        if is_basic:
+            mode = "Auto"
         is_manual = ("Manual" in mode)
 
-        vmin = float(_p("lvl_min", 500.0) or 500.0)
-        vmax = float(_p("lvl_max", 2000.0) or 2000.0)
+        # Keep separate lvl_min/lvl_max values for Auto vs Manual
+        # and restore them automatically when mode changes.
+        prev_mode = getattr(update_lvl_ui, "_last_lvl_mode", None)
+        try:
+            cur_min = float(_p("lvl_min", 500.0) or 500.0)
+            cur_max = float(_p("lvl_max", 2000.0) or 2000.0)
+        except Exception:
+            cur_min, cur_max = 500.0, 2000.0
+        if cur_min > cur_max:
+            cur_min, cur_max = cur_max, cur_min
+
+        # Initialize caches on first run
+        if not hasattr(update_lvl_ui, "_lvl_auto_range"):
+            setattr(update_lvl_ui, "_lvl_auto_range", (float(cur_min), float(cur_max)))
+        if not hasattr(update_lvl_ui, "_lvl_manual_range"):
+            setattr(update_lvl_ui, "_lvl_manual_range", (float(cur_min), float(cur_max)))
+
+        # If mode changed, store outgoing range and restore incoming range
+        if prev_mode is not None and str(prev_mode) != str(mode):
+            try:
+                if "Manual" in str(prev_mode):
+                    setattr(update_lvl_ui, "_lvl_manual_range", (float(cur_min), float(cur_max)))
+                else:
+                    setattr(update_lvl_ui, "_lvl_auto_range", (float(cur_min), float(cur_max)))
+            except Exception:
+                pass
+
+            try:
+                if is_manual:
+                    r_min, r_max = getattr(update_lvl_ui, "_lvl_manual_range", (cur_min, cur_max))
+                else:
+                    r_min, r_max = getattr(update_lvl_ui, "_lvl_auto_range", (cur_min, cur_max))
+                r_min = float(r_min)
+                r_max = float(r_max)
+                if r_min > r_max:
+                    r_min, r_max = r_max, r_min
+                pin_update("lvl_min", value=r_min)
+                pin_update("lvl_max", value=r_max)
+                cur_min, cur_max = r_min, r_max
+            except Exception:
+                pass
+
+        setattr(update_lvl_ui, "_last_lvl_mode", str(mode))
+
+        # Keep min/max helper texts in sync with mode selection.
+        try:
+            pin_update("lvl_min", help_text=t("lvl_min_help_manual" if is_manual else "lvl_min_help_auto"))
+            pin_update("lvl_max", help_text=t("lvl_max_help_manual" if is_manual else "lvl_max_help_auto"))
+        except Exception:
+            pass
+
+        vmin = float(_p("lvl_min", cur_min) or cur_min)
+        vmax = float(_p("lvl_max", cur_max) or cur_max)
         if vmin > vmax:
             vmin, vmax = vmax, vmin
             pin_update("lvl_min", value=vmin)
             pin_update("lvl_max", value=vmax)
 
+        # Keep caches up to date for current mode
+        try:
+            if is_manual:
+                setattr(update_lvl_ui, "_lvl_manual_range", (float(vmin), float(vmax)))
+            else:
+                setattr(update_lvl_ui, "_lvl_auto_range", (float(vmin), float(vmax)))
+        except Exception:
+            pass
+
+        def _step_manual_target(delta_db: float):
+            try:
+                cur = float(_p("lvl_manual_db", 0.0) or 0.0)
+            except Exception:
+                cur = 0.0
+            nxt = round((float(cur) + float(delta_db)) * 10.0) / 10.0
+            try:
+                pin_update("lvl_manual_db", value=float(nxt))
+            except Exception:
+                pass
+            try:
+                update_target_preview_ui()
+            except Exception:
+                pass
+
         with use_scope("lvl_manual_scope", clear=True):
-            w = put_input(
-                "lvl_manual_db",
-                label=t("lvl_target_db"),
-                type=FLOAT,
-                value=float(_p("lvl_manual_db", 75.0) or 75.0),
-                help_text=t("lvl_manual_help"),
+            try:
+                _bias_hint = t("lvl_manual_bias_hint")
+            except Exception:
+                _bias_hint = ""
+
+            w = put_row([
+                put_input(
+                    "lvl_manual_db",
+                    label=t("lvl_target_db"),
+                    type=FLOAT,
+                    value=float(_p("lvl_manual_db", 0.0) or 0.0),
+                    help_text=t("lvl_manual_help"),
+                ),
+                put_button("-", onclick=lambda: _step_manual_target(-0.1), color="secondary").style("margin-top:28px; min-width:34px; margin-right:4px;"),
+                put_button("+", onclick=lambda: _step_manual_target(+0.1), color="secondary").style("margin-top:28px; min-width:34px;"),
+            ], size="1fr auto auto")
+            put_html(
+                f"<div style='opacity:0.75; font-size:12px; margin-top:4px;'>"
+                f"{_bias_hint}"
+                f"</div>"
             )
             if not is_manual:
                 w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
@@ -1202,6 +1359,7 @@ def update_target_preview_ui(_=None):
     Small, fast target preview for Target tab.
     - Uses Plotly HTML (no Kaleido).
     - Supports built-in curves and uploaded custom target file.
+    - Optionally overlays speaker measurement curves (L/R + avg).
     """
     def _p(name, default=None):
         try:
@@ -1213,40 +1371,189 @@ def update_target_preview_ui(_=None):
         s = str(x or "").strip()
         if not s:
             return ""
-        # Prefer project’s canonical normalizer when available
         try:
             if callable(_normalize_hc_mode_key):
                 return str(_normalize_hc_mode_key(s))
         except Exception:
             pass
         return s
+
     try:
         import numpy as np
         import plotly.graph_objects as go
         import plotly.io as pio
+        from ..dsp.smoothing import psychoacoustic_smoothing as _psycho_smooth
+        from ..io.measurements_txt import (
+            parse_measurements_from_bytes as _parse_txt_bytes,
+            parse_measurements_from_path as _parse_txt_path,
+        )
+        from ..io.measurements_wav import (
+            parse_measurements_from_wav_bytes as _parse_wav_bytes,
+            parse_measurements_from_wav_path as _parse_wav_path,
+        )
+
+        def _to_float(v, default):
+            try:
+                x = float(v)
+                if np.isfinite(x):
+                    return x
+            except Exception:
+                pass
+            return float(default)
+
+        def _normalize_curve(freqs, mags):
+            try:
+                ff = np.asarray(freqs, dtype=float)
+                mm = np.asarray(mags, dtype=float)
+                if ff.size < 8 or mm.size != ff.size:
+                    return None, None
+                mask = np.isfinite(ff) & np.isfinite(mm) & (ff > 0.0)
+                ff = ff[mask]
+                mm = mm[mask]
+                if ff.size < 8:
+                    return None, None
+                order = np.argsort(ff)
+                ff = ff[order]
+                mm = mm[order]
+                uniq, idx = np.unique(ff, return_index=True)
+                ff = uniq
+                mm = mm[idx]
+                if ff.size < 8:
+                    return None, None
+                return ff, mm
+            except Exception:
+                return None, None
+
+        def _pick_upload(name):
+            v = _p(name, None)
+            if isinstance(v, list) and len(v) > 0:
+                v = v[0]
+            if isinstance(v, dict) and (v.get("content") is not None):
+                return v
+            return None
+
+        def _parse_uploaded_measurement(up):
+            if not isinstance(up, dict):
+                return None, None
+            content = up.get("content", None)
+            if content is None:
+                return None, None
+
+            name = str(up.get("filename", "") or "").strip().lower()
+            ext = "." + name.rsplit(".", 1)[1] if "." in name else ""
+            pre_ms = _to_float(_p("ir_window_left", 120.0), 120.0)
+            post_raw = _p("ir_window_right", None)
+            if post_raw in (None, ""):
+                post_raw = _p("ir_window", 500.0)
+            post_ms = _to_float(post_raw, 500.0)
+            try:
+                sl = int(float(_p("smoothing_level", 0) or 0))
+            except Exception:
+                sl = 0
+
+            try:
+                is_wav = (ext == ".wav") or (
+                    isinstance(content, (bytes, bytearray)) and len(content) >= 4 and content[:4] == b"RIFF"
+                )
+                if is_wav:
+                    ff, mm, _ = _parse_wav_bytes(
+                        content,
+                        pre_ms=pre_ms,
+                        post_ms=post_ms,
+                        smoothing_level=sl,
+                        logger=None,
+                    )
+                else:
+                    ff, mm, _ = _parse_txt_bytes(content)
+            except Exception:
+                return None, None
+            return _normalize_curve(ff, mm)
+
+        def _parse_local_measurement(path_raw):
+            p = str(path_raw or "").strip().strip('"').strip("'")
+            if not p:
+                return None, None
+            p_l = p.lower()
+            pre_ms = _to_float(_p("ir_window_left", 120.0), 120.0)
+            post_raw = _p("ir_window_right", None)
+            if post_raw in (None, ""):
+                post_raw = _p("ir_window", 500.0)
+            post_ms = _to_float(post_raw, 500.0)
+            try:
+                sl = int(float(_p("smoothing_level", 0) or 0))
+            except Exception:
+                sl = 0
+            try:
+                if p_l.endswith(".wav"):
+                    ff, mm, _ = _parse_wav_path(
+                        p,
+                        pre_ms=pre_ms,
+                        post_ms=post_ms,
+                        smoothing_level=sl,
+                        logger=None,
+                    )
+                else:
+                    ff, mm, _ = _parse_txt_path(p, logger=None)
+            except Exception:
+                return None, None
+            return _normalize_curve(ff, mm)
+
+        def _align_to_target_window(m_curve, t_curve, freq_axis, fmin, fmax):
+            try:
+                m = np.asarray(m_curve, dtype=float)
+                t_ = np.asarray(t_curve, dtype=float)
+                fx = np.asarray(freq_axis, dtype=float)
+                if m.size != fx.size or t_.size != fx.size:
+                    return m
+                mask = (fx >= float(fmin)) & (fx <= float(fmax)) & np.isfinite(m) & np.isfinite(t_)
+                if np.count_nonzero(mask) < 16:
+                    return m
+                off = float(np.median(m[mask] - t_[mask]))
+                if not np.isfinite(off):
+                    return m
+                return m - off
+            except Exception:
+                return np.asarray(m_curve, dtype=float)
+
+        def _smooth_for_preview(freq_axis, mags_curve):
+            try:
+                return np.asarray(_psycho_smooth(freq_axis, mags_curve), dtype=float)
+            except Exception:
+                return np.asarray(mags_curve, dtype=float)
 
         hc_mode_raw = str(_p("hc_mode", "Harman6") or "Harman6")
         hc_mode = _norm_key(hc_mode_raw)
 
-        mag_c_min = float(_p("mag_c_min", 10.0) or 10.0)
-        mag_c_max = float(_p("mag_c_max", 200.0) or 200.0)
+        mag_c_min = _to_float(_p("mag_c_min", 10.0), 10.0)
+        mag_c_max = _to_float(_p("mag_c_max", 200.0), 200.0)
 
-        # Log frequency grid for preview
+        lvl_min = _to_float(_p("lvl_min", 500.0), 500.0)
+        lvl_max = _to_float(_p("lvl_max", 2000.0), 2000.0)
+        if not (lvl_min > 0.0 and lvl_max > lvl_min):
+            lvl_min, lvl_max = 500.0, 2000.0
+        try:
+            app_mode = str(_p("mode", "BASIC") or "BASIC").strip().upper()
+        except Exception:
+            app_mode = "BASIC"
+
+        lvl_mode = str(_p("lvl_mode", "Auto") or "Auto")
+        if app_mode == "BASIC":
+            lvl_mode = "Auto"
+
+        is_manual_level = ("manual" in lvl_mode.strip().lower())
+        lvl_mode_label = t("lvl_mode_manual") if is_manual_level else t("lvl_mode_auto")
+        lvl_manual_db = _to_float(_p("lvl_manual_db", 0.0), 0.0)
+        preview_level_shift_db = lvl_manual_db if is_manual_level else 0.0
+
         f = np.logspace(np.log10(10.0), np.log10(20000.0), 600)
 
         y = None
         src = t("target_preview_source_builtin")
 
-        # Detect upload selection (be tolerant to naming)
         key_l = str(hc_mode).strip().lower()
         is_upload = key_l in ("upload", "custom", "hc_mode_upload") or ("upload" in key_l)
-        def _parse_target_bytes_fallback(b: bytes):
-            """
-            Preview-only fallback parser for 2-column target files:
-              <freq_hz> <mag_db>
-            Tolerant to extra whitespace and empty lines.
-            """
 
+        def _parse_target_bytes_fallback(b: bytes):
             try:
                 s = b.decode("utf-8", errors="ignore")
             except Exception:
@@ -1282,24 +1589,18 @@ def update_target_preview_ui(_=None):
             idx = np.argsort(ff)
             return ff[idx], yy[idx]
 
-
         if is_upload:
             up = _p("hc_custom_file", None)
-            
-            # Handle both dict and [dict] variants
             if isinstance(up, list) and len(up) > 0:
                 up = up[0]
 
             if isinstance(up, dict) and (up.get("content") is not None):
-
                 try:
-                    # Prefer the same loader used by pipeline
                     if callable(load_target_curve):
                         tf_f, tf_y = load_target_curve(up["content"])
                     else:
                         raise RuntimeError("load_target_curve not available")
 
-                    # load_target_curve() returns (None, None) on failure -> make it fail loudly
                     if tf_f is None or tf_y is None:
                         raise ValueError("load_target_curve() returned no data")
 
@@ -1311,7 +1612,6 @@ def update_target_preview_ui(_=None):
                     else:
                         raise ValueError("Target data malformed (size mismatch)")
                 except Exception as e1:
-                    # Fallback: parse the uploaded bytes directly (preview-only)
                     try:
                         tf_f, tf_y = _parse_target_bytes_fallback(up.get("content", b""))
                         y = np.interp(f, tf_f, tf_y, left=tf_y[0], right=tf_y[-1])
@@ -1320,25 +1620,23 @@ def update_target_preview_ui(_=None):
                         with use_scope("target_preview_scope", clear=True):
                             put_html(
                                 "<div style='opacity:0.85; font-size:13px; padding:8px 0;'>"
-                                "⚠️ Custom target could not be parsed.<br>"
+                                "Custom target could not be parsed.<br>"
                                 f"<span style='opacity:0.75'>Loader error: {str(e1)}</span><br>"
                                 f"<span style='opacity:0.75'>Fallback error: {str(e2)}</span>"
                                 "</div>"
                             )
                         return
 
-            # If upload mode selected but no file yet
             if not (isinstance(up, dict) and up.get("content") is not None):
                 with use_scope("target_preview_scope", clear=True):
                     put_html(
                         "<div style='opacity:0.8; font-size:13px; padding:8px 0;'>"
-                        "⚠️ Custom target selected, but no file loaded yet."
+                        "Custom target selected, but no file loaded yet."
                         "</div>"
                     )
                 return
 
         if y is None:
-            # Built-in curve path: try get_house_curve_by_name() in a duck-typed way
             hc = None
             try:
                 if callable(get_house_curve_by_name):
@@ -1346,7 +1644,6 @@ def update_target_preview_ui(_=None):
             except Exception:
                 hc = None
 
-            # Fallback: some implementations expose a file-backed loader
             if hc is None:
                 try:
                     if callable(load_house_curve):
@@ -1361,7 +1658,6 @@ def update_target_preview_ui(_=None):
                 if hf.size >= 2 and hy.size == hf.size:
                     y = np.interp(f, hf, hy, left=hy[0], right=hy[-1])
             elif isinstance(hc, dict):
-                # Accept several common dict shapes
                 for fk, mk in (("freqs", "mags"), ("f", "y"), ("freq", "mag"), ("hz", "db")):
                     if (fk in hc) and (mk in hc):
                         hf = np.asarray(hc[fk], dtype=float)
@@ -1374,16 +1670,101 @@ def update_target_preview_ui(_=None):
             with use_scope("target_preview_scope", clear=True):
                 put_html(
                     "<div style='opacity:0.8; font-size:13px; padding:8px 0;'>"
-                    "⚠️ Target preview could not be generated (unknown curve format). "
+                    "Target preview could not be generated (unknown curve format). "
                     "Try switching the target curve or re-uploading the custom file."
                     "</div>"
                 )
             return
 
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=f, y=y, mode="lines", name=f"Target ({hc_mode_raw})"))
+        speaker_curves = {}
+        for ch, up_key, path_key in (
+            ("L", "file_l", "local_path_l"),
+            ("R", "file_r", "local_path_r"),
+        ):
+            up = _pick_upload(up_key)
+            ff, mm = (None, None)
+            if up is not None:
+                ff, mm = _parse_uploaded_measurement(up)
+            if ff is None or mm is None:
+                ff, mm = _parse_local_measurement(_p(path_key, ""))
+            if ff is not None and mm is not None:
+                speaker_curves[ch] = (ff, mm)
 
-        # Correction band markers
+        speaker_interp = {}
+        for ch, (ff, mm) in speaker_curves.items():
+            m_raw = np.interp(f, ff, mm, left=mm[0], right=mm[-1])
+            m_aligned = _align_to_target_window(m_raw, y, f, lvl_min, lvl_max)
+            speaker_interp[ch] = _smooth_for_preview(f, m_aligned)
+
+        # Manual level mode preview shift:
+        # Keep target curve fixed; move only speaker curves so user sees the difference.
+        if abs(preview_level_shift_db) > 1e-9:
+            for _k in list(speaker_interp.keys()):
+                speaker_interp[_k] = np.asarray(speaker_interp[_k], dtype=float) + float(preview_level_shift_db)
+
+        speaker_avg = None
+        if len(speaker_interp) > 0:
+            speaker_avg = np.mean(np.vstack([speaker_interp[k] for k in sorted(speaker_interp.keys())]), axis=0)
+
+        speaker_label = "No speaker data loaded"
+        if "L" in speaker_interp and "R" in speaker_interp:
+            speaker_label = f"L + R (aligned {lvl_min:.0f}-{lvl_max:.0f} Hz)"
+        elif "L" in speaker_interp:
+            speaker_label = f"L only (aligned {lvl_min:.0f}-{lvl_max:.0f} Hz)"
+        elif "R" in speaker_interp:
+            speaker_label = f"R only (aligned {lvl_min:.0f}-{lvl_max:.0f} Hz)"
+
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=f,
+                y=y,
+                mode="lines",
+                name=f"Target ({hc_mode_raw})",
+                line=dict(color="#4caf50", width=2.0),
+            )
+        )
+
+        if "L" in speaker_interp:
+            fig.add_trace(
+                go.Scatter(
+                    x=f,
+                    y=speaker_interp["L"],
+                    mode="lines",
+                    name="Speaker L",
+                    line=dict(color="rgba(102, 187, 255, 0.55)", width=1.2),
+                )
+            )
+        if "R" in speaker_interp:
+            fig.add_trace(
+                go.Scatter(
+                    x=f,
+                    y=speaker_interp["R"],
+                    mode="lines",
+                    name="Speaker R",
+                    line=dict(color="rgba(255, 167, 102, 0.55)", width=1.2),
+                )
+            )
+        if speaker_avg is not None:
+            fig.add_trace(
+                go.Scatter(
+                    x=f,
+                    y=speaker_avg,
+                    mode="lines",
+                    name="Speaker avg",
+                    line=dict(color="#ffd166", width=2.0),
+                )
+            )
+
+        # Level calculation window (Smart Scan / manual range) as a subtle gray band
+        fig.add_vrect(
+            x0=max(1.0, lvl_min),
+            x1=max(1.0, lvl_max),
+            fillcolor="rgba(180, 180, 180, 0.16)",
+            line_width=0,
+            layer="below",
+        )
+
         fig.add_vline(x=max(1.0, mag_c_min), line_width=1, opacity=0.35)
         fig.add_vline(x=max(1.0, mag_c_max), line_width=1, opacity=0.35)
 
@@ -1395,7 +1776,7 @@ def update_target_preview_ui(_=None):
         )
         fig.update_yaxes(
             title_text="dB",
-            range=[-30, 20],
+            range=[-10.0, 20.0],
             fixedrange=True,
         )
         fig.update_layout(
@@ -1404,7 +1785,7 @@ def update_target_preview_ui(_=None):
             margin=dict(l=40, r=20, t=30, b=35),
             showlegend=True,
             template="plotly_dark",
-            uirevision="target_preview_lock"
+            uirevision="target_preview_lock",
         )
 
         html = pio.to_html(fig, include_plotlyjs="cdn", full_html=False)
@@ -1413,7 +1794,10 @@ def update_target_preview_ui(_=None):
             put_html(
                 f"<div style='opacity:0.85; font-size:12.5px; margin:6px 0 8px 0;'>"
                 f"{t('target_preview_source_label')}: <b>{src}</b> &nbsp;|&nbsp; {t('target_preview_correction_band_label')}: "
-                f"<b>{mag_c_min:.0f}</b>–<b>{mag_c_max:.0f}</b> Hz"
+                f"<b>{mag_c_min:.0f}</b>-<b>{mag_c_max:.0f}</b> Hz &nbsp;|&nbsp; Level window: <b>{lvl_min:.0f}-{lvl_max:.0f} Hz</b> "
+                f"&nbsp;|&nbsp; Level mode: <b>{lvl_mode_label}</b>"
+                f"{f' (target {lvl_manual_db:.1f} dB, speaker shift {preview_level_shift_db:+.1f} dB)' if is_manual_level else ''}"
+                f" &nbsp;|&nbsp; Speaker data: <b>{speaker_label}</b>"
                 f"</div>"
             )
             put_html(html)
@@ -1422,7 +1806,7 @@ def update_target_preview_ui(_=None):
         with use_scope("target_preview_scope", clear=True):
             put_html(
                 "<div style='opacity:0.8; font-size:13px; padding:8px 0;'>"
-                "⚠️ Target preview failed. See console/log for details."
+                "Target preview failed. See console/log for details."
                 "</div>"
             )
         try:

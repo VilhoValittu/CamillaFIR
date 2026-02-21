@@ -24,7 +24,7 @@ def load_config() -> dict:
         "max_boost": 5.0,
         "lvl_mode": "Auto",
         "lvl_algo": "Median",
-        "lvl_manual_db": 75.0,
+        "lvl_manual_db": 0.0,
         "lvl_min": 300.0,
         "lvl_max": 3000.0,
         "normalize_opt": False,
@@ -53,6 +53,11 @@ def load_config() -> dict:
         "mixed_freq": 180.0,
         "phase_limit": 600.0,
         "phase_safe_2058": False,
+        "excess_phase_strength": 0.9,
+        "low_freq_full_correction_hz": 140.0,
+        "high_freq_no_correction_hz": 900.0,
+        "max_pre_ringing_db": -35.0,
+        "max_excess_delay_ms": 2.5,
         "ir_window_right": 500.0,
         "ir_window_left": 120.0,
         "ir_export_window_mode": "auto",
@@ -95,6 +100,16 @@ def load_config() -> dict:
             ]:
                 if k in saved and isinstance(saved[k], list):
                     saved[k] = bool(saved[k])
+
+            # Legacy migration: manual-target neutral reference changed from 75 dB to 0 dB.
+            # Old configs typically stored values around ~60..90 dB.
+            try:
+                if "lvl_manual_db" in saved:
+                    _v = float(saved.get("lvl_manual_db"))
+                    if 40.0 <= _v <= 110.0:
+                        saved["lvl_manual_db"] = float(_v - 75.0)
+            except Exception:
+                pass
 
             default_conf.update(saved)
         except Exception:
