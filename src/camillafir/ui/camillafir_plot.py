@@ -1065,8 +1065,8 @@ def generate_prediction_plot(
                 js_mode = "cdn"
         else:
             # Windows builds are stable with inline Plotly.
-            # Linux uses local static route to avoid large websocket payloads.
-            js_mode = True if sys.platform.startswith("win") else "/static/plotly.min.js"
+            # Linux runtime is injected once at app start.
+            js_mode = True if sys.platform.startswith("win") else False
 
         # Plotly UI config:
         # - Disable double-click autoscale/reset (it breaks with matched log axes)

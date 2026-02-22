@@ -2,6 +2,8 @@
 import numpy as np
 import math
 import sys
+import os
+import importlib.resources as pkgres
 from pywebio.output import *  # needed because this PyWebIO build doesn't expose put_input/put_select as named exports
 from pywebio.input import FLOAT
 from pywebio.pin import pin, pin_update, put_input, put_select
@@ -30,6 +32,37 @@ except Exception:
     get_house_curve_by_name = None
     load_target_curve = None
     load_house_curve = None
+
+def inject_plotly_runtime_once():
+    """
+    Linux-only: inject Plotly runtime once as inline JS to avoid loader race
+    in embedded PyWebIO HTML snippets.
+    """
+    if not sys.platform.startswith("linux"):
+        return
+
+    js_text = None
+    try:
+        with pkgres.files("camillafir.resources.plotly").joinpath("plotly.min.js").open("r", encoding="utf-8") as f:
+            js_text = f.read()
+    except Exception:
+        js_text = None
+
+    if not js_text:
+        try:
+            from . import camillafir_plot as _plots
+            p = _plots._plotly_js_path()
+            if p and os.path.isfile(p):
+                with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                    js_text = f.read()
+        except Exception:
+            js_text = None
+
+    if js_text:
+        put_html("<script type='text/javascript'>\n" + js_text + "\n</script>")
+    else:
+        # Last-resort fallback
+        put_html("<script src='/static/plotly.min.js'></script>")
 
 def _warn_max_boost_if_over_cap(_=None):
     """
@@ -1745,8 +1778,8 @@ def update_target_preview_ui(_=None):
             uirevision="target_preview_lock",
         )
 
-        # Keep Windows on inline Plotly, Linux on local static route.
-        js_mode = True if sys.platform.startswith("win") else "/static/plotly.min.js"
+        # Keep Windows on inline Plotly; Linux runtime is injected once at page start.
+        js_mode = True if sys.platform.startswith("win") else False
         html = pio.to_html(fig, include_plotlyjs=js_mode, full_html=False)
 
         with use_scope("target_preview_scope", clear=True):

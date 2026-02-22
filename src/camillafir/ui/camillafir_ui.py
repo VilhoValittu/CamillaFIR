@@ -34,6 +34,7 @@ from .camillafir_ui_helpers import (
     update_confidence_pull_ui,
     update_target_preview_ui,
     update_basic_clamp_hints_ui,
+    inject_plotly_runtime_once,
 )
 from . import camillafir_plot as plots
 from .camillafir_modes import MODE_DEFAULTS
@@ -358,6 +359,7 @@ def update_engine_metrics_ui(*, pin=pin, pin_update=pin_update):
 def main():
     set_env(output_max_width='1850px') 
     _inject_dark_css()
+    inject_plotly_runtime_once()
     put_logo_header(t)
     put_html('<hr style="border:1px solid #1f2937; margin: 0 0 14px 0;">')
 
