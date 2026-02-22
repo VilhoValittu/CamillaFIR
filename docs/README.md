@@ -18,6 +18,7 @@ CamillaFIR generates high-resolution FIR room-correction filters from REW export
 
 - Windows: https://github.com/VilhoValittu/CamillaFIR/releases/latest
 - macOS (Intel + Apple Silicon): https://github.com/VilhoValittu/CamillaFIR/releases/latest
+    -macOS builds are community-supported. Limited direct testing.
 - Linux: https://github.com/VilhoValittu/CamillaFIR/releases/latest
 - All releases: https://github.com/VilhoValittu/CamillaFIR/releases
 

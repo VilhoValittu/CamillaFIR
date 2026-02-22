@@ -93,11 +93,36 @@ PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
 MAX_SAFE_TAPS = 131072
-TEST_MODE = 1
+TEST_MODE = 0
 # =========================
 # Test / diagnostics output
 # =========================
 TEST_MODE = os.environ.get("CAMILLAFIR_TEST", "0") == "1"
+
+def resolve_static_dir() -> str | None:
+    """
+    Return static_dir for PyWebIO so `/static/plotly.min.js` is always available.
+    Works in both dev runs and PyInstaller builds.
+    """
+    candidates = []
+
+    # PyInstaller onefile/onedir extracted base.
+    if hasattr(sys, "_MEIPASS"):
+        try:
+            candidates.append(os.path.join(sys._MEIPASS, "assets"))  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    # Dev/source run.
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "plotly"))
+
+    for d in candidates:
+        try:
+            if d and os.path.isfile(os.path.join(d, "plotly.min.js")):
+                return d
+        except Exception:
+            continue
+    return None
 
 def _irwin_tag(mode: typing.Any) -> str:
     """
@@ -1048,4 +1073,10 @@ main = _build_ui_app(
 
 
 if __name__ == '__main__':
-    start_server(main, port=8080, debug=True, auto_open_webbrowser=True)
+    start_server(
+        main,
+        port=8080,
+        debug=True,
+        auto_open_webbrowser=True,
+        static_dir=resolve_static_dir(),
+    )

@@ -1,6 +1,7 @@
 # camillafir_ui_helpers.py
 import numpy as np
 import math
+import sys
 from pywebio.output import *  # needed because this PyWebIO build doesn't expose put_input/put_select as named exports
 from pywebio.input import FLOAT
 from pywebio.pin import pin, pin_update, put_input, put_select
@@ -1744,8 +1745,9 @@ def update_target_preview_ui(_=None):
             uirevision="target_preview_lock",
         )
 
-        # Use inline Plotly for robust embedded rendering.
-        html = pio.to_html(fig, include_plotlyjs=True, full_html=False)
+        # Keep Windows on inline Plotly, Linux on local static route.
+        js_mode = True if sys.platform.startswith("win") else "/static/plotly.min.js"
+        html = pio.to_html(fig, include_plotlyjs=js_mode, full_html=False)
 
         with use_scope("target_preview_scope", clear=True):
             put_html(

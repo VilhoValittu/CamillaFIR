@@ -1055,8 +1055,8 @@ def generate_prediction_plot(
         )
         
         # JS loading mode:
-        # - Embedded snippets (PyWebIO put_html): inline Plotly for compatibility
-        #   (avoids external-load race where Plotly may be undefined).
+        # - Embedded snippets (PyWebIO put_html): load Plotly from local static route
+        #   to keep websocket payloads small and deterministic on Linux.
         # - Full HTML files: prefer local bundled asset, fallback to CDN.
         if create_full_html:
             if _plotly_js_path():
@@ -1064,7 +1064,9 @@ def generate_prediction_plot(
             else:
                 js_mode = "cdn"
         else:
-            js_mode = True
+            # Windows builds are stable with inline Plotly.
+            # Linux uses local static route to avoid large websocket payloads.
+            js_mode = True if sys.platform.startswith("win") else "/static/plotly.min.js"
 
         # Plotly UI config:
         # - Disable double-click autoscale/reset (it breaks with matched log axes)
