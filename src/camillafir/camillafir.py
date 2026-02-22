@@ -59,7 +59,7 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v.3.1.1"
+VERSION = "v.3.1.1.1"
 # Change log:
 
 # v.3.0.0 onwards --> See CHANGELOG.md for details.
