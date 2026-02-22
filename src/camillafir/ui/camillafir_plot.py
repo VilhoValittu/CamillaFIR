@@ -1054,15 +1054,17 @@ def generate_prediction_plot(
             uirevision="keep"
         )
         
-        # Use local Plotly JS when generating full HTML (offline-safe).
-        # If local JS is missing, fall back to CDN.
+        # JS loading mode:
+        # - Embedded snippets (PyWebIO put_html): inline Plotly for maximum compatibility
+        #   across Plotly versions (avoids "require" loader mismatch in Linux builds).
+        # - Full HTML files: prefer local bundled asset, fallback to CDN.
         if create_full_html:
             if _plotly_js_path():
-                js_mode = "plotly.min.js"   # suhteellinen polku
+                js_mode = "assets/plotly.min.js"
             else:
                 js_mode = "cdn"
         else:
-            js_mode = "require"
+            js_mode = True
 
         # Plotly UI config:
         # - Disable double-click autoscale/reset (it breaks with matched log axes)

@@ -1403,7 +1403,8 @@ def update_target_preview_ui(_=None):
                 post_raw = _p("ir_window", 500.0)
             post_ms = _to_float(post_raw, 500.0)
             try:
-                sl = int(float(_p("smoothing_level", 0) or 0))
+                # UI pin is `filter_smooth` (legacy fallback: `smoothing_level`).
+                sl = int(float(_p("filter_smooth", _p("smoothing_level", 0)) or 0))
             except Exception:
                 sl = 0
 
@@ -1436,7 +1437,8 @@ def update_target_preview_ui(_=None):
                 post_raw = _p("ir_window", 500.0)
             post_ms = _to_float(post_raw, 500.0)
             try:
-                sl = int(float(_p("smoothing_level", 0) or 0))
+                # UI pin is `filter_smooth` (legacy fallback: `smoothing_level`).
+                sl = int(float(_p("filter_smooth", _p("smoothing_level", 0)) or 0))
             except Exception:
                 sl = 0
             try:
@@ -1744,7 +1746,8 @@ def update_target_preview_ui(_=None):
             uirevision="target_preview_lock",
         )
 
-        html = pio.to_html(fig, include_plotlyjs="cdn", full_html=False)
+        # Keep preview robust in standalone/offline Linux builds.
+        html = pio.to_html(fig, include_plotlyjs=True, full_html=False)
 
         with use_scope("target_preview_scope", clear=True):
             put_html(

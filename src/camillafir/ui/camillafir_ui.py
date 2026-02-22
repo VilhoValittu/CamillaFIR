@@ -967,6 +967,7 @@ put_markdown("---"),
         'local_path_l', 'local_path_r',
         'lvl_min', 'lvl_max',
         'ir_window_left', 'ir_window_right', 'ir_window',
+        'filter_smooth',
         'smoothing_level',
     ):
         pin_on_change(_preview_pin, onchange=lambda _: update_target_preview_ui())
