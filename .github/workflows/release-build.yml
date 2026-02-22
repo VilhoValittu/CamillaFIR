@@ -206,6 +206,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export MPLCONFIGDIR="$RUNNER_TEMP/mplconfig_arm64"
+          mkdir -p "$MPLCONFIGDIR"
+          # Warm up Matplotlib cache to avoid first-run startup delay in packaged app.
+          python - << 'PY'
+          import matplotlib
+          matplotlib.use("Agg")
+          import matplotlib.pyplot as plt  # noqa: F401
+          PY
+
           dist/CamillaFIR.app/Contents/MacOS/CamillaFIR > smoke_macos_arm64.log 2>&1 &
           APP_PID=$!
           cleanup() {
@@ -214,7 +223,7 @@ jobs:
           }
           trap cleanup EXIT
 
-          for i in {1..45}; do
+          for i in {1..180}; do
             if curl -fsS "http://127.0.0.1:8080" >/dev/null; then
               echo "macOS arm64 startup smoke test passed."
               exit 0
@@ -278,6 +287,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export MPLCONFIGDIR="$RUNNER_TEMP/mplconfig_x86_64"
+          mkdir -p "$MPLCONFIGDIR"
+          # Warm up Matplotlib cache under Rosetta/x86_64 before starting the app.
+          arch -x86_64 python - << 'PY'
+          import matplotlib
+          matplotlib.use("Agg")
+          import matplotlib.pyplot as plt  # noqa: F401
+          PY
+
           arch -x86_64 dist/CamillaFIR.app/Contents/MacOS/CamillaFIR > smoke_macos_x86_64.log 2>&1 &
           APP_PID=$!
           cleanup() {
@@ -286,7 +304,7 @@ jobs:
           }
           trap cleanup EXIT
 
-          for i in {1..45}; do
+          for i in {1..180}; do
             if curl -fsS "http://127.0.0.1:8080" >/dev/null; then
               echo "macOS x86_64 startup smoke test passed."
               exit 0
