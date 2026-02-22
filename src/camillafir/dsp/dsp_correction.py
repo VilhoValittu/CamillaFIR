@@ -50,12 +50,10 @@ def run_correction_stage(
     _stage_probe = stage_probe_fn
     _cfg_float_allow_zero = cfg_float_allow_zero_fn
 
-    # --- 1. RT60 & TARGET ---
     m_rt_lin = np.interp(np.linspace(0, cfg.fs/2, 65537), freq_axis, np.interp(freq_axis, f_in, m_in))
     rt_ir = get_min_phase_impulse(m_rt_lin, 131072)
     current_rt60 = calculate_rt60(rt_ir, cfg.fs)
     rt60_bands = calculate_rt60_bands(rt_ir, cfg.fs, f_min=31.5, f_max=8000.0, order=4)
-    # "One number" of bands (good for scoring/reporting): median 125–4000 Hz if found
     band_avg = 0.0
     if rt60_bands:
         ks = np.array(sorted(rt60_bands.keys()), dtype=float)
@@ -69,23 +67,15 @@ def run_correction_stage(
     if cfg.house_freqs is not None and cfg.house_mags is not None and len(cfg.house_freqs) >= 2 and len(cfg.house_mags) >= 2:
         target_mags = interpolate_response(cfg.house_freqs, cfg.house_mags, freq_axis)
     else:
-        # fallback: flat 0 dB target
         target_mags = np.zeros_like(freq_axis, dtype=float)
     
-    # NOTE (HPF):
-    # Do NOT bake HPF into target curve. HPF is applied as a real magnitude filter later
-    # (gain_db += hpf_db), which keeps magnitude+phase consistent and avoids double-HPF.
     
     if cfg.enable_tdc:
-        # NEW: TDC receives frequency-dependent RT60 (dict), auto-fallback if empty
         rt60_for_tdc = rt60_bands if rt60_bands else current_rt60
-        # Safety brakes: cap total TDC reduction and keep it smooth (avoid deep, stacked notches)
-        # Configurable TDC safety brakes for easy A/B testing
         tdc_strength = _cfg_float_allow_zero(cfg, "tdc_strength", 50.0)
         tdc_max_red = _cfg_float_allow_zero(cfg, "tdc_max_reduction_db", 9.0)
         tdc_slope = _cfg_float_allow_zero(cfg, "tdc_slope_db_per_oct", 0.0)
 
-        # Clamp to sane values (never explode)
         if tdc_strength < 0: tdc_strength = 0.0
         if tdc_strength > 100: tdc_strength = 100.0
         if tdc_max_red < 0: tdc_max_red = 0.0
@@ -103,19 +93,12 @@ def run_correction_stage(
             max_slope_db_per_oct=tdc_slope
         )
 
-    # --- HPF params (always defined) ---
     hpf_f = 0.0
     hpf_order = 0
     if cfg.hpf_settings and cfg.hpf_settings.get('enabled'):
         hpf_f = float(cfg.hpf_settings.get('freq', 0.0) or 0.0)
         hpf_order = int(cfg.hpf_settings.get('order', 0) or 0)
 
-    # --- 2. TASONSOVITUS ---
-    # Huom: tasosovitus on erotettu omaan moduuliin testattavuuden ja edge-case -robustiuden takia.
-    #
-    # IMPORTANT:
-    # target_level_db / calc_offset_db / s_min / s_max MUST be defined before any later use.
-    # compute_leveling() guarantees finite outputs; stereo-link is handled inside compute_leveling().
     target_level_db = 0.0
     calc_offset_db = 0.0
     meas_level_db_window = 0.0
@@ -138,12 +121,8 @@ def run_correction_stage(
             s_max,
         ) = compute_leveling(cfg, np.asarray(freq_axis, dtype=float), np.asarray(m_anal, dtype=float), np.asarray(target_mags, dtype=float))
     except Exception:
-        # Keep safe defaults; never crash later with UnboundLocalError.
         pass
 
-    # --- 7A. Align target level to the SAME leveling window ---
-    # Keep deterministic behavior for both Auto and Manual:
-    # shift target, then recompute leveling so plotting/metadata stay consistent.
     target_shift_db = 0.0
     try:
         f = np.asarray(freq_axis, dtype=float)
@@ -153,11 +132,9 @@ def run_correction_stage(
             if int(np.count_nonzero(mask_lvl)) > 10:
                 tgt_win_mean = float(np.mean(t[mask_lvl]))
                 if np.isfinite(tgt_win_mean) and np.isfinite(float(target_level_db)):
-                    # shift target so that its mean in the leveling window equals target_level_db
                     target_shift_db = float(target_level_db) - tgt_win_mean
                     target_mags = t + target_shift_db
 
-                    # Recompute leveling with shifted target so calc_offset_db matches the new absolute target
                     (
                         target_level_db,
                         calc_offset_db,
@@ -171,21 +148,14 @@ def run_correction_stage(
         target_shift_db = 0.0
 
 
-    # Plotly uses st["target_mags"] / st["measured_mags"]. If we shift target in DSP but don't update st,
-    # the "Target & Magnitude" curves can disappear or desync.
-    # --- 2A2. Expose EFFECTIVE target & axis to native UI/plots ---
     try:
         if isinstance(st, dict):
             st["analysis_mode"] = "native"
             st["freq_axis"] = np.asarray(freq_axis, dtype=float).tolist()
 
-            # --- PLOT REFERENCE FIX ---
-            # Plot everything relative to Smart Scan / Manual leveling window
-            # so target & measured share the SAME 0 dB reference
 
             m_src = np.asarray(m_anal, dtype=float)
             if is_psy and (m_plot_db is not None):
-                # UI-only psychoacoustic magnitude view (REW-like)
                 mp = np.asarray(m_plot_db, dtype=float)
                 if mp.size == m_src.size:
                     m_src = mp
@@ -196,10 +166,7 @@ def run_correction_stage(
             st["measured_mags"] = measured_aligned.tolist()
             st["target_mags"]   = target_aligned.tolist()
 
-            # --- VISUAL: slope-limit envelope around Target (dB/oct) ---
-            # This is UI-only (does not change DSP).
             try:
-                # Inherit legacy symmetric slope limit if boost/cut are unset
                 max_slope = float(getattr(cfg, "max_slope_db_per_oct", 0.0) or 0.0)
                 max_slope_boost = float(getattr(cfg, "max_slope_boost_db_per_oct", 0.0) or 0.0)
                 max_slope_cut = float(getattr(cfg, "max_slope_cut_db_per_oct", 0.0) or 0.0)
@@ -225,7 +192,6 @@ def run_correction_stage(
 
             st["target_shift_db"] = float(target_shift_db)
 
-            # keep alignment metadata consistent
             st["eff_target_db"] = float(target_level_db)
             st["target_level_db_window"] = float(target_level_db_window)
             st["meas_level_db_window"] = float(meas_level_db_window)
@@ -236,21 +202,14 @@ def run_correction_stage(
         pass
 
 
-    # --- 2B. Keep comparison-mode target/leveling consistent after target shaping (HPF/TDC/etc.) ---
-    # NOTE: comparison grid is built earlier for confidence stability, but target_mags is shaped later.
-    # Without this, plots in comparison mode may show the *pre-shaping* target curve.
     try:
         if isinstance(cmp, dict) and analysis_mode == "comparison":
             freq_cmp = np.asarray(cmp.get("cmp_freq_axis", []) or [], dtype=float)
             if freq_cmp.size > 8:
-                # reconstruct raw cmp measured (before offset) from stored arrays
-                # reconstruct RAW measured on comparison grid
                 m_cmp_raw = np.interp(freq_cmp, freq_axis, m_anal)
 
-                # final effective target on comparison grid
                 target_cmp = np.interp(freq_cmp, freq_axis, target_mags)
 
-                # re-run leveling on comparison grid
                 filt_cmp = np.interp(freq_cmp, freq_axis, gain_db)
                 (
                     target_level_db_cmp,
@@ -262,7 +221,6 @@ def run_correction_stage(
                     s_max_cmp,
                 ) = compute_leveling(cfg, freq_cmp, m_cmp_raw, target_cmp)
 
-                # final aligned measured + filter on comparison grid
                 meas_cmp_final = m_cmp_raw - calc_offset_db_cmp
                 filt_cmp = np.interp(freq_cmp, freq_axis, gain_db)
 
@@ -282,15 +240,17 @@ def run_correction_stage(
     except Exception:
         pass
 
-    # --- 3. KORJAUS ---
     if cfg.enable_mag_correction:
-        # Optional debug: stage stats (no UI; enable via config)
         debug_stage_stats = bool(getattr(cfg, "debug_stage_stats", True))
 
         def _log_stats(name: str, x: np.ndarray, mask: np.ndarray | None = None, ref: np.ndarray | None = None):
             """
-            Lightweight stats: peak boost/cut, RMS, and delta vs ref.
-            Only logs when debug_stage_stats is enabled.
+            Kirjaa vaihekohtaiset dB-tilastot debug-kayttoon.
+
+            Laskee annetusta taulukosta (ja valinnaisesta maskista) maksimin,
+            minimin ja RMS-arvon. Jos `ref` on annettu, laskee lisaksi
+            erotuksen huippu- ja RMS-arvot (Delta max / Delta rms).
+            Lokitus tapahtuu vain, kun `debug_stage_stats` on paalla.
             """
             if not debug_stage_stats:
                 return
@@ -331,9 +291,16 @@ def run_correction_stage(
             measured_ref_db: np.ndarray | None = None
         ):
             """
-            Apply confidence-weighted target pull AFTER slope limiting.
-            This makes ConfPull actually affect the final filter (previously slope limiter dominated).
-            Pulls towards a STABLE reference (raw_safe from raw_g) when provided..
+            Soveltaa confidence-pohjaisen target-pullin slope-rajoituksen jalkeen.
+
+            Funktio muodostaa confpull-kayttoon tasoitetun confidence-maskin,
+            rakentaa tarvittaessa vakaan viitekayran (`measured_ref_db` tai
+            psycho_smooth_safe_gain), ajaa
+            `apply_confidence_weighted_target_pull()`-vaiheen ja rajaa tuloksen
+            takaisin korjausmaskin alueelle.
+
+            Samalla funktio kirjaa confpull-telemetrian lokiin ja tallentaa
+            keskeiset tunnusluvut `st`-sanakirjaan, jos se on kaytossa.
             """
             try:
                 if gain_db_in is None or mask_c_in is None:
@@ -345,7 +312,6 @@ def run_correction_stage(
                 if not np.any(mask_c_in):
                     return gain_db_in
 
-                # Tunables (cfg override; safe defaults if not present)
                 _conf_floor = float(getattr(cfg, "conf_pull_floor", 0.05) or 0.05)
                 _conf_ceil  = float(getattr(cfg, "conf_pull_ceil", 0.95) or 0.95)
                 _conf_max_hz = getattr(cfg, "conf_pull_max_hz", 200.0)
@@ -353,7 +319,6 @@ def run_correction_stage(
                 _gamma_cut = float(getattr(cfg, "conf_pull_gamma_cut", 0.55) or 0.55)
                 _gamma_boost = float(getattr(cfg, "conf_pull_gamma_boost", 1.35) or 1.35)
 
-                # NEW: confidence smoothing + bass-floor (same behavior as earlier versions, but now applied post-slope)
                 _conf_sigma = float(getattr(cfg, "conf_pull_conf_smooth_sigma", 2.0) or 2.0)
                 _bass_floor_hz = float(getattr(cfg, "conf_pull_bass_floor_hz", 120.0) or 120.0)
                 _bass_floor_min = float(getattr(cfg, "conf_pull_bass_floor_min", 0.25) or 0.25)
@@ -366,7 +331,6 @@ def run_correction_stage(
                     _bass_floor_min = 0.0
                 _bass_floor_min = float(np.clip(_bass_floor_min, 0.0, 1.0))
 
-                # Prepare confidence for pull (shape must match gain_db)
                 conf_for_pull = conf_mask
                 try:
                     c0 = np.asarray(conf_mask, dtype=float)
@@ -383,9 +347,6 @@ def run_correction_stage(
                 except Exception:
                     conf_for_pull = conf_mask
 
-                # Build measured reference:
-                # Prefer a STABLE "raw_safe" reference from raw_g (measured_ref_db).
-                # Fallback: old behavior using safe smoothing of gain_db_in.
                 try:
                     if measured_ref_db is not None:
                         g_ref = np.asarray(measured_ref_db, dtype=float)
@@ -397,7 +358,6 @@ def run_correction_stage(
                     g_ref = None
 
                 if g_ref is None:
-                    # Fallback: safe smoothing of already-limited gain curve (old behavior)
                     try:
                         g_in = np.asarray(gain_db_in, dtype=float).copy()
                         idx = np.where(mask_c_in)[0]
@@ -410,10 +370,8 @@ def run_correction_stage(
                     except Exception:
                         g_ref = np.asarray(gain_db_in, dtype=float)
 
-                # Always: only use reference in correction band; outside keep target
                 g_ref = np.where(mask_c_in, np.asarray(g_ref, dtype=float), gain_db_in)
 
-                # Apply pull (request telemetry for logs/stats)
                 out = apply_confidence_weighted_target_pull(
                     target_db=gain_db_in,
                     measured_db=g_ref,
@@ -432,10 +390,8 @@ def run_correction_stage(
                 else:
                     gain_out, _tel = out, None
 
-                # Enforce: only affect correction band
                 gain_out = np.where(mask_c_in, np.asarray(gain_out, dtype=float), gain_db_in)
 
-                # Telemetry log (Post-slope)
                 try:
                     if isinstance(_tel, dict):
                         _w_eff = _tel.get("w_eff", None)
@@ -451,7 +407,6 @@ def run_correction_stage(
                     if _pm is not None:
                         _pm = np.asarray(_pm, dtype=bool)
 
-                    # Combine pull_mask with correction mask so stats match "where it matters"
                     if (_pm is None) or (_pm.shape != mask_c_in.shape):
                         _pm2 = mask_c_in
                     else:
@@ -520,7 +475,6 @@ def run_correction_stage(
             except Exception:
                 return gain_db_in
 
-        # Filter smoothing (DSP only). Backward compatible with old config key.
         try:
             _filter_smooth = float(getattr(cfg, "filter_smooth", getattr(cfg, "smoothing_level", 12)) or 12)
         except Exception:
@@ -532,14 +486,10 @@ def run_correction_stage(
         afdw_base = float(getattr(cfg, "fdw_cycles", 15.0))
         afdw_min = max(3.0, afdw_base / 3.0)
         
-        # NOTE: ConfPull moved to POST-SLOPE (gain_db stage), because slope limiter dominated
-        # and made early raw_g pulls mostly invisible in final filters.
         manual_target_bias_db = 0.0
         try:
             lvl_mode_s = str(getattr(cfg, "lvl_mode", "Auto") or "Auto").strip().lower()
             if "manual" in lvl_mode_s:
-                # Reference point for manual mode:
-                # 0 dB == neutral, lower/higher values bias correction down/up.
                 manual_target_bias_db = float(getattr(cfg, "lvl_manual_db", 0.0) or 0.0)
                 if isinstance(st, dict):
                     st["manual_target_bias_db"] = float(manual_target_bias_db)
@@ -557,15 +507,10 @@ def run_correction_stage(
         _log_stats("raw_g_pre_confpull", raw_g, mask_c if "mask_c" in locals() else None)
         base_sigma = 60 // (_filter_smooth / 12 if _filter_smooth > 0 else 1)
 
-        # Raw_g smoothing:
-        # - df_smoothing ON: keep legacy Gaussian model with constant-Hz behavior across fs/taps
-        # - df_smoothing OFF: true 1/N-octave smoothing (log-frequency), matches UI wording
         df_mode = bool(getattr(cfg, "df_smoothing", False))
         if df_mode:
-            # Reference bin width ~ 44100/65536 Hz; match the old "base_sigma bins" at ref
             df_ref = 44100.0 / 65536.0
             sigma_hz = float(base_sigma) * df_ref
-            # Convert Hz -> bins for current axis
             sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=sigma_hz, fallback_bins=max(2.0, float(base_sigma)))
             sm_g = scipy.ndimage.gaussian_filter1d(raw_g, sigma=float(sigma_bins))
         else:
@@ -576,20 +521,13 @@ def run_correction_stage(
             )
 
         final_g = raw_g - (raw_g - sm_g) * (cfg.reg_strength / 100.0)
-        # Stage probes container (per channel/run)
         stage_probes = {}
         
-        # --- 8B. A-FDW directly to correction curve ---
-        # Debug/telemetry: effective BW (oct) per frequency (continuous)
         afdw_bw_oct = None
         afdw_bw_min_oct = afdw_bw_mean_oct = afdw_bw_max_oct = None
         afdw_bw_min_hz = afdw_bw_max_hz = None
 
         
-        # Smooths final_g adaptively based on confidence mask:
-        # - low confidence => more "cycles" => softer correction
-        # - high confidence => less smoothing => sharper correction
-        # --- 8B0. Bass-first AI masks (optional) ---
         use_bassfirst = bool(getattr(cfg, "bass_first_ai", False))
         bf_room_mode = None
         bf_rel = None
@@ -597,15 +535,10 @@ def run_correction_stage(
 
         if use_bassfirst:
             try:
-                # Tarvitaan raakamitta akselille + vaihe (unwrap) + gd_diff
-                # Note: at this point freq_axis exists and complex_meas was built earlier in analysis.
-                # Use same base data as analyze_acoustic_confidence: phase unwrap + gd
                 ph_u = np.unwrap(np.angle(complex_meas))
                 df = np.gradient(freq_axis) + 1e-12
                 gd_ms_local = (-np.gradient(ph_u) / (2*np.pi*df)) * 1000.0
 
-                # GD-diff should be deterministic across different freq_axis resolutions (fs/taps).
-                # Use Hz-based smoothing width (converted to bins) instead of fixed sigma-in-bins.
                 try:
                     _gd_sigma_hz = float(getattr(cfg, "bass_first_gd_sigma_hz", 2.0) or 2.0)
                 except Exception:
@@ -615,9 +548,6 @@ def run_correction_stage(
                 sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=float(_gd_sigma_hz), fallback_bins=20.0)
                 gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms_local, sigma=float(sigma_bins))
                 gd_diff_local = np.abs(gd_ms_local - gd_smooth)
-                # Limit bass-first effect at very low latency REW Asym to avoid unstable LF behavior.
-                # NOTE: this only affects bass-first masks (A-FDW confidence shaping), not the main correction band.
-                # Limit bass-first effect at very low latency REW Asym to avoid unstable LF behavior.
                 _bf_mode_f2 = float(getattr(cfg, "bass_first_mode_max_hz", 200.0) or 200.0)
                 _win_mode = "auto"
                 _left_ms = 0.0
@@ -630,8 +560,6 @@ def run_correction_stage(
                 except Exception:
                     pass
 
-                # m_interp should be the "raw measured mags" interpolated to freq_axis
-                # If at this point a different name is used, use it (usually m_interp / meas_interp etc.)
                 bf_rel, bf_room_mode, _ = bf.build_bassfirst_masks(
                     freq_axis=freq_axis,
                     m_raw_db=m_interp,
@@ -659,7 +587,6 @@ def run_correction_stage(
                 c = np.clip(conf_for_afdw, 0.0, 1.0)
                 adaptive_cycles = float(afdw_min) + (c * (float(afdw_base) - float(afdw_min)))
                 bw = 2.0 / np.maximum(adaptive_cycles, 1.0)
-                # clamp to same range used by the continuous blender
                 bw = np.clip(bw, AFDW_BW_MIN_OCT, AFDW_BW_MAX_OCT)
                 afdw_bw_oct = bw
                 afdw_bw_min_oct = float(np.min(bw))
@@ -670,15 +597,12 @@ def run_correction_stage(
                 afdw_bw_min_hz = float(freq_axis[int(bw_min_idx[len(bw_min_idx)//2])])
                 afdw_bw_max_hz = float(freq_axis[int(bw_max_idx[len(bw_max_idx)//2])])
 
-                # Feed dashboard: A-FDW Effective BW (oct)
                 try:
                     if isinstance(st, dict):
                         st["afdw_bw_oct"] = np.asarray(afdw_bw_oct, dtype=float).tolist()
-                        # Build cmp_afdw_bw_oct only if comparison grid exists; MUST match cmp_freq_axis length
                         try:
                             if str(locals().get("analysis_mode", "native")).lower() == "comparison":
                                 _fx_cmp = None
-                                # prefer cmp dict if present
                                 _cmp = locals().get("cmp", None)
                                 if isinstance(_cmp, dict):
                                     _fx_cmp = _cmp.get("cmp_freq_axis", None)
@@ -712,8 +636,6 @@ def run_correction_stage(
             )
         mask_c = (freq_axis >= (0 if cfg.hpf_settings else cfg.mag_c_min)) & (freq_axis <= cfg.mag_c_max)
 
-        # --- Build STABLE measured reference for ConfPullPost: raw_safe from raw_g ---
-        # Use edge-hold inside correction band before smoothing to avoid pulling towards 0 dB outside band.
         raw_safe_ref = None
         try:
             g0 = np.asarray(raw_g, dtype=float).copy()
@@ -725,14 +647,9 @@ def run_correction_stage(
                 if i1 < (g0.size - 1):
                     g0[i1+1:] = g0[i1]
             raw_safe_ref = psycho_smooth_safe_gain(freq_axis, g0)
-            # Keep reference only in correction band (outside is irrelevant / can confuse)
             raw_safe_ref = np.where(mask_c, np.asarray(raw_safe_ref, dtype=float), 0.0)
         except Exception:
             raw_safe_ref = None
-        # When A-FDW is ON, don't multiply final_g by eff_conf,
-        # because A-FDW already applies "caution" to shape (smoothing).
-        # This avoids double caution (shape softens + amplitude attenuates).
-        # --- 8B1. Bass-first gain modulation (room modes) ---
         if use_bassfirst and bf_room_mode is not None:
             try:
                 final_g = bf.modulate_gain_bassfirst(
@@ -749,9 +666,6 @@ def run_correction_stage(
             gain_apply = (final_g * eff_conf).copy()
         _gain_apply_pre_limits = gain_apply.copy()
         _log_stats("gain_apply_pre_limits", gain_apply, mask_c)
-        # --- REW ASYM ultra-low latency safety (gain side) ---
-        # If latency target is extremely small, prevent LF boosts (cuts still allowed)
-        # to avoid unstable correction / ripple in bass.
         try:
             _win_mode = str(getattr(cfg, "ir_export_window_mode", "auto") or "auto").strip().lower()
             _left_ms  = float(getattr(cfg, "ir_window_left", getattr(cfg, "ir_window_ms_left", 0.0)) or 0.0)
@@ -759,12 +673,11 @@ def run_correction_stage(
                 _hz = 120.0
                 _m = mask_c & (freq_axis > 0.0) & (freq_axis <= _hz)
                 if np.any(_m):
-                    gain_apply[_m] = np.minimum(gain_apply[_m], 0.0)  # no boost, cuts OK
+                    gain_apply[_m] = np.minimum(gain_apply[_m], 0.0)
                     logger.info(f"REW Asym safety: left_ms={_left_ms:.1f} -> no LF boost below {_hz:.0f} Hz")
         except Exception:
             pass
 
-        # --- CHECKPOINT 1: after_gain_apply (before slope/fade/exc/limits) ---
         try:
             _tmp_after_apply = np.zeros_like(gain_db, dtype=float)
             _tmp_after_apply[mask_c] = gain_apply[mask_c]
@@ -777,20 +690,13 @@ def run_correction_stage(
         except Exception:
             pass
 
-        # --- 8C. Low-bass CUT allowance ---
-        # < low_hz: allow ONLY attenuation (no boost).
-        # IMPORTANT: do NOT force "min(final_g, raw_g)" by default, because that can
-        # collapse different settings into identical low-frequency filters.
         low_cut_enable = True
         try:
-            # optional config flag (default ON if missing)
             low_cut_enable = bool(getattr(cfg, "low_bass_cut_enable", True))
         except Exception:
             low_cut_enable = True
 
         low_hz = _cfg_float_allow_zero(cfg, "low_bass_cut_hz", 0.0)
-        # strength: 0.0 => just "no boost" (preserve differences)
-        #           1.0 => old aggressive behavior (prefer stronger cuts)
         try:
             low_cut_strength = float(getattr(cfg, "low_bass_cut_strength", 0.0) or 0.0)
         except Exception:
@@ -801,11 +707,8 @@ def run_correction_stage(
 
         low_mask = mask_c & (freq_axis > 0) & (freq_axis <= low_hz)
         if low_cut_enable and np.any(low_mask):
-            # Base policy: keep computed correction but never boost in very low bass
             low_cut = np.minimum(gain_apply[low_mask], 0.0)
 
-            # Optional aggressiveness: blend toward "stronger of (final_g, raw_g)" cuts
-            # (this approximates the old behavior but avoids always dominating)
             if low_cut_strength > 0.0:
                 stronger_cut = np.minimum(final_g[low_mask], raw_g[low_mask])
                 stronger_cut = np.minimum(stronger_cut, 0.0)
@@ -813,7 +716,6 @@ def run_correction_stage(
 
             gain_apply[low_mask] = low_cut
 
-        # --- CHECKPOINT 2: after_lowbass_policy ---
         try:
             _tmp_after_low = np.zeros_like(gain_db, dtype=float)
             _tmp_after_low[mask_c] = gain_apply[mask_c]
@@ -832,15 +734,10 @@ def run_correction_stage(
         except Exception:
             pass
 
-        # --- SLOPE LIMIT (if present in your pipeline) ---
-        # NOTE: This patch assumes you have a section that modifies gain_apply or tmp via slope limiting.
-        # If your slope limiting modifies a different array, place the probe right after that modification.
 
 
-        # --- 8D. Max cut + max boost (soft) ---
-        max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))  # default: sallitaan kohtuullinen leikkaus
+        max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
 
-        # --- 8D-a. Diagnostic: config snapshot (once per run path) ---
         try:
             logger.info(
                 "Diagnostic: "
@@ -856,7 +753,6 @@ def run_correction_stage(
         except Exception:
             pass
 
-        # Pre-clamp diagnostics (what the algorithm "wanted" to do before soft clip)
         try:
             _cand = np.zeros_like(gain_db, dtype=float)
             _cand[mask_c] = gain_apply[mask_c]
@@ -875,7 +771,6 @@ def run_correction_stage(
         tmp = np.zeros_like(gain_db, dtype=float)
         tmp[mask_c] = gain_apply[mask_c]
 
-        # --- CHECKPOINT 3: pre_softclip (this is the input to soft_clip_gain) ---
         try:
             stage_probes["pre_softclip"] = _stage_probe(
                 "pre_softclip", freq_axis, tmp, mask_c,
@@ -887,13 +782,11 @@ def run_correction_stage(
             pass
 
 
-        # --- 8D-b. Clamp diagnostics: SOFT CLIP stage (what got limited here?) ---
         try:
             _pre_soft = tmp.copy()
             _max_boost = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
             _max_cut = float(max_cut_db)
 
-            # How much candidate exceeded limits before soft clip?
             if np.any(mask_c):
                 over_boost = float(np.max(_pre_soft[mask_c] - _max_boost)) if _max_boost > 0 else float(np.max(_pre_soft[mask_c]))
                 over_boost = max(0.0, over_boost)
@@ -925,7 +818,6 @@ def run_correction_stage(
             over_boost, over_cut = 0.0, 0.0
 
 
-        # --- CHECKPOINT 4: post_softclip ---
         try:
             stage_probes["post_softclip"] = _stage_probe(
                 "post_softclip", freq_axis, tmp, mask_c,
@@ -939,15 +831,7 @@ def run_correction_stage(
 
         gain_db[mask_c] = tmp[mask_c]
 
-        # --- 8E. Slope/octave limiter (gain curve steepness) ---
-        #----------
-        # Confidence pull is applied post-slope using a stable raw_safe reference, 
-        # ensuring it affects the final filter rather than being overridden by slope limiting.”
-        #---------
-        # Note: done before exc_prot and run exc_prot again at the end,
-        # so slope limiting cannot "leak" boost into protection zones.
-        max_slope = float(getattr(cfg, "max_slope_db_per_oct", 24.0) or 0.0)  # legacy (symmetric)
-        # NEW: separate limits for boost/cut; <=0 inherits legacy max_slope
+        max_slope = float(getattr(cfg, "max_slope_db_per_oct", 24.0) or 0.0)
         max_slope_boost = float(getattr(cfg, "max_slope_boost_db_per_oct", 0.0) or 0.0)
         max_slope_cut   = float(getattr(cfg, "max_slope_cut_db_per_oct", 0.0) or 0.0)
         if max_slope_boost <= 0.0:
@@ -955,12 +839,9 @@ def run_correction_stage(
         if max_slope_cut <= 0.0:
             max_slope_cut = max_slope
 
-        # Only run if any slope limiting is enabled
         if max_slope > 0 or max_slope_boost > 0 or max_slope_cut > 0:
-            # Limit only in correction area, keep outside untouched
             g2 = gain_db.copy()
             try:
-                # If equal, keep old behavior (bit-for-bit close) using symmetric limiter
                 if max_slope_boost == max_slope_cut and max_slope_boost > 0:
                     g2 = limit_slope_per_octave(freq_axis, g2, max_db_per_oct=float(max_slope_boost))
                 else:
@@ -971,12 +852,10 @@ def run_correction_stage(
                         max_db_per_oct_cut=float(max_slope_cut),
                     )
             except Exception:
-                # Never break the pipeline due to slope limiting
                 pass
             gain_db[mask_c] = g2[mask_c]
             _log_stats("gain_db_post_slope", gain_db, mask_c)
 
-            # --- ConfPull POST-SLOPE (makes A/B settings visible in final filter) ---
             try:
                 _pre = gain_db.copy()
                 gain_db = _apply_confpull_post_slope(gain_db, mask_c, measured_ref_db=raw_safe_ref)
@@ -995,16 +874,12 @@ def run_correction_stage(
             except Exception:
                 pass
 
-        # --- 8E1. Post-shape filter smoothing ---
-        # Keep filter_smooth/reg_strength visible in the final filter, even when
-        # A-FDW + slope/confpull rails have already reshaped the curve.
         try:
             if np.any(mask_c):
                 g0 = np.asarray(gain_db, dtype=float).copy()
                 idx = np.where(mask_c)[0]
                 if idx.size >= 2:
                     i0, i1 = int(idx[0]), int(idx[-1])
-                    # Edge-hold outside correction band to avoid pull toward 0 dB.
                     if i0 > 0:
                         g0[:i0] = g0[i0]
                     if i1 < (g0.size - 1):
@@ -1026,34 +901,24 @@ def run_correction_stage(
         f_start = max(cfg.mag_c_max - cfg.trans_width, cfg.mag_c_min)
         
         f_mask = (freq_axis > f_start) & (freq_axis <= cfg.mag_c_max)
-        # Varmistetaan jakolasku (ettei jaeta nollalla, jos trans_width on 0)
         fade_len = cfg.mag_c_max - f_start
         if np.any(f_mask) and fade_len > 0: 
             gain_db[f_mask] *= (cfg.mag_c_max - freq_axis[f_mask]) / fade_len
         if cfg.exc_prot:
-            # Define transition zone (about 1/2 octave, factor 1.41)
             f_start = cfg.exc_freq
             f_end = cfg.exc_freq * 1.41
             
-            # 1. Full protection below f_start: Force boost to zero, allow cuts
             prot_mask = freq_axis < f_start
             gain_db[prot_mask] = np.minimum(gain_db[prot_mask], 0.0)
             
-            # 2. Soft transition zone f_start -> f_end
-            # In this zone allowed boost rises linearly 0 dB -> max_boost_db
             trans_mask = (freq_axis >= f_start) & (freq_axis <= f_end)
             if np.any(trans_mask):
-                # Calculate fade factor (0.0 -> 1.0)
                 fade = (freq_axis[trans_mask] - f_start) / (f_end - f_start)
-                # Maximum allowed boost at this frequency
                 allowed_boost = fade * cfg.max_boost_db
-                # Limit boost, but keep all attenuations (cuts)
                 gain_db[trans_mask] = np.minimum(gain_db[trans_mask], allowed_boost)
             
             logger.info(f"Exc Prot: Full protection < {f_start}Hz, Soft fade up to {f_end:.1f}Hz.")
 
-        # --- 8E2. WAV-only ripple cleanup near correction upper edge ---
-        # Keep TXT path untouched; only smooth a narrow zone around mag_c_max.
         try:
             if bool(getattr(cfg, "is_wav_source", False)) and np.any(mask_c):
                 cmin = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
@@ -1090,12 +955,7 @@ def run_correction_stage(
         except Exception:
             pass
 
-        # NOTE (HPF):
-        # Do NOT "zero correction" below HPF. That is not a high-pass filter.
-        # Real HPF magnitude is applied later via gain_db += hpf_db.
 
-        # --- CHECKPOINT 5: after_fade (place right AFTER your fade/transition operations) ---
-        # If your fade is applied on gain_db, this is correct. If it is applied on another array, move accordingly.
         try:
             stage_probes["after_fade"] = _stage_probe(
                 "after_fade", freq_axis, gain_db, mask_c,
@@ -1106,9 +966,6 @@ def run_correction_stage(
         except Exception:
             pass
 
-        # --- CHECKPOINT 6: after_slope (place right AFTER your slope-limit operation) ---
-        # IMPORTANT: If slope-limit happens earlier than fade in your code, move this probe accordingly.
-        # This stays here as a fallback; you should move it to the actual slope-limit section if different.
         try:
             if "after_slope" not in stage_probes:
                 stage_probes["after_slope"] = _stage_probe(
@@ -1121,13 +978,10 @@ def run_correction_stage(
             pass
 
         
-        # --- 8F. Final safety clamp (max boost / max cut) ---
-        # Ensure no later operation (fade/slope/exc_prot) exceeds limits.
         max_cut_db = float(getattr(cfg, "max_cut_db", 15.0))
         max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
 
 
-        # --- CHECKPOINT 7: post_hardclamp ---
         try:
             stage_probes["post_hardclamp"] = _stage_probe(
                 "post_hardclamp", freq_axis, gain_db, mask_c,
@@ -1138,7 +992,6 @@ def run_correction_stage(
         except Exception:
             pass
 
-        # --- 8F-b. Clamp diagnostics: FINAL HARD CLAMP stage ---
         try:
             _pre_hard = gain_db.copy()
             _max_boost2 = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
@@ -1168,7 +1021,6 @@ def run_correction_stage(
                 f"worst_over_boost={hard_over_boost:.2f} dB, worst_over_cut={hard_over_cut:.2f} dB"
             )
 
-            # Clamp-dominance indicator: if high, many settings (e.g. smoothing) may look similar.
             clipped_total = int(hardclamp_boost_bins + hardclamp_cut_bins)
             clip_pct = (100.0 * clipped_total / float(max(1, _band_bins)))
             over_peak = float(max(hard_over_boost, hard_over_cut))
@@ -1201,9 +1053,6 @@ def run_correction_stage(
             hard_over_boost, hard_over_cut = 0.0, 0.0
             clamp_dominance_level = "NONE"
 
-        # --- 8F1. Clamp-aware final smoothing ---
-        # If hard clamp is active, smooth the already-limited curve and re-apply limits.
-        # This preserves safety while making filter_smooth/reg_strength visible in final export.
         try:
             _clamp_active = bool((hardclamp_boost_bins > 0) or (hardclamp_cut_bins > 0))
         except Exception:
@@ -1228,15 +1077,12 @@ def run_correction_stage(
                 if mix > 0.0:
                     _pre = gain_db.copy()
                     gain_db[mask_c] = gain_db[mask_c] + (g_sm[mask_c] - gain_db[mask_c]) * mix
-                    # Re-apply hard safety limits after polish.
                     gain_db = np.minimum(gain_db, float(getattr(cfg, "max_boost_db", 0.0) or 0.0))
                     gain_db = np.maximum(gain_db, -max_cut_db)
                     _log_stats("gain_db_post_final_clamp_smooth", gain_db, mask_c, ref=_pre)
         except Exception:
             pass
 
-        # --- 8F2. WAV-only final ripple polish near correction edge ---
-        # Applied at the end so later clamp/smoothing stages won't reintroduce ripple.
         try:
             if bool(getattr(cfg, "is_wav_source", False)) and np.any(mask_c):
                 cmin = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
@@ -1246,14 +1092,12 @@ def run_correction_stage(
                     if not np.isfinite(tw) or tw <= 0.0:
                         tw = max(50.0, 0.4 * cmax)
 
-                    # Wider than 8E2 to catch the visible 200-300 Hz comb/ripple region.
                     f_lo = max(cmin, cmax - 0.95 * tw)
                     f_hi = min(float(np.max(freq_axis)), cmax + 1.45 * tw)
                     zone = (freq_axis >= f_lo) & (freq_axis <= f_hi)
                     if int(np.count_nonzero(zone)) >= 8:
                         _pre = gain_db.copy()
                         g0 = np.asarray(gain_db, dtype=float).copy()
-                        # Stronger and deterministic smoothing in Hz domain.
                         sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=8.0, fallback_bins=12.0)
                         g_sm = scipy.ndimage.gaussian_filter1d(g0, sigma=float(max(2.0, sigma_bins)))
 
@@ -1263,11 +1107,9 @@ def run_correction_stage(
                         w = np.zeros_like(g0, dtype=float)
                         w[zone] = 0.5 - 0.5 * np.cos(np.pi * x[zone])
 
-                        # Apply mostly full blend inside the zone to ensure ripple attenuation.
                         mix = 0.95
                         gain_db = g0 + (g_sm - g0) * (mix * w)
 
-                        # Keep safety limits intact.
                         gain_db = np.minimum(gain_db, float(getattr(cfg, "max_boost_db", 0.0) or 0.0))
                         gain_db = np.maximum(gain_db, -max_cut_db)
 
@@ -1278,7 +1120,6 @@ def run_correction_stage(
         except Exception:
             pass
 
-        # --- 8F-a. Diagnostic: post-clamp boost/cut summary ---
         try:
             if np.any(mask_c):
                 boost_peak_db = float(np.max(gain_db[mask_c]))

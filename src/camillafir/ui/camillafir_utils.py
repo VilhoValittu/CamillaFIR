@@ -1,4 +1,3 @@
-# camillafir_utils.py
 
 def scale_taps_with_fs(
     fs: int,
@@ -10,7 +9,7 @@ def scale_taps_with_fs(
         1048576
     ),
 ) -> int:
-    """Scale FIR taps with sample rate so that filter time length stays constant."""
+    """Kasittelee signaalia tai dataa: scale taps with fs."""
     try:
         fs_i = int(fs)
         if fs_i <= 0:

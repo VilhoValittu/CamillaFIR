@@ -1,19 +1,14 @@
-# camillafir_housecurve.py
 import numpy as np
 from pywebio.pin import pin
 
 
 def _normalize_hc_mode_key(v) -> str:
-    """
-    Convert UI label / legacy saved strings into a stable preset key.
-    This fixes the bug where translated labels caused preset matching to fall back.
-    """
+    """Sisainen apufunktio: normalize hc mode key."""
     try:
         s = str(v or "")
     except Exception:
         s = ""
 
-    # Already a valid keys
     known = {
         "Harman6", "Harman8", "Harman4", "Harman10",
         "Studio", "Nearfield", "HiFi", "Speech",
@@ -22,9 +17,7 @@ def _normalize_hc_mode_key(v) -> str:
     if s in known:
         return s
 
-    # Legacy / label heuristics (robust against language + spacing)
     n = s.lower().replace(" ", "")
-    # "upload"/"custom" options in various languages (keep simple + safe)
     if "custom" in n or "lataa" in n or "upload" in n:
         return "Upload"
     if "cinema" in n:
@@ -50,13 +43,11 @@ def _normalize_hc_mode_key(v) -> str:
             return "Harman4"
         return "Harman6"
 
-    # Safe fallback
     return "Harman6"
 
 
 def get_house_curve_by_name(name):
 
-    # --- Common full-band frequency axis ---
     full_freqs = np.array([
         0.0,
         20.0, 25.0, 31.5, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0,
@@ -64,7 +55,6 @@ def get_house_curve_by_name(name):
         8000.0, 16000.0, 20000.0
     ])
 
-    # --- Harman variants ---
     if 'Harman8' in name or '+8dB' in name:
         freqs = full_freqs
         mags = np.array([
@@ -92,7 +82,6 @@ def get_house_curve_by_name(name):
             -4.0, -5.5, -6.0
         ])
 
-    # --- Research / reference ---
     elif 'Toole' in name:
         freqs = np.array([
             0.0,
@@ -114,7 +103,6 @@ def get_house_curve_by_name(name):
             -4.8, -6.0, -6.5
         ])
 
-    # --- Listening use cases ---
     elif 'Nearfield' in name or 'Desk' in name:
         freqs = full_freqs
         mags = np.array([
@@ -142,7 +130,6 @@ def get_house_curve_by_name(name):
             -3.5, -6.0, -8.0
         ])
 
-    # --- Cinema / special ---
     elif 'Cinema' in name:
         freqs = np.array([
             0.0, 20.0, 2000.0, 4000.0, 8000.0, 16000.0, 20000.0
@@ -155,7 +142,6 @@ def get_house_curve_by_name(name):
         freqs = full_freqs
         mags = np.zeros_like(freqs)
 
-    # --- Default fallback ---
     else:
         freqs = full_freqs
         mags = np.array([
@@ -168,9 +154,7 @@ def get_house_curve_by_name(name):
 
 
 def load_target_curve(file_content: bytes):
-    """
-    Reads target curve from text file and ensures correct ordering.
-    """
+    """Lataa tai lukee: load target curve."""
     try:
         content_str = file_content.decode("utf-8")
         lines = content_str.split("\n")
@@ -205,21 +189,13 @@ def load_target_curve(file_content: bytes):
 
 
 def load_house_curve(data: dict, *, parse_measurements_from_path=None):
-    """
-    1) Upload (pin.hc_custom_file) -> load_target_curve()
-    2) local_path_house -> parse_measurements_from_path() (callback)
-    3) preset -> get_house_curve_by_name()
-
-    Returns: (hc_f, hc_m, hc_source)
-    """
+    """Lataa tai lukee: load house curve."""
     hc_f, hc_m = None, None
     hc_source = "Preset"
-    # Decide mode ONCE (stable)
     mode_key = _normalize_hc_mode_key(data.get("hc_mode"))
     want_upload = (mode_key == "Upload")
 
 
-    # 1) Upload
     try:
         if want_upload and getattr(pin, "hc_custom_file", None):
             up = pin.hc_custom_file
@@ -229,7 +205,6 @@ def load_house_curve(data: dict, *, parse_measurements_from_path=None):
     except Exception:
         pass
 
-    # 2) Local file
     if hc_f is None and data.get("local_path_house"):
         if callable(parse_measurements_from_path):
             try:
@@ -241,17 +216,13 @@ def load_house_curve(data: dict, *, parse_measurements_from_path=None):
             except Exception:
                 hc_f, hc_m = None, None
 
-    # 3) Preset fallback (ONLY real presets)
     if hc_f is None:
         preset_key = mode_key
-        # If Upload selected but file missing/unparsable: choose Flat (and be explicit)
         if preset_key == "Upload":
             preset_key = "Flat"
             hc_source = "Upload (no file)"
 
-        # If Upload/Custom selected but no file loaded -> DO NOT silently fallback to Harman
         if preset_key in ("Custom", "Upload"):
-            # Return flat instead of misleading Harman
             hc_f, hc_m = get_house_curve_by_name("Flat")
             hc_source = "Upload (no file)"
         else:

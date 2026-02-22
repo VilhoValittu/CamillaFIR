@@ -1,4 +1,3 @@
-# camillafir_config.py
 import json
 import os
 
@@ -59,7 +58,7 @@ def load_config() -> dict:
         "max_pre_ringing_db": -35.0,
         "max_excess_delay_ms": 2.5,
         "ir_window_right": 500.0,
-        "ir_window_left": 120.0,
+        "ir_window_left": 85.0,
         "ir_export_window_mode": "auto",
         "ir_export_window_shape": "hann",
         "ir_export_tukey_alpha": 0.25,
@@ -85,7 +84,6 @@ def load_config() -> dict:
                 saved = json.load(f)
 
 
-            # Legacy: PyWebIO checkbox pins saved as []/[True]
             for k in [
                 "mag_correct",
                 "normalize_opt",
@@ -101,8 +99,6 @@ def load_config() -> dict:
                 if k in saved and isinstance(saved[k], list):
                     saved[k] = bool(saved[k])
 
-            # Legacy migration: manual-target neutral reference changed from 75 dB to 0 dB.
-            # Old configs typically stored values around ~60..90 dB.
             try:
                 if "lvl_manual_db" in saved:
                     _v = float(saved.get("lvl_manual_db"))

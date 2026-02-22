@@ -1,18 +1,11 @@
-"""
-Convolver config generators (CamillaDSP YAML, HLC/BruteFIR/Convolver VST cfg).
-
-These are intentionally isolated from UI/DSP logic so export paths can import
-them without pulling the whole app.
-"""
+"""Moduulin suomenkielinen kuvaus."""
 
 def generate_raspberry_yaml(fs, ft_short, file_ts, master_gain_db=0.0, irw_tag: str = "auto"):
     import textwrap
 
-    # FIR .wav files (CamillaDSP replaces $samplerate$ at runtime)
     l_wav = f'../coeffs/L_{ft_short}_$samplerate$Hz_{file_ts}_{irw_tag}.wav'
     r_wav = f'../coeffs/R_{ft_short}_$samplerate$Hz_{file_ts}_{irw_tag}.wav'
 
-    # sanitize
     try:
         g = float(master_gain_db)
     except Exception:
@@ -89,25 +82,21 @@ def generate_raspberry_yaml(fs, ft_short, file_ts, master_gain_db=0.0, irw_tag: 
 
 
 def generate_hlc_config(fs, ft_short, file_ts, irw_tag: str = "auto"):
-    """
-    Luo standardin .cfg konfiguraatiotiedoston (HLC, Convolver VST, BruteFIR).
-    Generoi tiedostonimet sisäisesti samoilla säännöillä kuin YAML-funktio.
-    """
-    # Generoidaan tiedostonimet täsmälleen samalla kaavalla kuin tallennuksessa
+    """Rakentaa tai generoi: generate hlc config."""
     l_name = f"L_{ft_short}_{fs}Hz_{file_ts}_{irw_tag}.wav"
     r_name = f"R_{ft_short}_{fs}Hz_{file_ts}_{irw_tag}.wav"
 
     config = [
-        f"{int(fs)} 2 2 0",  # Header: SampleRate, 2 In, 2 Out, 0 Offset
+        f"{int(fs)} 2 2 0",
         "0 0",
         "0 0",
-        f"{l_name}",         # Vasen tiedosto
-        "0",                 # Input Index (L)
+        f"{l_name}",
+        "0",
         "0.0",
-        "0.0",                 # Output Index (L)
-        f"{r_name}",         # Oikea tiedosto
-        "0",                 # Input Index (R)
+        "0.0",
+        f"{r_name}",
+        "0",
         "1.0",
-        "1.0"                  # Output Index (R)
+        "1.0"
     ]
     return "\n".join(config)

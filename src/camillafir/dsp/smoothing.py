@@ -5,8 +5,6 @@ import logging
 
 logger = logging.getLogger("CamillaFIR.dsp")
 
-# Keep A-FDW effective bandwidth bounded to the same practical range
-# used by correction telemetry/UI to avoid hidden over-smoothing.
 AFDW_BW_MIN_OCT = 1.0 / 96.0
 AFDW_BW_MAX_OCT = 1.0 / 3.0
 
@@ -14,8 +12,8 @@ def psychoacoustic_smoothing(
     freqs,
     mags,
     *,
-    low_bw=1/48.0,    # LF: keep reasonably detailed (less smoothing)
-    high_bw=1/1.0,    # HF: very smooth (safety/reference)
+    low_bw=1/48.0,
+    high_bw=1/1.0,
     f_lo=200.0,
     f_hi=2000.0,
 ):
@@ -37,11 +35,11 @@ def psychoacoustic_smoothing(
     return (1.0 - w) * m_low + w * m_high
 
 def psycho_smooth_safe_gain(freqs, mags):
-    """DSP safety preset for a 'safe' correction reference curve."""
+    """Funktio: psycho smooth safe gain."""
     return psychoacoustic_smoothing(
         freqs, mags,
-        low_bw=1/48.0,     # keep LF/mid reasonably detailed
-        high_bw=1/1.0,     # smooth HF
+        low_bw=1/48.0,
+        high_bw=1/1.0,
         f_lo=200.0,
         f_hi=2000.0,
     )
@@ -50,13 +48,7 @@ def psycho_smooth_safe_gain(freqs, mags):
     """
 
 def smooth_gain_fractional_octave(freqs, gain_db, filter_smooth, *, mult=1.0):
-    """
-    Smooth gain curve using true fractional-octave width on log-frequency axis.
-
-    Args:
-      filter_smooth: denominator N for 1/N octave smoothing (e.g. 12 -> 1/12 oct).
-      mult: optional width multiplier (>1 broadens smoothing; used by residual pass).
-    """
+    """Kasittelee signaalia tai dataa: smooth gain fractional octave."""
     f = np.asarray(freqs, dtype=float)
     g = np.asarray(gain_db, dtype=float)
     if f.size < 8 or g.size != f.size:
@@ -76,7 +68,6 @@ def smooth_gain_fractional_octave(freqs, gain_db, filter_smooth, *, mult=1.0):
     if not np.isfinite(m) or m <= 0.0:
         m = 1.0
 
-    # 1/N octave, widened by mult (e.g. mult=2 => approx 1/(N/2) octave).
     octave_fraction = float(np.clip(m / fs, 1.0 / 192.0, 1.0))
     dummy_phase = np.zeros_like(g)
     sm, _ = apply_smoothing_std(f, g, dummy_phase, octave_fraction=octave_fraction)
@@ -84,11 +75,7 @@ def smooth_gain_fractional_octave(freqs, gain_db, filter_smooth, *, mult=1.0):
 
 
 def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycles=5.0):
-    """
-    Apply adaptive magnitude smoothing based on confidence.
-    High confidence = more cycles (sharper correction).
-    Low confidence = fewer cycles (heavier smoothing).
-    """
+    """Soveltaa tai paivittaa: apply adaptive fdw."""
     f = np.asarray(freqs, dtype=float)
     m = np.asarray(mags, dtype=float)
     c = np.asarray(confidence_mask, dtype=float) if confidence_mask is not None else None
@@ -96,12 +83,10 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
     if f.size < 8 or m.size != f.size:
         return np.copy(mags)
 
-    # Confidence clamp (robustness)
     if c is None or c.size != f.size:
         c = np.ones_like(f)
     c = np.clip(c, 0.0, 1.0)
 
-    # Target cycles & octave widths (continuous)
     base_cycles = float(base_cycles)
     min_cycles = float(min_cycles)
     if base_cycles < 1.0: base_cycles = 1.0
@@ -110,24 +95,19 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
         min_cycles, base_cycles = base_cycles, min_cycles
 
     adaptive_cycles = min_cycles + (c * (base_cycles - min_cycles))
-    oct_widths = 2.0 / np.maximum(adaptive_cycles, 1.0)  # larger => heavier smoothing
+    oct_widths = 2.0 / np.maximum(adaptive_cycles, 1.0)
 
-    # Fixed set of octave widths to blend between (ascending for searchsorted)
     bw_list = np.array([1.0/96.0, 1.0/48.0, 1.0/24.0, 1.0/12.0, 1.0/6.0, 1.0/3.0], dtype=float)
 
-    # Precompute smoothed curves for each BW (fast: only 6 passes)
     sm_stack = []
     dummy = np.zeros_like(m)
     for bw in bw_list:
         sm, _ = apply_smoothing_std(f, m, dummy, float(bw))
         sm_stack.append(sm)
-    sm_stack = np.vstack(sm_stack)  # shape: (K, N)
+    sm_stack = np.vstack(sm_stack)
 
-    # Clamp target widths to available range
     t = np.clip(oct_widths, AFDW_BW_MIN_OCT, AFDW_BW_MAX_OCT)
 
-    # Find neighbors in bw_list: bw_lo <= t <= bw_hi
-    # hi in [1..K-1], lo = hi-1
     hi = np.searchsorted(bw_list, t, side='right')
     hi = np.clip(hi, 1, len(bw_list) - 1)
     lo = hi - 1
@@ -139,16 +119,13 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
     alpha = (t - bw_lo) / denom
     alpha = np.clip(alpha, 0.0, 1.0)
 
-    # Gather per-bin values from the two neighbor curves
     idx = np.arange(f.size)
     sm_lo = sm_stack[lo, idx]
     sm_hi = sm_stack[hi, idx]
 
-    # Linear blend
     out = (1.0 - alpha) * sm_lo + alpha * sm_hi
 
 
-    # --- DEBUG: effective BW statistics (log once) ---
     try:
         if not hasattr(apply_adaptive_fdw, "_dbg_printed"):
             apply_adaptive_fdw._dbg_printed = True
@@ -173,7 +150,7 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
 
 
 def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
-    """Standardized octave smoothing with logarithmic sampling."""
+    """Soveltaa tai paivittaa: apply smoothing std."""
     if octave_fraction <= 0: return mags, phases
     f_min = max(freqs[0], 1.0)
     f_max = freqs[-1]
@@ -190,7 +167,7 @@ def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
     log_phases = np.interp(log_freqs, freqs, phase_unwrap)
     
     window_size = int(points_per_octave * octave_fraction)
-    window_size = max(window_size, 1) # Ensure at least 1
+    window_size = max(window_size, 1)
     window = np.ones(window_size) / window_size
     
     pad_len = window_size // 2

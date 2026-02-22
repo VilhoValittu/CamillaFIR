@@ -96,8 +96,6 @@ def run_phase_ir_stage(
     _limit_gd_gradient_ms_per_oct = limit_gd_gradient_ms_per_oct_fn
     _cfg_float_allow_zero = cfg_float_allow_zero_fn
 
-    # --- 9. GENERATE PHASE ---
-    # --- THEORETICAL PHASE (single source of truth) ---
     hpf_freq = None
     hpf_slope = None
     hs = cfg.hpf_settings
@@ -106,9 +104,8 @@ def run_phase_ir_stage(
         hpf_freq = float(hs.get('freq', 0.0) or 0.0)
         hpf_order = int(hs.get('order', 0) or 0)
         if hpf_freq > 0 and hpf_order > 0:
-            hpf_slope = float(hpf_order * 6)  # dB/oct
+            hpf_slope = float(hpf_order * 6)
 
-    # --- DEBUG: what XO/HPF are we modeling? ---
     try:
         xo_list = getattr(cfg, "crossovers", None) or []
         if xo_list:
@@ -127,7 +124,6 @@ def run_phase_ir_stage(
         xo_txt = "n/a"
         hpf_txt = "n/a"
 
-    # RAW theoretical phase model (UNCLAMPED for debug indicators)
     theo_on_raw = calculate_theoretical_phase(
         freq_axis,
         cfg.crossovers,
@@ -137,14 +133,12 @@ def run_phase_ir_stage(
     )
     theo_off_raw = calculate_theoretical_phase(
         freq_axis,
-        [],               # no XO
-        hpf_freq=None,    # no HPF
+        [],
+        hpf_freq=None,
         hpf_slope=None,
         max_phase_deg=None
     )
 
-    # Main theoretical phase model used in correction.
-    # Keep this UNCLAMPED so only excess-phase correction is safety-limited later.
     theo_xo = calculate_theoretical_phase(
         freq_axis,
         cfg.crossovers,
@@ -152,7 +146,6 @@ def run_phase_ir_stage(
         hpf_slope=hpf_slope,
         max_phase_deg=None
     )
-    # --- XO/HPF ON/OFF diff indicator (debug-friendly, relevant band) ---
     try:
         xo_list = getattr(cfg, "crossovers", None) or []
         hpf_on = (hpf_freq and hpf_slope and float(hpf_freq) > 0 and float(hpf_slope) > 0)
@@ -160,7 +153,6 @@ def run_phase_ir_stage(
         if xo_list or hpf_on:
             f = np.asarray(freq_axis, float)
 
-            # IMPORTANT: use UNCLAMPED theoretical phase for "raw" indicator
             theo_on_raw = calculate_theoretical_phase(
                 f,
                 xo_list,
@@ -176,19 +168,16 @@ def run_phase_ir_stage(
                 max_phase_deg=None
             )
 
-            # RAW model delta (really no clamp)
             dphi_raw = np.unwrap(np.asarray(theo_on_raw, float) - np.asarray(theo_off_raw, float))
             dphi_raw_deg = np.rad2deg(dphi_raw)
 
-            # Wrap to [-180, 180) so "max phase" doesn't get dominated by unwrap turns / band edges
             def _wrap_deg(x_deg: np.ndarray) -> np.ndarray:
                 return (x_deg + 180.0) % 360.0 - 180.0
 
             dphi_wrapped_deg = _wrap_deg(dphi_raw_deg)
 
-            # Build masks separately so HPF doesn't dominate XO
             xo_mask = np.zeros_like(f, dtype=bool)
-            xo_band_masks = []  # list of (fc_hz, mask)
+            xo_band_masks = []
             for xo in xo_list:
                 try:
                     fc = float(xo.get("freq", 0.0) or 0.0)
@@ -202,10 +191,8 @@ def run_phase_ir_stage(
             hpf_mask = np.zeros_like(f, dtype=bool)
             if hpf_on:
                 fc = float(hpf_freq)
-                # HPF phase effect is most meaningful below/around fc -> focus a bit tighter
                 hpf_mask |= (f >= max(fc / 8.0, 10.0)) & (f <= fc * 2.0)
 
-            # Fallbacks
             wide_mask = np.isfinite(f) & (f >= 20.0) & (f <= float(np.nanmax(f)))
             if np.count_nonzero(xo_mask) < 8:
                 xo_mask = wide_mask
@@ -223,16 +210,13 @@ def run_phase_ir_stage(
                     return None, None
                 return float(np.abs(a[idx])), float(f[idx])
 
-            # Phase maxima (XO only; also identify which XO band "won")
             xo_phi, xo_phi_hz = _max_abs_in_mask(dphi_wrapped_deg, xo_mask)
             if xo_phi is not None:
                 st["xo_diff_raw_max_phase_deg"] = xo_phi
                 st["xo_diff_raw_max_phase_hz"] = xo_phi_hz
 
-                # Determine which XO band contains the winning frequency (closest fc if overlap)
                 best_fc = None
                 if xo_band_masks:
-                    # Find all fc where the winning frequency is in that band mask
                     candidates = []
                     for fc, m in xo_band_masks:
                         try:
@@ -242,15 +226,12 @@ def run_phase_ir_stage(
                         if bool(m[idx_win]):
                             candidates.append(fc)
                     if candidates:
-                        # pick the closest fc to the winning frequency
                         best_fc = float(min(candidates, key=lambda c: abs(float(c) - float(xo_phi_hz))))
                     else:
-                        # fallback: closest fc overall
                         best_fc = float(min([fc for fc, _ in xo_band_masks], key=lambda c: abs(float(c) - float(xo_phi_hz))))
                 if best_fc is not None:
                     st["xo_diff_raw_max_phase_xo_fc_hz"] = float(best_fc)
 
-            # Per-XO phase delta at fc (wrapped) — sanity check / debug gold
             for i, xo in enumerate(xo_list, start=1):
                 try:
                     fc = float(xo.get("freq", 0.0) or 0.0)
@@ -261,7 +242,6 @@ def run_phase_ir_stage(
                 idx_fc = int(np.argmin(np.abs(f - fc)))
                 st[f"xo{i}_dphi_wrapped_deg@fc"] = float(dphi_wrapped_deg[idx_fc])
 
-            # Per-XO GD delta at fc (RAW, ms) — correlates best with transient tightness
             for i, xo in enumerate(xo_list, start=1):
                 try:
                     fc = float(xo.get("freq", 0.0) or 0.0)
@@ -280,7 +260,6 @@ def run_phase_ir_stage(
                 st["hpf_diff_raw_max_phase_deg"] = hpf_phi
                 st["hpf_diff_raw_max_phase_hz"] = hpf_phi_hz
 
-            # GD delta (RAW) from RAW phases
             w = 2.0 * math.pi * f
             dw = np.gradient(w) + 1e-30
             ph_on = np.unwrap(np.asarray(theo_on_raw, float))
@@ -289,7 +268,6 @@ def run_phase_ir_stage(
             gd_off = (-np.gradient(ph_off) / dw) * 1000.0
             dgd = gd_on - gd_off
 
-            # Per-XO GD delta at fc (RAW, ms) — best proxy for "transient tightness"
             for i, xo in enumerate(xo_list, start=1):
                 try:
                     fc = float(xo.get("freq", 0.0) or 0.0)
@@ -303,12 +281,10 @@ def run_phase_ir_stage(
                 except Exception:
                     pass
 
-            # GD maxima (separately)
             xo_gd, xo_gd_hz = _max_abs_in_mask(dgd, xo_mask)
             if xo_gd is not None:
                 st["xo_diff_raw_max_gd_ms"] = xo_gd
                 st["xo_diff_raw_max_gd_hz"] = xo_gd_hz
-                # Optional: which XO band "won" for GD too (same idea)
                 try:
                     best_fc_gd = None
                     if xo_band_masks:
@@ -333,49 +309,37 @@ def run_phase_ir_stage(
 
 
 
-    # Expose to stats/Summary (human readable)
     try:
         st["xo_summary"] = xo_txt
         st["hpf_summary"] = hpf_txt
-        # small checkpoint samples (degrees) for debugging
         for fchk in (20.0, 80.0, 200.0, 1000.0, 5000.0):
             idx = int(np.argmin(np.abs(freq_axis - fchk)))
             st[f"theo_xo_deg@{int(fchk)}Hz"] = float(np.rad2deg(theo_xo[idx]))
     except Exception:
         pass
 
-    # --- Phase correction limit (Hz) with smooth blend ---
-    # Goal:
-    #   - below phase_limit: keep measured/room phase (TOF removed) in p_rad_interp
-    #   - above phase_limit*1.41 (~1/2 octave): use only theoretical XO/HPF phase (theo_xo)
-    #   - between: smooth crossfade (prevents GD "bump" from hard cut)
     try:
         phase_lim = float(getattr(cfg, "phase_limit", 0.0) or 0.0)
         if phase_lim > 0.0 and freq_axis.size == theo_xo.size:
             f0 = float(phase_lim)
-            f1 = float(phase_lim) * 1.41  # ~1/2 octave
+            f1 = float(phase_lim) * 1.41
 
-            # Clamp transition to valid frequency span
             f_min = float(freq_axis[0]) if freq_axis.size else 0.0
             f_max = float(freq_axis[-1]) if freq_axis.size else 0.0
             f0 = max(f0, max(f_min, 1e-6))
             f1 = min(f1, f_max)
 
             if f1 <= f0:
-                # Degenerate case: act like hard limit
                 mask = freq_axis <= f0
                 p_rad_interp = np.where(mask, p_rad_interp, theo_xo)
             else:
-                # Crossfade weight w: 0 below f0, 1 above f1
                 w = (freq_axis - f0) / (f1 - f0)
                 w = np.clip(w, 0.0, 1.0)
 
-                # Blend phase itself (radians). Both are already unwrapped-ish and TOF-removed upstream.
                 p_rad_interp = (1.0 - w) * p_rad_interp + w * theo_xo
     except Exception:
         pass
 
-    # --- LOGGING: HPF inclusion status ---
     if hpf_freq and hpf_slope:
         logger.info(
             f"Theoretical phase includes HPF: f={hpf_freq:.1f} Hz, "
@@ -389,7 +353,6 @@ def run_phase_ir_stage(
     else:
         logger.info("Phase mode: modern (excess-phase + confidence + FDW)")
 
-    # --- 9A. HPF magnitude into FIR (enabled-check) ---
     if isinstance(hs, dict) and hs.get('enabled'):
         hpf_f = float(hs.get('freq', 0.0) or 0.0)
         hpf_order = int(hs.get('order', 0) or 0)
@@ -406,34 +369,24 @@ def run_phase_ir_stage(
             except Exception:
                 pass
 
-    # --- 8G/9A2. Optional residual magnitude pass (2-pass target tracking) ---
-    # Improves target tracking without making correction aggressive:
-    #   pred0 = (m_anal - calc_offset_db) + gain_db
-    #   residual = target_mags - pred0
-    #   apply broad smoothing + confidence gating, add fraction back to gain_db
-    # Then re-apply the same magnitude safety constraints (lowbass policy, soft/hard clamp, slope, fades).
     if bool(getattr(cfg, "enable_residual_pass", False)) and bool(getattr(cfg, "enable_mag_correction", True)):
         try:
             def _reapply_mag_constraints(_g):
-                """Re-apply the same post-shaping constraints after residual tweaks (UI/DSP consistency)."""
+                """Sisainen apufunktio: reapply mag constraints."""
                 _g = np.asarray(_g, dtype=float).copy()
 
-                # Keep low-bass 'no boost + stronger cut' policy intact
                 try:
                     low_hz = _cfg_float_allow_zero(cfg, "low_bass_cut_hz", 40.0)
                     low_mask = mask_c & (freq_axis > 0) & (freq_axis <= low_hz)
                     if np.any(low_mask):
-                        # no boost below low_hz
                         _g[low_mask] = np.minimum(_g[low_mask], 0.0)
-                        # If raw_g/final_g exist (mag correction path), keep 'stronger cut' rule
                         if 'raw_g' in locals() and 'final_g' in locals():
-                            low_cut = np.minimum(final_g[low_mask], raw_g[low_mask])  # stronger cut
+                            low_cut = np.minimum(final_g[low_mask], raw_g[low_mask])
                             low_cut = np.minimum(low_cut, 0.0)
                             _g[low_mask] = np.minimum(_g[low_mask], low_cut)
                 except Exception:
                     pass
 
-                # Soft clip (same as 8D)
                 try:
                     max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
                     _g = soft_clip_gain(
@@ -444,9 +397,8 @@ def run_phase_ir_stage(
                 except Exception:
                     pass
 
-                # Slope limiter (same as 8E)
                 try:
-                    max_slope = float(getattr(cfg, "max_slope_db_per_oct", 24.0) or 0.0)  # legacy symmetric
+                    max_slope = float(getattr(cfg, "max_slope_db_per_oct", 24.0) or 0.0)
                     max_slope_boost = float(getattr(cfg, "max_slope_boost_db_per_oct", 0.0) or 0.0)
                     max_slope_cut   = float(getattr(cfg, "max_slope_cut_db_per_oct", 0.0) or 0.0)
                     if max_slope_boost <= 0.0:
@@ -467,7 +419,6 @@ def run_phase_ir_stage(
                 except Exception:
                     pass
 
-                # Fade to zero near mag_c_max (same as post-8E fade)
                 try:
                     mag_c_min = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
                     mag_c_max = float(getattr(cfg, "mag_c_max", 0.0) or 0.0)
@@ -481,8 +432,6 @@ def run_phase_ir_stage(
                 except Exception:
                     pass
 
-                # WAV-only: smooth residual comb/ripple near correction upper edge
-                # after fade, before final hard clamp in this phase stage.
                 try:
                     if bool(getattr(cfg, "is_wav_source", False)):
                         mag_c_min = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
@@ -510,7 +459,6 @@ def run_phase_ir_stage(
                 except Exception:
                     pass
 
-                # Exc-protection (same as existing exc_prot re-application)
                 try:
                     if bool(getattr(cfg, "exc_prot", False)):
                         f_start = float(getattr(cfg, "exc_freq", 0.0) or 0.0)
@@ -526,11 +474,7 @@ def run_phase_ir_stage(
                 except Exception:
                     pass
 
-                # NOTE (HPF):
-                # No "HPF policy fade" here. Real HPF magnitude is applied once (gain_db += hpf_db),
-                # so residual constraints should not zero/shape below fc.
 
-                # Final hard clamp (same as 8F)
                 try:
                     max_cut_db2 = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
                     _g = np.minimum(_g, float(getattr(cfg, "max_boost_db", 0.0) or 0.0))
@@ -540,7 +484,6 @@ def run_phase_ir_stage(
 
                 return _g
 
-            # Predicted response from current gain
             measured_aligned = (m_anal - calc_offset_db)
             pred0 = measured_aligned + gain_db
             resid0 = (target_mags - pred0)
@@ -548,7 +491,6 @@ def run_phase_ir_stage(
             resid = np.zeros_like(gain_db, dtype=float)
             resid[mask_c] = resid0[mask_c]
 
-            # Confidence gating (prefer reliable bins)
             k = float(getattr(cfg, "residual_conf_power", 2.0) or 2.0)
             try:
                 if conf_mask is not None:
@@ -556,13 +498,11 @@ def run_phase_ir_stage(
             except Exception:
                 pass
 
-            # Broad smoothing: avoid chasing narrow combing
             strength = float(getattr(cfg, "residual_strength", 0.6) or 0.6)
             strength = float(np.clip(strength, 0.0, 1.0))
             mult = float(getattr(cfg, "residual_smoothing_mult", 2.0) or 2.0)
             mult = max(1.0, float(mult))
 
-            # Use same smoothing model as raw_g smoothing (df_smoothing aware)
             _base_sigma = locals().get('base_sigma', 60 // (_filter_smooth / 12 if _filter_smooth > 0 else 1))
             _df_mode = bool(locals().get('df_mode', bool(getattr(cfg, "df_smoothing", False))))
             if _df_mode:
@@ -582,10 +522,8 @@ def run_phase_ir_stage(
                     mult=mult,
                 )
 
-            # Apply fraction of residual only in correction band
             gain_db[mask_c] = gain_db[mask_c] + (resid_sm[mask_c] * strength)
 
-            # Re-apply constraints to keep all safety rules intact
             gain_db = _reapply_mag_constraints(gain_db)
 
             try:
@@ -599,11 +537,6 @@ def run_phase_ir_stage(
         except Exception:
             pass
 
-    # --- 9B. AUTO OUTPUT LEVEL (realized max boost + user margin) ---
-    # `gain` UI value is treated as a non-negative safety margin in dB.
-    # Auto level is then:
-    #   auto_global_gain_db = -(realized_max_boost + gain_margin_db)
-    # This keeps net filter boost <= -margin in the realized response.
     try:
         _g_all = np.asarray(gain_db, dtype=float)
         _g_all = _g_all[np.isfinite(_g_all)]
@@ -638,7 +571,6 @@ def run_phase_ir_stage(
     except Exception:
         pass
 
-    # Stereo-link pass can force one shared auto gain for both channels.
     try:
         _override = getattr(cfg, "auto_gain_db_override", None)
         if _override is None:
@@ -657,7 +589,6 @@ def run_phase_ir_stage(
             f"-> auto_global_gain={auto_global_gain_db:.2f} dB"
         )
 
-    # Keep normalize as an optional final safety trim after auto level.
     if bool(getattr(cfg, "do_normalize", False)):
         peak_after_auto = float(current_peak_gain + auto_global_gain_db)
         if peak_after_auto > -0.1:
@@ -674,13 +605,8 @@ def run_phase_ir_stage(
 
     final_gain_total = gain_db + auto_global_gain_db + auto_headroom_db
     total_mag = 10**(final_gain_total / 20.0)
-    # Keep minimum-phase UNCLAMPED.
-    # Safety clamp is applied only to excess-phase correction component below.
     min_p = calculate_minimum_phase(total_mag, max_phase_deg=None)
 
-    # --- 9C. PHASE LOGIC (single entry point) ---
-    # IMPORTANT: do NOT recompute theo_xo here without HPF/crossover context.
-    # `theo_xo` above is the single source of truth (and already includes HPF if enabled).
 
     is_mixed = ('Mixed' in cfg.filter_type_str)
     low_phase = None
@@ -694,8 +620,6 @@ def run_phase_ir_stage(
         mixed_transition_hz = mixed_split_hz
 
     if bool(getattr(cfg, "phase_safe_2058", False)):
-        # === 2058-SAFE PHASE MODE ===
-        # No room phase correction (no excess-phase, FDW, confidence)
 
         if 'Min' in cfg.filter_type_str:
             final_phase = min_p
@@ -705,14 +629,10 @@ def run_phase_ir_stage(
             final_phase = low_phase
 
         else:
-            # Linear / Asym
             final_phase = -theo_xo
 
     else:
-        # Includes excess-phase, confidence, phase_limit blend, etc.
-        # IMPORTANT: compute low_phase HERE before using it.
 
-        # 1) Build/smooth confidence safely (avoid sawtooth weighting and None edge cases).
         try:
             conf_arr = np.asarray(conf_mask, dtype=float) if conf_mask is not None else np.ones_like(freq_axis, dtype=float)
             conf_s = scipy.ndimage.gaussian_filter1d(conf_arr, sigma=2)
@@ -723,23 +643,20 @@ def run_phase_ir_stage(
         phase_lim_hz = float(getattr(cfg, "phase_limit", 1000.0))
         phase_mask = (freq_axis > 0) & (freq_axis <= phase_lim_hz)
 
-        # Soft fade-out at the upper edge of phase_mask to reduce FIR ringing
-        # from hard truncation (DSP-only safety, no user control).
         try:
-            fade_oct = 1.0 / 1.0  # ~1/1 octave taper near phase_lim_hz
+            fade_oct = 1.0 / 1.0
             f1 = float(phase_lim_hz)
             f0_fade = f1 / (2.0 ** fade_oct)
             if f0_fade < (f1 - 1.0):
                 x = (freq_axis - f0_fade) / (f1 - f0_fade + 1e-12)
                 x = np.clip(x, 0.0, 1.0)
-                w_hi = 0.5 * (1.0 + np.cos(np.pi * x))  # 1 -> 0
+                w_hi = 0.5 * (1.0 + np.cos(np.pi * x))
                 w_hi = np.where(freq_axis <= f0_fade, 1.0, w_hi)
                 w_hi = np.where(freq_axis >= f1, 0.0, w_hi)
             else:
                 w_hi = np.ones_like(freq_axis, dtype=float)
         except Exception:
             w_hi = np.ones_like(freq_axis, dtype=float)
-        # Excess phase = measured - theoretical
         excess_phase = (p_rad_interp - theo_xo)
 
         phase_weight = np.zeros_like(freq_axis, dtype=float)
@@ -766,7 +683,6 @@ def run_phase_ir_stage(
             except Exception:
                 pass
         else:
-            # Legacy weighting for non-mixed modes.
             bass_f2 = float(np.clip(phase_lim_hz, 20.0, 400.0))
             f0, w0 = 20.0, 0.30
             f2, w2 = bass_f2, 0.00
@@ -788,16 +704,11 @@ def run_phase_ir_stage(
             w[seg2] = w1 + (w2 - w1) * s2
             phase_weight[bass_band] = np.maximum(phase_weight[bass_band], w)
 
-        # Apply the upper-edge taper so correction fades out smoothly near phase_limit
-        # and does not create hard-edge ringing in time domain.
         try:
             phase_weight *= w_hi
         except Exception:
             pass
 
-        # Confidence-aware phase weighting:
-        # - low confidence reduces correction strength clearly
-        # - high confidence allows near full correction strength
         try:
             conf_floor = 0.10
             conf_power = 1.25
@@ -809,11 +720,6 @@ def run_phase_ir_stage(
 
         extra_phase = -excess_phase * phase_weight
 
-        # Clamp ONLY the excess-phase correction component.
-        # Adaptive clamp is stricter:
-        # - in low-confidence bins
-        # - near the upper edge of correction band
-        # This preserves useful LF correction while reducing risk of GD spikes/ringing.
         try:
             extra_phase_before = np.asarray(extra_phase, dtype=float).copy()
 
@@ -826,17 +732,14 @@ def run_phase_ir_stage(
             if clamp_max_deg < clamp_min_deg:
                 clamp_max_deg, clamp_min_deg = clamp_min_deg, clamp_max_deg
 
-            # Confidence contribution: low confidence -> closer to min clamp.
             conf_part = np.clip(conf_s, 0.0, 1.0) ** 0.85
 
-            # Frequency contribution: lower frequencies can tolerate larger correction.
             if phase_lim_hz > 0.0:
                 freq_rel = np.clip((phase_lim_hz - freq_axis) / max(phase_lim_hz, 1e-9), 0.0, 1.0)
             else:
                 freq_rel = np.ones_like(freq_axis, dtype=float)
             freq_part = np.sqrt(freq_rel)
 
-            # Blend confidence and frequency evidence into per-bin clamp limits.
             blend = 0.70 * conf_part + 0.30 * freq_part
             limit_deg_arr = clamp_min_deg + (clamp_max_deg - clamp_min_deg) * blend
             limit_deg_arr = np.clip(limit_deg_arr, clamp_min_deg, clamp_max_deg)
@@ -846,7 +749,6 @@ def run_phase_ir_stage(
             extra_phase = np.clip(extra_phase, -limit_rad_arr, limit_rad_arr)
             _after_rad = float(np.max(np.abs(extra_phase)))
 
-            # Always report in logs + stats.
             _before_deg = float(np.rad2deg(_before_rad))
             _after_deg = float(np.rad2deg(_after_rad))
             _clipped = bool(np.any(np.abs(extra_phase_before) > (limit_rad_arr + 1e-12)))
@@ -870,7 +772,6 @@ def run_phase_ir_stage(
 
             try:
                 if isinstance(st, dict):
-                    # Backward-compatible scalar + new adaptive diagnostics.
                     st["phase_corr_clamp_deg"] = float(clamp_max_deg)
                     st["phase_corr_clamp_min_deg"] = float(clamp_min_deg)
                     st["phase_corr_clamp_max_deg"] = float(clamp_max_deg)
@@ -885,17 +786,10 @@ def run_phase_ir_stage(
         except Exception:
             pass
 
-        # --- GD-gradient limiter (DSP-only safety) ---
-        # Limits abrupt changes of group delay induced by the correction phase.
-        # Apply only inside the same correction band (phase_mask).
         try:
-           # Conditional enable:
-           # - With Bass-first + A-FDW, phase is already stabilized; the limiter can reduce "liveliness".
-           # - Keep it only for risky setups (ultra-short REW Asym) or legacy mode (no BF, no A-FDW).
             _use_bassfirst = bool(locals().get("use_bassfirst", False))
             _afdw_on = bool(locals().get("afdw_on", False))
 
-            # REW Asym tight-left detection (phase can get fragile)
             try:
                 _win_mode = str(getattr(cfg, "ir_export_window_mode", "auto") or "auto").strip().lower()
             except Exception:
@@ -912,9 +806,6 @@ def run_phase_ir_stage(
 
             _gd_grad_enable = bool(_rew_asym_tight or _legacy_mode)
 
-            # Choose limiter strength (ms/oct)
-            # - tight REW Asym: strict
-            # - legacy: moderate (still safer than "always on 8")
             if _gd_grad_enable:
                 _gd_grad_lim = 8.0 if _rew_asym_tight else 20.0
 
@@ -939,7 +830,6 @@ def run_phase_ir_stage(
         except Exception:
             pass
 
-        # --- Mixed-only: absolute excess-delay guard ---
         if is_mixed:
             try:
                 max_excess_delay_ms = float(getattr(cfg, "max_excess_delay_ms", 2.5) or 0.0)
@@ -968,7 +858,6 @@ def run_phase_ir_stage(
 
         low_phase = (-theo_xo) + extra_phase
 
-        # --- Mixed-only: pre-ringing guard (iteratively reduce excess correction) ---
         if is_mixed:
             try:
                 max_pre_db = float(getattr(cfg, "max_pre_ringing_db", -35.0) or -35.0)
@@ -1000,7 +889,6 @@ def run_phase_ir_stage(
                     if (not np.isfinite(pre_now_db)) or (pre_now_db <= max_pre_db):
                         break
 
-                    # Energy-ratio based scale keeps iterations stable.
                     ratio_now = 10.0 ** (pre_now_db / 10.0)
                     ratio_target = 10.0 ** (max_pre_db / 10.0)
                     step_scale = float(np.clip(np.sqrt(ratio_target / max(ratio_now, 1e-30)), 0.20, 0.95))
@@ -1028,7 +916,6 @@ def run_phase_ir_stage(
                 except Exception:
                     pass
 
-            # Recompute correction weight metric for stats if guards changed extra phase.
             try:
                 corr_band = phase_mask & (np.abs(excess_phase) > 1e-12)
                 if np.any(corr_band):
@@ -1061,7 +948,6 @@ def run_phase_ir_stage(
         else:
             final_phase = (1.0 - sm_mask) * low_phase + sm_mask * min_p
 
-    # --- 10. IMPULSE GENERATION (common path) ---
     if is_mixed and low_phase is not None:
         try:
             if isinstance(st, dict):
@@ -1087,10 +973,6 @@ def run_phase_ir_stage(
         raw_imp = scipy.fft.irfft(h_complex, n=n_fft)
     requested_win_mode = str(getattr(cfg, 'ir_export_window_mode', 'auto') or 'auto').strip().lower()
     is_min_filter = ('Min' in cfg.filter_type_str)
-    # NOTE:
-    # Strict "off" for minimum-phase can produce visible GD ripple in external tools
-    # (FFT boundary/truncation sensitivity). Keep UI-selected mode by default.
-    # Power users can enable strict off via cfg.min_strict_off = True.
     min_strict_off = bool(getattr(cfg, "min_strict_off", False))
     win_mode = 'off' if (is_min_filter and min_strict_off) else requested_win_mode
     if is_min_filter and min_strict_off and requested_win_mode != 'off':
@@ -1099,10 +981,7 @@ def run_phase_ir_stage(
         )
 
     def _ms(name_ms: str, name_alias: str, default: float = 0.0) -> float:
-        """
-        Read milliseconds value from config, preferring canonical *_ms fields,
-        with fallback to legacy aliases for backwards compatibility.
-        """
+        """Sisainen apufunktio: ms."""
         v = getattr(cfg, name_ms, None)
         if v is None:
             v = getattr(cfg, name_alias, default)
@@ -1112,12 +991,10 @@ def run_phase_ir_stage(
             return float(default)
 
     left_ms  = _ms('ir_window_ms_left',  'ir_window_left',  0.0)
-    # Prefer 'ir_window_right' / 'ir_window_ms_right'; fall back to legacy 'ir_window' / 'ir_window_ms'
     right_ms = _ms('ir_window_ms_right', 'ir_window_right',
                    _ms('ir_window_ms', 'ir_window', 0.0))
 
 
-    # --- 10a. INITIAL PLACEMENT (single-pass) ---
     if ('Asym' in cfg.filter_type_str):
         shift = min(
             int(left_ms * cfg.fs / 1000.0),
@@ -1130,7 +1007,7 @@ def run_phase_ir_stage(
         impulse = np.roll(raw_imp, n_fft // 2)
 
     def _shift_zeropad_local(x: np.ndarray, shift_samp: int) -> np.ndarray:
-        """Integer shift with zero padding (no circular wrap)."""
+        """Sisainen apufunktio: shift zeropad local."""
         n_loc = int(len(x))
         if n_loc == 0 or int(shift_samp) == 0:
             return x
@@ -1143,9 +1020,6 @@ def run_phase_ir_stage(
             return np.zeros_like(x)
         return np.concatenate((x[s:], np.zeros(s, dtype=x.dtype)))
 
-    # Minimum + OFF window mode:
-    # enforce causal placement without wrap-around (peak at sample 0)
-    # to avoid FFT boundary discontinuity that appears as GD sawtooth.
     if is_min_filter and win_mode == "off":
         try:
             peak_now = int(np.argmax(np.abs(impulse))) if impulse.size else 0
@@ -1163,7 +1037,6 @@ def run_phase_ir_stage(
             logger.info(
                 f"Minimum OFF causal shift applied: peak {peak_now} -> 0 (shift={shift_samp})"
             )
-    # --- 10b. IR WINDOWING (REW-style export; separate from filter type) ---
     win_shape = str(getattr(cfg, 'ir_export_window_shape', 'hann') or 'hann').strip().lower()
     try:
         tukey_alpha = float(getattr(cfg, 'ir_export_tukey_alpha', 0.25))
@@ -1203,45 +1076,33 @@ def run_phase_ir_stage(
                 radius = s_right
                 s_left = radius
                 s_right = radius
-        # win_mode == 'rew_asym' -> use symmetric window, do peak shift AFTER window
 
-        # Build window around peak
         def _edge_taper(L: int, *, alpha: float, side: str) -> np.ndarray:
-            """
-            Edge taper for IR export window.
-            - hann: legacy sin^2/cos^2 (smoothest)
-            - tukey: rectangular-ish plateau near peak + raised-cosine taper to 0 at edge (alpha controls taper amount)
-            side: 'left' (toward peak) or 'right' (away from peak)
-            Returns length L weights from 0..1.
-            """
+            """Sisainen apufunktio: edge taper."""
             L = int(L)
             if L <= 0:
                 return np.zeros(0, dtype=float)
             if win_shape == 'hann' or alpha >= 0.999:
-                # legacy behavior (keep sound identical by default)
                 if side == 'left':
                     return (np.sin(np.linspace(0, np.pi / 2, L + 1))[:-1] ** 2).astype(float)
                 else:
                     return (np.cos(np.linspace(0, np.pi / 2, L + 1))[1:] ** 2).astype(float)
 
-            # Tukey-like: keep 1.0 near peak (plateau), then cosine down to 0 at edge.
             a = float(np.clip(alpha, 0.0, 1.0))
             taper_len = int(max(1, round(a * L)))
             plateau_len = int(max(0, L - taper_len))
 
-            # k=0 near peak, increasing toward edge
             k = (np.arange(L)[::-1] if side == 'left' else np.arange(L)).astype(float)
             w = np.ones(L, dtype=float)
             if plateau_len > 0:
-                w[k >= plateau_len] = 0.0  # will be overwritten by taper below
+                w[k >= plateau_len] = 0.0
                 w[k < plateau_len] = 1.0
             else:
                 w[:] = 0.0
 
-            # Taper region: k in [plateau_len .. plateau_len+taper_len]
             kk = np.clip(k - plateau_len, 0.0, float(taper_len))
-            x = kk / float(max(taper_len, 1))  # 0..1
-            taper = 0.5 * (1.0 + np.cos(np.pi * x))  # 1..0
+            x = kk / float(max(taper_len, 1))
+            taper = 0.5 * (1.0 + np.cos(np.pi * x))
 
             mask = (k >= plateau_len)
             w[mask] = taper[mask]
@@ -1267,29 +1128,21 @@ def run_phase_ir_stage(
 
         window[peak_idx] = 1.0
 
-    # --- APPLY EXPORT WINDOW TO *THE* IMPULSE ---
     impulse_before = impulse.copy()
     impulse *= window
 
-    # For REW asymmetric export:
-    # - keep SAME windowing as rew_sym (magnitude identical)
-    # - then shift peak earlier to reduce startup latency (phase/delay only)
     if win_mode == 'rew_asym' and n > 0:
         desired_peak = int(np.clip(int(left_ms * cfg.fs / 1000.0), 0, n - 1))
         peak_now = int(np.argmax(np.abs(impulse)))
         shift_samp = desired_peak - peak_now
         if shift_samp != 0:
-            # IMPORTANT: do NOT use np.roll here (circular wrap).
-            # Circular wrap leaves non-zero tail at the end -> comb/sawtooth ripple.
             if shift_samp > 0:
-                # shift right (later): pad zeros at start
                 if shift_samp >= n:
                     impulse[:] = 0.0
                 else:
                     impulse = np.concatenate((np.zeros(shift_samp, dtype=impulse.dtype),
                                               impulse[:-shift_samp]))
             else:
-                # shift left (earlier): pad zeros at end
                 s = -shift_samp
                 if s >= n:
                     impulse[:] = 0.0
@@ -1297,9 +1150,6 @@ def run_phase_ir_stage(
                     impulse = np.concatenate((impulse[s:],
                                               np.zeros(s, dtype=impulse.dtype)))
 
-    # Minimum + OFF window mode:
-    # apply a very short end taper to suppress circular-boundary discontinuity
-    # (common source of comb/sawtooth ripple in phase/group-delay views).
     if is_min_filter and win_mode == "off" and n > 16:
         try:
             taper_ms = float(getattr(cfg, "min_off_tail_taper_ms", 2.0) or 2.0)
@@ -1323,9 +1173,6 @@ def run_phase_ir_stage(
                 f"Minimum OFF anti-wrap taper applied: {taper_ms:.2f} ms ({taper_n} samples)"
             )
 
-    # --- GUARD (non-fatal): Tukey should usually change IR, but allow edge-cases ---
-    # Some impulses have tails that are exactly/near-zero in float, so a Tukey taper can be
-    # bit-identical in practice. This is not an error worth crashing the run.
     if win_shape == "tukey" and tukey_alpha > 0.0 and win_mode != "off":
         try:
             d = float(np.max(np.abs(impulse - impulse_before)))
@@ -1336,8 +1183,6 @@ def run_phase_ir_stage(
                 "IR export window: Tukey had no measurable effect on impulse "
                 f"(mode={win_mode}, alpha={tukey_alpha:.3f}). Continuing."
             )
-    # DC removal (preserves zero outside the window).
-    # Skip when windowing is OFF to keep "pure" export unchanged.
     if win_mode != "off":
         try:
             w_sum = float(np.sum(window))
@@ -1347,8 +1192,6 @@ def run_phase_ir_stage(
         except Exception:
             pass
 
-    # Mixed filters: force fixed startup delay regardless of UI/window settings.
-    # Do this AFTER window/DC steps so those operations stay aligned to their window.
     if is_mixed and n > 0:
         mixed_forced_peak_ms = 90.0
         desired_peak = int(np.clip(int(round(mixed_forced_peak_ms * cfg.fs / 1000.0)), 0, n - 1))
@@ -1380,4 +1223,3 @@ def run_phase_ir_stage(
         "current_peak_gain": float(locals().get("current_peak_gain", 0.0)),
         "final_gain_total": np.asarray(locals().get("final_gain_total", gain_db), dtype=float),
     }
-

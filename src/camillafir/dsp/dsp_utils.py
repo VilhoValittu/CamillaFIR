@@ -4,7 +4,7 @@ import numpy as np
 
 
 def cfg_float_allow_zero(cfg, key: str, default: float) -> float:
-    """Read cfg.<key> as float. IMPORTANT: 0 is valid and must not fall back."""
+    """Funktio: cfg float allow zero."""
     try:
         v = getattr(cfg, key, default)
     except Exception:

@@ -1,7 +1,6 @@
-# camillafir_ui_helpers.py
 import numpy as np
 import math
-from pywebio.output import *  # needed because this PyWebIO build doesn't expose put_input/put_select as named exports
+from pywebio.output import *
 from pywebio.input import FLOAT
 from pywebio.pin import pin, pin_update, put_input, put_select
 
@@ -16,7 +15,6 @@ from .system_health import (
     toast_tdc_preset_applied,
 )
 
-# --- House curve loaders for target preview ---
 try:
     from .camillafir_housecurve import (
         _normalize_hc_mode_key,
@@ -31,10 +29,7 @@ except Exception:
     load_house_curve = None
 
 def _warn_max_boost_if_over_cap(_=None):
-    """
-    Warn user if max_boost exceeds internal safety cap.
-    Uses a simple "edge trigger" to avoid spamming toast repeatedly.
-    """
+    """Sisainen apufunktio: warn max boost if over cap."""
     try:
         v = pin.get('max_boost', None)
         if v is None or v == '':
@@ -55,10 +50,7 @@ def _warn_max_boost_if_over_cap(_=None):
         return
 
 def _warn_taps_if_over_cap(_=None):
-    """
-    Warn user if taps exceeds recommended maximum.
-    Uses edge trigger to avoid repeated toasts.
-    """
+    """Sisainen apufunktio: warn taps if over cap."""
     try:
         v = pin.get('taps', None)
         if v is None or v == '':
@@ -87,7 +79,7 @@ def _max_boost_help_with_cap():
 
 
 def update_mode_desc(_=None):
-    """UI helper: show a short description under Mode selection."""
+    """Soveltaa tai paivittaa: update mode desc."""
     try:
         m = str(pin["mode"] or "BASIC").strip().upper()
     except Exception:
@@ -97,10 +89,7 @@ def update_mode_desc(_=None):
         put_markdown(f"**{t('mode_desc_title')}**\n\n{t(key)}")
 
 def update_basic_clamp_hints_ui(*, pin, pin_update, t):
-    """
-    Show BASIC mode clamp bounds in help_text for fields that are constrained
-    by MODE_CLAMPS["BASIC"].
-    """
+    """Soveltaa tai paivittaa: update basic clamp hints ui."""
     try:
         mode_u = str(pin.get("mode", "BASIC") or "BASIC").strip().upper()
     except Exception:
@@ -161,7 +150,7 @@ def _as_pin_checkbox_list(v: bool):
     return [True] if bool(v) else []
 
 def update_ir_tukey_ui(_=None):
-    """UI helper: show/lock Tukey alpha depending on selected window shape."""
+    """Soveltaa tai paivittaa: update ir tukey ui."""
     def _p(name, default=None):
         try:
             return pin[name]
@@ -169,7 +158,6 @@ def update_ir_tukey_ui(_=None):
             return default
 
     try:
-        # Allow IR window controls ONLY when filter_type is Linear or Asymmetric
         ft = str(_p("filter_type", "") or "").strip().lower()
         try:
             ft_linear_label = str(t("ft_linear") or "").strip().lower()
@@ -188,7 +176,6 @@ def update_ir_tukey_ui(_=None):
         sh = str(_p("ir_export_window_shape", "hann") or "hann").strip().lower()
         is_tukey = (sh == "tukey")
 
-        # Clamp alpha to 0..1 for display stability (doesn't change DSP rules)
         try:
             a = float(_p("ir_export_tukey_alpha", 0.25) or 0.25)
         except Exception:
@@ -198,7 +185,6 @@ def update_ir_tukey_ui(_=None):
         a = float(np.clip(a, 0.0, 1.0))
 
         with use_scope("ir_tukey_alpha_scope", clear=True):
-            # If IR controls not allowed for this filter type, hide the whole alpha control
             if not allow_ir:
                 return
 
@@ -215,11 +201,7 @@ def update_ir_tukey_ui(_=None):
         pass
 
 def update_ir_export_window_mode_ui(_=None):
-    """
-    UI helper: grey out (disable) 'rew_asym' option unless filter_type is Linear.
-    Also sanitizes saved/forced value: if not linear and mode==rew_asym -> auto.
-    Renders the select into scope 'ir_export_window_mode_scope'.
-    """
+    """Soveltaa tai paivittaa: update ir export window mode ui."""
     def _p(name, default=None):
         try:
             return pin[name]
@@ -227,7 +209,6 @@ def update_ir_export_window_mode_ui(_=None):
             return default
 
     try:
-        # HARD POLICY: BASIC mode => windowing ALWAYS auto (UI + pin sanitize)
         try:
             m = str(_p("mode", "BASIC") or "BASIC").strip().upper()
         except Exception:
@@ -243,28 +224,22 @@ def update_ir_export_window_mode_ui(_=None):
 
         is_linear = (ft == ft_linear_label) or ("linear" in ft)
 
-        # Allow IR window controls ONLY when filter_type is Linear or Asymmetric
         try:
             ft_asym_label = str(t("ft_asymmetric") or "").strip().lower()
         except Exception:
             ft_asym_label = "asymmetric"
         is_asym_filter = (ft == ft_asym_label) or ("asym" in ft)
         allow_ir = bool(is_linear or is_asym_filter)
-        # POLICY: Asymmetric filter type => IR export window mode must be Auto
-        # (left_ms still matters for asymmetric filter placement, but windowing mode stays Auto)
         lock_window_mode = bool(is_basic or (not allow_ir) or is_asym_filter)
 
-        # Current value (from pins, may come from loaded config)
         cur = str(_p("ir_export_window_mode", "auto") or "auto").strip().lower()
 
-        # BASIC: force auto no matter what user tries
         if is_basic and cur != "auto":
             try:
                 pin_update("ir_export_window_mode", value="auto")
             except Exception:
                 pass
             cur = "auto"
-        # Asymmetric filter: force auto no matter what user tries
         if is_asym_filter and cur != "auto":
             try:
                 pin_update("ir_export_window_mode", value="auto")
@@ -272,7 +247,6 @@ def update_ir_export_window_mode_ui(_=None):
                 pass
             cur = "auto"
 
-        # If IR controls not allowed for this filter type, force mode to auto
         if (not allow_ir) and (cur != "auto"):
             try:
                 pin_update("ir_export_window_mode", value="auto")
@@ -281,7 +255,6 @@ def update_ir_export_window_mode_ui(_=None):
             cur = "auto"
 
 
-        # If not linear, force away from rew_asym
         if (not is_linear) and (cur == "rew_asym"):
             try:
                 pin_update("ir_export_window_mode", value="auto")
@@ -300,11 +273,8 @@ def update_ir_export_window_mode_ui(_=None):
                 value=cur,
                 help_text=t("ir_export_window_help"),
             )
-            # Lock the whole control when policy requires Auto-only
             if lock_window_mode:
                 w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
-            # Disable/enable the rew_asym option at DOM level (greys out in native select)
-            # NOTE: do this after put_select so the element exists.
             js_disable = "true" if (lock_window_mode or (not is_linear)) else "false"
             put_html(f"""
 <script>
@@ -330,7 +300,6 @@ def update_ir_export_window_mode_ui(_=None):
 }})();
 </script>
 """)
-            # Info text: visible always, emphasized when non-linear
             try:
                 msg_ = t("ir_asym_linear_only")
                 
@@ -360,16 +329,7 @@ def update_ir_export_window_mode_ui(_=None):
         pass
 
 def update_ir_lr_window_ui(_=None):
-    """
-    UI helper:
-      - Controls visible always, but enabled only when filter_type is Linear or Asymmetric.
-      - Left is meaningful for:
-          * IR export window mode == 'rew_asym', OR
-          * filter_type == Asymmetric (DSP initial placement).
-      - Right is meaningful ONLY for:
-          * IR export window mode == 'rew_asym'
-    Renders into scope 'ir_lr_window_scope'.
-    """
+    """Soveltaa tai paivittaa: update ir lr window ui."""
     def _p(name, default=None):
         try:
             return pin[name]
@@ -397,9 +357,8 @@ def update_ir_lr_window_ui(_=None):
         enable_left = bool(allow_ir and (is_rew_asym or is_asym_filter))
         enable_right = bool(allow_ir and is_rew_asym)
 
-        # Values (keep backward compat for right window via legacy 'ir_window')
         try:
-            v_left = float(_p("ir_window_left", 120.0) or 120.0)
+            v_left = float(_p("ir_window_left", 85.0) or 85.0)
         except Exception:
             v_left = 10.0
 
@@ -432,7 +391,6 @@ def update_ir_lr_window_ui(_=None):
             if not enable_right:
                 w_right.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
 
-            # Optional: show generic hint only when both are locked
             if (not enable_left) and (not enable_right):
                 try:
                     msg = t("ir_lr_window_hint")
@@ -451,9 +409,7 @@ def update_ir_lr_window_ui(_=None):
 
 
 def update_ir_window_shape_ui(_=None):
-    """
-    UI helper: grey out IR window shape selector when IR window mode == Auto.
-    """
+    """Soveltaa tai paivittaa: update ir window shape ui."""
     def _p(name, default=None):
         try:
             return pin[name]
@@ -484,10 +440,7 @@ def update_ir_window_shape_ui(_=None):
         pass
 
 def update_mixed_freq_ui(_=None):
-    """
-    UI helper: enable mixed_freq ONLY when filter_type == Mixed.
-    Otherwise grey out the field (visible but locked).
-    """
+    """Soveltaa tai paivittaa: update mixed freq ui."""
     def _p(name, default=None):
         try:
             return pin[name]
@@ -518,16 +471,7 @@ def update_mixed_freq_ui(_=None):
         pass
     
 def update_low_bass_cut_ui(*, pin, pin_update, get_val, t):
-    """
-    UI helper: Low-bass cut toggle.
-    OFF -> low_bass_cut_hz = ""   (empty)
-    ON  -> low_bass_cut_hz = float
-
-    Renders into scope: 'low_bass_cut_scope'
-    Uses existing pins:
-      - low_bass_cut_enable (checkbox list or bool)
-      - low_bass_cut_hz     (float or "")
-    """
+    """Soveltaa tai paivittaa: update low bass cut ui."""
 
     def _p(name, default=None):
         try:
@@ -535,7 +479,6 @@ def update_low_bass_cut_ui(*, pin, pin_update, get_val, t):
         except Exception:
             return default
 
-    # Enable: checkbox commonly returns [] / [True]
     try:
         en_raw = _p("low_bass_cut_enable", None)
         if isinstance(en_raw, (list, tuple, set)):
@@ -547,23 +490,18 @@ def update_low_bass_cut_ui(*, pin, pin_update, get_val, t):
 
     cur = _p("low_bass_cut_hz", "")
 
-    # Remember last numeric for nice UX when OFF
     last = _p("low_bass_cut_hz_last", get_val("low_bass_cut_hz", 40.0))
 
-    # --- sanitize stored pin value ---
     try:
         if not enabled:
-            # OFF => force empty string, keep last remembered value
             if cur not in ("", None):
                 try:
-                    # store last good numeric before blanking
                     pin_update("low_bass_cut_hz_last", value=float(cur))
                 except Exception:
                     pass
                 pin_update("low_bass_cut_hz", value="")
             disp = float(last or 40.0)
         else:
-            # ON => ensure numeric, restore from last/default if currently blank
             if cur in ("", None):
                 v0 = float(last or 40.0)
                 pin_update("low_bass_cut_hz", value=v0)
@@ -572,12 +510,10 @@ def update_low_bass_cut_ui(*, pin, pin_update, get_val, t):
             if not math.isfinite(disp):
                 disp = float(last or 40.0)
                 pin_update("low_bass_cut_hz", value=disp)
-            # refresh last
             pin_update("low_bass_cut_hz_last", value=float(disp))
     except Exception:
         disp = 40.0
 
-    # --- render ---
     with use_scope("low_bass_cut_scope", clear=True):
         w = put_input(
             "low_bass_cut_hz",
@@ -588,24 +524,19 @@ def update_low_bass_cut_ui(*, pin, pin_update, get_val, t):
         )
 
         if not enabled:
-            # truly not usable when OFF
             w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
             put_html(
                 "<div style='margin-top:6px; color:#9aa0a6; font-size:13px;'>OFF</div>"
             )
 
 def update_afdw_cycles_ui(*, pin, get_val, t):
-    """
-    UI helper: grey out FDW cycles input when A-FDW is disabled.
-    Renders into scope: 'afdw_cycles_scope'
-    """
+    """Soveltaa tai paivittaa: update afdw cycles ui."""
     def _p(name, default=None):
         try:
             return pin[name]
         except Exception:
             return default
 
-    # PyWebIO checkbox can be [] or [True]
     try:
         en_raw = _p("enable_afdw", None)
         if isinstance(en_raw, (list, tuple, set)):
@@ -615,7 +546,6 @@ def update_afdw_cycles_ui(*, pin, get_val, t):
     except Exception:
         enabled = bool(get_val("enable_afdw", True))
 
-    # Current value
     try:
         v = float(_p("fdw_cycles", get_val("fdw_cycles", 10.0)) or 10.0)
     except Exception:
@@ -638,17 +568,13 @@ def update_afdw_cycles_ui(*, pin, get_val, t):
             )
 
 def update_tdc_controls_ui(*, pin, get_val, t, apply_tdc_preset):
-    """
-    UI helper: grey out all TDC controls when TDC is disabled.
-    Renders into scope: 'tdc_controls_scope'
-    """
+    """Soveltaa tai paivittaa: update tdc controls ui."""
     def _p(name, default=None):
         try:
             return pin[name]
         except Exception:
             return default
 
-    # Checkbox value can be [] or [True]
     try:
         en_raw = _p("enable_tdc", None)
         if isinstance(en_raw, (list, tuple, set)):
@@ -670,9 +596,8 @@ def update_tdc_controls_ui(*, pin, get_val, t, apply_tdc_preset):
     slope    = _f("tdc_slope_db_per_oct", 6.0)
 
     with use_scope("tdc_controls_scope", clear=True):
-        w = put_html("<div id='tdc_box' style='margin-top:6px'>")  # wrapper start
+        w = put_html("<div id='tdc_box' style='margin-top:6px'>")
 
-        # Presets row (ONLY buttons)
         put_row([
             put_buttons(
                 [
@@ -685,11 +610,9 @@ def update_tdc_controls_ui(*, pin, get_val, t, apply_tdc_preset):
             ),
         ])
 
-        # Help texts as compact blocks below (no row layout)
         put_html(f"<div style='opacity:0.65; font-size:12px; line-height:1.25; margin-top:6px'>{t('tdc_preset_help')}</div>")
         put_html(f"<div style='opacity:0.70; font-size:12px; line-height:1.25; margin-top:4px'>{t('tdc_summary_hint')}</div>")
 
-        # Inputs row
         put_row([
             put_input(
                 "tdc_strength",
@@ -714,12 +637,9 @@ def update_tdc_controls_ui(*, pin, get_val, t, apply_tdc_preset):
             ),
         ])
 
-        put_html("</div>")  # wrapper end
+        put_html("</div>")
 
-    # Re-acquire wrapper as one output for styling
-    # (PyWebIO limitation: we style the whole scope content instead)
     if not enabled:
-        # style the whole scope (works reliably)
         put_html("<script>document.getElementById('tdc_box').style.opacity='0.55';"
                  "document.getElementById('tdc_box').style.pointerEvents='none';"
                  "document.getElementById('tdc_box').style.filter='grayscale(1)';</script>")
@@ -728,7 +648,7 @@ def update_tdc_controls_ui(*, pin, get_val, t, apply_tdc_preset):
 
 
 def apply_mode_defaults_to_ui(_=None):
-    """Apply current mode defaults to UI fields (manual button only)."""
+    """Soveltaa tai paivittaa: apply mode defaults to ui."""
     try:
         mode = str(pin["mode"] or "BASIC").strip().upper()
     except Exception:
@@ -820,7 +740,7 @@ def apply_mode_defaults_to_ui(_=None):
     toast_mode_defaults_applied(mode)
 
 def update_taps_auto_info(_=None):
-    """UI helper: show Auto-taps mapping when multi-rate is enabled."""
+    """Soveltaa tai paivittaa: update taps auto info."""
     try:
         mr = bool(pin["multi_rate_opt"])
     except Exception:
@@ -862,8 +782,6 @@ def update_lvl_ui(_=None):
             mode = "Auto"
         is_manual = ("Manual" in mode)
 
-        # Keep separate lvl_min/lvl_max values for Auto vs Manual
-        # and restore them automatically when mode changes.
         prev_mode = getattr(update_lvl_ui, "_last_lvl_mode", None)
         try:
             cur_min = float(_p("lvl_min", 500.0) or 500.0)
@@ -873,13 +791,11 @@ def update_lvl_ui(_=None):
         if cur_min > cur_max:
             cur_min, cur_max = cur_max, cur_min
 
-        # Initialize caches on first run
         if not hasattr(update_lvl_ui, "_lvl_auto_range"):
             setattr(update_lvl_ui, "_lvl_auto_range", (float(cur_min), float(cur_max)))
         if not hasattr(update_lvl_ui, "_lvl_manual_range"):
             setattr(update_lvl_ui, "_lvl_manual_range", (float(cur_min), float(cur_max)))
 
-        # If mode changed, store outgoing range and restore incoming range
         if prev_mode is not None and str(prev_mode) != str(mode):
             try:
                 if "Manual" in str(prev_mode):
@@ -906,7 +822,6 @@ def update_lvl_ui(_=None):
 
         setattr(update_lvl_ui, "_last_lvl_mode", str(mode))
 
-        # Keep min/max helper texts in sync with mode selection.
         try:
             pin_update("lvl_min", help_text=t("lvl_min_help_manual" if is_manual else "lvl_min_help_auto"))
             pin_update("lvl_max", help_text=t("lvl_max_help_manual" if is_manual else "lvl_max_help_auto"))
@@ -920,7 +835,6 @@ def update_lvl_ui(_=None):
             pin_update("lvl_min", value=vmin)
             pin_update("lvl_max", value=vmax)
 
-        # Keep caches up to date for current mode
         try:
             if is_manual:
                 setattr(update_lvl_ui, "_lvl_manual_range", (float(vmin), float(vmax)))
@@ -1015,39 +929,28 @@ def apply_afdw_preset(name: str):
 
 
 def _pretty_plot_smoothing(v, t):
-    # UI naming: Psychoacoustic == CamillaFIR Reference
     if isinstance(v, str) and v.strip().lower() == "psychoacoustic":
-        return t("smooth_safe_reference")  # "CamillaFIR Reference"
+        return t("smooth_safe_reference")
     return str(v)
 
 def _fmt_mode_value(key: str, defaults: dict, clamps: dict):
-    """
-    Return a human-friendly markdown string for a mode default,
-    including clamp info when available.
-    """
+    """Sisainen apufunktio: fmt mode value."""
     v = defaults.get(key, None)
     if key == "plot_smoothing_level":
         v_str = _pretty_plot_smoothing(v)
     else:
         v_str = str(v)
 
-    # Optional clamp display
     lim = clamps.get(key, None) if isinstance(clamps, dict) else None
     if isinstance(lim, tuple) and len(lim) == 2:
         lo, hi = lim
-        # bool clamps are (True, True) etc.
         if isinstance(lo, bool) and isinstance(hi, bool):
             return f"**{v_str}**"
         return f"**{v_str}** _(clamped to {lo}–{hi})_"
     return f"**{v_str}**"
 
 def _build_modes_guide_parts(t):
-    """
-    Returns: intro_md, basic_md, advanced_md, tip_md
-    Values are read live from camillafir_modes.MODE_DEFAULTS / MODE_CLAMPS.
-    Text is localized via translations.json keys.
-    """
-    # Import live policy
+    """Sisainen apufunktio: build modes guide parts."""
     
 
     d_basic = MODE_DEFAULTS.get("BASIC", {})
@@ -1059,14 +962,11 @@ def _build_modes_guide_parts(t):
         lim = clamps.get(key)
         if isinstance(lim, tuple) and len(lim) == 2:
             lo, hi = lim
-            # localized " (clamped lo–hi)"
             return t("guide_modes_clamped_suffix").format(lo=lo, hi=hi)
         return ""
 
-    # Localized intro
     intro = t("guide_modes_intro") + "\n"
 
-    # BASIC markdown
     basic_lines = []
     basic_lines.append(t("guide_modes_basic_goal") + "\n")
     basic_lines.append(t("guide_modes_defaults_live"))
@@ -1140,7 +1040,6 @@ def _build_modes_guide_parts(t):
     )
     basic_md = "\n".join(basic_lines)
 
-    # ADVANCED markdown
     adv_lines = []
     adv_lines.append(t("guide_modes_adv_goal") + "\n")
     adv_lines.append(t("guide_modes_defaults_live"))
@@ -1232,16 +1131,11 @@ def put_guide_section():
             put_collapse(title, [put_markdown(body)], open=False)
         )
 
-    # Optional outer collapse (if you want everything under one)
     put_collapse(t("guide_section_title"), content, open=False)
 
 
 def update_confidence_pull_ui(*, pin, get_val, t):
-    """
-    UI helper: Confidence-based target pull (Advanced only).
-    Creates pins so pipeline/DSP can actually see user values.
-    Renders into scope: 'conf_pull_scope'
-    """
+    """Soveltaa tai paivittaa: update confidence pull ui."""
     def _p(name, default=None):
         try:
             return pin[name]
@@ -1309,12 +1203,7 @@ def update_confidence_pull_ui(*, pin, get_val, t):
 
 
 def update_target_preview_ui(_=None):
-    """
-    Small, fast target preview for Target tab.
-    - Uses Plotly HTML (no Kaleido).
-    - Supports built-in curves and uploaded custom target file.
-    - Optionally overlays speaker measurement curves (L/R + avg).
-    """
+    """Soveltaa tai paivittaa: update target preview ui."""
     def _p(name, default=None):
         try:
             return pin[name]
@@ -1395,13 +1284,12 @@ def update_target_preview_ui(_=None):
 
             name = str(up.get("filename", "") or "").strip().lower()
             ext = "." + name.rsplit(".", 1)[1] if "." in name else ""
-            pre_ms = _to_float(_p("ir_window_left", 120.0), 120.0)
+            pre_ms = _to_float(_p("ir_window_left", 85.0), 85.0)
             post_raw = _p("ir_window_right", None)
             if post_raw in (None, ""):
                 post_raw = _p("ir_window", 500.0)
             post_ms = _to_float(post_raw, 500.0)
             try:
-                # UI pin is `filter_smooth` (legacy fallback: `smoothing_level`).
                 sl = int(float(_p("filter_smooth", _p("smoothing_level", 0)) or 0))
             except Exception:
                 sl = 0
@@ -1429,13 +1317,12 @@ def update_target_preview_ui(_=None):
             if not p:
                 return None, None
             p_l = p.lower()
-            pre_ms = _to_float(_p("ir_window_left", 120.0), 120.0)
+            pre_ms = _to_float(_p("ir_window_left", 85.0), 85.0)
             post_raw = _p("ir_window_right", None)
             if post_raw in (None, ""):
                 post_raw = _p("ir_window", 500.0)
             post_ms = _to_float(post_raw, 500.0)
             try:
-                # UI pin is `filter_smooth` (legacy fallback: `smoothing_level`).
                 sl = int(float(_p("filter_smooth", _p("smoothing_level", 0)) or 0))
             except Exception:
                 sl = 0
@@ -1652,8 +1539,6 @@ def update_target_preview_ui(_=None):
             m_aligned = _align_to_target_window(m_raw, y, f, lvl_min, lvl_max)
             speaker_interp[ch] = _smooth_for_preview(f, m_aligned)
 
-        # Manual level mode preview shift:
-        # Keep target curve fixed; move only speaker curves so user sees the difference.
         if abs(preview_level_shift_db) > 1e-9:
             for _k in list(speaker_interp.keys()):
                 speaker_interp[_k] = np.asarray(speaker_interp[_k], dtype=float) + float(preview_level_shift_db)
@@ -1712,7 +1597,6 @@ def update_target_preview_ui(_=None):
                 )
             )
 
-        # Level calculation window (Smart Scan / manual range) as a subtle gray band
         fig.add_vrect(
             x0=max(1.0, lvl_min),
             x1=max(1.0, lvl_max),

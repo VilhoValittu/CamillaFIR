@@ -1,4 +1,3 @@
-# camillafir_i18n.py
 import json
 import locale
 import os
@@ -7,12 +6,11 @@ from pathlib import Path
 
 
 def get_resource_path(relative_path: str) -> str:
-    """Returns the path to a resource, whether inside an EXE package or in development."""
+    """Hakee tai ratkaisee: get resource path."""
     if hasattr(sys, "_MEIPASS"):
         base = os.path.join(sys._MEIPASS, relative_path)
         if os.path.exists(base):
             return base
-        # Fallback for older bundle layouts
         alt = os.path.join(sys._MEIPASS, "camillafir", "resources", relative_path)
         return alt
     package_root = Path(__file__).resolve().parents[1]
@@ -36,15 +34,10 @@ TRANSLATIONS = load_translations()
 
 
 def t(key: str) -> str:
-    """
-    Translation helper (fi/en). Falls back to English, then to key.
-    Preserves current special-cases from camillafir.py.
-    """
+    """Funktio: t."""
     lang = locale.getlocale()[0]
     lang = "fi" if lang and "fi" in lang.lower() else "en"
 
-    # current hardcoded special cases
     if key == "zoom_hint":
         return "(Vinkki: Voit zoomata hiirellä kuvaajaa)" if lang == "fi" else "(Hint: Use mouse to zoom)"
     return TRANSLATIONS.get(lang, TRANSLATIONS.get("en", {})).get(key, key)
-

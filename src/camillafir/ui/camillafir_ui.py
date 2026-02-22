@@ -46,11 +46,7 @@ from .camillafir_ui_helpers import (
 logger = logging.getLogger("CamillaFIR")
 
 def build_app(*, process_run, PROGRAM_NAME: str, VERSION: str, MAX_SAFE_BOOST: float):
-    """
-    Adapter for camillafir.py:
-    - Injects required globals into this module
-    - Returns the PyWebIO 'main' callable
-    """
+    """Rakentaa tai generoi: build app."""
     g = globals()
     g["process_run"] = process_run
     g["PROGRAM_NAME"] = PROGRAM_NAME
@@ -308,12 +304,7 @@ def put_logo_header(t):
 """)
 
 def update_engine_metrics_ui(*, pin=pin, pin_update=pin_update):
-    """
-    Renders FIR engine metrics into scope: 'engine_metrics_scope'
-    - Latency (ms) (Linear-phase group delay approx = taps/2)
-    - Bin resolution (Hz) = fs / taps
-    This is UI-only and safe (never raises).
-    """
+    """Soveltaa tai paivittaa: update engine metrics ui."""
     try:
         try:
             fs_v = pin["fs"]
@@ -332,7 +323,6 @@ def update_engine_metrics_ui(*, pin=pin, pin_update=pin_update):
         latency_ms = (taps_i / 2.0) / fs_f * 1000.0
         bin_hz = fs_f / float(taps_i)
 
-        # light “badges”
         lat_txt = f"{latency_ms:.0f} ms"
         res_txt = f"{bin_hz:.3f} Hz/bin"
 
@@ -361,7 +351,6 @@ def main():
     put_logo_header(t)
     put_html('<hr style="border:1px solid #1f2937; margin: 0 0 14px 0;">')
 
-    # About / Credits (collapsible)
     put_collapse(
         t('about_title'),
         [put_markdown(t('about_body'))]
@@ -370,7 +359,7 @@ def main():
     put_guide_section(); put_markdown("---")
     d = load_config(); get_val = lambda k, def_v: d.get(k, def_v)
     hc_opts = [
-        {'label': t('hc_harman'),        'value': 'Harman6'},   # default
+        {'label': t('hc_harman'),        'value': 'Harman6'},
         {'label': t('hc_harman8'),       'value': 'Harman8'},
         {'label': t('hc_harman4'),       'value': 'Harman4'},
         {'label': t('hc_harman10'),      'value': 'Harman10'},
@@ -387,7 +376,6 @@ def main():
     fs_opts = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]; 
     taps_opts = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]; slope_opts = [6, 12, 18, 24, 36, 48]
     
-#--- #1 Files
     
     tab_files = [
         put_markdown(f"### 📂 {t('tab_files')}"),
@@ -420,16 +408,11 @@ def main():
         put_scope('taps_auto_info_scope_files'),
     ]
     
-#--- #2 Basic Settings
 
     tab_basic = [
         put_markdown(f"### ⚙️ {t('tab_basic')}"),
         put_markdown("---"),
 
-        # =========================
-        # MODE
-        # =========================
-        # Mode + Apply defaults (manual apply is safer UX)
         put_row([
             put_select(
                 'mode',
@@ -451,9 +434,6 @@ def main():
         put_scope('mode_desc_scope'),
         put_markdown("---"),
 
-        # =========================
-        # FIR ENGINE
-        # =========================
         put_markdown(f"#### \U0001F9F1 {t('ui_fir_engine')}"),
         put_row([
             put_select('fs', label=t('fs'), options=fs_opts, value=get_val('fs', 44100), help_text=t('fs_help')),  # type: ignore
@@ -466,9 +446,6 @@ def main():
         
         put_markdown("---"),
 
-        # =========================
-        # PHASE STRATEGY
-        # =========================
         put_markdown(f"#### \U0001F9ED {t('ui_filter_type')}"),
         put_row([
             put_select(
@@ -483,7 +460,6 @@ def main():
         
 
 ]
-#--- #3 Target
     
     tab_target = [
         put_markdown(f"### 🎯 {t('tab_target')}"),
@@ -508,11 +484,7 @@ def main():
             help_text=t('hc_custom_help'),
             
         ),
-                #put_markdown("---"),
 
-        # =========================
-        # LEVELING & GAIN
-        # =========================
         put_markdown(f"#### \U0001F39A {t('ui_leveling_gain')}"),
         put_row([
             put_select('lvl_algo', label=t('lvl_algo'), options=['Median', 'Average'], value=get_val('lvl_algo', 'Median'), help_text=t('lvl_algo_help')),
@@ -525,14 +497,14 @@ def main():
                 label=t('lvl_min'),
                 type=FLOAT,
                 value=get_val('lvl_min', 500.0),
-                help_text=t('lvl_min_help_auto')  # default Auto mode
+                help_text=t('lvl_min_help_auto')
             ),
             put_input(
                 'lvl_max',
                 label=t('lvl_max'),
                 type=FLOAT,
                 value=get_val('lvl_max', 2000.0),
-                help_text=t('lvl_max_help_auto')  # default Auto mode
+                help_text=t('lvl_max_help_auto')
             ),
         ]),
 
@@ -584,7 +556,7 @@ def main():
             label=t('max_boost'),
             type=FLOAT,
             value=get_val('max_boost', 5.0),
-            help_text=t('max_boost_help'),  # vain normaali teksti tähän
+            help_text=t('max_boost_help'),
         ),
 
         put_html(
@@ -603,15 +575,11 @@ def main():
 
     pin_on_change("hc_mode", _on_hc_mode_change)
 
-#--- #4 Advanced
     tab_adv = [
         put_markdown(f"### 🛠️ {t('tab_adv')}"),
 
             put_markdown("---"),
 
-            # =========================
-            # PLOTS (visual only)
-            # =========================
             put_collapse(
                 f"\U0001F4C8 {t('ui_plots_visual_only')}",
                 [
@@ -650,9 +618,6 @@ def main():
             ),
             
         put_markdown("---"),
-            # =========================
-            # CORRECTION SHAPING (rails)
-            # =========================
             put_markdown(f"### \U0001F9E9 {t('ui_correction_shaping_rails')}"),
             
             put_row([
@@ -712,11 +677,9 @@ def main():
 
         put_checkbox('stereo_link', options=[{'label': t('enable_link'), 'value': True}], value=[True] if get_val('stereo_link', False) else [], help_text=t('link_help')),
         
-        # --- Bass Safety (Advanced tab) ---
 put_markdown("### 🛡️ Bass Safety"),
 put_markdown("---"),
 
-        # 1) Excursion Protection (Driver Safety)
         put_row([
             put_checkbox(
                 'exc_prot',
@@ -733,23 +696,19 @@ put_markdown("---"),
             ),
         ]),
 
-        # micro-hint (small, grey)
         put_html(
             f"<div style='margin-top:6px; color:#9aa0a6; font-size:13px;'>"
             f"{t('exc_prot_hint')}"
             f"</div>"
         ),
 
-        # guide (collapsible)
         put_collapse(
             t('guide_exc_prot_title'),
             [put_markdown(t('guide_exc_prot_body'))]
         ),
 
-        # spacing between the two tools
         put_html("<div style='height:12px'></div>"),
         put_markdown("---"),
-        # 2) Low-bass boost lock (policy limiter)
         put_checkbox(
             'low_bass_cut_enable',
             options=[{'label': t('low_bass_cut_hz'), 'value': True}],
@@ -757,14 +716,12 @@ put_markdown("---"),
         ),
         put_scope('low_bass_cut_scope'),
 
-        # micro-hint (small, grey)
         put_html(
             f"<div style='margin-top:6px; color:#9aa0a6; font-size:13px;'>"
             f"{t('low_bass_cut_hint')}"
             f"</div>"
         ),
 
-        # guide (collapsible)
         put_collapse(
             t('guide_low_bass_cut_title'),
             [put_markdown(t('guide_low_bass_cut_body'))]
@@ -783,7 +740,6 @@ put_markdown("---"),
 
     ]
 
-#--- #5 Window & TDC
     tab_window_tdc = [
         put_markdown(f"🪟 {t('tab_window_tdc')}"),
         put_markdown("---"),
@@ -805,7 +761,6 @@ put_markdown("---"),
         
         put_markdown("---"),
 
-        # A-FDW
 
         put_checkbox('enable_afdw', options=[{'label': '⏳ Adaptive Frequency-Domain Windowing (A-FDW)', 'value': True}], 
              value=[True] if get_val('enable_afdw', True) else [], help_text=t('afdw_help')),
@@ -828,7 +783,6 @@ put_markdown("---"),
             put_scope("afdw_cycles_scope"),
         ]),
         put_markdown("---"),
-        # --- TDC aka Trinnov-mode (PyWebIO)
 
         put_checkbox(
             'enable_tdc',
@@ -840,7 +794,6 @@ put_markdown("---"),
 
         put_scope("tdc_controls_scope"),
     ]
-#--- #6 XO
     tab_xo = [
         put_markdown(f"### ❌ {t('tab_xo')}"),
         put_html(
@@ -868,7 +821,6 @@ put_markdown("---"),
     ]
 
 
-    # Draw tabs
     put_tabs([
         {'title': t('tab_files'), 'content': tab_files}, 
         {'title': t('tab_basic'), 'content': tab_basic}, 
@@ -878,7 +830,6 @@ put_markdown("---"),
         {'title': t('tab_xo'), 'content': tab_xo},
     ])
     update_target_preview_ui(None)
-    # After tabs exist in DOM, render engine metrics
     def _render_engine_metrics_later():
         try:
             update_engine_metrics_ui(pin=pin, pin_update=pin_update)
@@ -887,8 +838,6 @@ put_markdown("---"),
 
     _render_engine_metrics_later()
 
-    # Only sanitize range when BOTH ends are valid numbers.
-    # Do NOT call update_lvl_ui() here (it rerenders the scope and can reset inputs).
     def _on_lvl_range_change(_=None):
         try:
             a = pin.get('lvl_min', None)
@@ -896,7 +845,6 @@ put_markdown("---"),
             if a is None or b is None:
                 update_target_preview_ui()
                 return
-            # If user is mid-edit, values can be '' -> ignore until valid
             a = float(a)
             b = float(b)
             if not np.isfinite(a) or not np.isfinite(b):
@@ -909,7 +857,6 @@ put_markdown("---"),
             pass
         update_target_preview_ui()
 
-    # update ui (initial render)
     update_lvl_ui()
     update_ir_tukey_ui()
     update_ir_export_window_mode_ui()
@@ -926,10 +873,8 @@ put_markdown("---"),
     update_confidence_pull_ui(pin=pin, get_val=get_val, t=t)
     update_target_preview_ui()
 
-    # --- orchestrators (avoid racing handlers) ---
 
     def _refresh_ir_window_controls(_=None):
-    # --- HARD POLICY: BASIC mode => windowing ALWAYS auto ---
         try:
             m = str(_pin_get('mode', 'BASIC') or 'BASIC').strip().upper()
             if m == "BASIC":
@@ -938,10 +883,8 @@ put_markdown("---"),
         except Exception:
             pass
 
-        # 1) sanitize/export-mode first (may force value back to "auto")
         update_ir_export_window_mode_ui()
 
-        # 2) dependent scopes
         update_ir_window_shape_ui()
         update_ir_tukey_ui()
         update_ir_lr_window_ui()
@@ -951,13 +894,9 @@ put_markdown("---"),
 
 
     def _on_filter_type_change(_=None):
-        # Mixed freq depends on filter_type
         update_mixed_freq_ui()
-        # Filter type may indirectly force mode to auto -> refresh whole IR window group
         _refresh_ir_window_controls()
 
-    # pins
-    # --- Target preview live updates ---
     pin_on_change('hc_mode', onchange=lambda _: update_target_preview_ui())
     pin_on_change('hc_custom_file', onchange=lambda _: update_target_preview_ui())
     pin_on_change('mag_c_min', onchange=lambda _: update_target_preview_ui())
@@ -994,13 +933,10 @@ put_markdown("---"),
         )
     )
 
-    # keep these (independent)
     pin_on_change('lvl_mode', onchange=lambda _: (update_lvl_ui(), update_target_preview_ui()))
 
-    # Tukey alpha depends on shape, but our refresh covers mode/filter changes
     pin_on_change('ir_export_window_shape', onchange=update_ir_tukey_ui)
 
-    # Range change: sanitize only, no rerender
     pin_on_change('lvl_min', onchange=_on_lvl_range_change)
     pin_on_change('lvl_max', onchange=_on_lvl_range_change)
     pin_on_change('lvl_manual_db', onchange=_on_lvl_range_change)
@@ -1015,14 +951,12 @@ put_markdown("---"),
 
     _warn_taps_if_over_cap()
 
-    # Mode description: initial render + live updates
     def _on_mode_change(_=None):
         try:
             m = str(_pin_get('mode', 'BASIC') or 'BASIC').strip().upper()
         except Exception:
             m = "BASIC"
 
-        # HARD POLICY: BASIC => Smart Scan only
         try:
             if m == "BASIC":
                 pin_update(
@@ -1070,7 +1004,6 @@ put_markdown("---"),
     pin_on_change('mode', onchange=_on_mode_change)
     _on_mode_change()
 
-    # Auto-taps UI updater: react when multi-rate toggles (tab_files) or basic changes
     pin_on_change('multi_rate_opt', onchange=update_taps_auto_info)
     pin_on_change('fs', onchange=update_taps_auto_info)
     pin_on_change('taps', onchange=update_taps_auto_info)
@@ -1084,7 +1017,6 @@ put_markdown("---"),
     put_markdown("---")
 
     
-    # Button update: Completely clean text without background or border
     put_button("🚀 START", onclick=process_run).style("""
         width: 100%; 
         margin-top: 30px; 
@@ -1121,11 +1053,7 @@ def _log_df_smoothing_for_fs(cfg, fs_v, df_on):
         logger.info(f"{fs_v//1000} kHz -> DF smoothing OFF")
 
 def _pin_get(key, default=None):
-    """
-    Robust read from PyWebIO pin.
-    pin behaves like a dict, but membership/tests can be fragile depending on session state.
-    This helper NEVER raises.
-    """
+    """Sisainen apufunktio: pin get."""
     try:
         v = pin.get(key, None)
         if v is None:
@@ -1133,42 +1061,30 @@ def _pin_get(key, default=None):
         return v
     except Exception:
         try:
-            # Fallback to __getitem__ if available
             return pin[key]
         except Exception:
             return default
 
 def _json_safe(obj, *, _depth=0, _max_depth=12):
-    """
-    Best-effort conversion of nested stats objects to JSON-serializable types.
-    - numpy scalars -> float/int
-    - numpy arrays -> lists
-    - dict/list/tuple -> recursively converted
-    - unknown objects -> string repr
-    """
+    """Sisainen apufunktio: json safe."""
     try:
         if _depth > _max_depth:
             return str(obj)
-        # Basic primitives
         if obj is None or isinstance(obj, (str, bool, int, float)):
             return obj
 
-        # numpy scalars / arrays (avoid importing numpy here; rely on duck-typing)
         try:
-            import numpy as _np  # local import (already dependency)
+            import numpy as _np
             if isinstance(obj, _np.generic):
-                # e.g. np.float64, np.int64
                 return obj.item()
             if isinstance(obj, _np.ndarray):
                 return obj.tolist()
         except Exception:
             pass
 
-        # dict
         if isinstance(obj, dict):
             out = {}
             for k, v in obj.items():
-                # ensure keys are strings
                 try:
                     ks = str(k)
                 except Exception:
@@ -1176,29 +1092,22 @@ def _json_safe(obj, *, _depth=0, _max_depth=12):
                 out[ks] = _json_safe(v, _depth=_depth + 1, _max_depth=_max_depth)
             return out
 
-        # list/tuple
         if isinstance(obj, (list, tuple)):
             return [_json_safe(v, _depth=_depth + 1, _max_depth=_max_depth) for v in obj]
 
-        # bytes
         if isinstance(obj, (bytes, bytearray)):
             try:
                 return obj.decode("utf-8", errors="replace")
             except Exception:
                 return str(obj)
 
-        # fallback
         return str(obj)
     except Exception:
         return str(obj)
 
 
 def _build_diagnostics_dict(data, fs_v, l_st, r_st):
-    """
-    Single source of truth diagnostics object for Summary.txt and future parsing.
-   Keep it stable; bump schema_version if changing structure.
-    """
-    # Extract a compact leveling block (StereoLink uses same window/offset for both)
+    """Sisainen apufunktio: build diagnostics dict."""
     def _leveling_block(st):
         if not isinstance(st, dict):
             return {}
@@ -1300,8 +1209,6 @@ def _render_results(
 
       
             
-        # --- Acoustic Intelligence UI (single source of truth: SAME as Summary.txt) ---
-        # No separate "measured vs filtered" logic in UI. We display the Summary-based result.
         l_ai = plots.calc_ai_summary_from_stats(l_st_f)
         r_ai = plots.calc_ai_summary_from_stats(r_st_f)
 
@@ -1365,7 +1272,6 @@ def _render_results(
 
         put_markdown(f"###  {t('rep_header')}")
         with put_collapse(" DSP info"):
-            # Phase clamp reporting (always-on safety)
             def _phase_clamp_str(st: dict) -> str:
                 try:
                     lim = float((st or {}).get('phase_corr_clamp_deg', 0.0) or 0.0)
@@ -1380,16 +1286,11 @@ def _render_results(
                     return "—"
 
             def _xo_fc_wrapped_str(st: dict) -> str:
-                """
-                Show per-XO wrapped phase delta at crossover frequency (debug sanity check).
-                Looks for keys like: xo1_dphi_wrapped_deg@fc, xo2_dphi_wrapped_deg@fc, ...
-                """
+                """Sisainen apufunktio: xo fc wrapped str."""
                 try:
                     if not isinstance(st, dict) or not st:
                         return "—"
 
-                    # Pull XO freqs from the human-readable summary to label the numbers (best-effort).
-                    # Example xo_summary: "500.0Hz/12dB/oct, 2800.0Hz/12dB/oct"
                     xo_summary = str(st.get("xo_summary", "") or "")
                     freqs = []
                     for part in xo_summary.split(","):
@@ -1409,7 +1310,6 @@ def _render_results(
                             v = float(st.get(k))
                         except Exception:
                             continue
-                        # Label with frequency if available, else "XO i"
                         f_lbl = None
                         if i <= len(freqs) and freqs[i-1] is not None:
                             f_lbl = f"{int(round(freqs[i-1]))}Hz"
@@ -1421,10 +1321,7 @@ def _render_results(
                 except Exception:
                     return "—"
             def _xo_fc_gd_str(st: dict) -> str:
-                """
-                Show per-XO group delay delta at crossover frequency (ms).
-                Keys: xo{i}_dgd_ms@fc
-                """
+                """Sisainen apufunktio: xo fc gd str."""
                 try:
                     if not isinstance(st, dict) or not st:
                         return "—"
@@ -1459,7 +1356,6 @@ def _render_results(
                 except Exception:
                     return "—"
 
-            # XO/HPF phase model reporting (from DSP stats; falls back safely)
             def _xo_phase_model_str(st: dict) -> str:
                 try:
                     s = (st or {}).get("xo_summary", None)
@@ -1495,10 +1391,7 @@ def _render_results(
                     return "—"
 
             def _xo_fc_gd_badge(st: dict) -> str:
-                """
-                Color badge based on worst |ΔGD@fc| across XO points.
-                Thresholds (ms): <0.7 green, 0.7–1.5 yellow, >1.5 red.
-                """
+                """Sisainen apufunktio: xo fc gd badge."""
                 try:
                     if not isinstance(st, dict) or not st:
                         return ""
@@ -1568,10 +1461,7 @@ def _render_results(
                 except Exception:
                     return "—"
             def _format_ir_window(data: dict) -> str:
-                """
-                Human-readable IR export window description.
-                Avoids tool-specific terminology and reflects actual behavior.
-                """
+                """Sisainen apufunktio: format ir window."""
                 mode = str(data.get('ir_export_window_mode', '') or '').lower()
 
                 if mode == 'rew_asym':
@@ -1584,10 +1474,8 @@ def _render_results(
                         pass
                     return "Asymmetric"
 
-                # Auto / fallback
                 return "Auto (adaptive)"
 
-            # XO ΔGD@fc line with color badge (HTML for inline styling)
             _xo_gd_line = (
                 f"XO ΔGD@fc: L {_xo_fc_gd_str(l_st_f)} | R {_xo_fc_gd_str(r_st_f)}"
                 f"{_xo_fc_gd_badge(l_st_f) or _xo_fc_gd_badge(r_st_f)}"
@@ -1646,7 +1534,6 @@ def _render_results(
         ])
         put_file(fname, zip_buffer.getvalue(), label=" DOWNLOAD FILTER ZIP")
 
-        # Stage timing breakdown (start-button -> done)
         try:
             rows = [['Stage', 'Time (s)']]
             p = dict(perf_stats or {})

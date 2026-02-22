@@ -8,9 +8,6 @@ from .camillafir_analysis import (
     _sigma_bins_from_hz,
     _third_oct_centers,
 )
-# NOTE:
-# Legacy helper. Not used in current DSP or UI pipelines.
-# Kept only for backward compatibility / external scripts.
 
 __all__ = [
     "analyze_acoustic_confidence",
@@ -22,10 +19,9 @@ __all__ = [
 ]
 
 def calculate_group_delay(freqs, phases_deg):
-    """Calculates group delay (ms) from phase gradient."""
+    """Laskee: calculate group delay."""
     phase_rad = np.unwrap(np.deg2rad(phases_deg))
     d_phi_d_f = np.gradient(phase_rad, freqs)
     gd_ms = -d_phi_d_f / (2 * np.pi) * 1000.0
-    # Smoothing in "Hz width", not bins -> stays same across fs/taps changes
     sigma_bins = _sigma_bins_from_hz(freqs, sigma_hz=2.0, fallback_bins=3.0)
     return scipy.ndimage.gaussian_filter1d(gd_ms, sigma=sigma_bins)

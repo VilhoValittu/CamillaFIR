@@ -1,4 +1,3 @@
-#camillafir_export.py
 import json
 import logging
 import os
@@ -9,7 +8,6 @@ logger = logging.getLogger("CamillaFIR")
 
 TEST_MODE = 1
 
-# Test / diagnostics mode
 TEST_MODE = os.environ.get("CAMILLAFIR_TEST", "0") == "1"
 
 def _append_dsp_effective_params(summary_content, data, fs_v):
@@ -34,10 +32,8 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
 
         summary_content += "\n=== DSP EFFECTIVE PARAMS (THIS SAMPLE RATE) ===\n"
         summary_content += f"Sample rate: {int(fs_v)} Hz\n"
-        # UI-only smoothing view (does not change DSP math)
         try:
             psl = str(data.get("plot_smoothing_level", "Psychoacoustic") or "Psychoacoustic").strip()
-            # UI naming: Psychoacoustic mode is presented as CamillaFIR Reference.
             psl_display = "CamillaFIR Reference" if "psy" in psl.lower() else psl
             summary_content += f"Plot smoothing: {psl_display}\n"
         except Exception:
@@ -83,7 +79,6 @@ def _append_acoustic_events(summary_content, l_st, r_st):
                 ev_type = str(rev.get('type', 'Event') or 'Event')
                 gd_error = float(rev.get('gd_error', 0) or 0)
                 dist = float(rev.get('dist', 0) or 0)
-                # Keep numeric output stable; allow "n/a" if resonance distance is meaningless
                 try:
                     et = ev_type.strip().lower()
                 except Exception:
@@ -92,7 +87,6 @@ def _append_acoustic_events(summary_content, l_st, r_st):
                     summary_content += f"{freq:<10} {ev_type:<12} {gd_error:<12} {'n/a':<14}\n"
                 else:
                     summary_content += f"{freq:<10} {ev_type:<12} {gd_error:<12} {dist:<14}\n"
-        # Always report headroom/normalization per side (even if no events)
         summary_content += f"\n=== HEADROOM MANAGEMENT ({side}) ===\n"
         summary_content += f"Auto Gain Margin: {float(st.get('gain_margin_db', 0.0)):.2f} dB\n"
         summary_content += f"Applied Auto Gain: {float(st.get('auto_global_gain_db', 0.0)):.2f} dB\n"
@@ -100,9 +94,7 @@ def _append_acoustic_events(summary_content, l_st, r_st):
         summary_content += f"Peak Gain (pre-headroom): {float(st.get('peak_gain_db', 0.0)):.2f} dB\n"
         summary_content += f"Applied Headroom: {float(st.get('auto_headroom_db', 0.0)):.2f} dB\n"
         summary_content += f"Final Max (filter+auto_gain+headroom): {float(st.get('final_max_db', 0.0)):.2f} dB\n"
-        # Diagnostics for boost/cut processing
         summary_content += f"\n=== BOOST/CUT DIAGNOSTICS ({side}) ===\n"
-        # max_boost diagnostics: show effective + user + safety cap if present
         _mb_eff = float(st.get('max_boost_db_effective', st.get('max_boost_db', 0.0)) or 0.0)
         _mb_user = float(st.get('max_boost_db_user', st.get('max_boost_db', 0.0)) or 0.0)
         _mb_cap = float(st.get('max_safe_boost_db', 0.0) or 0.0)
@@ -140,7 +132,6 @@ def _append_acoustic_events(summary_content, l_st, r_st):
         )
 
 
-        # --- Stage checkpoints table ---
         probes = st.get("stage_probes") or {}
         if isinstance(probes, dict) and probes:
             summary_content += f"\n=== STAGE CHECKPOINTS ({side}) ===\n"
@@ -170,7 +161,6 @@ def _append_acoustic_events(summary_content, l_st, r_st):
             summary_content += f"\n=== BASS-FIRST AI ({side}) ===\n"
             summary_content += f"Bass-first AI active: {'YES' if bool(st.get('bass_first_ai', False)) else 'NO'}\n"
 
-            # --- Mode peak (robust formatting; fixes lost 'n/a' line) ---
             pk_hz = st.get('bass_first_mode_peak_hz', None)
             pk_sc = st.get('bass_first_mode_peak_score', None)
             if (pk_hz is not None) and (pk_sc is not None):
@@ -180,7 +170,6 @@ def _append_acoustic_events(summary_content, l_st, r_st):
 
             summary_content += f"Smoothing conf floor applied: {'YES' if bool(st.get('bass_first_conf_floor_applied', False)) else 'NO'}\n"
 
-            # --- BF debug stats (if present) ---
             rm_max = st.get('bass_first_roommode_max_20_200', None)
             rel_mean = st.get('bass_first_rel_mean_20_200', None)
             rel_min = st.get('bass_first_rel_min_20_200', None)
@@ -198,8 +187,6 @@ def _append_acoustic_events(summary_content, l_st, r_st):
                     f"conf_floor_applied={'YES' if floor_applied else 'NO'}\n"
                 )
 
-            # --- Optional source tag (only if caller stored it in stats) ---
-            # e.g. st["bass_first_source"] = "WAV" or "TXT/REW"
             src = st.get("bass_first_source", None)
             if isinstance(src, str) and src.strip():
                 summary_content += f"BassFirst source: {src.strip()}\n"
@@ -235,7 +222,6 @@ def _write_fs_outputs(
     r_dash_name = f"R_Dashboard_{ft_short}_{fs_v}Hz.png"
 
     summary_content = plots.format_summary_content(data, l_st, r_st)
-    # Include explicit house-curve provenance (preset vs upload/local file)
     try:
         hc_src = str(data.get('hc_source', '') or '').strip()
         if hc_src:
@@ -243,9 +229,7 @@ def _write_fs_outputs(
     except Exception:
         pass
     summary_content = _append_dsp_effective_params(summary_content, data, fs_v)
-    # --- Explicit leveling section (human-readable) ---
     try:
-        # Prefer StereoLink summary if enabled, but always print per-side values.
         summary_content += "\n=== LEVELING ===\n"
         for side, st in [("LEFT", l_st), ("RIGHT", r_st)]:
             if not isinstance(st, dict):
@@ -293,7 +277,6 @@ def _write_fs_outputs(
         summary_content += f"Distance Diff: {res['distance_cm']} cm\n"
         summary_content += f"Gain Diff: {res['gain_diff_db']} dB\n"
 
-    # --- Machine-readable diagnostics block (JSON) ---
     if TEST_MODE:
         try:
             diag = _build_diagnostics_dict(data, fs_v, l_st, r_st)
@@ -312,11 +295,7 @@ def _write_fs_outputs(
 
     zf.writestr(sum_name, summary_content)
 
-    # Policy: ZIP size control
-    # We store only ONE dashboard pair into the ZIP (forced, no UI choice).
-    # Dashboard format: PNG only (no HTML), so it opens everywhere without Plotly JS.
     if bool(write_dashboards):
-        # Plot smoothing (view-only). New key: plot_smoothing_level.
         
         psl = data.get("plot_smoothing_level", "Psychoacoustic")
 
@@ -357,13 +336,9 @@ def _write_fs_outputs(
         else:
             zf.writestr(r_dash_name.replace(".png", ".txt"), str(html_r))
 
-    # HLC / BruteFIR cfg remains fs-specific
     hlc_cfg = generate_hlc_config(fs_v, ft_short, file_ts, irw_tag=irw_tag)
     zf.writestr(f"Config_{ft_short}_{fs_v}Hz_{irw_tag}.cfg", hlc_cfg)
 
-    # CamillaDSP YAML:
-    # - single-rate: keep fs-specific YAML (historical behavior)
-    # - multi-rate: write ONE YAML once in process_run() (uses $samplerate$)
     if not bool(data.get("multi_rate_opt", False)):
         yaml_content = generate_raspberry_yaml(
             fs_v,

@@ -1,4 +1,3 @@
-# camillafir_io/measurements_loader.py
 import os
 from pywebio.pin import pin
 
@@ -8,6 +7,7 @@ from .measurements_wav import parse_measurements_from_wav_bytes, parse_measureme
 
 
 def _clean_local_path(p) -> str:
+    """Normalisoi kayttajan antaman paikallisen tiedostopolun merkkijonoksi."""
     try:
         return str(p or "").strip().strip('"').strip("'")
     except Exception:
@@ -23,6 +23,12 @@ def parse_measurements_from_upload(
     smoothing_level: int | None = None,
     logger=None,
 ):
+    """
+    Jasentaa selaimesta ladatun mittaustiedoston sisallon.
+
+    Valitsee parserin tiedostopaateen tai RIFF-headerin perusteella:
+    WAV -> WAV-parseri, muuten TXT-parseri.
+    """
     try:
         if not file_dict:
             return None, None, None
@@ -40,7 +46,6 @@ def parse_measurements_from_upload(
                 smoothing_level=smoothing_level,
                 logger=logger,
             )
-        # fallback: try wav by header "RIFF"
         if isinstance(content, (bytes, bytearray)) and len(content) >= 4 and content[:4] == b"RIFF":
             return parse_measurements_from_wav_bytes(
                 content,
@@ -57,14 +62,17 @@ def parse_measurements_from_upload(
 
 def load_measurements_lr(data: dict, *, logger=None):
     """
-    Load measurements for Left/Right.
-    Priority:
-      1) Browser upload (pin.file_l / pin.file_r)
-      2) Local path fields (local_path_l / local_path_r)
+    Lataa vasemman ja oikean kanavan mittaukset ensisijaisuusjarjestyksessa.
+
+    Jarjestys:
+    1) selainlataukset (`pin.file_l`, `pin.file_r`)
+    2) paikalliset polut (`local_path_l`, `local_path_r`)
+
+    Palauttaa aina 6-arvoisen tuplen:
+    `(f_l, m_l, p_l, f_r, m_r, p_r)`.
     """
-    # UI-driven IR windows (ms) + smoothing for WAV parsing
     try:
-        pre_ms = float(data.get("ir_window_left", 120.0) or 120.0)
+        pre_ms = float(data.get("ir_window_left", 85.0) or 85.0)
     except Exception:
         pre_ms = 10.0
     try:
@@ -76,7 +84,6 @@ def load_measurements_lr(data: dict, *, logger=None):
     except Exception:
         sl = 0
 
-    # 1) Browser uploads
     try:
         up_l = pin["file_l"]
     except Exception:
@@ -95,7 +102,6 @@ def load_measurements_lr(data: dict, *, logger=None):
         if f_l is not None and f_r is not None:
             return f_l, m_l, p_l, f_r, m_r, p_r
 
-    # 2) Local paths fallback
     lp_l = _clean_local_path(data.get("local_path_l", ""))
     lp_r = _clean_local_path(data.get("local_path_r", ""))
 
@@ -103,13 +109,11 @@ def load_measurements_lr(data: dict, *, logger=None):
         ext_l = os.path.splitext(lp_l)[1].lower()
         ext_r = os.path.splitext(lp_r)[1].lower()
 
-        # WAV local
         if ext_l == ".wav" and ext_r == ".wav":
             f_l, m_l, p_l = parse_measurements_from_wav_path(lp_l, pre_ms=pre_ms, post_ms=post_ms, smoothing_level=sl, logger=logger)
             f_r, m_r, p_r = parse_measurements_from_wav_path(lp_r, pre_ms=pre_ms, post_ms=post_ms, smoothing_level=sl, logger=logger)
             return f_l, m_l, p_l, f_r, m_r, p_r
 
-        # TXT local (or anything else treated as TXT)
         f_l, m_l, p_l = parse_txt_path(lp_l, logger=logger)
         f_r, m_r, p_r = parse_txt_path(lp_r, logger=logger)
         return f_l, m_l, p_l, f_r, m_r, p_r

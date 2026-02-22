@@ -1,10 +1,8 @@
-# camillafir_modes.py
 from __future__ import annotations
 
 from typing import Dict, Any, Tuple
-from camillafir.config.models import FilterConfig  # uses your existing dataclass fields :contentReference[oaicite:1]{index=1}
+from camillafir.config.models import FilterConfig
 
-#Version: v0.1.1
 
 def _clamp_float(v, lo: float, hi: float) -> float:
     try:
@@ -31,60 +29,46 @@ def _apply_clamps(cfg: FilterConfig, clamps: Dict[str, Tuple[Any, Any]]) -> None
 
         lo, hi = lim
 
-        # bool clamp (forced True/False)
         if isinstance(lo, bool) and isinstance(hi, bool):
             setattr(cfg, k, bool(lo))
             continue
 
-        # literal clamp (force exact value), e.g. ("auto", "auto")
         if lo == hi:
             setattr(cfg, k, lo)
             continue
 
-        # numeric clamp
         try:
             cur = getattr(cfg, k)
             setattr(cfg, k, _clamp_float(cur, float(lo), float(hi)))
         except Exception:
-            # never fail mode application
             pass
 
 
-# ---------------------------------------------------------------------
-# Mode policy
-# ---------------------------------------------------------------------
 
 MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    # BASIC
     "BASIC": {
-        # --- BASIC ---
         "filter_type_str": "Linear Phase",
         "global_gain_db": 0.0,
 
-        # --- CORRECTION LIMITS ---
         "enable_mag_correction": True,
         "mag_c_min": 25.0,
         "mag_c_max": 250.0,
         "max_boost_db": 3.0,
         "max_cut_db": 15.0,
 
-        # Phase: allow, but still bounded by other rails
         "phase_safe_2058": False,
         "phase_limit": 400.0,
 
-        # --- SMOOTHING / FDW / REG ---
         "plot_smoothing_level": "Psychoacoustic",
         "filter_smooth": 12,
         "fdw_cycles": 10.0,
         "reg_strength": 30.0,
 
-        # Asymmetric slope rails
-        "max_slope_db_per_oct": 12.0,          # fallback/back-compat
+        "max_slope_db_per_oct": 12.0,
         "max_slope_boost_db_per_oct": 6.0,
         "max_slope_cut_db_per_oct": 24.0,
         "df_smoothing": True,
 
-        # --- ADVANCED FEATURES (ON, guarded) ---
         "enable_tdc": True,
         "tdc_strength": 50.0,
         "tdc_max_reduction_db": 9.0,
@@ -93,18 +77,15 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         
 
 
-        # --- IR WINDOW / MIXED ---
         "ir_export_window_mode": "auto",
         "ir_window_right": 500.0,
-        "ir_window_left": 120.0,
+        "ir_window_left": 85.0,
         "mixed_split_freq": 200.0,
         "trans_width": 100.0,
 
-        # --- BASS-FIRST ---
         "bass_first_ai": True,
         "bass_first_mode_max_hz": 180.0,
 
-        # --- LEVELING ---
         "lvl_mode": "Auto",
         "lvl_algo": "Median",
         "lvl_manual_db": 0.0,
@@ -112,14 +93,12 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "lvl_max": 2000.0,
         "stereo_link": True,
 
-        # --- PROTECTIONS ---
         "do_normalize": False,
         "exc_prot": True,
         "low_bass_cut_hz": 50.0,
         "low_bass_cut_enable": True,
     },
 
-    # ADVANCED = your “expert” profile: minimal policy, no clamps
     "ADVANCED": {
         "filter_type_str": "Linear Phase",
         "global_gain_db": 0.0,
@@ -138,11 +117,9 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "fdw_cycles": 10.0,
         "reg_strength": 30.0,
 
-        # Off by default: user decides
         "max_slope_db_per_oct": 24.0,
         "max_slope_boost_db_per_oct": 0.0,
         "max_slope_cut_db_per_oct": 0.0,
-        # Auto by default: internal normalization (no UI control)
         "df_smoothing": False,
 
         "enable_tdc": True,
@@ -172,14 +149,13 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 
 
 MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
-    # BASIC: guard rails (hard clamps)
     "BASIC": {
         "max_boost_db": (0.0, 4.0),
         "max_cut_db": (0.0, 15.0),
 
         "filter_smooth": (1, 24),
         "reg_strength": (10.0, 60.0),
-        "ir_export_window_mode": ("auto", "auto"),  # force auto in BASIC (UI + pin sanitize)
+        "ir_export_window_mode": ("auto", "auto"),
         "enable_tdc": (True, True),
         "tdc_strength": (0.0, 70.0),
         "tdc_max_reduction_db": (0.0, 12.0),
@@ -187,7 +163,6 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
 
         "enable_afdw": (True, True),
         "fdw_cycles": (10.0, 15.0),
-        # Correction band guard rails (BASIC)
         "mag_c_min": (18.0, 300.0),
         "mag_c_max": (18.0, 300.0),
         "phase_limit": (200.0, 450.0),
@@ -196,23 +171,12 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
         "stereo_link": (True, True),
     },
 
-    # ADVANCED: no clamps
     "ADVANCED": {},
 }
 
 
 def apply_mode_to_cfg(cfg: FilterConfig, mode: str | None, *, apply_defaults: bool = True) -> FilterConfig:
-    """
-    Apply mode defaults + clamps to an existing FilterConfig.
-
-    Modes:
-      - BASIC: guarded "studio"
-      - ADVANCED: freer "expert" (no clamps)
-
-    Safe behavior:
-      - Unknown mode -> BASIC
-      - Never raises (best-effort)
-    """
+    """Soveltaa tai paivittaa: apply mode to cfg."""
     m = (mode or "BASIC").upper().strip()
     if m not in MODE_DEFAULTS:
         m = "BASIC"

@@ -10,19 +10,13 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 from datetime import datetime
-# Tuodaan tarvittavat funktiot DSP-moduulista
 from ..dsp.smoothing import apply_smoothing_std, psychoacoustic_smoothing
-# Plot-only phase smoothing strength (octave-fraction style).
-# Higher = smoother-looking phase/GD. Does NOT affect DSP/filter generation.
 PHASE_SMOOTH_OCT = 5.5
 GD_SMOOTH_OCT    = 3.0
 
-# Version 1.2.1
 
 def _float_allow_zero(v, default: float) -> float:
-    """
-    Parse float, allowing 0 (OFF). Only None/"" => default.
-    """
+    """Sisainen apufunktio: float allow zero."""
     if v is None:
         return float(default)
     if isinstance(v, str) and v.strip() == "":
@@ -33,15 +27,7 @@ def _float_allow_zero(v, default: float) -> float:
         return float(default)
 
 def _maybe_shift_to_abs(mags_db, avg_t_db):
-    """
-    target_stats may contain either:
-      A) absolute SPL-like mags already aligned to eff_target_db (preferred, new native path)
-      B) relative mags around ~0 dB that still need +avg_t (older paths)
-
-    Heuristic:
-      - if median looks "small" (< 40 dB), treat as relative and shift by avg_t
-      - otherwise treat as already absolute and return as-is
-    """
+    """Sisainen apufunktio: maybe shift to abs."""
     try:
         a = np.asarray(mags_db, dtype=float)
         if a.size == 0:
@@ -54,11 +40,7 @@ def _maybe_shift_to_abs(mags_db, avg_t_db):
         return np.asarray(mags_db, dtype=float)
     
 def _align_meas_to_target_window(freqs_hz, meas_db, targ_db, f_min_hz, f_max_hz):
-    """
-    Force measured & target to overlap in the chosen window.
-    Robust: uses median(meas-target) within window.
-    Returns meas_db shifted by -median(meas-target) (so window overlap is exact).
-    """
+    """Sisainen apufunktio: align meas to target window."""
     try:
         f = np.asarray(freqs_hz, dtype=float)
         m = np.asarray(meas_db, dtype=float)
@@ -81,11 +63,7 @@ def _align_meas_to_target_window(freqs_hz, meas_db, targ_db, f_min_hz, f_max_hz)
 
 
 def _resource_path(rel_path: str) -> str:
-    """
-    Resource path that works both in dev and PyInstaller (onedir/onefile).
-    - In PyInstaller: sys._MEIPASS points to extracted / bundled base.
-    - In dev: use directory of this file.
-    """
+    """Sisainen apufunktio: resource path."""
     if hasattr(sys, "_MEIPASS"):
         base = sys._MEIPASS  # type: ignore[attr-defined]
     else:
@@ -93,15 +71,13 @@ def _resource_path(rel_path: str) -> str:
     return os.path.join(base, rel_path)
 
 def _plotly_js_path() -> str | None:
-    """
-    Returns absolute path to local Plotly JS if present, else None.
-    """
+    """Sisainen apufunktio: plotly js path."""
     p = _resource_path(os.path.join("assets", "plotly.min.js"))
     return p if os.path.isfile(p) else None
 
 
 def smooth_complex(freqs, spec, oct_frac=1.0):
-    """Smooths the real and imaginary parts of complex response separately to preserve phase."""
+    """Kasittelee signaalia tai dataa: smooth complex."""
     real_parts = np.nan_to_num(np.real(spec))
     imag_parts = np.nan_to_num(np.imag(spec))
     real_s, _ = apply_smoothing_std(freqs, real_parts, np.zeros_like(freqs), oct_frac)
@@ -109,7 +85,7 @@ def smooth_complex(freqs, spec, oct_frac=1.0):
     return real_s + 1j * imag_s
 
 def calculate_clean_gd(freqs, complex_resp):
-    """Calculates group delay (ms) from smoothed complex response."""
+    """Laskee: calculate clean gd."""
     phase_rad = np.unwrap(np.angle(complex_resp))
     df = np.gradient(freqs) + 1e-12
     gd_ms = -np.gradient(phase_rad) / (2 * np.pi * df) * 1000.0
@@ -123,30 +99,13 @@ def _clamp(x: float, lo: float, hi: float) -> float:
         return float(lo)
 
 def calc_acoustic_score(conf_pct: float, match_pct: float, rt60_s: float | None = None, rt60_rel: float | None = None) -> float:
-    """
-    Combine confidence + target match into one 0..100 score.
-    Weighting: 60% match, 40% confidence.
-    (Module-level so UI code can call it.)
-    Acoustic Score v2:
-      - Base: 55% match + 35% confidence
-      - Bonus: up to +15 points for fast decay (low RT60), BUT weighted by RT60 reliability
-
-    RT60 bonus:
-      rt_bonus = 15 * clamp((0.35 - rt60) / 0.25, 0..1)
-      rt_bonus_eff = rt_bonus * rt60_rel
-
-    Notes:
-      - WAV/IR path should tag rt60_rel ~ 1.0
-      - TXT/REW FR path should tag rt60_rel ~ 0.25 (proxy / less trustworthy)
-    """
+    """Laskee: calc acoustic score."""
 
     conf = _clamp(conf_pct, 0.0, 100.0)
     match = _clamp(match_pct, 0.0, 100.0)
 
-    # Base score (keeps match dominant but not equal)
     base = 0.55 * match + 0.35 * conf
 
-    # RT60 bonus (optional + reliability-weighted)
     rt_bonus_eff = 0.0
     try:
         if rt60_s is not None:
@@ -160,26 +119,18 @@ def calc_acoustic_score(conf_pct: float, match_pct: float, rt60_s: float | None 
 
     return _clamp(base + rt_bonus_eff, 0.0, 100.0)
 
-# Backward-compat aliases (older callers use underscore names)
 _calc_acoustic_score = calc_acoustic_score
 
 
 
 
 def calc_ai_summary_from_stats(stats: dict) -> dict:
-    """
-    Single source of truth for UI + Summary:
-      - confidence (%)
-      - target match (%), rms (dB)
-      - acoustic score (/100)
-    Uses the exact same basis as format_summary_content().
-    """
+    """Laskee: calc ai summary from stats."""
     stats = stats or {}
     conf = float(stats.get('cmp_avg_confidence', stats.get('avg_confidence', 0.0)) or 0.0)
     rms, match = calc_target_match_from_stats(stats)
     if match is None:
         return {"conf": conf, "rms": None, "match": None, "score": None}
-    # RT60 bonus: reliability-weighted (tagged by camillafir.py)
     rt60 = stats.get("rt60_val", None)
     rt_rel = stats.get("rt60_reliability", None)
     score = calc_acoustic_score(conf, float(match), rt60_s=rt60, rt60_rel=rt_rel)
@@ -193,10 +144,7 @@ def calc_ai_summary_from_stats(stats: dict) -> dict:
     }
 
 def _calc_target_match(stats):
-    """
-    Returns (rms_db, match_pct) or (None, None) when data is insufficient.
-    Uses the same logic as Summary.txt.
-    """
+    """Sisainen apufunktio: calc target match."""
     def _as_np(stats, key):
         v = stats.get(key, None)
         if v is None:
@@ -253,10 +201,7 @@ def _calc_target_match(stats):
     return rms, match_pct
 
 def calc_target_match_from_stats(stats: dict):
-    """
-    Public wrapper for target-match calculation.
-    Returns (rms_db, match_pct) or (None, None) if insufficient data.
-    """
+    """Laskee: calc target match from stats."""
     try:
         return _calc_target_match(stats or {})
     except Exception:
@@ -266,7 +211,7 @@ def calc_target_match_from_stats(stats: dict):
 
 
 def format_summary_content(settings, l_stats, r_stats):
-    """Creates a compact English-only Summary.txt with key results first."""
+    """Jasentaa tai muotoilee: format summary content."""
     from datetime import datetime
     import numpy as np
 
@@ -514,22 +459,13 @@ def format_summary_content(settings, l_stats, r_stats):
     )
 
     return "\n".join(lines)
-# ======================================================================
-# FINAL OVERRIDE: Comparison-mode wrapper (locks analysis grid to 44.1 kHz)
-# This is appended at EOF on purpose so it always wins even if the file
-# contains multiple legacy copies of format_summary_content().
-# ======================================================================
 _format_summary_content_legacy = format_summary_content
 
 def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 65536) -> dict:
-    """
-    Builds cmp_* fields by resampling native stats onto a fixed reference grid.
-    This stabilizes Target Match and Score vs fs/taps changes without requiring DSP changes.
-    """
+    """Sisainen apufunktio: make comparison stats."""
     stats = stats or {}
     out = copy.deepcopy(stats)
 
-    # If DSP already produced coherent cmp-set, keep it.
     if str(out.get("analysis_mode", "native")).lower() == "comparison" and ("cmp_freq_axis" in out):
         return out
     f = out.get("freq_axis", None)
@@ -541,7 +477,6 @@ def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 655
     if f is None or m is None or t is None:
         return out  
     
-    # --- Robustness: remove NaN/inf before interpolation (np.interp propagates NaNs) ---
     m = np.nan_to_num(m, nan=0.0, posinf=0.0, neginf=0.0)
     t = np.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
     if g is not None:
@@ -561,7 +496,6 @@ def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 655
 
     if f.ndim != 1 or f.size < 32 or m is None or t is None:
         return out
-    # Require consistent lengths for interpolation
     if (m.ndim != 1) or (t.ndim != 1) or (m.size != f.size) or (t.size != f.size):
         return out
     if (g is not None) and ((g.ndim != 1) or (g.size != f.size)):
@@ -569,7 +503,6 @@ def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 655
     if (c is not None) and ((c.ndim != 1) or (c.size != f.size)):
         c = None
 
-    # Reference grid: 0..ref_fs/2 with N=rfft(ref_taps)
     nfft = int(ref_taps)
     if nfft < 1024:
         nfft = 1024
@@ -595,8 +528,6 @@ def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 655
         return out
     
 
-    # --- Comparison-leveling: re-align measured to target on the comparison grid ---
-    # Use smart_scan_range if present; otherwise default to 200..5000 Hz.
     rng = out.get("smart_scan_range", None)
     if isinstance(rng, (list, tuple)) and len(rng) == 2:
         fmin, fmax_rng = float(rng[0]), float(rng[1])
@@ -604,7 +535,6 @@ def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 655
         fmin, fmax_rng = 200.0, 5000.0
     mask = (freq_cmp >= fmin) & (freq_cmp <= fmax_rng)
     if np.count_nonzero(mask) >= 20:
-        # Median offset is robust vs room modes/outliers
         cmp_offset_db = float(np.median((m_cmp - t_cmp)[mask]))
     else:
         cmp_offset_db = 0.0
@@ -621,24 +551,19 @@ def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 655
     if c_cmp is not None:
         out["cmp_confidence_mask"] = np.clip(c_cmp, 0.0, 1.0).tolist()
         out["cmp_avg_confidence"] = float(np.mean(np.clip(c_cmp, 0.0, 1.0)) * 100.0)
-        # A-FDW BW to comparison grid (for BW panel / overlays)
     bw = out.get("afdw_bw_oct", None)
     bw_cmp = _interp(bw) if bw is not None and np.asarray(bw).shape == f.shape else None
     if bw_cmp is not None:
         out["cmp_afdw_bw_oct"] = np.clip(bw_cmp, 1.0/96.0, 1.0/3.0).tolist()
         out["cmp_offset_db"] = float(cmp_offset_db)
 
-    # Keep scan range in Hz (same numbers), but provide cmp_ key so legacy code can use it.
     if "smart_scan_range" in out and isinstance(out["smart_scan_range"], (list, tuple)) and len(out["smart_scan_range"]) == 2:
         out["cmp_smart_scan_range"] = [float(out["smart_scan_range"][0]), float(out["smart_scan_range"][1])]
 
-    # Average confidence for display if present
     if c_cmp is not None:
         out["cmp_avg_confidence"] = float(np.mean(np.clip(c_cmp, 0.0, 1.0)) * 100.0)
 
 
-    # --- Preserve effective target level from DSP ---
-    # Comparison re-alignment must NOT erase the actual target level.
     if "eff_target_db" in stats and stats.get("eff_target_db") is not None:
         try:
             v = float(stats.get("eff_target_db"))
@@ -654,10 +579,7 @@ def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 655
     return out
 
 def format_summary_content(settings, l_stats, r_stats):
-    """
-    Wrapper that forces comparison-mode analysis (locked to 44.1k grid)
-    when settings['comparison_mode'] is True.
-    """
+    """Jasentaa tai muotoilee: format summary content."""
     settings = settings or {}
     l_stats = l_stats or {}
     r_stats = r_stats or {}
@@ -669,11 +591,7 @@ def format_summary_content(settings, l_stats, r_stats):
     return _format_summary_content_legacy(settings, l_stats, r_stats)
 
 def _view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
-    """Plot-only smoothing (never affects DSP math).
-    plot_smoothing_level:
-      - "Psychoacoustic" => psychoacoustic_smoothing()
-      - int N            => standard octave smoothing width = 1/N
-    """
+    """Sisainen apufunktio: view mags for plot."""
     f = np.asarray(freqs, dtype=float)
     m = np.asarray(mags, dtype=float)
 
@@ -682,15 +600,12 @@ def _view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
 
     psl = plot_smoothing_level
 
-    # Psychoacoustic mode by name (string)
     if isinstance(psl, str) and ("psy" in psl.strip().lower()):
         return psychoacoustic_smoothing(f, m)
 
-    # Standard smoothing: only if it parses cleanly to int
     try:
         lvl = int(psl)
     except Exception:
-        # Unknown value -> don't surprise user with hardcoded 1/48
         return m
 
     lvl = max(1, lvl)
@@ -704,10 +619,8 @@ def generate_prediction_plot(
     zoom_hint="", create_full_html=True, return_fig: bool = False,
     plot_smoothing_level="Psychoacoustic",
 ):
-    """Luo optimoidun HTML-dashboardin (Pieni tiedostokoko, korkea resoluutio)."""
+    """Rakentaa tai generoi: generate prediction plot."""
     try:
-        # 1. LASKENTA (Korkea resoluutio)
-        # Use original high-quality render settings also for embedded view.
         MIN_FFT_SIZE = 131072
         FFT_MUL = 4
         MAX_FFT_SIZE = None
@@ -721,7 +634,6 @@ def generate_prediction_plot(
         h_filt = scipy.fft.rfft(filt_ir, n=n_fft)
         
         avg_t = target_stats.get('eff_target_db', 75) if target_stats else 75
-        # Overlap window MUST follow Smart Scan / Manual range if available
         if target_stats and 'smart_scan_range' in target_stats:
             match_range = target_stats.get('smart_scan_range', [500, 2000])
         else:
@@ -732,14 +644,12 @@ def generate_prediction_plot(
         except Exception:
             f_win_min, f_win_max = 500.0, 2000.0
 
-        # Valmistellaan data lineaarisella akselilla (Heavy)
         if target_stats and 'measured_mags' in target_stats:
             f_stats = np.asarray(target_stats.get('freq_axis', []), dtype=float)
             m_stats = _maybe_shift_to_abs(target_stats.get('measured_mags', []), avg_t)
             t_stats = _maybe_shift_to_abs(target_stats.get('target_mags', []), avg_t) if 'target_mags' in target_stats else None
 
             m_interp = np.interp(f_lin, f_stats, m_stats)
-            # FORCE overlap in chosen window so different targets remain meaningful
             if t_stats is not None and np.asarray(t_stats).size == f_stats.size:
                 t_interp = np.interp(f_lin, f_stats, np.asarray(t_stats, dtype=float))
                 m_interp = _align_meas_to_target_window(f_lin, m_interp, t_interp, f_win_min, f_win_max)
@@ -758,10 +668,6 @@ def generate_prediction_plot(
         p_lin = np.interp(f_lin, orig_freqs, orig_phases)
         total_spec = 10**(m_lin_clean/20.0) * np.exp(1j * np.deg2rad(p_lin)) * h_filt
 
-        # Plot-only compensation for automatic output attenuation.
-        # Keep UI visuals comparable to pre-auto-level behavior:
-        # - show realized EQ boost/cut shape
-        # - avoid "Predicted" curve dropping due to auto output level
         plot_level_comp_db = 0.0
         try:
             if target_stats is not None:
@@ -771,7 +677,6 @@ def generate_prediction_plot(
         except Exception:
             plot_level_comp_db = 0.0
         
-        # Calculate other curves (Heavy)
         p_sm = _view_mags_for_plot(
             f_lin,
             20*np.log10(np.abs(total_spec)+1e-12),
@@ -779,7 +684,6 @@ def generate_prediction_plot(
         )
         if plot_level_comp_db != 0.0:
             p_sm = p_sm + float(plot_level_comp_db)
-        # Original high-quality phase/GD smoothing path.
         spec_sm_phase = smooth_complex(f_lin, total_spec, PHASE_SMOOTH_OCT)
         ph_sm = (np.rad2deg(np.angle(spec_sm_phase)) + 180) % 360 - 180
 
@@ -789,7 +693,6 @@ def generate_prediction_plot(
         if plot_level_comp_db != 0.0:
             filt_db = filt_db + float(plot_level_comp_db)
 
-        # 2. OPTIMOINTI (Resampling visualisointia varten)
         f_vis = np.geomspace(2, fs/2, VIS_POINTS)
         
         m_vis = np.interp(f_vis, f_lin, m_lin_clean)
@@ -798,7 +701,6 @@ def generate_prediction_plot(
         gd_vis = np.interp(f_vis, f_lin, gd_sm)
         filt_vis = np.interp(f_vis, f_lin, filt_db)
 
-        # --- PIIRTO ---
         fig = make_subplots(
             rows=5, cols=1, vertical_spacing=0.045,
             subplot_titles=(
@@ -811,7 +713,6 @@ def generate_prediction_plot(
             )
         )
 
-        # Smart Scan Range
         if target_stats and 'smart_scan_range' in target_stats:
             s_min, s_max = target_stats['smart_scan_range']
             fig.add_shape(type="rect", xref="x", yref="y",
@@ -819,13 +720,9 @@ def generate_prediction_plot(
                           y0=avg_t-40, y1=avg_t+60,
                           fillcolor="rgba(200, 200, 200, 0.15)", layer="below", line_width=0, row=1, col=1)
 
-        # --- Level reference line (Smart Scan / Manual target level) ---
-        # This line shows the level-matching reference that measured & target
-        # are aligned to within the chosen window.
         try:
             ref_level = float(avg_t)
 
-            # Determine window text for legend (Smart Scan / Manual)
             if target_stats and 'smart_scan_range' in target_stats:
                 _r = target_stats.get('smart_scan_range', None)
             else:
@@ -845,7 +742,6 @@ def generate_prediction_plot(
                 row=1, col=1
             )
 
-            # Add legend entry for level reference (Plotly shapes don't appear in legend)
             fig.add_trace(
                 go.Scatter(
                     x=[None],
@@ -861,7 +757,6 @@ def generate_prediction_plot(
             )
         except Exception:
             pass
-        # Correction band (mag correction active range)
         if target_stats:
             try:
                 cmin = float(target_stats.get('mag_c_min', 0.0) or 0.0)
@@ -878,15 +773,12 @@ def generate_prediction_plot(
                 pass
 
 
-        # Confidence
         if target_stats and 'confidence_mask' in target_stats:
             c_freqs = np.array(target_stats['freq_axis'])
             c_mask = np.array(target_stats['confidence_mask'])
             conf_line = (avg_t - 15) + (c_mask * 10)
             fig.add_trace(go.Scatter(x=c_freqs, y=conf_line, name='Confidence', 
                                      line=dict(color='magenta', width=1), opacity=0.3, hoverinfo='skip'), row=1, col=1)
-            # Shade "unreliable" regions (low confidence). This is a *visual cue* only.
-            # Threshold is intentionally conservative to avoid over-shading.
             try:
                 thr = 0.35
                 bad = np.asarray(c_mask, dtype=float) < float(thr)
@@ -922,32 +814,23 @@ def generate_prediction_plot(
                 pass
 
 
-        # A. MEASURED (Using optimized f_vis data)
         fig.add_trace(go.Scatter(x=f_vis, y=m_vis, name='Measured', 
                                  line=dict(color='rgba(0,0,255,0.4)', width=1.5)), row=1, col=1)
 
-        # B. TARGET (Original light data + avg_t correction)
         if target_stats and 'target_mags' in target_stats:
-            # NOTE:
-            # Slope-limit envelope visualization intentionally removed.
-            # It caused confusing artifacts (crossed fill / "orange X")
-            # and provided no essential information for end users.
 
             t_mags = _maybe_shift_to_abs(target_stats.get('target_mags', []), avg_t)
             fig.add_trace(go.Scatter(x=target_stats['freq_axis'], y=t_mags,
                                      name='Target', line=dict(color='green', dash='dash', width=2.0)), row=1, col=1)
 
-        # C. PREDICTED (Using optimized f_vis data)
         fig.add_trace(go.Scatter(x=f_vis, y=p_vis, name='Predicted', 
                                  line=dict(color='orange', width=1.5)), row=1, col=1)
 
-        # Muut paneelit
         fig.add_trace(go.Scatter(x=f_vis, y=ph_vis, name="Phase", line=dict(color='orange'), showlegend=False), row=2, col=1)
         fig.add_trace(go.Scatter(x=f_vis, y=gd_vis, name="Group Delay", line=dict(color='orange'), showlegend=False), row=3, col=1)
         fig.add_trace(go.Scatter(x=f_vis, y=filt_vis, name="Filter dB", line=dict(color='red', width=1.2), showlegend=False), row=4, col=1)
     
 
-        # Mirror correction band hint on the filter panel as well
         if target_stats:
             try:
                 cmin = float(target_stats.get('mag_c_min', 0.0) or 0.0)
@@ -964,7 +847,6 @@ def generate_prediction_plot(
                 pass
 
         
-    # --- A-FDW BW panel (row 5) ---
         bw_vis = None
         bw_dbg = ""
 
@@ -1022,7 +904,6 @@ def generate_prediction_plot(
             )
 
 
-        # Asetukset
         t_vals = [2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
         for r in (1, 2, 3, 4, 5):
             fig.update_xaxes(matches="x", row=r, col=1)
@@ -1032,7 +913,6 @@ def generate_prediction_plot(
         fig.update_yaxes(range=[avg_t-20, avg_t+30], row=1, col=1)
         fig.update_yaxes(range=[-180, 180], row=2, col=1)
         fig.update_yaxes(range=[-30, 12], row=4, col=1)
-        # Y-axis for A-FDW BW panel
         if bw_vis is not None and len(bw_vis) > 0:
             bw_lo = max(1.0/96.0, float(np.min(bw_vis)) * 0.9)
             bw_hi = min(1.0/3.0,  float(np.max(bw_vis)) * 1.1)
@@ -1049,27 +929,17 @@ def generate_prediction_plot(
             width=fig_width,
             template="plotly_white",
             title_text=f"{title} Analysis",
-            # Keep UI state stable across redraws (doesn't stop doubleclick by itself,
-            # but prevents other "reset weirdness" when page re-renders)
             uirevision="keep"
         )
         
-        # JS loading mode:
-        # - Embedded snippets (PyWebIO put_html): load Plotly from local static route
-        #   to keep websocket payloads small and deterministic on Linux.
-        # - Full HTML files: prefer local bundled asset, fallback to CDN.
         if create_full_html:
             if _plotly_js_path():
                 js_mode = "assets/plotly.min.js"
             else:
                 js_mode = "cdn"
         else:
-            # Embedded snippets: self-contained Plotly for deterministic behavior.
             js_mode = True
 
-        # Plotly UI config:
-        # - Disable double-click autoscale/reset (it breaks with matched log axes)
-        # - Keep scroll-zoom enabled for easier navigation
         config = {
             "responsive": True,
             "scrollZoom": True,
@@ -1093,13 +963,9 @@ def generate_prediction_plot(
         return msg
 
 def plotly_fig_to_png(fig, *, scale=2, width=None, height=None):
-    """
-    Export Plotly figure to PNG bytes (same as HTML modebar download).
-    Uses Plotly 6.x default Kaleido backend.
-    """
+    """Funktio: plotly fig to png."""
     try:
         import plotly.io as pio
-        # Plotly 6.x: kaleido is implicit backend
         kwargs = {"format": "png", "scale": float(scale)}
         if width is not None:
             kwargs["width"] = int(width)
@@ -1113,7 +979,7 @@ def plotly_fig_to_png(fig, *, scale=2, width=None, height=None):
 
 
 def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, title, target_stats=None):
-    """Luo staattisen PNG-kuvan."""
+    """Rakentaa tai generoi: generate combined plot mpl."""
     try:
         n_fft = len(filt_ir); f_lin = scipy.fft.rfftfreq(n_fft, d=1/fs); h_filt = scipy.fft.rfft(filt_ir)
         offset = target_stats.get('offset_db', 0) if target_stats else 0
@@ -1125,14 +991,12 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
         ax1.semilogx(f_lin, psychoacoustic_smoothing(f_lin, 20*np.log10(np.abs(total_spec)+1e-12)), 'orange', linewidth=2)
         if target_stats: ax1.semilogx(target_stats['freq_axis'], target_stats['target_mags'], 'g--')
         
-        # Haetaan rajat stats-sanakirjasta.
         if target_stats and 'smart_scan_range' in target_stats:
             f_min, f_max = target_stats['smart_scan_range']
             ax1.axvline(f_min, color='red', linestyle='--', alpha=0.6, label=f'Final Min: {f_min:.0f}Hz')
             ax1.axvline(f_max, color='green', linestyle='--', alpha=0.6, label=f'Final Max: {f_max:.0f}Hz')
             ax1.legend(loc='upper right', fontsize='small')
         
-        # KORJATTU: Poistettu NameErroria aiheuttaneet ax1.axvline(final_min/max) rivit.
         
         ax1.set_ylim(avg_t-15, avg_t+15)
         ax3.semilogx(f_lin, calculate_clean_gd(f_lin, total_spec), 'orange')

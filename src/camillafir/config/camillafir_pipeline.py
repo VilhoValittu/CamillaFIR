@@ -1,4 +1,3 @@
-# camillafir_pipeline.py
 from __future__ import annotations
 
 from asyncio.log import logger
@@ -7,10 +6,7 @@ import logging
 import math
 
 def collect_ui_data(pin) -> Dict[str, Any]:
-    """
-    Read relevant pins into a plain dict and normalize checkbox pins (list -> bool).
-    NOTE: pin is injected to keep this module testable without PyWebIO.
-    """
+    """Funktio: collect ui data."""
     logger = logging.getLogger("CamillaFIR")
     p_keys = [
         "mode", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
@@ -44,13 +40,11 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         except Exception:
             data[k] = None
 
-    # Keep backward compatibility between legacy 'ir_window' and canonical 'ir_window_right'.
     if data.get("ir_window_right", None) in (None, ""):
         data["ir_window_right"] = data.get("ir_window", 500.0)
     if data.get("ir_window", None) in (None, ""):
         data["ir_window"] = data.get("ir_window_right", 500.0)
 
-    # normalize checkbox pins saved as [] / [True]
     for k in [
         "mag_correct", "normalize_opt", "align_opt", "multi_rate_opt",
         "stereo_link", "exc_prot", "hpf_enable", "df_smoothing",
@@ -63,7 +57,6 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Policy: BASIC mode always uses Smart Scan (Auto leveling mode).
     try:
         mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
     except Exception:
@@ -71,10 +64,8 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     if mode_u == "BASIC":
         data["lvl_mode"] = "Auto"
 
-    # Policy: auto time alignment is always enabled and not user-configurable.
     data["align_opt"] = True
 
-    # XO pins
     for i in range(1, 6):
         try:
             data[f"xo{i}_f"] = pin[f"xo{i}_f"]
@@ -85,7 +76,6 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         except Exception:
             data[f"xo{i}_s"] = None
 
-    # numeric clamps (same behavior as camillafir.py)
     try:
         data["max_cut_db"] = abs(float(data.get("max_cut_db", 15.0) or 15.0))
     except Exception:
@@ -106,7 +96,6 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     except Exception:
         data["lvl_manual_db"] = 0.0
 
-    # `gain` is used as auto headroom margin (dB), so keep it non-negative.
     try:
         data["gain"] = max(0.0, float(data.get("gain", 0.0) or 0.0))
     except Exception:
@@ -117,12 +106,9 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         v_raw = data.get("ir_window_mode", "auto")
     v = str(v_raw or "auto").strip().lower()
     v = v if v in ("auto", "off", "rew_sym", "rew_asym") else "auto"
-    # Canonical key used by DSP and exporter
     data["ir_export_window_mode"] = v
-    # Backward-compat alias (some UI/configs used ir_window_mode)
     data["ir_window_mode"] = v
 
-    # --- IR export window shape + Tukey alpha (must survive pipeline) ---
     try:
         sh_raw = data.get("ir_export_window_shape", None)
         sh = str(sh_raw or "hann").strip().lower()
@@ -148,14 +134,12 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Backward-compat: if UI still uses old key 'smoothing_level', map it to filter_smooth.
     try:
         if data.get("filter_smooth", None) is None and data.get("smoothing_level", None) is not None:
             data["filter_smooth"] = data.get("smoothing_level")
     except Exception:
         pass
 
-    # Default plot smoothing if missing
     try:
         if data.get("plot_smoothing_level", None) is None:
             data["plot_smoothing_level"] = "Psychoacoustic"
@@ -177,7 +161,6 @@ def log_df_smoothing_toggle(pin, logger) -> bool:
 
 
 def build_xos_hpf(data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    # XO: normalize pins -> list of dicts for DSP/phase model
     xos: List[Dict[str, Any]] = []
     for i in range(1, 6):
         f_raw = data.get(f"xo{i}_f", None)
@@ -194,7 +177,6 @@ def build_xos_hpf(data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[
             slope_db_oct = int(round(float(s_raw)))
         except Exception:
             slope_db_oct = 12
-        # keep sane slope; order uses /6 in phase model
         if slope_db_oct <= 0:
             slope_db_oct = 12
         order = max(1, int(round(slope_db_oct / 6.0)))
@@ -281,13 +263,10 @@ def build_filter_config(
     hc_m,
     pin,
 ) -> Any:
-    """
-    Construct FilterConfig instance without importing camillafir/models inside this module.
-    """
+    """Rakentaa tai generoi: build filter config."""
 
     def _pin_get(key: str, default=None):
-        """Robust pin read: supports dict-like and attribute-like pin objects. NEVER raises."""
-        # dict-like: pin.get / pin[key]
+        """Sisainen apufunktio: pin get."""
         try:
             if hasattr(pin, "get"):
                 v = pin.get(key, None)
@@ -301,7 +280,6 @@ def build_filter_config(
         except Exception:
             pass
 
-        # attribute-like: pin.key
         try:
             v = getattr(pin, key)
             if v is not None:
@@ -314,7 +292,7 @@ def build_filter_config(
     def _as_float(v, default=0.0) -> float:
         try:
             x = float(v)
-            return x if x == x else float(default)  # NaN guard
+            return x if x == x else float(default)
         except Exception:
             return float(default)
 
@@ -324,9 +302,7 @@ def build_filter_config(
         except Exception:
             return int(default)
     def _as_float_allow_zero(v, default: float) -> float:
-        """
-        Like _as_float, but treats None/"" as missing. IMPORTANT: 0 is valid (OFF).
-        """
+        """Sisainen apufunktio: as float allow zero."""
         if v is None:
             return float(default)
         if isinstance(v, str) and v.strip() == "":
@@ -334,7 +310,7 @@ def build_filter_config(
         return _as_float(v, default)
 
     def _as_float_or_none(v, default: Optional[float]) -> Optional[float]:
-        """Parse float or return None (accepts None / '' / 'None')."""
+        """Sisainen apufunktio: as float or none."""
         if v is None:
             return default
         if isinstance(v, str):
@@ -349,7 +325,6 @@ def build_filter_config(
             return default
         return float(x)
 
-    # --- NEW: read confidence-pull + low-bass-cut-strength from UI data (with safe defaults) ---
     conf_pull_floor = _as_float_allow_zero(data.get("conf_pull_floor", None), 0.05)
     conf_pull_ceil  = _as_float_allow_zero(data.get("conf_pull_ceil", None), 0.95)
     conf_pull_max_hz = _as_float_or_none(data.get("conf_pull_max_hz", None), 200.0)
@@ -389,7 +364,6 @@ def build_filter_config(
     enable_tdc = bool(_pin_get("enable_tdc", data.get("enable_tdc", False)))
     tdc_max_red = _as_float(_pin_get("tdc_max_reduction_db", data.get("tdc_max_reduction_db", 9.0)), 9.0)
     tdc_slope = _as_float(_pin_get("tdc_slope_db_per_oct", data.get("tdc_slope_db_per_oct", 0.0)), 0.0)
-    # Filter smoothing (DSP only)
     filter_smooth = _as_int(
         _pin_get("filter_smooth", data.get("filter_smooth", data.get("smoothing_level", 12))),
         12
@@ -419,7 +393,7 @@ def build_filter_config(
         max_slope_boost_db_per_oct=data.get("max_slope_boost_db_per_oct", 0.0),
         max_slope_cut_db_per_oct=data.get("max_slope_cut_db_per_oct", 0.0),
         phase_limit=data["phase_limit"],
-        phase_safe_2058=False,  # TUPE/2058 mode forced OFF (hidden from UI)
+        phase_safe_2058=False,
         enable_mag_correction=bool(data.get("mag_correct", True)),
         lvl_mode=lvl_mode,
         reg_strength=float(data.get("reg_strength", 30.0)),
@@ -428,7 +402,7 @@ def build_filter_config(
         exc_freq=data["exc_freq"],
         low_bass_cut_hz=float(lb_hz),
         ir_window_ms=data.get("ir_window_right", 500.0),
-        ir_window_ms_left=data.get("ir_window_left", 120.0),
+        ir_window_ms_left=data.get("ir_window_left", 85.0),
         ir_export_window_mode=data.get("ir_export_window_mode", "auto"),
         enable_afdw=bool(enable_afdw),
         enable_tdc=bool(enable_tdc),
@@ -450,7 +424,6 @@ def build_filter_config(
         trans_width=data.get("trans_width", 100.0),
         bass_first_ai=bool(data.get("bass_first_ai", False)),
         bass_first_mode_max_hz=float(data.get("bass_first_mode_max_hz", 200.0) or 200.0),
-        # --- NEW: confidence pull + low-bass-cut-strength plumbing into cfg (safe defaults; UI may not provide keys yet) ---
         conf_pull_floor=float(_as_float_allow_zero(data.get("conf_pull_floor", None), 0.05)),
         conf_pull_ceil=float(_as_float_allow_zero(data.get("conf_pull_ceil", None), 0.95)),
         conf_pull_max_hz=_as_float_or_none(data.get("conf_pull_max_hz", None), 200.0),
@@ -469,13 +442,11 @@ def build_filter_config(
         pass
     logger.info(f"UI raw: conf_pull_floor pin={data.get('conf_pull_floor')}, low_bass_cut_strength pin={data.get('low_bass_cut_strength')}")
     
-    # Optional experimental features (avoid breaking older FilterConfig constructors)
     try:
         setattr(cfg, "enable_residual_pass", bool(data.get("enable_residual_pass", False)))
     except Exception:
         pass
 
-    # Reset stereo-link state every run (prevents stale reuse across runs)
     try:
         setattr(cfg, "_stereo_link_window", None)
         setattr(cfg, "_stereo_link_offset_db", None)

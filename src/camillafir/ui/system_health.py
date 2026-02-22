@@ -17,21 +17,16 @@ def _prune_toast_cache(
     max_items: int = 256,
     max_age_s: float = 300.0,
 ) -> None:
-    """
-    Prevent unbounded growth if dedupe keys are highly variable.
-   Keeps newest entries and drops very old ones.
-    """
+    """Sisainen apufunktio: prune toast cache."""
     try:
         if not _TOAST_LAST_SHOWN:
             return
 
-        # Drop old entries first
         if max_age_s > 0:
             old_keys = [k for k, ts in _TOAST_LAST_SHOWN.items() if (now - float(ts)) > float(max_age_s)]
             for k in old_keys:
                 _TOAST_LAST_SHOWN.pop(k, None)
 
-        # Hard cap (keep newest)
         if max_items > 0 and len(_TOAST_LAST_SHOWN) > int(max_items):
             items: List[Tuple[str, float]] = [(k, float(v)) for k, v in _TOAST_LAST_SHOWN.items()]
             items.sort(key=lambda kv: kv[1], reverse=True)
@@ -40,7 +35,6 @@ def _prune_toast_cache(
                 if k not in keep:
                     _TOAST_LAST_SHOWN.pop(k, None)
     except Exception:
-        # Never let pruning break the UI
         return
 
 
@@ -54,7 +48,7 @@ class Issue:
 @dataclass(frozen=True)
 class HealthResult:
     overall: Level
-    blocked: bool  # BASIC blocks start if True
+    blocked: bool
     issues: List[Issue]
 
 
@@ -92,12 +86,11 @@ def _valid_path(p: Any) -> bool:
     p = p.strip().strip('"').strip("'")
     if not p:
         return False
-    # Accept both absolute and relative paths.
     return True
 
 
 def _has_uploaded_file(v: Any) -> bool:
-    """Best-effort check for PyWebIO file upload payload."""
+    """Sisainen apufunktio: has uploaded file."""
     try:
         if isinstance(v, dict):
             name = str(v.get("filename", "") or "").strip()
@@ -181,7 +174,6 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
     issues: List[Issue] = []
     mode_u = str(mode or "BASIC").strip().upper()
 
-    # --- Measurement source availability (L/R) ---
     up_l = _has_uploaded_file(data.get("file_l", None))
     up_r = _has_uploaded_file(data.get("file_r", None))
     lp_l = _valid_path(data.get("local_path_l", None))
@@ -197,7 +189,6 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
     else:
         issues.append(Issue("warn", _tr("health_measurements"), _tr("health_measurements_missing")))
 
-    # --- Target selection ---
     hc_mode = str(data.get("hc_mode") or "").strip()
     if hc_mode.lower() == "upload":
         upload_ok = _has_uploaded_file(data.get("hc_custom_file", None))
@@ -217,7 +208,6 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
     else:
         issues.append(Issue("warn", _tr("health_target_curve"), _tr("health_not_set")))
 
-    # --- Correction range sanity ---
     mag_on = bool(data.get("mag_correct", True))
     fmin = _as_float(data.get("mag_c_min", None))
     fmax = _as_float(data.get("mag_c_max", None))
@@ -228,13 +218,11 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
             issues.append(Issue("crit", _tr("health_correction_range_invalid")))
         else:
             issues.append(Issue("ok", _tr("health_correction_range"), f"{fmin:.0f}-{fmax:.0f} Hz"))
-            # Optional user-safety warning (does NOT block)
             if fmax > 350.0:
                 issues.append(Issue("warn", _tr("health_correction_max_very_high")))
     else:
         issues.append(Issue("warn", _tr("health_correction_range_set_bounds")))
 
-    # --- Engine metrics ---
     fs = _as_int(data.get("fs", None))
     taps = _as_int(data.get("taps", None))
     if fs and taps and fs > 0 and taps > 0:
@@ -257,7 +245,6 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
     else:
         issues.append(Issue("warn", _tr("health_engine_metrics_set")))
 
-    # --- Leveling range sanity ---
     lvl_min = _as_float(data.get("lvl_min", None))
     lvl_max = _as_float(data.get("lvl_max", None))
     if (lvl_min is not None) and (lvl_max is not None):
@@ -266,7 +253,6 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
         elif (lvl_max - lvl_min) < 200.0:
             issues.append(Issue("warn", _tr("health_leveling_range_narrow")))
 
-    # --- Boost safety (warn only; DSP may clamp) ---
     max_boost = _as_float(data.get("max_boost", None))
     if max_boost is None:
         issues.append(Issue("ok", _tr("health_max_boost"), _tr("health_default")))
@@ -275,19 +261,16 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
         if max_boost > 8.0:
             issues.append(Issue("warn", _tr("health_max_boost_high")))
 
-    # --- Phase correction limit sanity ---
     phase_limit = _as_float(data.get("phase_limit", None))
     if (phase_limit is not None) and (phase_limit > 800.0):
         issues.append(Issue("warn", _tr("health_phase_limit_high"), f"{phase_limit:.0f} Hz"))
 
-    # --- Protection hints ---
     exc_on = bool(data.get("exc_prot", False))
     if not exc_on:
         issues.append(Issue("warn", _tr("health_excursion_protection_off")))
     else:
         issues.append(Issue("ok", _tr("health_excursion_protection"), _tr("health_enabled")))
 
-    # --- HPF sanity ---
     hpf_on = bool(data.get("hpf_enable", False))
     if hpf_on:
         hpf_f = _as_float(data.get("hpf_freq", None))
@@ -300,7 +283,6 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
         if (hpf_s is None) or (hpf_s <= 0.0):
             issues.append(Issue("crit", _tr("health_hpf_slope_invalid")))
 
-    # --- Mixed phase sanity ---
     ftype = str(data.get("filter_type") or "").lower()
     if "mixed" in ftype:
         mixed_f = _as_float(data.get("mixed_freq", None))
@@ -319,7 +301,6 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
         if (mixed_f is not None) and (mixed_f > 0.0) and (trans_w is not None) and (trans_w > mixed_f):
             issues.append(Issue("warn", _tr("health_transition_width_wider")))
 
-    # --- Overall & BASIC gating ---
     has_crit = any(i.level == "crit" for i in issues)
     has_warn = any(i.level == "warn" for i in issues)
     overall: Level = "crit" if has_crit else ("warn" if has_warn else "ok")
@@ -448,14 +429,7 @@ def toast_taps_over_cap(value: Any, max_safe_taps: int) -> None:
 
 
 def format_health_summary(hr: HealthResult, max_items: int = 3) -> str:
-    """
-    Production-style short summary for toast / status.
-    Example:
-      System warnings (3):
-      - Correction max is very high
-      - Latency is high
-      - Max boost is high
-    """
+    """Jasentaa tai muotoilee: format health summary."""
     crits = [i for i in hr.issues if i.level == "crit"]
     warns = [i for i in hr.issues if i.level == "warn"]
 

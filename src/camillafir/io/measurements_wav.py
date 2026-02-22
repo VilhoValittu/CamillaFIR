@@ -1,21 +1,16 @@
-# camillafir_io/measurements_wav.py
 import io
 import os
 import numpy as np
 import scipy.io.wavfile
 
 try:
-    # Preferred: local package import.
     from .camillafir_wav_window import ir_wav_to_freq_response as _wav_ir_to_fr
 except Exception:
     try:
-        # Fallback for some script execution contexts.
         from src.camillafir.io.camillafir_wav_window import ir_wav_to_freq_response as _wav_ir_to_fr
     except Exception:
         _wav_ir_to_fr = None
 
-# TXT-baseline compatibility policy:
-# WAV input parsing should stay deterministic and not depend on user UI knobs.
 _TXT_BASELINE_PRE_MS = 120.0
 _TXT_BASELINE_POST_MS = 500.0
 _TXT_BASELINE_SMOOTHING = 0
@@ -172,7 +167,6 @@ def parse_measurements_from_wav_bytes(
             ch = (sig.shape[1] - 1) if ch >= sig.shape[1] else ch
             sig = sig[:, ch]
 
-        # Keep WAV->FR conversion aligned to TXT baseline (no user-tunable parse knobs).
         pre_ms, post_ms, smoothing_level = _txt_baseline_params()
         min_n_fft = _txt_baseline_min_n_fft(int(fs))
 
@@ -223,7 +217,6 @@ def parse_measurements_from_wav_path(
             ch = (sig.shape[1] - 1) if ch >= sig.shape[1] else ch
             sig = sig[:, ch]
 
-        # Keep WAV->FR conversion aligned to TXT baseline (no user-tunable parse knobs).
         pre_ms, post_ms, smoothing_level = _txt_baseline_params()
         min_n_fft = _txt_baseline_min_n_fft(int(fs))
 

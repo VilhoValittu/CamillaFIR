@@ -1,10 +1,16 @@
-# camillafir_io/measurements_txt.py
 import os
 import numpy as np
 
 
 def parse_measurements_from_bytes(file_content):
-    """Reads measurement data (REW export) from bytes robustly."""
+    """
+    Jasentaa REW-tyylisen mittausdatan tavu- tai merkkijonosyotteesta.
+
+    Hyvaksyy rivit, joissa on vahintaan taajuus ja amplitudi, sekavia
+    desimaalierottimia (pilkku/piste) seka valinnaisen vaihesarakkeen.
+    Palauttaa `(freqs, mags, phases)` tai `(None, None, None)`, jos dataa
+    ei voida lukea.
+    """
     try:
         if isinstance(file_content, (bytes, bytearray)):
             content_str = file_content.decode("utf-8", errors="ignore")
@@ -21,7 +27,6 @@ def parse_measurements_from_bytes(file_content):
             if not line[0].isdigit() and line[0] != "-":
                 continue
 
-            # SMART separator detection (match current behavior)
             if "," in line and "." in line:
                 line = line.replace(",", " ")
             else:
@@ -49,7 +54,12 @@ def parse_measurements_from_bytes(file_content):
 
 
 def parse_measurements_from_path(path, *, logger=None):
-    """Read measurement data from local REW .txt export path robustly."""
+    """
+    Lukee mittausdatan paikallisesta tekstitiedostosta ja jasentaa sen.
+
+    Polku siistitään turvallisesti, olemassaolo tarkistetaan ennen lukua ja
+    mahdolliset virheet kirjataan loggeriin, jos logger on annettu.
+    """
     try:
         if not path:
             return None, None, None
@@ -60,7 +70,6 @@ def parse_measurements_from_path(path, *, logger=None):
                 logger.error(f"File not found: {p}")
             return None, None, None
 
-        # TXT only here. WAV is handled by loader.
         with open(p, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
 

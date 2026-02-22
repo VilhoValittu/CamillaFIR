@@ -1,7 +1,6 @@
 import os
 import sys
 
-# Allow running as a script or frozen entrypoint by forcing package context.
 if __package__ in (None, ""):
     _pkg_root = os.path.dirname(os.path.abspath(__file__))
     _src_root = os.path.dirname(_pkg_root)
@@ -56,64 +55,29 @@ from .ui.camillafir_utils import scale_taps_with_fs
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("CamillaFIR")
 
-
-
-
 VERSION = "v.3.1.1.2"
-# Change log:
-
-# v.3.0.0 onwards --> See CHANGELOG.md for details.
-# v.2.9.5 [UI] add low-bass cut toggle + lock Hz field when disabled.
-# v.2.9.4 [CFG] Fixed low_bass_cut_hz value not saving correctly in config.
-# v.2.9.3 [UI] Fixed typo at psychoacoustic plot smoothing code (1/48 / 1/3 ---> 1/6 / 1/3)
-# v.2.9.2 [UI] hard-lock IR windowing to Auto in Basic & Asymmetric filter modes
-# v.2.9.1 [UI] Cleared functions (mixed phase & ir-windowing)
-# v.2.9.0 [UI] Removed "Symmetric" & "Off" modes from windowing options, leaving only "Auto" (rewind-based) and "Asymmetric" (rewind-based + shift). 
-# This simplifies the UI and focuses on the most effective windowing strategies. The "Auto" mode will automatically choose the best windowing based on the impulse response characteristics, while "Asymmetric" can be used to further reduce latency if desired.
-# v.2.9.0 [DSP] Fixed HPF magnitude application to ensure it is applied as a real magnitude filter (gain_db += hpf_db) rather than being baked into the target curve. This keeps magnitude and phase consistent and avoids issues with double-HPF effects.
-# v.2.8.9 [DSP] Added more safety checks and fixed edge cases in various blocks (leveling, TDC, bass-first, etc.)
-# v.2.8.5 [DSP] Added tukey windowing option
-# v2.8.4  Github actions now makes running files
-# v2.8.2.3 [IO] Fixed ZIP output when multi-rate is enabled:
-#               generate a single CamillaDSP .yml using $samplerate$
-# v2.8.2.3 [DSP] More precise leveling tilt used in magnitude calculation
-# v.2.8.2.2 [UI] updated translations and phase plot
-# v.2.8.2.1 changed file structure to more debug-friendly format
-# v2.8.2: [UI] improved robustness of file upload parsing from browser & added xo_help translation
-# v2.8.1.2" [UI/DSP] bug fix for modes selection, that was not saving ui state correctly
-# v2.8.1.1" [UI] small ui-update for modes selection
-# v2.8.1: [DSP] fix A-FDW bandwidth limits & UI display
-# v2.8.0: [UI] removed html dashboard export (now PNG only)
-# v2.7.9: [UI] fix custom house curve upload
-# v2.7.8: [IO] fix WAV parsing – phase unwrap
-# v2.7.7: [DSP] fix HF phase handling
-# v2.7.6: [IO] fix WAV parsing smoothing
-
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
 MAX_SAFE_TAPS = 131072
 TEST_MODE = 0
-# =========================
-# Test / diagnostics output
-# =========================
 TEST_MODE = os.environ.get("CAMILLAFIR_TEST", "0") == "1"
 
 def resolve_static_dir() -> str | None:
     """
-    Return static_dir for PyWebIO so `/static/plotly.min.js` is always available.
-    Works in both dev runs and PyInstaller builds.
+    Palauttaa PyWebIO:n static_dir-polun, josta paikallinen Plotly JS loytyy.
+
+    Tarkistaa ensin PyInstaller-ympariston (`sys._MEIPASS/assets`) ja sen
+    jalkeen lahdekoodin resurssipolun (`resources/plotly`).
     """
     candidates = []
 
-    # PyInstaller onefile/onedir extracted base.
     if hasattr(sys, "_MEIPASS"):
         try:
             candidates.append(os.path.join(sys._MEIPASS, "assets"))  # type: ignore[attr-defined]
         except Exception:
             pass
 
-    # Dev/source run.
     candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources", "plotly"))
 
     for d in candidates:
@@ -126,8 +90,10 @@ def resolve_static_dir() -> str | None:
 
 def _irwin_tag(mode: typing.Any) -> str:
     """
-    Short, filename-safe tag for IR export windowing mode.
-    UI values: auto / off / rew_sym / rew_asym
+    Normalisoi IR-ikkunointitilan lyhyeksi tiedostonimitunnisteeksi.
+
+    Tunnetut arvot muunnetaan muotoon `sym`, `asym`, `auto` tai `off`.
+    Virheellinen syote palautuu arvoon `auto`.
     """
     try:
         m = str(mode or "auto").strip().lower()
@@ -143,8 +109,10 @@ def _irwin_tag(mode: typing.Any) -> str:
 
 def _shift_zeropad_1d(x: np.ndarray, shift: int) -> np.ndarray:
     """
-    Shift a 1D signal by integer samples with zero padding (no circular wrap).
-    Positive shift moves content to the right (adds delay).
+    Siirtaa 1D-signaalia kokonaisilla naytteilla nollataytolla.
+
+    Positiivinen siirto lisaa viivetta (siirto oikealle), negatiivinen
+    aikaistaa signaalia (siirto vasemmalle) ilman wrap-around-kaytosta.
     """
     arr = np.asarray(x)
     n = int(arr.size)
@@ -171,9 +139,10 @@ def _postpolish_wav_filter_ir(
     trans_width: float,
 ) -> np.ndarray:
     """
-    Final WAV-only polish on exported FIR impulse.
-    Smooths visible comb/ripple near correction upper edge (typically ~200-300 Hz)
-    while preserving original phase.
+    Viimeistelee WAV-lahteesta lasketun FIR-impulssin ennen vientia.
+
+    Tasaa korjausalueen ylarajan ymparilla esiintyvaa ripplea taajuustasossa,
+    sailyttaa vaiheen ja skaalaa ulostulon takaisin alkuperaiseen huippuun.
     """
     x = np.asarray(ir, dtype=float).reshape(-1)
     n = int(x.size)
@@ -222,7 +191,6 @@ def _postpolish_wav_filter_ir(
     h2 = np.power(10.0, mag_out / 20.0) * np.exp(1j * ph)
     y = np.fft.irfft(h2, n=n)
 
-    # Keep the original peak scale.
     p0 = float(np.max(np.abs(x)))
     p1 = float(np.max(np.abs(y)))
     if p0 > 0.0 and p1 > 0.0:
@@ -254,11 +222,9 @@ def process_run():
             except Exception:
                 pass
 
-    # 1) UI -> data dict
     data = collect_ui_data(pin)
     data["program_version"] = VERSION
 
-    # 1.5) System Health gate
     try:
         mode = str(data.get("mode") or "BASIC").strip().upper()
         hr = compute_health(data, mode)
@@ -269,13 +235,11 @@ def process_run():
 
 
 
-    # Sanitize IR export window mode (config.json may contain null)
     _iw = data.get('ir_export_window_mode')
     if not isinstance(_iw, str) or _iw.strip() == "":
         data['ir_export_window_mode'] = 'auto'
     logger.info(f"UI ir_export_window_mode={data.get('ir_export_window_mode')}")
 
-    # Sanitize IR export window shape + Tukey alpha
     try:
         sh = str(data.get('ir_export_window_shape', 'hann') or 'hann').strip().lower()
     except Exception:
@@ -296,7 +260,6 @@ def process_run():
     put_processbar('bar')
     put_scope('status_area')
     set_processbar('bar', 0.0)
-    # 2) Measurements (upload OR local paths)
     _t_read = time.perf_counter()
     _status(t('stat_reading'))
     f_l, m_l, p_l, f_r, m_r, p_r = load_measurements_lr(data, logger=logger)
@@ -305,7 +268,6 @@ def process_run():
         toast_measurement_files_missing()
         return
 
-    # 3) Target / house curve
     hc_f, hc_m, hc_source = load_house_curve(
         data,
         parse_measurements_from_path=parse_measurements_from_path
@@ -320,7 +282,6 @@ def process_run():
             )
     except Exception:
         pass
-    # 4) XO + HPF
     xos, hpf = build_xos_hpf(data)
     try:
         if xos:
@@ -336,16 +297,12 @@ def process_run():
             logger.info("HPF (UI->CFG): off")
     except Exception:
         pass
-    # 5) (Optional) DF smoothing log
     df_on = log_df_smoothing_toggle(pin, logger)
 
 
-    # 6) Sample rates list
     target_rates = choose_target_rates(data)
     multi_rate_on = bool(data.get("multi_rate_opt"))
     dash_fs = choose_dash_fs(target_rates, multi_rate_on=multi_rate_on, forced_plot_fs_hz=int(FORCE_SINGLE_PLOT_FS_HZ))
-    # Perf test mode: omit dashboard images from ZIP export.
-    # UI still renders interactive plots normally.
     zip_dashboards_on = False
 
     zip_buffer = io.BytesIO()
@@ -355,14 +312,11 @@ def process_run():
     split, zoom = data['mixed_freq'], t('zoom_hint')
     l_st_f, r_st_f, l_imp_f, r_imp_f = None, None, None, None
     ui_dashboards = {}
-    # Debug: UI-selected IR export window parameters (cfg not built yet)
     logger.warning(
         f"EXPORT IR (UI): shape={data.get('ir_export_window_shape')}, "
         f"alpha={data.get('ir_export_tukey_alpha')}"
     )
 
-    # --- IR windowing tag (used in filenames) ---
-    # Keep this stable across all outputs in this run.
     val_raw = data.get('ir_export_window_mode', None)
     if not isinstance(val_raw, str) or val_raw.strip() == '':
         val_raw = data.get('ir_window_mode', 'auto')
@@ -395,7 +349,6 @@ def process_run():
                 pin=pin,
             )
 
-            # Enforce mode policy clamps from camillafir_modes.py for every run.
             try:
                 mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
             except Exception:
@@ -411,23 +364,18 @@ def process_run():
             )
             setattr(cfg, 'ir_export_window_mode', irw_mode)
 
-            # IR export window shape (Hann/Tukey) + alpha (0..1)
             try:
                 setattr(cfg, 'ir_export_window_shape', str(data.get('ir_export_window_shape', 'hann') or 'hann').strip().lower())
                 setattr(cfg, 'ir_export_tukey_alpha', float(data.get('ir_export_tukey_alpha', 0.25) or 0.25))
             except Exception:
                 pass
 
-           # IR window length values come from UI keys (ms). DSP expects *_ms fields.
             try:
                 setattr(cfg, 'ir_window', float(data.get('ir_window', getattr(cfg, 'ir_window', 500.0)) or 500.0))
                 setattr(cfg, 'ir_window_left', float(data.get('ir_window_left', getattr(cfg, 'ir_window_left', 120.0)) or 120.0))
             except Exception:
                 pass
 
-            # --- Safety cap for boost (CamillaFIR philosophy: never allow "surprise" boosts) ---
-            # max_boost_db is a user-visible knob, but we additionally cap it with MAX_SAFE_BOOST
-            # to prevent accidental large boosts from unstable measurements / target mismatch.
             try:
                 _user_mb = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
                 setattr(cfg, "max_boost_db_user", _user_mb)
@@ -471,12 +419,6 @@ def process_run():
             _slot = per_fs_stats.setdefault(_fs_k, {})
             _slot["dsp_s"] = float(_slot.get("dsp_s", 0.0)) + _dsp_dt
 
-            # ------------------------------------------------------------------
-            # RT60 reliability tagging for scoring:
-            # - WAV/IR path: RT60 is IR-derived => higher reliability
-            # - TXT/REW FR path: RT60 is proxy/estimate => lower reliability
-            # This is used by the new Acoustic Score formula (bonus is weighted).
-            # ------------------------------------------------------------------
             try:
                 rt_rel = 1.0 if bool(is_wav) else 0.25
                 rt_src = "WAV" if bool(is_wav) else "TXT/REW"
@@ -492,7 +434,6 @@ def process_run():
 
             l_st = _ensure_scoring_keys(l_st, f_l, m_l, hc_f, hc_m)
             r_st = _ensure_scoring_keys(r_st, f_r, m_r, hc_f, hc_m)
-            # Build comparison grid per sample-rate (needed for correct UI scoring with WAV)
             if bool(data.get("comparison_mode", False)):
                 try:
                     l_st = plots._make_comparison_stats(l_st, int(fs_v), int(taps_v))
@@ -500,21 +441,10 @@ def process_run():
                 except Exception as e:
                     logger.warning(f"Comparison-mode stats failed: {e}")
 
-            # ------------------------------------------------------------------
-            # Time alignment (always enabled by policy)
-            #
-            # TXT-compatible behavior: if generate_filter() produced explicit
-            # delay estimates (delay_samples), prefer those for alignment.
-            # This avoids the "peak-pick" method drifting when the main impulse
-            # peak is not stable (common with heavy LF energy / long tails).
-            #
-            # If delay_samples are missing, fall back to the legacy peak-pick.
-            # ------------------------------------------------------------------
             d_s = None
             align_method = "peak"
             d_peak = int(np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp)))
 
-            # Prefer delay_samples (TXT-compatible)
             d_delay = None
             try:
                 dl = l_st.get('delay_samples', None) if isinstance(l_st, dict) else None
@@ -522,8 +452,6 @@ def process_run():
                 if dl is not None and dr is not None:
                     dl_i = int(round(float(dl)))
                     dr_i = int(round(float(dr)))
-                    # delay_samples sign convention: larger physical delay -> more negative.
-                    # To match legacy peak-pick behavior, use dr - dl.
                     d_delay = dr_i - dl_i
             except Exception:
                 d_delay = None
@@ -535,8 +463,6 @@ def process_run():
                 d_s = int(d_delay)
                 align_method = "delay_samples"
 
-                # Guard against source-dependent drift:
-                # if delay_samples and peak-pick disagree clearly, use peak-pick.
                 try:
                     guard_samples = 8
                     if abs(int(d_delay) - int(d_peak)) > int(guard_samples):
@@ -554,9 +480,6 @@ def process_run():
             elif d_s < 0:
                 l_imp = _shift_zeropad_1d(l_imp, -d_s)
 
-            # WAV-only final IR polish: suppress residual comb/ripple around
-            # correction upper-edge transition (commonly visible near 200-300 Hz).
-            # Also enable when measurement axis clearly looks like FFT-grid WAV parse.
             _wav_like_fft_grid = False
             try:
                 _fx = np.asarray(f_l if f_l is not None else [], dtype=float)
@@ -595,7 +518,6 @@ def process_run():
                 except Exception as e:
                     logger.warning(f"WAV final IR polish failed: {e}")
 
-            # UI "results" view: show the same fs as the (single) dashboard fs in multi-rate.
             if fs_v == dash_fs:
                 l_st_f, r_st_f, l_imp_f, r_imp_f = l_st, r_st, l_imp, r_imp
 
@@ -646,7 +568,6 @@ def process_run():
             perf_stats["zip_png_s"] += _zip_dt
             _slot["zip_png_s"] = float(_slot.get("zip_png_s", 0.0)) + _zip_dt
 
-        # Multi-rate: write ONE CamillaDSP YAML (uses $samplerate$ in FIR filenames)
         if bool(data.get("multi_rate_opt", False)):
             yaml_content = generate_raspberry_yaml(
                 int(data.get("fs") or 44100),
@@ -657,7 +578,6 @@ def process_run():
             )
             zf.writestr(f"camilladsp_{ft_short}_{irw_tag}.yml", yaml_content)
 
-    # --- Save ZIP into filters/ directory ---
     filters_dir = os.path.join(os.getcwd(), "filters")
     os.makedirs(filters_dir, exist_ok=True)
 
@@ -672,7 +592,6 @@ def process_run():
         save_msg = "Zip saving failed."
 
 
-    # --- Ensure UI has stats even if fs selection didn't hit (e.g. WAV/local path quirks) ---
     if l_st_f is None:
         l_st_f = l_st
     if r_st_f is None:
@@ -682,7 +601,6 @@ def process_run():
     if r_imp_f is None:
         r_imp_f = r_imp
 
-    # --- Ensure UI scoring has filter_mags (so Measured != Filtered) ---
     try:
         fs_sel = int(data.get('fs') or 44100)
     except Exception:
@@ -717,7 +635,10 @@ def process_run():
 
 def _ui_pick(stats, key):
     """
-    UI helper: pick comparison-grid data if analysis_mode == 'comparison'
+    Hakee UI:lle oikean arvon natiivi- tai vertailutilasta.
+
+    Jos analyysitila on `comparison`, funktio priorisoi `cmp_<key>`-avaimen.
+    Muussa tapauksessa palauttaa tavallisen `<key>`-arvon.
     """
     if not stats:
         return None
@@ -728,9 +649,7 @@ def _ui_pick(stats, key):
 
 
 def _pick_cmp(stats, key):
-    """
-    Return comparison-mode arrays for UI scoring if available.
-    """
+    """Yhteensopiva valitsin vertailutilan (`cmp_`) ja natiivin datan valille."""
     if not stats:
         return None
     if str(stats.get("analysis_mode", "native")).lower() == "comparison":
@@ -738,11 +657,12 @@ def _pick_cmp(stats, key):
     return stats.get(key)
 
 def view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
-    """UI-only smoothing for plots (does NOT affect DSP math).
+    """
+    Tuottaa kuvaajia varten tasoitetun amplitudikayran (vain UI-nakymaan).
 
-    plot_smoothing_level:
-      - "Psychoacoustic" => REW-like crossfade (heavy LF, light HF), view-only
-      - int N            => standard 1/N octave smoothing (view-only)
+    Tukee kahta tilaa:
+    - `Psychoacoustic`: REW-tyylinen painotettu LF/HF-yhdistelma
+    - numeerinen N: standardi 1/N-oktaavitasoitus
     """
     f = np.asarray(freqs, dtype=float)
     m = np.asarray(mags, dtype=float)
@@ -756,7 +676,6 @@ def view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
 
     psl = plot_smoothing_level
 
-    # Psychoacoustic (string selector)
     if isinstance(psl, str) and ("psy" in psl.lower()):
         try:
             dummy = np.zeros_like(m)
@@ -771,7 +690,6 @@ def view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
         except Exception:
             return m
 
-    # Standard (numeric selector => 1/N octave)
     try:
         n = float(psl if not isinstance(psl, str) else 48.0)
         if not np.isfinite(n) or n <= 0:
@@ -789,8 +707,10 @@ def view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
 
 def _ensure_scoring_keys(st, f_in, m_in, hc_f, hc_m):
     """
-    Ensure UI scoring keys exist in stats dict (WAV/TXT safe).
-    - freq_axis, measured_mags, target_mags, confidence_mask
+    Varmistaa, etta pisteytykseen tarvittavat avaimet ovat stats-sanakirjassa.
+
+    Taydentaa puuttuvat kentat (`freq_axis`, `measured_mags`, `target_mags`,
+    `confidence_mask`) turvallisilla oletuksilla annetuista syotteista.
     """
     try:
         if st is None:
@@ -804,7 +724,6 @@ def _ensure_scoring_keys(st, f_in, m_in, hc_f, hc_m):
             if st.get("measured_mags") is None:
                 st["measured_mags"] = m
 
-        # target mags (fallback from house curve if missing)
         if st.get("target_mags") is None:
             try:
                 hf = np.asarray(hc_f or [], dtype=float)
@@ -814,7 +733,6 @@ def _ensure_scoring_keys(st, f_in, m_in, hc_f, hc_m):
             except Exception:
                 pass
 
-        # confidence mask (fallback to ones if missing)
         if st.get("confidence_mask") is None:
             if f.size > 1:
                 st["confidence_mask"] = np.ones_like(f, dtype=float)
@@ -828,15 +746,18 @@ _HOUSE_FREQS = np.array([
 ], dtype=float)
 
 def _resample_to_freq_axis(freqs_dst: np.ndarray, arr: np.ndarray, freqs_src: np.ndarray) -> np.ndarray:
-    """Safe 1D interpolation in log-frequency domain."""
+    """
+    Resamplaa 1D-kayran uudelle taajuusakselille log-taajuusinterpoloinnilla.
+
+    Tarkoitettu tilanteisiin, joissa target- tai filter-kayran pisteistus
+    poikkeaa mittausakselista.
+    """
     if arr.size == 0 or freqs_src.size == 0 or freqs_dst.size == 0:
         return arr
-    # clip to valid region
     f1 = np.maximum(freqs_src.astype(float), 1.0)
     f2 = np.maximum(freqs_dst.astype(float), 1.0)
     lf1 = np.log10(f1)
     lf2 = np.log10(f2)
-    # Ensure monotonic source
     order = np.argsort(lf1)
     lf1 = lf1[order]
     a1 = arr.astype(float)[order]
@@ -844,7 +765,12 @@ def _resample_to_freq_axis(freqs_dst: np.ndarray, arr: np.ndarray, freqs_src: np
 
 
 def calculate_target_match(st):
-    """Calculates how well the corrected response follows the target curve (0-100%)."""
+    """
+    Laskee korjatun vasteen tavoitevastaavuuden prosentteina (0-100).
+
+    Vertailu tehdaan kayrille `(measured + filter)` vs. `target`, jonka
+    RMS-virhe muunnetaan sigmoidilla prosenttipisteiksi.
+    """
     if not st:
         return 0.0
 
@@ -856,21 +782,15 @@ def calculate_target_match(st):
     if freqs.size == 0 or meas.size == 0 or target.size == 0:
         return 0.0
 
-    # WAV-polulla filter_mags voi puuttua -> tulkitaan 0 dB korjaukseksi
     if filt.size == 0:
         filt = np.zeros_like(meas, dtype=float)
-    # If filter mags are missing (common in some UI paths), treat as 0 dB correction
     if filt.size == 0:
         filt = np.zeros_like(meas, dtype=float)
 
-    # If WAV measurement: measured/target are dense FFT grid, but filter may be on 19-point house grid.
-    # Resample target/filter to the measurement freq_axis when shapes differ.
     if target.size != freqs.size:
-        # common case: target on house grid
         if target.size == _HOUSE_FREQS.size:
             target = _resample_to_freq_axis(freqs, target, _HOUSE_FREQS)
         else:
-            # last resort: truncate
             n = min(freqs.size, meas.size, target.size)
             freqs, meas, target = freqs[:n], meas[:n], target[:n]
 
@@ -881,13 +801,11 @@ def calculate_target_match(st):
             n = min(freqs.size, meas.size, filt.size, target.size)
             freqs, meas, target, filt = freqs[:n], meas[:n], target[:n], filt[:n]
 
-    # RMS virhe (dB) korjatusta vasteesta
     diff = (meas + filt) - target
     rms = float(np.sqrt(np.mean(diff * diff)))
 
-    # Sama muunnos kuin Summaryssä (sigmoidi)
-    m0 = 3.2   # dB @ 50%
-    s0 = 0.9   # jyrkkyys
+    m0 = 3.2
+    s0 = 0.9
     match_pct = 100.0 / (1.0 + np.exp((rms - m0) / s0))
     if rms <= 0.4:
         match_pct = 99.0
@@ -897,8 +815,10 @@ def calculate_target_match(st):
 
 def _avg_confidence_pct(st: dict) -> float:
     """
-    UI helper: returns average confidence in percent.
-    Supports comparison-mode keys (cmp_avg_confidence / cmp_confidence_mask).
+    Palauttaa keskimaaraisen confidence-arvon prosentteina.
+
+    Tukee seka natiivi- (`avg_confidence` / `confidence_mask`) etta
+    vertailutilan (`cmp_avg_confidence` / `cmp_confidence_mask`) avaimia.
     """
     if not st:
         return 0.0
@@ -914,7 +834,6 @@ def _avg_confidence_pct(st: dict) -> float:
         if cm.size:
             return float(np.mean(cm) * 100.0)
         return 0.0
-    # native
     v = st.get("avg_confidence", None)
     if v is not None:
         try:
@@ -929,8 +848,10 @@ def _avg_confidence_pct(st: dict) -> float:
 
 def calculate_target_match_unfiltered(st: dict) -> float:
     """
-    Target match for *unfiltered* response (measured vs target).
-    Uses the same sigmoid mapping as calculate_target_match().
+    Laskee tavoitevastaavuuden suodattamattomalle vasteelle.
+
+    Vertailu tehdaan suoraan kayrille `measured` vs. `target` samalla
+    sigmoidikartoituksella kuin suodatetussa target-match-laskennassa.
     """
     if not st:
         return 0.0
@@ -950,11 +871,11 @@ def calculate_target_match_unfiltered(st: dict) -> float:
     return float(np.clip(match_pct, 0.0, 100.0))
 
 def _inject_filter_mags_for_ui(st: dict, filt_ir, fs: int):
-    """Ensure st has filter_mags on the same freq_axis as measured, so UI can score 'Filtered' correctly.
+    """
+    Laskee ja injektoi `filter_mags`-kayran stats-rakenteeseen UI:ta varten.
 
-    Some pipelines didn't store filter_mags into stats; then UI 'Measured' and 'Filtered' collapse to the same value.
-    This computes |FFT(filter_ir)| and interpolates it to st['freq_axis'] (or cmp_freq_axis if in comparison mode),
-    storing it as (cmp_)filter_mags in dB.
+    Jos putki ei ole tallentanut filter-kayraa valmiiksi, funktio muodostaa
+    sen `filt_ir`-impulssista FFT:lla ja interpoloi aktiiviselle taajuusakselille.
     """
     try:
         if st is None or filt_ir is None:
@@ -991,13 +912,11 @@ def _inject_filter_mags_for_ui(st: dict, filt_ir, fs: int):
 
 
 def calculate_score(st, is_predicted=False):
-    """UI score (0..99) for Measured / Filtered.
+    """
+    Laskee UI:n kokonaispisteet (0..99) mitatulle tai ennustetulle vasteelle.
 
-    Note: this is *not* the same as Target Curve Match.
-    It combines:
-      - target match (sigmoid RMS mapping)
-      - acoustic confidence
-      - optional RT60 room-quality bonus/penalty (scaled by reliability)
+    Piste koostuu target-matchista, confidence-arvosta, RT60-bonuksesta
+    (luotettavuudella painotettuna) seka heijastuslistan penalteista.
     """
     if not st:
         return 0.0
@@ -1034,7 +953,7 @@ def calculate_score(st, is_predicted=False):
         match_pct = 99.0
     match_pct = float(np.clip(match_pct, 0.0, 100.0))
 
-    base = 0.55 * match_pct + 0.35 * conf  # 0..90
+    base = 0.55 * match_pct + 0.35 * conf
 
     rt_bonus = 0.0
     try:
@@ -1062,7 +981,6 @@ def calculate_score(st, is_predicted=False):
     return float(np.clip(score, 0.0, 99.0))
 
 
-# Build PyWebIO app from extracted UI module
 from .ui.camillafir_ui import build_app as _build_ui_app
 main = _build_ui_app(
     process_run=process_run,
