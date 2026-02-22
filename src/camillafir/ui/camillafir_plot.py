@@ -5,7 +5,6 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg') 
 import copy
-import math
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -13,7 +12,6 @@ from plotly.subplots import make_subplots
 from datetime import datetime
 # Tuodaan tarvittavat funktiot DSP-moduulista
 from ..dsp.smoothing import apply_smoothing_std, psychoacoustic_smoothing
-from ..dsp.analysis import calculate_rt60
 # Plot-only phase smoothing strength (octave-fraction style).
 # Higher = smoother-looking phase/GD. Does NOT affect DSP/filter generation.
 PHASE_SMOOTH_OCT = 5.5
@@ -275,6 +273,7 @@ def format_summary_content(settings, l_stats, r_stats):
     settings = settings or {}
     l_stats = l_stats or {}
     r_stats = r_stats or {}
+    program_version = str(settings.get("program_version", "") or "").strip()
 
     def _safe_float(v, default=0.0):
         try:
@@ -393,6 +392,10 @@ def format_summary_content(settings, l_stats, r_stats):
     lines = [
         "=== CamillaFIR - Filter Generation Summary ===",
         f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+    ]
+    if program_version:
+        lines.append(f"Version: {program_version}")
+    lines += [
         "",
         "--- Executive Summary ---",
         f"Acoustic Score: L {_fmt_score(l_score)} | R {_fmt_score(r_score)}",
@@ -704,8 +707,16 @@ def generate_prediction_plot(
     """Luo optimoidun HTML-dashboardin (Pieni tiedostokoko, korkea resoluutio)."""
     try:
         # 1. LASKENTA (Korkea resoluutio)
-        MIN_FFT_SIZE = 131072 
-        n_fft = max(len(filt_ir) * 4, MIN_FFT_SIZE)
+        # Use original high-quality render settings also for embedded view.
+        MIN_FFT_SIZE = 131072
+        FFT_MUL = 4
+        MAX_FFT_SIZE = None
+        VIS_POINTS = 4000
+        fig_height, fig_width = 1520, 1750
+
+        n_fft = max(len(filt_ir) * FFT_MUL, MIN_FFT_SIZE)
+        if MAX_FFT_SIZE is not None:
+            n_fft = min(n_fft, int(MAX_FFT_SIZE))
         f_lin = scipy.fft.rfftfreq(n_fft, d=1/fs)
         h_filt = scipy.fft.rfft(filt_ir, n=n_fft)
         
@@ -768,12 +779,10 @@ def generate_prediction_plot(
         )
         if plot_level_comp_db != 0.0:
             p_sm = p_sm + float(plot_level_comp_db)
-        #spec_sm phase smoothing for plots
-        # Phase: heavier smoothing for readability
+        # Original high-quality phase/GD smoothing path.
         spec_sm_phase = smooth_complex(f_lin, total_spec, PHASE_SMOOTH_OCT)
         ph_sm = (np.rad2deg(np.angle(spec_sm_phase)) + 180) % 360 - 180
 
-        # Group Delay: lighter smoothing to keep detail (still stable)
         spec_sm_gd = smooth_complex(f_lin, total_spec, GD_SMOOTH_OCT)
         gd_sm = calculate_clean_gd(f_lin, spec_sm_gd)
         filt_db = 20 * np.log10(np.abs(h_filt) + 1e-12)
@@ -781,7 +790,6 @@ def generate_prediction_plot(
             filt_db = filt_db + float(plot_level_comp_db)
 
         # 2. OPTIMOINTI (Resampling visualisointia varten)
-        VIS_POINTS = 4000
         f_vis = np.geomspace(2, fs/2, VIS_POINTS)
         
         m_vis = np.interp(f_vis, f_lin, m_lin_clean)
@@ -1037,8 +1045,8 @@ def generate_prediction_plot(
         fig.update_yaxes(title_text="oct", row=5, col=1)
 
         fig.update_layout(
-            height=1520,
-            width=1750,
+            height=fig_height,
+            width=fig_width,
             template="plotly_white",
             title_text=f"{title} Analysis",
             # Keep UI state stable across redraws (doesn't stop doubleclick by itself,
@@ -1081,7 +1089,7 @@ def generate_prediction_plot(
             return msg, None
         return msg
 
-def plotly_fig_to_png(fig, *, scale=2):
+def plotly_fig_to_png(fig, *, scale=2, width=None, height=None):
     """
     Export Plotly figure to PNG bytes (same as HTML modebar download).
     Uses Plotly 6.x default Kaleido backend.
@@ -1089,7 +1097,12 @@ def plotly_fig_to_png(fig, *, scale=2):
     try:
         import plotly.io as pio
         # Plotly 6.x: kaleido is implicit backend
-        return pio.to_image(fig, format="png", scale=int(scale))
+        kwargs = {"format": "png", "scale": float(scale)}
+        if width is not None:
+            kwargs["width"] = int(width)
+        if height is not None:
+            kwargs["height"] = int(height)
+        return pio.to_image(fig, **kwargs)
     except Exception as e:
         raise RuntimeError(
             f"Plotly PNG export failed: {e}"

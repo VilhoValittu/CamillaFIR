@@ -17,3 +17,6 @@ pytest.ini
 src/camillafir/bass_integration/
 specs.txt
 analysis/
+.tmp_run_en_server.py
+build_pyival/
+dist_pyival/

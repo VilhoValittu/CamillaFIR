@@ -34,6 +34,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "conf_pull_conf_smooth_sigma",
         "conf_pull_bass_floor_hz", "conf_pull_bass_floor_min",
         "low_bass_cut_strength", "hc_custom_file",
+        "file_l", "file_r",
     ]
 
     data: Dict[str, Any] = {}
@@ -265,7 +266,6 @@ def detect_is_wav_source(data: Dict[str, Any], pin) -> bool:
         or lp_r_s.endswith(".wav")
         or up_l_s.endswith(".wav")
         or up_r_s.endswith(".wav")
-        or str(data.get("fmt", "")).upper() == "WAV"
     )
 
 

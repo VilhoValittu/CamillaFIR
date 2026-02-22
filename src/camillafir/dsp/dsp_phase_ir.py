@@ -481,6 +481,35 @@ def run_phase_ir_stage(
                 except Exception:
                     pass
 
+                # WAV-only: smooth residual comb/ripple near correction upper edge
+                # after fade, before final hard clamp in this phase stage.
+                try:
+                    if bool(getattr(cfg, "is_wav_source", False)):
+                        mag_c_min = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
+                        mag_c_max = float(getattr(cfg, "mag_c_max", 0.0) or 0.0)
+                        trans_w = float(getattr(cfg, "trans_width", 0.0) or 0.0)
+                        if np.isfinite(mag_c_min) and np.isfinite(mag_c_max) and (mag_c_max > mag_c_min):
+                            if (not np.isfinite(trans_w)) or trans_w <= 0.0:
+                                trans_w = max(50.0, 0.4 * mag_c_max)
+
+                            f_lo = max(mag_c_min, mag_c_max - 1.00 * trans_w)
+                            f_hi = min(float(np.max(freq_axis)), mag_c_max + 1.50 * trans_w)
+                            z = (freq_axis >= f_lo) & (freq_axis <= f_hi)
+                            if int(np.count_nonzero(z)) >= 8:
+                                g0 = np.asarray(_g, dtype=float).copy()
+                                sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=8.0, fallback_bins=12.0)
+                                g_sm = scipy.ndimage.gaussian_filter1d(g0, sigma=float(max(2.0, sigma_bins)))
+
+                                x = np.zeros_like(g0, dtype=float)
+                                span = max(1e-9, float(f_hi - f_lo))
+                                x[z] = np.clip((freq_axis[z] - f_lo) / span, 0.0, 1.0)
+                                w = np.zeros_like(g0, dtype=float)
+                                w[z] = 0.5 - 0.5 * np.cos(np.pi * x[z])
+
+                                _g = g0 + (g_sm - g0) * (0.95 * w)
+                except Exception:
+                    pass
+
                 # Exc-protection (same as existing exc_prot re-application)
                 try:
                     if bool(getattr(cfg, "exc_prot", False)):

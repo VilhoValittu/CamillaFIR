@@ -112,6 +112,7 @@ def ir_wav_to_freq_response(
     window: str = "tukey",
     tukey_alpha: float = 0.25,
     zero_pad_pow2: bool = True,
+    min_n_fft: int | None = None,
     detrend: str = "linear",
     phase_hf_hold: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -179,6 +180,15 @@ def ir_wav_to_freq_response(
         n_fft = _next_pow2(n_fft)
     if n_fft < seg.size:
         n_fft = seg.size
+    if min_n_fft is not None:
+        try:
+            mn = int(min_n_fft)
+            if mn > 0:
+                mn = _next_pow2(mn)
+                if n_fft < mn:
+                    n_fft = mn
+        except Exception:
+            pass
 
     # FFT
     spec = np.fft.rfft(seg, n=n_fft)

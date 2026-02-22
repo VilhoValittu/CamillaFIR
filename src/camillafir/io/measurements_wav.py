@@ -1,13 +1,38 @@
 # camillafir_io/measurements_wav.py
 import io
+import os
 import numpy as np
 import scipy.io.wavfile
 
 try:
-    # Preferred: dedicated helper (closer to REW .txt export)
-    from src.camillafir.io.camillafir_wav_window import ir_wav_to_freq_response as _wav_ir_to_fr
+    # Preferred: local package import.
+    from .camillafir_wav_window import ir_wav_to_freq_response as _wav_ir_to_fr
 except Exception:
-    _wav_ir_to_fr = None
+    try:
+        # Fallback for some script execution contexts.
+        from src.camillafir.io.camillafir_wav_window import ir_wav_to_freq_response as _wav_ir_to_fr
+    except Exception:
+        _wav_ir_to_fr = None
+
+# TXT-baseline compatibility policy:
+# WAV input parsing should stay deterministic and not depend on user UI knobs.
+_TXT_BASELINE_PRE_MS = 120.0
+_TXT_BASELINE_POST_MS = 500.0
+_TXT_BASELINE_SMOOTHING = 0
+_TXT_BASELINE_BIN_HZ_MAX = 0.4
+
+
+def _txt_baseline_params():
+    return float(_TXT_BASELINE_PRE_MS), float(_TXT_BASELINE_POST_MS), int(_TXT_BASELINE_SMOOTHING)
+
+
+def _txt_baseline_min_n_fft(fs: int) -> int:
+    fs_i = int(fs) if fs else 0
+    if fs_i <= 0:
+        return 131072
+    target = int(np.ceil(float(fs_i) / float(_TXT_BASELINE_BIN_HZ_MAX)))
+    n = 1 << (max(1, target) - 1).bit_length()
+    return int(max(131072, n))
 
 
 def _wav_to_float(sig: np.ndarray) -> np.ndarray:
@@ -97,16 +122,15 @@ def _ir_wav_to_freq_response(
     if seg.size < 64:
         seg = sig
 
-    try:
-        w = np.hanning(seg.size).astype(np.float32)
-        seg = seg * w
-    except Exception:
-        pass
+    n_fft = 1 << (int(seg.size) - 1).bit_length()
+    if n_fft < seg.size:
+        n_fft = int(seg.size)
+    mn = _txt_baseline_min_n_fft(fs_i)
+    if n_fft < mn:
+        n_fft = int(mn)
 
-    seg -= np.linspace(seg[0], seg[-1], seg.size, dtype=np.float32)
-
-    spec = np.fft.rfft(seg)
-    freqs = np.fft.rfftfreq(seg.size, d=1.0 / float(fs_i))
+    spec = np.fft.rfft(seg, n=n_fft)
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / float(fs_i))
     mag = np.abs(spec)
     mag_db = 20.0 * np.log10(np.maximum(mag, 1e-12))
 
@@ -148,8 +172,23 @@ def parse_measurements_from_wav_bytes(
             ch = (sig.shape[1] - 1) if ch >= sig.shape[1] else ch
             sig = sig[:, ch]
 
+        # Keep WAV->FR conversion aligned to TXT baseline (no user-tunable parse knobs).
+        pre_ms, post_ms, smoothing_level = _txt_baseline_params()
+        min_n_fft = _txt_baseline_min_n_fft(int(fs))
+
         if _wav_ir_to_fr is not None:
-            return _wav_ir_to_fr(int(fs), sig, pre_ms=float(pre_ms), post_ms=float(post_ms), smoothing_level=smoothing_level)
+            return _wav_ir_to_fr(
+                int(fs),
+                sig,
+                pre_ms=float(pre_ms),
+                post_ms=float(post_ms),
+                smoothing_level=smoothing_level,
+                window="none",
+                detrend="none",
+                zero_pad_pow2=True,
+                min_n_fft=int(min_n_fft),
+                phase_hf_hold=True,
+            )
         return _ir_wav_to_freq_response(int(fs), sig, pre_ms=float(pre_ms), post_ms=float(post_ms), smoothing_level=smoothing_level)
     except Exception as e:
         if logger:
@@ -167,7 +206,15 @@ def parse_measurements_from_wav_path(
     logger=None,
 ):
     try:
-        fs, sig = scipy.io.wavfile.read(path)
+        p = str(path or "").strip().strip('"').strip("'")
+        if not p:
+            return None, None, None
+        if not os.path.exists(p):
+            if logger:
+                logger.error(f"WAV file not found: {p}")
+            return None, None, None
+
+        fs, sig = scipy.io.wavfile.read(p)
         sig = _wav_to_float(sig)
 
         if sig.ndim == 2:
@@ -176,8 +223,23 @@ def parse_measurements_from_wav_path(
             ch = (sig.shape[1] - 1) if ch >= sig.shape[1] else ch
             sig = sig[:, ch]
 
+        # Keep WAV->FR conversion aligned to TXT baseline (no user-tunable parse knobs).
+        pre_ms, post_ms, smoothing_level = _txt_baseline_params()
+        min_n_fft = _txt_baseline_min_n_fft(int(fs))
+
         if _wav_ir_to_fr is not None:
-            return _wav_ir_to_fr(int(fs), sig, pre_ms=float(pre_ms), post_ms=float(post_ms), smoothing_level=smoothing_level)
+            return _wav_ir_to_fr(
+                int(fs),
+                sig,
+                pre_ms=float(pre_ms),
+                post_ms=float(post_ms),
+                smoothing_level=smoothing_level,
+                window="none",
+                detrend="none",
+                zero_pad_pow2=True,
+                min_n_fft=int(min_n_fft),
+                phase_hf_hold=True,
+            )
         return _ir_wav_to_freq_response(int(fs), sig, pre_ms=float(pre_ms), post_ms=float(post_ms), smoothing_level=smoothing_level)
     except Exception as e:
         if logger:

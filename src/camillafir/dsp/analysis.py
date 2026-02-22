@@ -2,15 +2,24 @@ import numpy as np
 import scipy.ndimage
 
 from .camillafir_analysis import (
-    _sigma_bins_from_hz,
     analyze_acoustic_confidence,
     calculate_rt60,
     calculate_rt60_bands,
+    _sigma_bins_from_hz,
     _third_oct_centers,
 )
 # NOTE:
 # Legacy helper. Not used in current DSP or UI pipelines.
 # Kept only for backward compatibility / external scripts.
+
+__all__ = [
+    "analyze_acoustic_confidence",
+    "calculate_rt60",
+    "calculate_rt60_bands",
+    "_sigma_bins_from_hz",
+    "_third_oct_centers",
+    "calculate_group_delay",
+]
 
 def calculate_group_delay(freqs, phases_deg):
     """Calculates group delay (ms) from phase gradient."""

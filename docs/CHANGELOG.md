@@ -4,6 +4,35 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.1.1] - 2026-02-22
+
+### DSP
+- Added WAV-only ripple attenuation around correction upper-edge transition in correction + phase stages, plus final FIR IR post-polish while preserving phase and peak scale
+- Added alignment guard between `delay_samples` and impulse-peak alignment; falls back to peak alignment when estimates disagree significantly
+- Aligned WAV parsing closer to TXT baseline with deterministic window/smoothing policy and higher minimum FFT resolution for more consistent results
+
+### IO
+- Hardened local path handling by cleaning quoted paths and validating local WAV existence before parsing
+- Fixed WAV parser import fallback behavior and added configurable `min_n_fft` support in WAV IR -> FR conversion
+- Updated WAV source detection to rely on actual input sources/extensions instead of UI format selection
+
+### UI
+- Added elapsed-time status updates and a run timing breakdown table (Read, DSP, ZIP/PNG, Render, Total, per sample rate)
+- Improved completion status to show the real output directory path
+- Centralized toast behavior through System Health helpers (dedupe + edge-trigger warnings for max boost/taps and preset toasts)
+
+### System Health
+- Added explicit L/R measurement source checks (upload/local pair completeness) with dedicated warnings
+- Added phase-limit warning when correction limit is set high (above ~800 Hz)
+- Improved health gate notifications with centralized, deduplicated toast summaries
+
+### Export & Docs
+- Added version stamp to generated summary output (`Version: v.3.1.1`)
+- Updated ZIP dashboard PNG path to use combined Matplotlib export when dashboard image export is enabled
+- Updated docs/app version references to `v3.1.1` and refreshed EN/FI guide + health translation texts
+
+---
+
 ## [3.1.0] - 2026-02-21
 
 ### DSP

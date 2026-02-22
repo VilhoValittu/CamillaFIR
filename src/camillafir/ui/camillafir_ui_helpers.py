@@ -1,15 +1,20 @@
 # camillafir_ui_helpers.py
 import numpy as np
 import math
-import tempfile
-import re
 from pywebio.output import *  # needed because this PyWebIO build doesn't expose put_input/put_select as named exports
 from pywebio.input import FLOAT
-from pywebio.pin import pin, pin_update, put_input, put_select, put_file_upload, pin_on_change, pin_update
+from pywebio.pin import pin, pin_update, put_input, put_select
 
 from ..resources.i8n.camillafir_i18n import t
 from .camillafir_modes import MODE_DEFAULTS, MODE_CLAMPS
 from .camillafir_utils import scale_taps_with_fs
+from .system_health import (
+    toast_afdw_preset_applied,
+    toast_max_boost_over_cap,
+    toast_mode_defaults_applied,
+    toast_taps_over_cap,
+    toast_tdc_preset_applied,
+)
 
 # --- House curve loaders for target preview ---
 try:
@@ -35,28 +40,16 @@ def _warn_max_boost_if_over_cap(_=None):
     try:
         v = pin.get('max_boost', None)
         if v is None or v == '':
+            toast_max_boost_over_cap(None, float(globals().get("MAX_SAFE_BOOST", 8.0) or 8.0))
             return
         v = float(v)
         if not math.isfinite(v):
+            toast_max_boost_over_cap(None, float(globals().get("MAX_SAFE_BOOST", 8.0) or 8.0))
             return
 
-        over = (float(MAX_SAFE_BOOST) > 0.0) and (v > float(MAX_SAFE_BOOST) + 1e-9)
-        # Edge-trigger (warn only when transitioning to over-cap state)
-        prev = bool(getattr(_warn_max_boost_if_over_cap, "_prev_over", False))
-        if over and not prev:
-            # Build message safely even if translations are missing
-            try:
-                cap_suffix = t('max_boost_help_cap').format(value=f"{MAX_SAFE_BOOST:.1f}")
-            except Exception:
-                cap_suffix = f" (capped to {MAX_SAFE_BOOST:.1f} dB)"
-
-            msg = f"{t('max_boost')}: {v:.1f} dB > {MAX_SAFE_BOOST:.1f} dB{cap_suffix}"
-
-            # Use default toast styling to avoid version-specific color keyword issues
-            _toast(msg, duration=5)
-        _warn_max_boost_if_over_cap._prev_over = over
+        cap = float(globals().get("MAX_SAFE_BOOST", 8.0) or 8.0)
+        toast_max_boost_over_cap(v, cap)
     except Exception as e:
-
         try:
             logger.warning(f"max_boost toast failed: {e}")
         except Exception:
@@ -71,41 +64,16 @@ def _warn_taps_if_over_cap(_=None):
     try:
         v = pin.get('taps', None)
         if v is None or v == '':
+            toast_taps_over_cap(None, int(globals().get("MAX_SAFE_TAPS", 131072) or 131072))
             return
         v = int(v)
-
-        over = v > int(MAX_SAFE_TAPS)
-        prev = bool(getattr(_warn_taps_if_over_cap, "_prev_over", False))
-
-        if over and not prev:
-            try:
-                msg = t('taps_warn_over').format(value=MAX_SAFE_TAPS)
-            except Exception:
-                msg = f"Taps > {MAX_SAFE_TAPS}: very high latency and diminishing returns."
-
-            _toast(msg, duration=6)
-
-        _warn_taps_if_over_cap._prev_over = over
+        cap = int(globals().get("MAX_SAFE_TAPS", 131072) or 131072)
+        toast_taps_over_cap(v, cap)
     except Exception as e:
         try:
             logger.warning(f"taps warning toast failed: {e}")
         except Exception:
             pass
-
-def _toast(msg, *, duration=5, color=None):
-    """
-    Safe toast wrapper for PyWebIO.
-    Works even if toast is unavailable or UI context is missing.
-    """
-    try:
-        fn = globals().get("toast", None)
-        if callable(fn):
-            if color is None:
-                fn(msg, duration=duration)
-            else:
-                fn(msg, duration=duration, color=color)
-    except Exception:
-        pass
 
 def _max_boost_help_with_cap():
     try:
@@ -851,14 +819,7 @@ def apply_mode_defaults_to_ui(_=None):
         pass
     update_mode_desc()
 
-    try:
-        msg = t("mode_defaults_applied_toast").replace("{mode}", mode)
-    except Exception:
-        msg = f"Mode defaults applied: {mode}"
-    try:
-        toast(msg, color="success", duration=2.0)
-    except Exception:
-        pass
+    toast_mode_defaults_applied(mode)
 
 def update_taps_auto_info(_=None):
     """UI helper: show Auto-taps mapping when multi-rate is enabled."""
@@ -996,7 +957,7 @@ def update_lvl_ui(_=None):
                     "lvl_manual_db",
                     label=t("lvl_target_db"),
                     type=FLOAT,
-                    value=float(_p("lvl_manual_db", 0.0) or 0.0),
+                    value=float(_p("lvl_manual_db", 0.0) or 0.0), # type: ignore
                     help_text=t("lvl_manual_help"),
                 ),
                 put_button("-", onclick=lambda: _step_manual_target(-0.1), color="secondary").style("margin-top:28px; min-width:34px; margin-right:4px;"),
@@ -1028,10 +989,7 @@ def apply_tdc_preset(name: str):
     pin_update("tdc_max_reduction_db", value=float(p["max_red"]))
     pin_update("tdc_slope_db_per_oct", value=float(p["slope"]))
 
-    try:
-        toast(f"TDC preset applied: {name}", color="success", duration=1.5)
-    except Exception:
-        pass
+    toast_tdc_preset_applied(name)
 
 
 def apply_afdw_preset(name: str):
@@ -1055,10 +1013,7 @@ def apply_afdw_preset(name: str):
     except Exception:
         pass
 
-    try:
-        toast(f"A-FDW preset applied: {name}", color="success", duration=1.5)
-    except Exception:
-        pass
+    toast_afdw_preset_applied(name)
 
 
 def _pretty_plot_smoothing(v, t):
@@ -1247,7 +1202,8 @@ def put_guide_section():
         ("guide_reg", t("guide_reg_title")),
         ("guide_lvl", t("guide_lvl_title")),
         ("guide_sl", t("guide_sl_title")),
-        ("guide_ep", t("guide_ep_title")),
+        ("guide_exc_prot", t("guide_exc_prot_title")),
+        ("guide_low_bass_cut", t("guide_low_bass_cut_title")),
         ("guide_asy", t("guide_asy_title")),
         ("guide_ai", t("guide_ai_title")),
         ("guide_summary", t("guide_summary_title")),

@@ -7,6 +7,13 @@ from .measurements_txt import parse_measurements_from_bytes as parse_txt_bytes
 from .measurements_wav import parse_measurements_from_wav_bytes, parse_measurements_from_wav_path
 
 
+def _clean_local_path(p) -> str:
+    try:
+        return str(p or "").strip().strip('"').strip("'")
+    except Exception:
+        return ""
+
+
 def parse_measurements_from_upload(
     file_dict,
     *,
@@ -89,12 +96,12 @@ def load_measurements_lr(data: dict, *, logger=None):
             return f_l, m_l, p_l, f_r, m_r, p_r
 
     # 2) Local paths fallback
-    lp_l = str(data.get("local_path_l", "") or "").strip()
-    lp_r = str(data.get("local_path_r", "") or "").strip()
+    lp_l = _clean_local_path(data.get("local_path_l", ""))
+    lp_r = _clean_local_path(data.get("local_path_r", ""))
 
     if lp_l and lp_r:
-        ext_l = os.path.splitext(lp_l.strip().strip('"').strip("'"))[1].lower()
-        ext_r = os.path.splitext(lp_r.strip().strip('"').strip("'"))[1].lower()
+        ext_l = os.path.splitext(lp_l)[1].lower()
+        ext_r = os.path.splitext(lp_r)[1].lower()
 
         # WAV local
         if ext_l == ".wav" and ext_r == ".wav":

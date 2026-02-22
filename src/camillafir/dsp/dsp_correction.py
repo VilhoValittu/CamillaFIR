@@ -1052,6 +1052,44 @@ def run_correction_stage(
             
             logger.info(f"Exc Prot: Full protection < {f_start}Hz, Soft fade up to {f_end:.1f}Hz.")
 
+        # --- 8E2. WAV-only ripple cleanup near correction upper edge ---
+        # Keep TXT path untouched; only smooth a narrow zone around mag_c_max.
+        try:
+            if bool(getattr(cfg, "is_wav_source", False)) and np.any(mask_c):
+                cmin = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
+                cmax = float(getattr(cfg, "mag_c_max", 0.0) or 0.0)
+                tw = float(getattr(cfg, "trans_width", 0.0) or 0.0)
+                if np.isfinite(cmin) and np.isfinite(cmax) and np.isfinite(tw) and (cmax > cmin):
+                    if tw <= 0.0:
+                        tw = max(50.0, 0.4 * cmax)
+
+                    f_lo = max(cmin, cmax - max(30.0, 0.35 * tw))
+                    f_hi = min(float(np.max(freq_axis)), cmax + max(45.0, 0.55 * tw))
+                    zone = (freq_axis >= f_lo) & (freq_axis <= f_hi)
+                    if int(np.count_nonzero(zone)) >= 8:
+                        _pre = gain_db.copy()
+                        g0 = np.asarray(gain_db, dtype=float).copy()
+                        g_sm = smooth_gain_fractional_octave(freq_axis, g0, 24.0)
+
+                        span = max(1e-9, float(f_hi - f_lo))
+                        x = np.clip((freq_axis - f_lo) / span, 0.0, 1.0)
+                        ramp = 0.5 - 0.5 * np.cos(np.pi * x)
+
+                        sigma_hz = max(20.0, 0.20 * max(tw, 1.0))
+                        focus = np.exp(-0.5 * ((freq_axis - cmax) / sigma_hz) ** 2)
+
+                        w = np.zeros_like(g0, dtype=float)
+                        w[zone] = ramp[zone] * focus[zone]
+                        mix = 0.55
+                        gain_db = g0 + (g_sm - g0) * (mix * w)
+
+                        _log_stats("gain_db_post_wav_transition_smooth", gain_db, mask_c, ref=_pre)
+                        if isinstance(st, dict):
+                            st["wav_transition_smoothing"] = True
+                            st["wav_transition_smoothing_zone_hz"] = [float(f_lo), float(f_hi)]
+        except Exception:
+            pass
+
         # NOTE (HPF):
         # Do NOT "zero correction" below HPF. That is not a high-pass filter.
         # Real HPF magnitude is applied later via gain_db += hpf_db.
@@ -1194,6 +1232,49 @@ def run_correction_stage(
                     gain_db = np.minimum(gain_db, float(getattr(cfg, "max_boost_db", 0.0) or 0.0))
                     gain_db = np.maximum(gain_db, -max_cut_db)
                     _log_stats("gain_db_post_final_clamp_smooth", gain_db, mask_c, ref=_pre)
+        except Exception:
+            pass
+
+        # --- 8F2. WAV-only final ripple polish near correction edge ---
+        # Applied at the end so later clamp/smoothing stages won't reintroduce ripple.
+        try:
+            if bool(getattr(cfg, "is_wav_source", False)) and np.any(mask_c):
+                cmin = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
+                cmax = float(getattr(cfg, "mag_c_max", 0.0) or 0.0)
+                tw = float(getattr(cfg, "trans_width", 0.0) or 0.0)
+                if np.isfinite(cmin) and np.isfinite(cmax) and (cmax > cmin):
+                    if not np.isfinite(tw) or tw <= 0.0:
+                        tw = max(50.0, 0.4 * cmax)
+
+                    # Wider than 8E2 to catch the visible 200-300 Hz comb/ripple region.
+                    f_lo = max(cmin, cmax - 0.95 * tw)
+                    f_hi = min(float(np.max(freq_axis)), cmax + 1.45 * tw)
+                    zone = (freq_axis >= f_lo) & (freq_axis <= f_hi)
+                    if int(np.count_nonzero(zone)) >= 8:
+                        _pre = gain_db.copy()
+                        g0 = np.asarray(gain_db, dtype=float).copy()
+                        # Stronger and deterministic smoothing in Hz domain.
+                        sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=8.0, fallback_bins=12.0)
+                        g_sm = scipy.ndimage.gaussian_filter1d(g0, sigma=float(max(2.0, sigma_bins)))
+
+                        x = np.zeros_like(g0, dtype=float)
+                        span = max(1e-9, float(f_hi - f_lo))
+                        x[zone] = np.clip((freq_axis[zone] - f_lo) / span, 0.0, 1.0)
+                        w = np.zeros_like(g0, dtype=float)
+                        w[zone] = 0.5 - 0.5 * np.cos(np.pi * x[zone])
+
+                        # Apply mostly full blend inside the zone to ensure ripple attenuation.
+                        mix = 0.95
+                        gain_db = g0 + (g_sm - g0) * (mix * w)
+
+                        # Keep safety limits intact.
+                        gain_db = np.minimum(gain_db, float(getattr(cfg, "max_boost_db", 0.0) or 0.0))
+                        gain_db = np.maximum(gain_db, -max_cut_db)
+
+                        _log_stats("gain_db_post_wav_final_ripple_polish", gain_db, mask_c, ref=_pre)
+                        if isinstance(st, dict):
+                            st["wav_final_ripple_polish"] = True
+                            st["wav_final_ripple_polish_zone_hz"] = [float(f_lo), float(f_hi)]
         except Exception:
             pass
 

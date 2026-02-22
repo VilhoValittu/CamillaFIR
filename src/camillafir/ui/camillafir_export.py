@@ -36,8 +36,10 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
         summary_content += f"Sample rate: {int(fs_v)} Hz\n"
         # UI-only smoothing view (does not change DSP math)
         try:
-            psl = str(data.get("plot_smoothing_level", "Psychoacoustic") or "Psychoacoustic")
-            summary_content += f"Plot smoothing: {psl}\n"
+            psl = str(data.get("plot_smoothing_level", "Psychoacoustic") or "Psychoacoustic").strip()
+            # UI naming: Psychoacoustic mode is presented as CamillaFIR Reference.
+            psl_display = "CamillaFIR Reference" if "psy" in psl.lower() else psl
+            summary_content += f"Plot smoothing: {psl_display}\n"
         except Exception:
             pass
 
@@ -226,6 +228,7 @@ def _write_fs_outputs(
     *,
     write_dashboards: bool = True,
     irw_tag: str = "auto",
+    ui_dashboards: dict | None = None,
 ):
     sum_name = f"Summary_{ft_short}_{fs_v}Hz.txt"
     l_dash_name = f"L_Dashboard_{ft_short}_{fs_v}Hz.png"
@@ -317,32 +320,40 @@ def _write_fs_outputs(
         
         psl = data.get("plot_smoothing_level", "Psychoacoustic")
 
-        html_l, fig_l = plots.generate_prediction_plot(
+        html_l = plots.generate_prediction_plot(
             f_l,
-            plots._view_mags_for_plot(f_l, m_l, plot_smoothing_level=psl),
+            m_l,
             p_l, l_imp, fs_v, "Left",
             None, l_st, data['mixed_freq'], "low",
             create_full_html=False,
-            return_fig=True,
             plot_smoothing_level=psl,
         )
-        if fig_l is not None:
-            zf.writestr(l_dash_name, plots.plotly_fig_to_png(fig_l, scale=2))
+        if isinstance(ui_dashboards, dict):
+            ui_dashboards["fs_hz"] = int(fs_v)
+            ui_dashboards["left_html"] = str(html_l)
+        png_l = plots.generate_combined_plot_mpl(
+            f_l, m_l, p_l, l_imp, fs_v, "Left", target_stats=l_st
+        )
+        if png_l:
+            zf.writestr(l_dash_name, png_l)
         else:
-            # keep a clue in the ZIP if plotly rendering failed
             zf.writestr(l_dash_name.replace(".png", ".txt"), str(html_l))
 
-        html_r, fig_r = plots.generate_prediction_plot(
+        html_r = plots.generate_prediction_plot(
             f_r,
-            plots._view_mags_for_plot(f_r, m_r, plot_smoothing_level=psl),
+            m_r,
             p_r, r_imp, fs_v, "Right",
             None, r_st, data['mixed_freq'], "low",
             create_full_html=False,
-            return_fig=True,
             plot_smoothing_level=psl,
         )
-        if fig_r is not None:
-            zf.writestr(r_dash_name, plots.plotly_fig_to_png(fig_r, scale=2))
+        if isinstance(ui_dashboards, dict):
+            ui_dashboards["right_html"] = str(html_r)
+        png_r = plots.generate_combined_plot_mpl(
+            f_r, m_r, p_r, r_imp, fs_v, "Right", target_stats=r_st
+        )
+        if png_r:
+            zf.writestr(r_dash_name, png_r)
         else:
             zf.writestr(r_dash_name.replace(".png", ".txt"), str(html_r))
 

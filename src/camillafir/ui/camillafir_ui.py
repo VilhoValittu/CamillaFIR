@@ -1,32 +1,20 @@
-import json
 import logging
-import math
-import typing
-import os
-import re
-import sys
-from datetime import datetime
 from textwrap import dedent
 
 import numpy as np
-import scipy.io.wavfile
-import tempfile
 from pywebio import config
 from pywebio.input import *
 from pywebio.output import *
 from pywebio.pin import *
 from pywebio.session import set_env
-import pywebio.output as pwo
-from pywebio.output import put_html, put_image, put_row, put_markdown
+from pywebio.output import put_html, put_row, put_markdown
 import importlib.resources as pkgres
 import base64
-from pywebio.pin import put_input, put_select, put_file_upload, pin_on_change, pin_update, pin
+from pywebio.pin import put_input, put_select, pin_on_change, pin_update, pin
 
-from ..config.camillafir_config import load_config, save_config
+from ..config.camillafir_config import load_config
 from ..resources.i8n.camillafir_i18n import t
-from .camillafir_housecurve import _normalize_hc_mode_key, get_house_curve_by_name, load_target_curve, load_house_curve
-from camillafir.io.measurements_loader import load_measurements_lr
-from camillafir.io.measurements_txt import parse_measurements_from_path
+from .camillafir_housecurve import _normalize_hc_mode_key
 from .camillafir_ui_helpers import (
     update_mode_desc,
     apply_mode_defaults_to_ui,
@@ -47,26 +35,9 @@ from .camillafir_ui_helpers import (
     update_target_preview_ui,
     update_basic_clamp_hints_ui,
 )
-from ..config.camillafir_pipeline import (
-    collect_ui_data,
-    log_df_smoothing_toggle,
-    build_xos_hpf,
-    filter_type_short,
-    choose_target_rates,
-    choose_dash_fs,
-    detect_is_wav_source,
-    build_filter_config,
-)
-from ..dsp import camillafir_dsp as dsp
 from . import camillafir_plot as plots
-import camillafir.config.models as models
-from camillafir.config.models import FilterConfig
-from .camillafir_modes import apply_mode_to_cfg, MODE_DEFAULTS
-from .camillafir_utils import scale_taps_with_fs
-from pywebio.pin import pin_update
+from .camillafir_modes import MODE_DEFAULTS
 from .camillafir_ui_helpers import (
-    _max_boost_help_with_cap,
-    _toast,
     _warn_taps_if_over_cap,
     _warn_max_boost_if_over_cap,
 )
@@ -1270,9 +1241,38 @@ def _build_diagnostics_dict(data, fs_v, l_st, r_st):
     }
     return diag
 
-def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f, r_st_f, fname, zip_buffer):
-    update_status(t('stat_plot'))
+def _render_results(
+    data,
+    f_l,
+    m_l,
+    p_l,
+    f_r,
+    m_r,
+    p_r,
+    l_imp_f,
+    r_imp_f,
+    l_st_f,
+    r_st_f,
+    fname,
+    zip_buffer,
+    *,
+    dash_html_l=None,
+    dash_html_r=None,
+    run_started_at=None,
+    perf_stats=None,
+    per_fs_stats=None,
+    saved_filters_dir=None,
+):
     import time
+    _render_started_at = time.perf_counter()
+    if run_started_at is not None:
+        try:
+            _elapsed_now = max(0.0, float(time.perf_counter() - float(run_started_at)))
+            update_status(f"{t('stat_plot')} | {_elapsed_now:.1f} s")
+        except Exception:
+            update_status(t('stat_plot'))
+    else:
+        update_status(t('stat_plot'))
     time.sleep(0.05)
     set_processbar('bar', 0.8)
     print("plot_smoothing_level =", data.get("plot_smoothing_level"))
@@ -1624,23 +1624,76 @@ def _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f
             - **Leveling algo:** {data.get('lvl_algo', '')}
             """), sanitize=False)
 
-        put_tabs([
-            {'title': 'Left Channel', 'content': put_html(plots.generate_prediction_plot(
+        if dash_html_l is None:
+            dash_html_l = plots.generate_prediction_plot(
                 f_l, m_l, p_l, l_imp_f, data['fs'], "Left",
                 None, l_st_f, data['mixed_freq'], "low",
                 create_full_html=False,
                 plot_smoothing_level=data.get('plot_smoothing_level', 'Psychoacoustic')
-            ))},
-            {'title': 'Right Channel', 'content': put_html(plots.generate_prediction_plot(
+            )
+        if dash_html_r is None:
+            dash_html_r = plots.generate_prediction_plot(
                 f_r, m_r, p_r, r_imp_f, data['fs'], "Right",
                 None, r_st_f, data['mixed_freq'], "low",
                 create_full_html=False,
                 plot_smoothing_level=data.get('plot_smoothing_level', 'Psychoacoustic')
-            ))}
+            )
+
+        put_tabs([
+            {'title': 'Left Channel', 'content': put_html(dash_html_l)},
+            {'title': 'Right Channel', 'content': put_html(dash_html_r)}
         ])
         put_file(fname, zip_buffer.getvalue(), label=" DOWNLOAD FILTER ZIP")
+
+        # Stage timing breakdown (start-button -> done)
+        try:
+            rows = [['Stage', 'Time (s)']]
+            p = dict(perf_stats or {})
+            read_s = float(p.get("read_s", 0.0) or 0.0)
+            dsp_s = float(p.get("dsp_s", 0.0) or 0.0)
+            zip_s = float(p.get("zip_png_s", 0.0) or 0.0)
+            render_s = max(0.0, float(time.perf_counter() - _render_started_at))
+            rows.append(['Read', f"{read_s:.2f}"])
+            rows.append(['DSP L/R', f"{dsp_s:.2f}"])
+            rows.append(['ZIP + PNG', f"{zip_s:.2f}"])
+            rows.append(['Results render', f"{render_s:.2f}"])
+
+            if isinstance(per_fs_stats, dict) and per_fs_stats:
+                for fs_k in sorted(per_fs_stats.keys(), key=lambda x: int(x)):
+                    st = per_fs_stats.get(fs_k, {}) or {}
+                    fs_dsp = float(st.get("dsp_s", 0.0) or 0.0)
+                    fs_zip = float(st.get("zip_png_s", 0.0) or 0.0)
+                    rows.append([f"DSP @ {int(fs_k)} Hz", f"{fs_dsp:.2f}"])
+                    rows.append([f"ZIP+PNG @ {int(fs_k)} Hz", f"{fs_zip:.2f}"])
+
+            if run_started_at is not None:
+                total_s = max(0.0, float(time.perf_counter() - float(run_started_at)))
+                known_s = max(0.0, read_s + dsp_s + zip_s + render_s)
+                other_s = max(0.0, total_s - known_s)
+                rows.append(['Other', f"{other_s:.2f}"])
+                rows.append(['Total', f"{total_s:.2f}"])
+
+            put_markdown("### Timing")
+            put_table(rows)
+        except Exception:
+            pass
         
+        done_status = t('stat_done')
+        if saved_filters_dir:
+            try:
+                done_status = done_status.format(path=str(saved_filters_dir))
+            except Exception:
+                done_status = f"{done_status} {saved_filters_dir}"
+
         put_success(t('done_msg'))
-        update_status(t('stat_done'))
+        if run_started_at is not None:
+            try:
+                total_s = max(0.0, float(time.perf_counter() - float(run_started_at)))
+                put_info(f"Total time: {total_s:.1f} s")
+                update_status(f"{done_status} | {total_s:.1f} s")
+            except Exception:
+                update_status(done_status)
+        else:
+            update_status(done_status)
         set_processbar('bar', 1.0)
     return main

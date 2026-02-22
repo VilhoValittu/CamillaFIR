@@ -10,42 +10,27 @@ if __package__ in (None, ""):
     __package__ = "camillafir"
 
 import io
-import json
 import logging
-import re
 import zipfile
 import typing
 import scipy.io.wavfile
 import math
+import time
 from datetime import datetime
-from textwrap import dedent
-import math
 import numpy as np
-from pywebio import config, start_server
+from pywebio import start_server
 from pywebio.input import *
 from pywebio.output import *
 from pywebio.pin import *
-from pywebio.session import set_env
-import pywebio.output as pwo
-#from pywebio.output import toast
-from pywebio.output import put_html
-from .config.camillafir_config import load_config, save_config
+from .config.camillafir_config import save_config
 from .resources.i8n.camillafir_i18n import t
-from .ui.camillafir_housecurve import _normalize_hc_mode_key, get_house_curve_by_name, load_target_curve, load_house_curve
+from .ui.camillafir_housecurve import load_house_curve
 from camillafir.io.measurements_loader import load_measurements_lr
 from camillafir.io.measurements_txt import parse_measurements_from_path
-from .ui.camillafir_ui_helpers import (
-    update_mode_desc,
-    apply_mode_defaults_to_ui,
-    update_taps_auto_info,
-    update_lvl_ui,
-    apply_tdc_preset,
-    apply_afdw_preset,
-    put_guide_section,
-    _max_boost_help_with_cap,
-    _toast,
-    _warn_taps_if_over_cap,
-    _warn_max_boost_if_over_cap,
+from .ui.system_health import (
+    compute_health,
+    toast_health_gate_result,
+    toast_measurement_files_missing,
 )
 from .config.camillafir_pipeline import (
     collect_ui_data,
@@ -60,16 +45,13 @@ from .config.camillafir_pipeline import (
 from .ui.camillafir_export import _write_fs_outputs
 from .dsp import camillafir_dsp as dsp
 from .ui import camillafir_plot as plots
-import camillafir.config.models as models
 from camillafir.config.models import FilterConfig
-from .ui.camillafir_modes import apply_mode_to_cfg, MODE_DEFAULTS
+from .ui.camillafir_modes import apply_mode_to_cfg
 from .config.camillafir_convolver_configs import (
     generate_raspberry_yaml,
-    generate_hlc_config,
 )
 from .ui.camillafir_ui import _render_results
 from .ui.camillafir_utils import scale_taps_with_fs
-from pywebio.pin import pin_update
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("CamillaFIR")
@@ -77,7 +59,7 @@ logger = logging.getLogger("CamillaFIR")
 
 
 
-VERSION = "v.3.1.0"
+VERSION = "v.3.1.1"
 # Change log:
 
 # v.3.0.0 onwards --> See CHANGELOG.md for details.
@@ -154,45 +136,109 @@ def _shift_zeropad_1d(x: np.ndarray, shift: int) -> np.ndarray:
             out[:-s] = arr[s:]
     return out
 
+
+def _postpolish_wav_filter_ir(
+    ir: np.ndarray,
+    fs: int,
+    *,
+    mag_c_min: float,
+    mag_c_max: float,
+    trans_width: float,
+) -> np.ndarray:
+    """
+    Final WAV-only polish on exported FIR impulse.
+    Smooths visible comb/ripple near correction upper edge (typically ~200-300 Hz)
+    while preserving original phase.
+    """
+    x = np.asarray(ir, dtype=float).reshape(-1)
+    n = int(x.size)
+    fs_i = int(fs) if fs else 0
+    if n < 64 or fs_i <= 0:
+        return x
+
+    cmin = float(mag_c_min if np.isfinite(mag_c_min) else 0.0)
+    cmax = float(mag_c_max if np.isfinite(mag_c_max) else 0.0)
+    tw = float(trans_width if np.isfinite(trans_width) else 0.0)
+    if cmax <= max(1.0, cmin):
+        return x
+    if tw <= 0.0:
+        tw = max(50.0, 0.4 * cmax)
+
+    f_lo = max(cmin, cmax - 0.95 * tw)
+    f_hi = min(float(fs_i) * 0.5, cmax + 1.45 * tw)
+    if f_hi <= f_lo:
+        return x
+
+    h = np.fft.rfft(x)
+    freqs = np.fft.rfftfreq(n, d=1.0 / float(fs_i))
+    mag_db = 20.0 * np.log10(np.maximum(np.abs(h), 1e-14))
+    ph = np.angle(h)
+
+    df = float(np.median(np.diff(freqs))) if freqs.size > 2 else 1.0
+    sigma_bins = max(2.0, 8.0 / max(df, 1e-9))
+    half = int(max(3, round(4.0 * sigma_bins)))
+    kx = np.arange(-half, half + 1, dtype=float)
+    kk = np.exp(-0.5 * (kx / sigma_bins) ** 2)
+    kk /= np.sum(kk)
+    mag_sm = np.convolve(mag_db, kk, mode="same")
+
+    zone = (freqs >= f_lo) & (freqs <= f_hi)
+    if int(np.count_nonzero(zone)) < 8:
+        return x
+
+    w = np.zeros_like(freqs, dtype=float)
+    span = max(1e-9, float(f_hi - f_lo))
+    zz = (freqs[zone] - f_lo) / span
+    w[zone] = 0.5 - 0.5 * np.cos(np.pi * np.clip(zz, 0.0, 1.0))
+
+    mix = 0.95
+    mag_out = mag_db + (mag_sm - mag_db) * (mix * w)
+
+    h2 = np.power(10.0, mag_out / 20.0) * np.exp(1j * ph)
+    y = np.fft.irfft(h2, n=n)
+
+    # Keep the original peak scale.
+    p0 = float(np.max(np.abs(x)))
+    p1 = float(np.max(np.abs(y)))
+    if p0 > 0.0 and p1 > 0.0:
+        y = y * (p0 / p1)
+    return y.astype(float, copy=False)
+
+
 def process_run():
     from .ui.camillafir_ui import update_status as status_cb
 
+    run_started_at = time.perf_counter()
+    perf_stats = {
+        "read_s": 0.0,
+        "dsp_s": 0.0,
+        "zip_png_s": 0.0,
+    }
+    per_fs_stats = {}
+
+    def _elapsed_seconds() -> float:
+        try:
+            return max(0.0, float(time.perf_counter() - run_started_at))
+        except Exception:
+            return 0.0
 
     def _status(msg):
         if callable(status_cb):
             try:
-                status_cb(msg)
+                status_cb(f"{msg} | {_elapsed_seconds():.1f} s")
             except Exception:
                 pass
 
     # 1) UI -> data dict
     data = collect_ui_data(pin)
+    data["program_version"] = VERSION
 
     # 1.5) System Health gate
     try:
-        from .ui.system_health import compute_health, format_health_summary
-
         mode = str(data.get("mode") or "BASIC").strip().upper()
         hr = compute_health(data, mode)
-
-        def _health_color(level: str, mode_u: str) -> str | None:
-            if level == "warn":
-                return "warn" if mode_u == "BASIC" else "info"
-            if level == "crit":
-                return "error"
-            return None
-
-        if hr.blocked:
-            msg = format_health_summary(hr) or "Fix errors before running (blocked in BASIC)."
-            _toast(msg, duration=15, color=_health_color("crit", mode))
+        if toast_health_gate_result(hr, mode):
             return
-
-        # Show summary at START when there are warnings (and also crits in ADVANCED)
-        if hr.overall in ("warn", "crit"):
-            msg = format_health_summary(hr)
-            if msg:
-                _toast(msg, duration=20, color=_health_color(hr.overall, mode))
-
     except Exception:
         pass
 
@@ -225,25 +271,13 @@ def process_run():
     put_processbar('bar')
     put_scope('status_area')
     set_processbar('bar', 0.0)
-
-
-    # Always warn at START if user requested boost above safety cap
-    try:
-        mb = float(data.get('max_boost', 0.0) or 0.0)
-        if float(MAX_SAFE_BOOST) > 0.0 and mb > float(MAX_SAFE_BOOST) + 1e-9:
-            try:
-                cap_suffix = t('max_boost_help_cap').format(value=f"{MAX_SAFE_BOOST:.1f}")
-            except Exception:
-                cap_suffix = f" (capped to {MAX_SAFE_BOOST:.1f} dB)"
-            toast(f"{t('max_boost')}: {mb:.1f} dB > {MAX_SAFE_BOOST:.1f} dB{cap_suffix}", duration=6)
-    except Exception:
-        pass
-
     # 2) Measurements (upload OR local paths)
+    _t_read = time.perf_counter()
     _status(t('stat_reading'))
     f_l, m_l, p_l, f_r, m_r, p_r = load_measurements_lr(data, logger=logger)
+    perf_stats["read_s"] += max(0.0, float(time.perf_counter() - _t_read))
     if f_l is None or f_r is None:
-        _toast("Measurement files missing! Load Left/Right or give local.", duration=6, color='red')
+        toast_measurement_files_missing()
         return
 
     # 3) Target / house curve
@@ -285,6 +319,9 @@ def process_run():
     target_rates = choose_target_rates(data)
     multi_rate_on = bool(data.get("multi_rate_opt"))
     dash_fs = choose_dash_fs(target_rates, multi_rate_on=multi_rate_on, forced_plot_fs_hz=int(FORCE_SINGLE_PLOT_FS_HZ))
+    # Perf test mode: omit dashboard images from ZIP export.
+    # UI still renders interactive plots normally.
+    zip_dashboards_on = False
 
     zip_buffer = io.BytesIO()
     ts = datetime.now().strftime('%d%m%y_%H%M')
@@ -292,6 +329,7 @@ def process_run():
     ft_short = filter_type_short(data['filter_type'])
     split, zoom = data['mixed_freq'], t('zoom_hint')
     l_st_f, r_st_f, l_imp_f, r_imp_f = None, None, None, None
+    ui_dashboards = {}
     # Debug: UI-selected IR export window parameters (cfg not built yet)
     logger.warning(
         f"EXPORT IR (UI): shape={data.get('ir_export_window_shape')}, "
@@ -392,6 +430,7 @@ def process_run():
 
             log_df_smoothing_toggle(cfg, df_on)
             _status(f"{t('stat_calc')} {int(fs_v)} Hz")
+            _t_dsp = time.perf_counter()
             if bool(getattr(cfg, "stereo_link", False)):
                 l_imp, l_st, r_imp, r_st = dsp.generate_filter_pair(
                     f_l, m_l, p_l,
@@ -401,6 +440,11 @@ def process_run():
             else:
                 l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, cfg)
                 r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, cfg)
+            _dsp_dt = max(0.0, float(time.perf_counter() - _t_dsp))
+            perf_stats["dsp_s"] += _dsp_dt
+            _fs_k = int(fs_v)
+            _slot = per_fs_stats.setdefault(_fs_k, {})
+            _slot["dsp_s"] = float(_slot.get("dsp_s", 0.0)) + _dsp_dt
 
             # ------------------------------------------------------------------
             # RT60 reliability tagging for scoring:
@@ -442,8 +486,11 @@ def process_run():
             # If delay_samples are missing, fall back to the legacy peak-pick.
             # ------------------------------------------------------------------
             d_s = None
+            align_method = "peak"
+            d_peak = int(np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp)))
 
             # Prefer delay_samples (TXT-compatible)
+            d_delay = None
             try:
                 dl = l_st.get('delay_samples', None) if isinstance(l_st, dict) else None
                 dr = r_st.get('delay_samples', None) if isinstance(r_st, dict) else None
@@ -452,18 +499,76 @@ def process_run():
                     dr_i = int(round(float(dr)))
                     # delay_samples sign convention: larger physical delay -> more negative.
                     # To match legacy peak-pick behavior, use dr - dl.
-                    d_s = dr_i - dl_i
+                    d_delay = dr_i - dl_i
             except Exception:
-                d_s = None
+                d_delay = None
 
-            # Fallback: align by impulse peak
-            if d_s is None:
-                d_s = int(np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp)))
+            if d_delay is None:
+                d_s = d_peak
+                align_method = "peak"
+            else:
+                d_s = int(d_delay)
+                align_method = "delay_samples"
+
+                # Guard against source-dependent drift:
+                # if delay_samples and peak-pick disagree clearly, use peak-pick.
+                try:
+                    guard_samples = 8
+                    if abs(int(d_delay) - int(d_peak)) > int(guard_samples):
+                        d_s = int(d_peak)
+                        align_method = "peak_guard"
+                        logger.info(
+                            f"Alignment guard: delay_samples={int(d_delay)} vs peak={int(d_peak)} "
+                            f"(>{guard_samples} samp) -> using peak"
+                        )
+                except Exception:
+                    pass
 
             if d_s > 0:
                 r_imp = _shift_zeropad_1d(r_imp, d_s)
             elif d_s < 0:
                 l_imp = _shift_zeropad_1d(l_imp, -d_s)
+
+            # WAV-only final IR polish: suppress residual comb/ripple around
+            # correction upper-edge transition (commonly visible near 200-300 Hz).
+            # Also enable when measurement axis clearly looks like FFT-grid WAV parse.
+            _wav_like_fft_grid = False
+            try:
+                _fx = np.asarray(f_l if f_l is not None else [], dtype=float)
+                if _fx.size > 1024 and abs(float(_fx[0])) < 1e-9:
+                    _df = float(np.median(np.diff(_fx[: min(int(_fx.size), 4096)])))
+                    if np.isfinite(_df) and (0.0 < _df < 2.0):
+                        _wav_like_fft_grid = True
+            except Exception:
+                _wav_like_fft_grid = False
+
+            if bool(is_wav) or bool(_wav_like_fft_grid):
+                try:
+                    mc_min = float(getattr(cfg, "mag_c_min", data.get("mag_c_min", 10.0)) or 10.0)
+                    mc_max = float(getattr(cfg, "mag_c_max", data.get("mag_c_max", 230.0)) or 230.0)
+                    tr_w = float(getattr(cfg, "trans_width", data.get("trans_width", 100.0)) or 100.0)
+
+                    l_imp = _postpolish_wav_filter_ir(
+                        l_imp,
+                        int(fs_v),
+                        mag_c_min=mc_min,
+                        mag_c_max=mc_max,
+                        trans_width=tr_w,
+                    )
+                    r_imp = _postpolish_wav_filter_ir(
+                        r_imp,
+                        int(fs_v),
+                        mag_c_min=mc_min,
+                        mag_c_max=mc_max,
+                        trans_width=tr_w,
+                    )
+                    logger.info(
+                        f"WAV final IR polish applied at {int(fs_v)} Hz "
+                        f"(zone approx {max(mc_min, mc_max - 0.95*tr_w):.0f}-{mc_max + 1.45*tr_w:.0f} Hz, "
+                        f"is_wav={bool(is_wav)}, wav_like_fft_grid={bool(_wav_like_fft_grid)})"
+                    )
+                except Exception as e:
+                    logger.warning(f"WAV final IR polish failed: {e}")
 
             # UI "results" view: show the same fs as the (single) dashboard fs in multi-rate.
             if fs_v == dash_fs:
@@ -471,13 +576,21 @@ def process_run():
 
             
 
-            if 'delay_samples' in l_st and 'delay_samples' in r_st:
-                diff_samples = r_st['delay_samples'] - l_st['delay_samples']
-                delay_ms = round((diff_samples / fs_v) * 1000, 3)
-                distance_cm = round((delay_ms / 1000) * 34300, 2)
-                gain_diff = round(l_st['offset_db'] - r_st['offset_db'], 2)
-                l_st['auto_align'] = {'delay_ms': delay_ms, 'distance_cm': distance_cm, 'gain_diff_db': gain_diff}
+            if isinstance(l_st, dict) and isinstance(r_st, dict):
+                try:
+                    delay_ms = round((float(d_s) / fs_v) * 1000, 3)
+                    distance_cm = round((delay_ms / 1000) * 34300, 2)
+                    gain_diff = round(float(l_st.get('offset_db', 0.0)) - float(r_st.get('offset_db', 0.0)), 2)
+                    l_st['auto_align'] = {
+                        'delay_ms': delay_ms,
+                        'distance_cm': distance_cm,
+                        'gain_diff_db': gain_diff,
+                        'method': str(align_method),
+                    }
+                except Exception:
+                    pass
 
+            _t_zip = time.perf_counter()
             wav_l, wav_r = io.BytesIO(), io.BytesIO()
             scipy.io.wavfile.write(wav_l, fs_v, l_imp.astype(np.float32))
             scipy.io.wavfile.write(wav_r, fs_v, r_imp.astype(np.float32))
@@ -500,9 +613,13 @@ def process_run():
                 p_r,
                 r_imp,
                 r_st,
-                write_dashboards=(not multi_rate_on) or (int(fs_v) == int(dash_fs)),
+                write_dashboards=zip_dashboards_on and ((not multi_rate_on) or (int(fs_v) == int(dash_fs))),
                 irw_tag=irw_tag,
+                ui_dashboards=ui_dashboards if int(fs_v) == int(dash_fs) else None,
             )
+            _zip_dt = max(0.0, float(time.perf_counter() - _t_zip))
+            perf_stats["zip_png_s"] += _zip_dt
+            _slot["zip_png_s"] = float(_slot.get("zip_png_s", 0.0)) + _zip_dt
 
         # Multi-rate: write ONE CamillaDSP YAML (uses $samplerate$ in FIR filenames)
         if bool(data.get("multi_rate_opt", False)):
@@ -551,7 +668,27 @@ def process_run():
     logger.info(f"UI stats mode L/R: {l_st_f.get('analysis_mode')}/{r_st_f.get('analysis_mode')} | "
                 f"len cmp f/m/t = {len(l_st_f.get('cmp_freq_axis',[]))}/{len(l_st_f.get('cmp_measured_mags',[]))}/{len(l_st_f.get('cmp_target_mags',[]))}")
 
-    _render_results(data, f_l, m_l, p_l, f_r, m_r, p_r, l_imp_f, r_imp_f, l_st_f, r_st_f, fname, zip_buffer)
+    _render_results(
+        data,
+        f_l,
+        m_l,
+        p_l,
+        f_r,
+        m_r,
+        p_r,
+        l_imp_f,
+        r_imp_f,
+        l_st_f,
+        r_st_f,
+        fname,
+        zip_buffer,
+        dash_html_l=ui_dashboards.get("left_html"),
+        dash_html_r=ui_dashboards.get("right_html"),
+        run_started_at=run_started_at,
+        perf_stats=perf_stats,
+        per_fs_stats=per_fs_stats,
+        saved_filters_dir=os.path.abspath(filters_dir),
+    )
 
 def _ui_pick(stats, key):
     """

@@ -22,11 +22,12 @@ datas = [
 # PyWebIO loads some components dynamically; keep these minimal hidden imports.
 hiddenimports = [
     "pywebio.platform.tornado_http",
-    "pywebio.platform.tornado_websocket",
     "pywebio.platform.tornado",
     "pywebio.platform",
     "pywebio.session",
     "pywebio.io_ctrl",
+    # Static ZIP dashboard generation uses Matplotlib Agg backend.
+    "matplotlib.backends.backend_agg",
 ]
 
 # Include PyWebIO static assets if present (kept minimal by package)
