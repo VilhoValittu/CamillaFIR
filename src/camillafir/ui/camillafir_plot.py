@@ -1055,8 +1055,8 @@ def generate_prediction_plot(
         )
         
         # JS loading mode:
-        # - Embedded snippets (PyWebIO put_html): inline Plotly for maximum compatibility
-        #   across Plotly versions (avoids "require" loader mismatch in Linux builds).
+        # - Embedded snippets (PyWebIO put_html): inline Plotly for compatibility
+        #   (avoids external-load race where Plotly may be undefined).
         # - Full HTML files: prefer local bundled asset, fallback to CDN.
         if create_full_html:
             if _plotly_js_path():

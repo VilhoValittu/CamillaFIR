@@ -30,8 +30,6 @@ except Exception:
     load_target_curve = None
     load_house_curve = None
 
-
-
 def _warn_max_boost_if_over_cap(_=None):
     """
     Warn user if max_boost exceeds internal safety cap.
@@ -1746,7 +1744,7 @@ def update_target_preview_ui(_=None):
             uirevision="target_preview_lock",
         )
 
-        # Keep preview robust in standalone/offline Linux builds.
+        # Use inline Plotly for robust embedded rendering.
         html = pio.to_html(fig, include_plotlyjs=True, full_html=False)
 
         with use_scope("target_preview_scope", clear=True):

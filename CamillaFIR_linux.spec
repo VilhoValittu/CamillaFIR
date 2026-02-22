@@ -22,6 +22,7 @@ datas = [
 # PyWebIO loads some components dynamically; keep these minimal hidden imports.
 hiddenimports = [
     "pywebio.platform.tornado_http",
+    "pywebio.platform.tornado_websocket",
     "pywebio.platform.tornado",
     "pywebio.platform",
     "pywebio.session",
