@@ -65,6 +65,7 @@ If you search for *“FIR filter maker”*, *“FIR filter generator”*, or *�
 - **Repository:** https://github.com/VilhoValittu/CamillaFIR
 - **Documentation:** https://github.com/VilhoValittu/CamillaFIR#readme
 - **Support / Ko-fi:** https://ko-fi.com/camillafir
+- **FAQ:** {{ site.baseurl }}/faq/
 
 ---
 
