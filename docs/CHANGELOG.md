@@ -4,6 +4,19 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.1.1.1] - 2026-02-22
+
+### UI
+- Fixed Chromium/Brave chart rendering regression (`Plotly is not defined`) by restoring self-contained embedded Plotly rendering for dashboard and Target Preview
+- Fixed Linux chart visibility issue by avoiding fragile Plotly loader mode in embedded UI charts
+- Fixed Target Preview measurement smoothing input mapping to use `filter_smooth` (with legacy fallback to `smoothing_level`)
+- Added live Target Preview refresh on `filter_smooth` changes
+
+### Build
+- Added `pywebio.platform.tornado_websocket` to Linux PyInstaller hidden imports for better websocket backend compatibility
+
+---
+
 ## [3.1.1] - 2026-02-22
 
 ### DSP
