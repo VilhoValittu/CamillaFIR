@@ -33,6 +33,9 @@ hiddenimports = [
 
 # Include PyWebIO static assets if present (kept minimal by package)
 datas += collect_data_files("pywebio")
+# Ensure Plotly package_data (incl. package_data/plotly.min.js) is bundled.
+# Needed when figure HTML uses include_plotlyjs=True in packaged runtime.
+datas += collect_data_files("plotly")
 
 a = Analysis(
     ["src/camillafir/__main__.py"],
