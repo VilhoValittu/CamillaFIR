@@ -70,12 +70,70 @@ jobs:
           rm -rf build dist
           pyinstaller --clean --noconfirm CamillaFIR_linux.spec
 
+      - name: Smoke test startup (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x dist/CamillaFIR/CamillaFIR || true
+          dist/CamillaFIR/CamillaFIR > smoke_linux.log 2>&1 &
+          APP_PID=$!
+          cleanup() {
+            kill "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for i in {1..45}; do
+            if curl -fsS "http://127.0.0.1:8080" >/dev/null; then
+              echo "Linux startup smoke test passed."
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "Linux startup smoke test FAILED."
+          tail -n 200 smoke_linux.log || true
+          exit 1
+
       - name: Build (Windows) using standalone spec
         if: runner.os == 'Windows'
         shell: bash
         run: |
           rm -rf build dist
           pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
+
+      - name: Smoke test startup (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "dist\CamillaFIR\CamillaFIR.exe" -PassThru `
+            -RedirectStandardOutput "smoke_windows.out.log" `
+            -RedirectStandardError "smoke_windows.err.log"
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 45; $i++) {
+              try {
+                $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8080" -UseBasicParsing -TimeoutSec 2
+                if ($resp.StatusCode -ge 200) {
+                  $ok = $true
+                  break
+                }
+              } catch {}
+              Start-Sleep -Seconds 1
+            }
+            if (-not $ok) {
+              Write-Output "Windows startup smoke test FAILED."
+              if (Test-Path "smoke_windows.out.log") { Get-Content "smoke_windows.out.log" -Tail 200 }
+              if (Test-Path "smoke_windows.err.log") { Get-Content "smoke_windows.err.log" -Tail 200 }
+              exit 1
+            }
+            Write-Output "Windows startup smoke test passed."
+          } finally {
+            if ($proc -and -not $proc.HasExited) {
+              Stop-Process -Id $proc.Id -Force
+            }
+          }
 
       - name: Package Windows build
         if: runner.os == 'Windows'
@@ -144,6 +202,30 @@ jobs:
           file dist/CamillaFIR.app/Contents/MacOS/CamillaFIR
           lipo -archs dist/CamillaFIR.app/Contents/MacOS/CamillaFIR || true
 
+      - name: Smoke test startup (macOS arm64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist/CamillaFIR.app/Contents/MacOS/CamillaFIR > smoke_macos_arm64.log 2>&1 &
+          APP_PID=$!
+          cleanup() {
+            kill "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for i in {1..45}; do
+            if curl -fsS "http://127.0.0.1:8080" >/dev/null; then
+              echo "macOS arm64 startup smoke test passed."
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "macOS arm64 startup smoke test FAILED."
+          tail -n 200 smoke_macos_arm64.log || true
+          exit 1
+
       - name: Package macOS arm64 build
         shell: bash
         run: |
@@ -191,6 +273,30 @@ jobs:
           arch -x86_64 pyinstaller --clean --noconfirm CamillaFIR_macos.spec
           file dist/CamillaFIR.app/Contents/MacOS/CamillaFIR
           lipo -archs dist/CamillaFIR.app/Contents/MacOS/CamillaFIR || true
+
+      - name: Smoke test startup (macOS x86_64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch -x86_64 dist/CamillaFIR.app/Contents/MacOS/CamillaFIR > smoke_macos_x86_64.log 2>&1 &
+          APP_PID=$!
+          cleanup() {
+            kill "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for i in {1..45}; do
+            if curl -fsS "http://127.0.0.1:8080" >/dev/null; then
+              echo "macOS x86_64 startup smoke test passed."
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "macOS x86_64 startup smoke test FAILED."
+          tail -n 200 smoke_macos_x86_64.log || true
+          exit 1
 
       - name: Package macOS x86_64 build
         shell: bash

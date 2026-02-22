@@ -4,6 +4,22 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.1.1.2] - 2026-02-22
+
+### Build / CI
+- Added startup smoke tests to release workflow for all build targets:
+  - Linux (`dist/CamillaFIR/CamillaFIR` -> `http://127.0.0.1:8080`)
+  - Windows (`dist/CamillaFIR/CamillaFIR.exe` -> `http://127.0.0.1:8080`)
+  - macOS arm64 (`CamillaFIR.app` binary -> `http://127.0.0.1:8080`)
+  - macOS x86_64 (Rosetta run -> `http://127.0.0.1:8080`)
+- Release pipeline now fails early if an artifact builds but does not actually start a web server.
+- Added failure log tail output in smoke tests to improve diagnostics in GitHub Actions.
+
+### Core
+- Bumped app version to `v.3.1.1.2`.
+
+---
+
 ## [3.1.1.1] - 2026-02-22
 
 ### UI
