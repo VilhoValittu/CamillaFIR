@@ -1,10 +1,24 @@
 """Moduulin suomenkielinen kuvaus."""
 
-def generate_raspberry_yaml(fs, ft_short, file_ts, master_gain_db=0.0, irw_tag: str = "auto"):
+
+def _tc_segment(target_curve_tag: str | None) -> str:
+    tag = str(target_curve_tag or "").strip()
+    return f"_{tag}" if tag else ""
+
+
+def generate_raspberry_yaml(
+    fs,
+    ft_short,
+    file_ts,
+    master_gain_db=0.0,
+    irw_tag: str = "auto",
+    target_curve_tag: str = "",
+):
     import textwrap
 
-    l_wav = f'../coeffs/L_{ft_short}_$samplerate$Hz_{file_ts}_{irw_tag}.wav'
-    r_wav = f'../coeffs/R_{ft_short}_$samplerate$Hz_{file_ts}_{irw_tag}.wav'
+    tc = _tc_segment(target_curve_tag)
+    l_wav = f'../coeffs/L_{ft_short}_$samplerate$Hz{tc}_{file_ts}_{irw_tag}.wav'
+    r_wav = f'../coeffs/R_{ft_short}_$samplerate$Hz{tc}_{file_ts}_{irw_tag}.wav'
 
     try:
         g = float(master_gain_db)
@@ -81,10 +95,11 @@ def generate_raspberry_yaml(fs, ft_short, file_ts, master_gain_db=0.0, irw_tag: 
 
 
 
-def generate_hlc_config(fs, ft_short, file_ts, irw_tag: str = "auto"):
+def generate_hlc_config(fs, ft_short, file_ts, irw_tag: str = "auto", target_curve_tag: str = ""):
     """Rakentaa tai generoi: generate hlc config."""
-    l_name = f"L_{ft_short}_{fs}Hz_{file_ts}_{irw_tag}.wav"
-    r_name = f"R_{ft_short}_{fs}Hz_{file_ts}_{irw_tag}.wav"
+    tc = _tc_segment(target_curve_tag)
+    l_name = f"L_{ft_short}_{fs}Hz{tc}_{file_ts}_{irw_tag}.wav"
+    r_name = f"R_{ft_short}_{fs}Hz{tc}_{file_ts}_{irw_tag}.wav"
 
     config = [
         f"{int(fs)} 2 2 0",

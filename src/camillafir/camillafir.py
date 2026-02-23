@@ -12,6 +12,8 @@ import io
 import logging
 import zipfile
 import typing
+import re
+import unicodedata
 import scipy.io.wavfile
 import math
 import time
@@ -107,6 +109,62 @@ def _irwin_tag(mode: typing.Any) -> str:
     if m in ("auto", "off"):
         return m
     return "auto"
+
+
+def _slugify_filename_token(value: typing.Any, *, default: str = "target", max_len: int = 48) -> str:
+    """Muuntaa tekstin turvalliseksi tiedostonimiosaksi."""
+    try:
+        raw = str(value or "").strip()
+    except Exception:
+        raw = ""
+    if not raw:
+        return default
+
+    try:
+        txt = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode("ascii")
+    except Exception:
+        txt = raw
+    txt = re.sub(r"[^A-Za-z0-9]+", "-", txt).strip("-").lower()
+    if not txt:
+        return default
+    if len(txt) > int(max_len):
+        txt = txt[: int(max_len)].rstrip("-")
+    return txt or default
+
+
+def _pick_target_curve_label(data: dict) -> str:
+    """Valitsee target curven nimen vientitiedostonimiin."""
+    try:
+        up = data.get("hc_custom_file")
+        if isinstance(up, dict):
+            for k in ("filename", "name", "file_name"):
+                v = up.get(k)
+                if isinstance(v, str) and v.strip():
+                    return os.path.splitext(os.path.basename(v.strip()))[0]
+    except Exception:
+        pass
+
+    try:
+        p = str(data.get("local_path_house") or "").strip()
+    except Exception:
+        p = ""
+    if p:
+        return os.path.splitext(os.path.basename(p))[0]
+
+    try:
+        hc_mode = str(data.get("hc_mode") or "").strip()
+    except Exception:
+        hc_mode = ""
+    if hc_mode:
+        return hc_mode
+
+    try:
+        src = str(data.get("hc_source") or "").strip()
+    except Exception:
+        src = ""
+    if src:
+        return src
+    return "Target"
 
 def _resolve_ui_stats_fs(ui_stats_fs: typing.Any, selected_fs: typing.Any) -> int:
     """
@@ -290,7 +348,12 @@ def process_run():
         parse_measurements_from_path=parse_measurements_from_path
     )
     data['hc_source'] = hc_source
+    target_curve_name = _pick_target_curve_label(data)
+    target_curve_tag = _slugify_filename_token(target_curve_name, default="target")
+    data["target_curve_name"] = target_curve_name
+    data["target_curve_tag"] = target_curve_tag
     logger.info(f"House curve source: {hc_source}")
+    logger.info(f"Export target curve tag: {target_curve_tag} (from '{target_curve_name}')")
     try:
         if hc_f is not None and hc_m is not None:
             logger.info(
@@ -560,8 +623,14 @@ def process_run():
             wav_l, wav_r = io.BytesIO(), io.BytesIO()
             scipy.io.wavfile.write(wav_l, fs_v, l_imp.astype(np.float32))
             scipy.io.wavfile.write(wav_r, fs_v, r_imp.astype(np.float32))
-            zf.writestr(f"L_{ft_short}_{fs_v}Hz_{file_ts}_{irw_tag}.wav", wav_l.getvalue())
-            zf.writestr(f"R_{ft_short}_{fs_v}Hz_{file_ts}_{irw_tag}.wav", wav_r.getvalue())
+            zf.writestr(
+                f"L_{ft_short}_{fs_v}Hz_{target_curve_tag}_{file_ts}_{irw_tag}.wav",
+                wav_l.getvalue(),
+            )
+            zf.writestr(
+                f"R_{ft_short}_{fs_v}Hz_{target_curve_tag}_{file_ts}_{irw_tag}.wav",
+                wav_r.getvalue(),
+            )
 
             _write_fs_outputs(
                 zf,
@@ -594,13 +663,14 @@ def process_run():
                 file_ts,
                 master_gain_db=0.0,
                 irw_tag=irw_tag,
+                target_curve_tag=target_curve_tag,
             )
             zf.writestr(f"camilladsp_{ft_short}_{irw_tag}.yml", yaml_content)
 
     filters_dir = os.path.join(os.getcwd(), "filters")
     os.makedirs(filters_dir, exist_ok=True)
 
-    fname = f"CamillaFIR_{ft_short}_{irw_tag}_{ts}.zip"
+    fname = f"CamillaFIR_{ft_short}_{irw_tag}_{target_curve_tag}_{ts}.zip"
     out_path = os.path.join(filters_dir, fname)
 
     try:

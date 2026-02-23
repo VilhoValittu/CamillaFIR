@@ -336,7 +336,15 @@ def _write_fs_outputs(
         else:
             zf.writestr(r_dash_name.replace(".png", ".txt"), str(html_r))
 
-    hlc_cfg = generate_hlc_config(fs_v, ft_short, file_ts, irw_tag=irw_tag)
+    target_curve_tag = str(data.get("target_curve_tag", "") or "").strip()
+
+    hlc_cfg = generate_hlc_config(
+        fs_v,
+        ft_short,
+        file_ts,
+        irw_tag=irw_tag,
+        target_curve_tag=target_curve_tag,
+    )
     zf.writestr(f"Config_{ft_short}_{fs_v}Hz_{irw_tag}.cfg", hlc_cfg)
 
     if not bool(data.get("multi_rate_opt", False)):
@@ -346,6 +354,6 @@ def _write_fs_outputs(
             file_ts,
             master_gain_db=0.0,
             irw_tag=irw_tag,
+            target_curve_tag=target_curve_tag,
         )
         zf.writestr(f"camilladsp_{ft_short}_{fs_v}Hz_{irw_tag}.yml", yaml_content)
-
