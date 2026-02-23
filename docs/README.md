@@ -66,6 +66,35 @@ chmod +x CamillaFIR
 
 ## Run From Source (Detailed)
 
+### Install Git
+
+#### Windows
+
+```powershell
+winget install --id Git.Git -e --source winget
+```
+
+If `winget` is unavailable, install from: https://git-scm.com/download/win
+
+#### Ubuntu / Debian
+
+```bash
+sudo apt update
+sudo apt install -y git
+```
+
+#### macOS
+
+```bash
+xcode-select --install
+```
+
+Alternative (Homebrew):
+
+```bash
+brew install git
+```
+
 ### Windows (PowerShell)
 
 ```powershell
