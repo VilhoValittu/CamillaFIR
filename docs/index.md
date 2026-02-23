@@ -71,10 +71,10 @@ If you search for *“FIR filter maker”*, *“FIR filter generator”*, or *�
 
 ## Typical workflow
 
-1. Measure your speakers / room with **REW**
-2. Export measurements
+1. Measure your speakers / room with **REW** (load your microphone calibration file first)
+2. Export measurements (for TXT include magnitude + phase; for WAV use `Mono`, `float32`, `Normalise`, `Place t=0 (256)`)
 3. Generate correction filters with **CamillaFIR**
-4. Load the resulting FIR WAV/TXT into **CamillaDSP / Roon / Equalizer APO**
+4. Load the resulting FIR WAV into **CamillaDSP / Roon / Equalizer APO**
 5. Verify the result (measurement + listening)
 
 ---

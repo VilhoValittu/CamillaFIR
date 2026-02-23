@@ -223,7 +223,7 @@ but prevent excessive ripple and instability in the bass region.
 - **Standard smoothing (1/6, 1/12 etc):** classic fractional-octave smoothing.
 - **CamillaFIR Reference:** heavier smoothing where the ear is less sensitive (useful for robust targets).
 
-- Filters smoothing is not really readable in CamillaFIRs graphs, due space limits. 
+- Filter smoothing is not always easy to read in CamillaFIR graphs due to limited plot space.
 
 ### 5.4 Safety limits (highly recommended)
 - **Max boost (dB):** hard safety ceiling for positive gain.
@@ -272,10 +272,11 @@ When to reduce or disable:
 
 ## 7. Outputs
 Typical output package contains:
-- FIR filters (`.wav` 32-bit float or text)
+- FIR filters (`.wav` 32-bit float)
 - Summary report (`Summary.txt`)
-- Plots (magnitude/phase/GD/filter response)
-- Optional CamillaDSP YAML snippet
+- Config snippet (`.cfg`)
+- CamillaDSP YAML (`.yml`)
+- Optional dashboard plots (PNG, depending on export/performance mode)
 
 The Summary report typically includes:
 - correction range, smoothing, FDW/A-FDW info

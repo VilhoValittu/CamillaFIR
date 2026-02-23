@@ -33,8 +33,8 @@ REW-style windowing:
 
 Supported modes (UI):
 
-- `auto` – automatic window selection (default)
-- `rew_asym` – REW-style asymmetric (causal) window
+- `auto` - automatic window selection (default)
+- `rew_asym` - REW-style asymmetric (causal) window
 
 Legacy config values (`off`, `rew_sym`) are still accepted when set directly in config files,
 but are no longer exposed in the UI.

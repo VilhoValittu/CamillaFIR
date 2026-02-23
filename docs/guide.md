@@ -1,247 +1,150 @@
 ---
 layout: default
-title: "How to Create FIR Filters from REW Measurements – Complete Guide"
-description: "Step-by-step guide for creating FIR filters using REW measurements. Learn how to generate convolution filters for CamillaDSP, Roon and Equalizer APO using CamillaFIR."
+title: "How to Create FIR Filters from REW Measurements - Current Guide"
+description: "Up-to-date step-by-step CamillaFIR guide for creating FIR convolution filters from REW measurements."
 permalink: /guide/
 ---
 
-# How to Create FIR Filters from REW Measurements (Step-by-Step Guide)
+# CamillaFIR Guide (Current Workflow)
 
-This complete guide explains how to create **FIR filters** from **REW measurements** using **CamillaFIR**.
+This guide reflects the current CamillaFIR workflow (v3.1.1.x generation): from REW measurement data to convolution filters for CamillaDSP, Roon, and Equalizer APO.
 
-If you searched for:
+## Quick workflow
 
-- FIR filter maker  
-- FIR filter generator  
-- REW FIR convolution  
-- How to create FIR filters  
-- Room correction FIR  
-
-You are in the right place.
-
----
-
-# 1. What Is a FIR Filter?
-
-A **FIR (Finite Impulse Response) filter** is a digital filter used in audio DSP for:
-
-- Room correction
-- Speaker correction
-- Crossover linearization
-- Phase alignment
-- Subwoofer integration
-
-Unlike IIR filters, FIR filters can provide:
-
-- Linear-phase response
-- Precise magnitude shaping
-- Time-domain control
-- Mixed-phase correction strategies
-
-This makes FIR filters ideal for convolution engines like:
-
-- CamillaDSP
-- Roon
-- Equalizer APO
+1. Measure Left and Right in REW.
+2. Export REW data (TXT with magnitude+phase, or WAV/IR workflow).
+3. Open CamillaFIR and choose mode (`BASIC` recommended, `ADVANCED` for expert control).
+4. Apply mode defaults, then set correction band and safety limits.
+5. Generate filters and export ZIP package.
+6. Load WAV filters into your convolution engine.
+7. Re-measure and validate.
 
 ---
 
-# 2. Why Use FIR Instead of REW EQ Filters?
+## 1. Prepare measurements in REW
 
-REW can export IIR parametric EQ filters. Those are useful but limited:
+- Load the correct microphone calibration file in REW before measuring.
+- Measure Left and Right channels separately.
+- Keep measurement procedure and timing reference consistent between channels.
+- Avoid clipping and bad SNR.
+- For TXT export, include Frequency + Magnitude + Phase (do not omit phase).
+- If you use WAV/IR import workflow, use REW export settings: `Mono`, `float32`, `Normalise`, `Place t=0 (256)`.
+- Header/comment lines are supported (`*`, `#`, `;` are ignored).
 
-| Feature | IIR (PEQ) | FIR |
-|----------|-----------|-----|
-| Linear phase | ❌ | ✅ |
-| Mixed-phase correction | ❌ | ✅ |
-| Precise magnitude shaping | Limited | High |
-| Convolution support | No | Yes |
-
-If you want full control and better bass integration, a **FIR filter maker** like CamillaFIR gives more flexibility.
-
----
-
-# 3. Step 1 – Measure Your Speakers in REW
-
-1. Use proper mic calibration file provided by your mics manufactorer.
-2. Measure left and right speakers separately. Use 48khz samplerate and 0-24000hz range.
-3. Avoid clipping. Repeat if necessary.
+Tip: good input data matters more than aggressive correction.
 
 ---
 
-# 4. Step 2 – Export Measurement Data from REW
+## 2. Import into CamillaFIR and select mode
 
-Export frequency response as .txt / .wav file.
-Remember include phase on text file.
-If you import the loudspeaker measurement data in WAV format, use: (Mono, float32, Normalise & Place t=0 (256)).
+CamillaFIR has two modes:
 
-Recommended:
-- No excessive smoothing
-- Full resolution export
-- Verify measurement integrity
+- `BASIC` (recommended): strong safety rails and runtime clamps.
+- `ADVANCED`: fewer policy limits for expert workflows.
 
-You will use this file inside CamillaFIR.
+Important:
 
----
+- Selecting mode alone does not rewrite all values.
+- Use `Apply mode defaults` to load mode-specific defaults into UI.
 
-# 5. Step 3 – Generate FIR Filters with CamillaFIR
+BASIC defaults (high level):
+- Correction band: `25-250 Hz`
+- Max boost/cut: `+3 dB / -15 dB`
+- TDC: ON
+- A-FDW: ON
+- Stereo link: ON
 
-Open CamillaFIR and:
-
-1. Load measurement file(s)
-2. Select correction range
-3. Choose target curve
-4. Set maximum boost (recommended: +3 dB)
-5. Select filter type:
-   - Linear phase
-   - Mixed phase
-   - Fast minimum-phase workflow
-
-Avoid extreme boost values like +8 dB unless you are sure your amplifier and speakers can handle it.
-
-Safer boosts = more reliable system.
+ADVANCED defaults (high level):
+- Correction band: `10-200 Hz`
+- Max boost/cut: `+3 dB / -30 dB`
+- More manual freedom
 
 ---
 
-# 6. Linear Phase vs Mixed Phase
+## 3. Choose filter type and correction range
 
-## Linear Phase
+Filter types:
 
-- Symmetrical impulse response
-- Pure phase linearity
-- Higher latency
+- `Linear Phase`: best phase linearity, highest latency.
+- `Minimum Phase`: lower latency, no linear-phase target.
+- `Mixed Phase`: blend of linear and minimum behavior.
+- `Asymmetric Linear`: low-latency linear-phase strategy with asymmetric windowing.
 
-Best for:
-- Offline correction
-- Roon convolution
-- DSP systems with delay compensation
-
-## Mixed Phase
-
-- More natural time response
-- Lower latency
-- Controlled excess phase handling
-
-Often preferred for:
-- Real-world listening systems
-- Subwoofer integration
-- Practical DSP workflows
+Practical starting point:
+- Keep correction mostly in bass/lower mids unless measurement confidence is very high.
+- Use conservative max boost (often `+3 dB` is enough).
+- CamillaFIR also applies a global safety cap (`8 dB` maximum effective boost).
 
 ---
 
-# 7. Step 4 – Export Convolution Files
+## 4. Use safety features on purpose
 
-CamillaFIR exports:
+Key protections:
 
-- WAV FIR filters
-- TXT FIR filters
+- Max boost/cut limits
+- Slope limits (global and optional split boost/cut)
+- Excursion protection
+- Low-bass boost lock
+- Optional HPF (true FIR magnitude HPF in correction path)
+- TDC (Temporal Decay Control) for ringing/decay management
+- A-FDW for confidence-aware behavior in difficult regions
 
-These work with:
-
-- CamillaDSP
-- Roon convolution
-- Equalizer APO
-- Any convolution-capable DSP
-
----
-
-# 8. Step 5 – Load FIR Filters into Your DSP
-
-## CamillaDSP
-Load WAV file into convolution block. Camillafir creates CamillaDSP compatible .yml settings file for 2 chl setups.
-
-## Roon
-Use convolution engine → upload FIR WAV.
-
-## Equalizer APO
-Use convolution module → load WAV filter.
-
-Always verify gain staging. CamillaFIR uses Auto Headroom feature for filters. Filters are always atleat -0.1db below clipping rate.
+Do not try to fix deep nulls with heavy boost. Placement, crossover work, or room treatment is usually more effective.
 
 ---
 
-# 9. Safe Correction Strategy (Important)
+## 5. Generate and export filters
 
-Do NOT:
+Export creates a ZIP package in:
 
-- Boost deep nulls aggressively
-- Overcorrect above practical frequency range
-- Use excessive boost (+8 dB or more) without reason
+`filters/` (project root)
 
-Recommended:
-- Keep boost around +3 dB
-- Limit correction range logically
-- Verify with re-measurement
+Typical package contents:
+- L/R FIR WAV files (`32-bit float`)
+- `Summary_...txt` report
+- CamillaDSP config snippet (`.cfg`)
+- CamillaDSP `.yml` (single-rate export, or multi-rate variant)
+- Dashboard PNG files (or TXT fallback if PNG is unavailable)
 
-Good DSP is controlled DSP.
-
----
-
-# 10. Common Mistakes
-
-### ❌ Overboosting bass  
-Causes distortion and amplifier stress.
-
-### ❌ Fixing nulls  
-Deep nulls are often position-related.
-
-### ❌ Overcorrecting full bandwidth  
-Correction should be intentional.
-
-### ❌ Ignoring verification measurement  
-Always re-measure after applying FIR filter.
+Multi-rate export targets:
+- `44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz`
 
 ---
 
-# 11. FAQ
+## 6. Load filters into your DSP
 
-## What is a FIR filter maker?
-A tool that generates convolution-ready FIR filters from measurement data.
-
-## Can CamillaFIR create linear-phase filters?
-Yes.
-
-## Does it support mixed-phase correction?
-Yes.
-
-## Is FIR better than IIR?
-It depends on the goal. FIR offers more control and precision.
-
-## Does it work with CamillaDSP?
-Yes.
+- CamillaDSP: load L/R WAV files into convolution pipeline (optionally use generated YAML).
+- Roon: load FIR WAV in Convolution settings.
+- Equalizer APO: use Convolution module and set safe preamp/headroom.
 
 ---
 
-# 12. When Should You Use CamillaFIR?
+## 7. Verify after applying filters
 
-Use it when you want:
+Always re-measure with filter active:
 
-- Better bass integration
-- Controlled room correction
-- Convolution-ready filters
-- Advanced DSP workflow
-- More precision than standard REW EQ
-
----
-
-# 13. Final Thoughts
-
-A good FIR filter is not about extreme correction.
-
-It is about:
-
-- Control
-- Stability
-- Safe boost
-- Logical correction range
-- Verification
-
-CamillaFIR is designed as a practical FIR filter maker for real-world systems.
+- Confirm target match improved.
+- Check headroom and clipping risk.
+- Review `Summary.txt` for confidence, decay, and clamp diagnostics.
+- Adjust correction range/boost if result sounds or measures over-corrected.
 
 ---
 
-## Download CamillaFIR
+## Common mistakes to avoid
 
-👉 https://github.com/VilhoValittu/CamillaFIR/releases
+- Overboosting bass/nulls.
+- Correcting too wide a band with low-confidence data.
+- Ignoring latency implications of filter type.
+- Skipping post-filter verification measurement.
 
 ---
+
+## Related docs
+
+- `docs/Official_Manual.md`
+- `docs/Modes.md`
+- `docs/CamillaFIR_Reading_Output_Guide.md`
+
+## Download
+
+https://github.com/VilhoValittu/CamillaFIR/releases

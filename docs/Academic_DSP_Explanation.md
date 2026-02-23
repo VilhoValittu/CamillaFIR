@@ -1,231 +1,200 @@
-# CamillaFIR: A Time-Domain–First FIR Room Correction Framework
-## Academic DSP Rationale and Mathematical Foundations (v2.7.7)
+# CamillaFIR: Time-Domain-First FIR Room Correction
+## Academic DSP Rationale and Mathematical Foundations (v3.1.1.2)
 
 ### Abstract
-CamillaFIR is a room-correction DSP framework that prioritizes **time-domain correctness**
-before frequency-domain equalization. Unlike traditional EQ-centric systems,
-CamillaFIR explicitly separates *propagation delay*, *excess phase*, and *room-induced energy
-storage*, applying different mathematical treatments to each.
+CamillaFIR is a FIR room-correction framework that separates:
+- propagation delay (time of flight),
+- excess phase distortion,
+- magnitude-domain target tracking,
+- temporal decay behavior (TDC).
+
+The current engine (v3.1.1.2) uses confidence-aware and safety-bounded processing in both magnitude and phase paths, with optional fixed-grid comparison analysis for reproducible scoring.
 
 ---
 
-## 1. Signal model
+## 1. Measurement model
 
-Let the measured loudspeaker-room frequency response be
+Let the measured response be
 
 \[
-H_m(f) = H_s(f)\,H_r(f)\,e^{-j 2\pi f \tau}
+H_m(f)=|H_m(f)|e^{j\phi_m(f)}.
 \]
 
-where:
-- \(H_s(f)\) is the loudspeaker + crossover response,
-- \(H_r(f)\) is the room response,
-- \(\tau\) is the acoustic time of flight (TOF).
-
-A direct inversion of \(H_m\) implicitly mixes distance, excess phase, and room decay.
-CamillaFIR instead removes TOF first and treats the remaining terms with bounded, physically
-meaningful operations.
+CamillaFIR does not directly invert \(H_m\). It first removes linear delay and then applies bounded correction to magnitude and excess phase.
 
 ---
 
-## 2. Time-of-Flight (TOF) removal
+## 2. TOF removal (implemented)
 
-The unwrapped phase \(\phi(f)\) of \(H_m(f)\) is approximated by
-
-\[
-\phi(f) \approx -2\pi f\,\tau + \phi_e(f)
-\]
-
-where \(\phi_e(f)\) is the excess phase. Over a stable band, \(\tau\) can be estimated by a
-linear fit of phase slope:
+Unwrapped phase is modeled as
 
 \[
-\tau = -\frac{1}{2\pi}\,\frac{d\phi(f)}{df}
+\phi_m(f)\approx a f+\phi_e(f),
 \]
 
-The corrected response is
+where \(af\) is the linear delay term and \(\phi_e(f)\) is excess phase. The slope \(a\) is estimated by linear regression over 1-10 kHz and removed:
 
 \[
-H_c(f) = H_m(f)\,e^{j 2\pi f\tau}
+\phi_c(f)=\phi_m(f)-af.
 \]
 
-This ensures subsequent phase processing targets **distortion**, not distance.
+This ensures phase correction acts on excess phase, not acoustic distance.
 
 ---
 
-## 3. Confidence masking
+## 3. Acoustic confidence and reflection extraction
 
-Each frequency bin gets a reliability score \(C(f)\in[0,1]\), derived from phase stability,
-reflection dominance, and decay behavior. A conceptual form is
+From complex analysis data, CamillaFIR computes group delay:
 
 \[
-C(f) = \exp\left(-\alpha\,\sigma_\phi^2(f) - \beta\,E_r(f)\right)
+GD(f)=-\frac{1}{2\pi}\frac{d\phi(f)}{df}.
 \]
 
-where \(\sigma_\phi^2\) is local phase variance and \(E_r\) is reflected energy.
-This mask controls downstream aggressiveness (windowing, smoothing, and correction strength).
+A smoothed baseline \(GD_s(f)\) is subtracted and confidence is formed from deviation:
+
+\[
+\Delta GD(f)=|GD(f)-GD_s(f)|,
+\]
+\[
+C(f)=\frac{1}{1+\exp\left(1.5(\Delta GD(f)-2.5\text{ ms})\right)}.
+\]
+
+Reflection/resonance nodes are detected as peaks of \(\Delta GD\) and later reused by TDC.
 
 ---
 
-## 4. Frequency-dependent windowing (FDW) and adaptive FDW
+## 4. Target formation, leveling, and comparison grid
 
-FDW controls the time window length as a function of frequency. A practical parameterization is
+Target \(T(f)\) is either flat (0 dB) or interpolated from a loaded house curve. Before correction, target/measurement alignment is solved by the leveling stage (auto/manual windowing and offset estimation).
 
-\[
-N(f) = N_{\min} + C(f)\,(N_{\max}-N_{\min})
-\]
-
-High confidence yields longer windows (higher resolution); low confidence yields shorter windows
-(more smoothing). This prevents inverting stochastic interference patterns.
-
-CamillaFIR’s adaptive FDW reports the **effective bandwidth** range (min/mean/max) that results
-from confidence-weighted windowing.
+When comparison mode is enabled, analysis metrics are additionally projected to a fixed grid (44.1 kHz, 65536 taps) for stable score reporting across run settings.
 
 ---
 
-## 5. Magnitude correction with regularization
+## 5. Magnitude correction pipeline (current implementation)
 
-Let \(T(f)\) be the target magnitude (in dB) and \(|H_c(f)|\) the corrected measurement magnitude.
-Raw correction gain (dB):
+### 5.1 Raw gain
+\[
+G_{raw}(f)=T(f)-\left(M(f)-\Delta L\right)+B_{manual},
+\]
+where \(M(f)\) is analyzed magnitude, \(\Delta L\) is computed level offset, and \(B_{manual}\) is optional manual bias.
+
+### 5.2 Regularization and smoothing
+CamillaFIR computes a smoothed reference \(G_{sm}\) and blends it using regularization ratio \(r\in[0,1]\):
 
 \[
-G_{raw}(f) = T(f) - |H_c(f)|
+G_{reg}(f)=(1-r)G_{raw}(f)+rG_{sm}(f),
+\]
+\[
+r=\text{reg\_strength}/100.
 \]
 
-Regularization limits correction depth (especially for deep nulls). One stable form is a
-soft saturation:
+Smoothing mode is either fractional-octave or DF (constant-Hz equivalent kernel width across sample-rate/tap changes).
+
+### 5.3 Adaptive FDW (A-FDW)
+If enabled, smoothing bandwidth is confidence-weighted via cycles:
 
 \[
-G(f) = \frac{G_{raw}(f)}{1 + \left(\frac{|G_{raw}(f)|}{R(f)}\right)^2}
+N(f)=N_{min}+C(f)(N_{base}-N_{min}),\quad BW_{oct}(f)\propto \frac{1}{N(f)}.
 \]
 
-where \(R(f)\) is the regularization strength in dB.
+### 5.4 Bass-first modulation
+Optional Bass-first AI derives reliability and room-mode masks from GD behavior, spectral prominence/Q, roughness, and phase-jerk cues. It strengthens cuts and suppresses boosts in modal regions.
+
+### 5.5 Safety stack (order in code)
+Inside correction band:
+1. Low-bass cuts-only policy (optionally strength-weighted)
+2. Soft clip:
+\[
+G_{+}=B_{max}\tanh(G/B_{max}),\quad
+G_{-}=-C_{max}\tanh((-G)/C_{max})
+\]
+3. Slope limit (global or asymmetric boost/cut dB/oct)
+4. Confidence-weighted pull toward safe reference (post-slope stage):
+\[
+G_{out}=w(f)G+(1-w(f))G_{ref}
+\]
+with \(w\) derived from confidence floor/ceil and separate boost/cut gamma (in the current pipeline this is run in the slope-limited correction branch)
+5. Transition fade near \(mag\_c\_max\)
+6. Excursion protection constraints
+7. Hard clamp to max boost/cut
+8. Clamp-aware post-smoothing and final re-clamp
+9. WAV-source ripple polish (transition-zone stabilization)
 
 ---
 
-## 6. Slope limiting (symmetric and asymmetric)
+## 6. Temporal Decay Control (TDC)
 
-To avoid non-physical correction shapes, gain slope is constrained in log-frequency space:
-
-\[
-\left|\frac{dG(f)}{d\log_2 f}\right| \le S_{\max}
-\]
-
-Implementation uses forward and backward passes over \(\log_2 f\) to enforce the bound.
-
-### 6.1 Independent boost/cut slope limits
-
-A key stability improvement is using different bounds for rising vs falling segments:
+TDC modifies the target (not final phase directly) using detected reflection/mode nodes and RT60 context:
 
 \[
-\frac{dG}{d\log_2 f} \le S_{\max}^{(+)} \quad (\text{boost / rising})
+D(f)=\sum_i k_i\exp\left(-\frac{(f-f_i)^2}{2\sigma_i^2}\right),
 \]
 \[
-\frac{dG}{d\log_2 f} \ge -S_{\max}^{(-)} \quad (\text{cut / falling})
+0\le D(f)\le D_{max}.
 \]
 
-This prevents small boosts from being flattened by an overly strict symmetric limiter, while
-keeping cuts controlled.
+Then:
+\[
+T_{tdc}(f)=T(f)-D(f).
+\]
+
+Optional TDC slope limiting constrains \(D(f)\) in dB/oct to avoid narrow stacked notches.
 
 ---
 
-## 7. Phase reconstruction strategies
+## 7. Phase modeling and guards
 
-### 7.1 Minimum phase
-Given a magnitude spectrum \(M(f)\), minimum phase can be computed via the Hilbert transform:
+### 7.1 Theoretical phase baseline
+Theoretical phase \(\phi_{theo}(f)\) is built from configured XO + HPF analog Butterworth models.
 
+### 7.2 Excess phase correction
 \[
-\phi_{min}(f) = -\mathcal{H}\{\ln M(f)\}
+\phi_{ex}(f)=\phi_c(f)-\phi_{theo}(f).
 \]
-
-### 7.2 Linear phase
-Linear-phase correction inverts the estimated excess phase:
-
+Correction term:
 \[
-H_{lin}(f) = e^{-j\,\phi_e(f)}
+\phi_{add}(f)=-\phi_{ex}(f)\,W_{phase}(f)\,W_{conf}(f),
 \]
+where weights depend on filter type, phase-limit region, and confidence.
 
-### 7.3 Mixed phase
-A frequency-domain weighting \(W(f)\) blends linear and minimum phase:
+### 7.3 Adaptive phase clamp
+\(\phi_{add}\) is clamped by a frequency/confidence-adaptive budget. Default mixed-phase budgets are tighter at HF and wider at LF.
 
-\[
-H_{phase}(f) = W(f)\,H_{lin}(f) + [1-W(f)]\,H_{min}(f)
-\]
+### 7.4 Conditional GD-gradient limiter
+A GD-gradient limiter on phase correction is enabled in conservative cases (notably tight REW asymmetric latency mode), to prevent unstable bass spikes.
 
-### 7.4 Asymmetric linear phase
-Asymmetric linear phase applies an asymmetric time window to reduce audible pre-ringing:
-
-\[
-w(n)=\begin{cases}w_L(n), & n<0\\ w_R(n), & n\ge 0\end{cases}\quad\text{with } w_L\ll w_R
-\]
+### 7.5 Mixed-phase extra guards
+Mixed mode includes:
+- excess-delay guard (scales correction if max group delay exceeds configured limit),
+- pre-ringing guard (iterative scaling to respect max pre-ringing dB target),
+- time-domain mixed fusion of linear/minimum components around split + transition.
 
 ---
 
-## 8. Temporal Decay Control (TDC)
+## 8. FIR synthesis, gain staging, and export IR windowing
 
-Room modes are energy-storage phenomena. A simplified modal impulse envelope is
-
+Final magnitude:
 \[
-h(t)=e^{-t/\tau_r}
+|H_{corr}(f)|=10^{G_{final}(f)/20}.
 \]
 
-TDC injects an inverse-decay component to shorten the tail:
+Phase depends on mode (Linear, Minimum, Mixed, Asymmetric), then IFFT gives \(h[n]\).
 
-\[
-h_{tdc}(t)=-k\,e^{-t/\tau_r}
-\]
+Automatic gain staging applies:
+- auto global gain from peak estimate and requested margin,
+- optional extra headroom when normalization is enabled.
 
-### 8.1 Safety brakes for predictability
-TDC in CamillaFIR is bounded by:
-- a **hard cap** on total reduction per frequency bin, \(R_{tdc,max}\) (dB)
-- an **optional slope limit** on the reduction curve (dB/oct) to avoid narrow, stacked notches
-
-Conceptually, the accumulated reduction curve \(D(f)\) is constrained by
-
-\[
-0 \le D(f) \le R_{tdc,max}
-\]
-
-and optionally
-
-\[
-\left|\frac{dD(f)}{d\log_2 f}\right| \le S_{tdc}
-\]
+IR export windowing (auto/off/rew_sym/rew_asym; Hann/Tukey) is applied after DSP correction to shape impulse time spread. This affects IR realization, not the target definition logic.
 
 ---
 
-## 9. DF smoothing (constant-Hz smoothing across sample rates)
+## 9. Stability summary (current)
 
-When analysis grids (fs/taps) change, octave-based smoothing changes its effective width in Hz.
-DF smoothing targets a roughly constant width in **Hz** by setting the smoothing kernel width
-in bins proportional to the analysis frequency resolution.
-
-If FFT bin spacing is \(\Delta f = \frac{f_s}{N}\), a constant-Hz kernel \(\sigma_{Hz}\) maps to
-
-\[
-\sigma_{bins} \approx \frac{\sigma_{Hz}}{\Delta f} = \sigma_{Hz}\,\frac{N}{f_s}
-\]
-
-This makes “detail level” comparable across sample rates.
-
----
-
-## 10. FIR synthesis
-
-The final complex correction spectrum is
-
-\[
-H_{corr}(f) = 10^{G(f)/20}\,H_{phase}(f)
-\]
-
-IFFT yields the FIR impulse response, followed by optional normalization and export.
-
----
-
-## 11. Stability summary
-
-CamillaFIR is stable because it:
-- avoids inverting low-confidence data
-- bounds gain (boost/cut), slope, and phase correction bandwidth
-- treats TOF, excess phase, and decay as separate problems
-- provides reproducible scoring via an optional fixed analysis grid
+CamillaFIR stability is based on layered constraints:
+- TOF removed before phase correction,
+- confidence-aware smoothing and correction pull,
+- bounded boost/cut and slope (soft + hard clamp),
+- excursion/low-bass safety policies,
+- bounded phase correction with adaptive clamp and mixed guards,
+- optional fixed comparison grid for repeatable scoring.

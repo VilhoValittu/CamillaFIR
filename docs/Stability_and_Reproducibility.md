@@ -1,99 +1,115 @@
-# Stability and Reproducibility (v2.7.7)
+# Stability and Reproducibility (v3.1.1.2)
 
-CamillaFIR is built to avoid the classic room-correction failure mode: **tiny measurement differences -> huge, audible filter differences**.
+CamillaFIR is designed to avoid the classic failure mode:
 
-The core idea is simple:
-- treat measurements as *partly unreliable* (especially in-room)
-- only correct what is likely correctable
-- keep every stage bounded so nothing can run away
+**small measurement or setting changes -> large unstable filter changes**
 
-## 1) Deterministic pipeline
-CamillaFIR does not use stochastic optimization, random seeds, ML estimators, or iterative "fit until convergence" loops.
+The system stays predictable because it is deterministic, bounded, and observable.
 
-If you run the same version with:
-- the same input measurement exports
-- the same settings
-- the same base sample rate / taps (or the same multi-rate selection)
+## 1) Deterministic pipeline and versioned behavior
 
-then the FIR output is reproducible (the math is deterministic).
+Given the same:
+- CamillaFIR version
+- input files
+- settings
+- base fs/taps or comparison-grid settings
 
-## 2) Confidence-guided processing (stability against mic moves)
-Room measurements contain combing, reflection dips, and windowing artifacts. A naive inverse filter turns those into narrow, high-Q boosts or phase swings.
+CamillaFIR produces repeatable outputs.
 
-CamillaFIR reduces that risk by using a *confidence mask* and windowing strategies:
-- unreliable regions are smoothed rather than aggressively inverted
-- phase work is limited to where it is likely meaningful
-- Adaptive FDW (A-FDW) can automatically shorten the window when confidence is low
+The pipeline does not use stochastic optimization or random restarts.
+Release `v3.1.1.2` (2026-02-22) keeps this deterministic model and adds stronger startup validation in CI.
 
-Practical result: small mic placement changes tend to change only small details, not the entire correction personality.
+## 2) Input robustness: TXT and WAV/IR
 
-## 3) Explicit guardrails (bounded correction)
-Every major stage has a hard limit so the filter cannot become extreme:
+Modern workflows mix REW text exports and WAV/IR measurements.
 
-Magnitude and targets
-- **max_boost_db**: caps positive correction (soft-limited)
-- **max_cut_db**: caps attenuation depth
-- **low_bass_cut_hz**: below this frequency only cuts are allowed (prevents risky sub-bass boosts)
+Stability improvements include:
+- deterministic WAV parsing policy aligned to TXT baseline behavior
+- path sanitation and local WAV existence validation
+- higher minimum FFT robustness for WAV IR -> FR conversion
+- alignment guard between delay estimate and impulse-peak alignment
 
-Slope / smoothness
-- **max_slope_db_per_oct**: legacy max slope limit
-- **max_slope_boost_db_per_oct** and **max_slope_cut_db_per_oct** (v2.7.7): optional asymmetric slope limits so boosts and cuts can be constrained differently
+This reduces source-format-dependent surprises.
 
-Regularization and smoothing
-- **reg_strength**: prevents deep nulls from turning into huge boosts
-- **df_smoothing** (experimental): keeps smoothing width more constant in Hz across different fs/taps so results stay comparable when you change sample rate or taps
+## 3) Bounded correction prevents inverse-filter runaway
 
-These constraints are not cosmetic. They are the difference between "correction" and "unstable inverse filter".
+CamillaFIR keeps each stage bounded:
 
-## 4) Phase safety options
-Phase correction is powerful but easy to misuse in-room. v2.7.7 gives you multiple safety levers:
-- **phase_limit (Hz)**: do not correct room phase above a chosen frequency
-- **FDW cycles** and optional **A-FDW**: reduce phase noise by windowing
-- **2058-safe phase mode**: disables room phase correction (confidence/FDW/excess-phase) and uses only theoretical crossover phase and minimum-phase where applicable
+Magnitude bounds:
+- `max_boost_db`, `max_cut_db`
+- low-bass safety controls
+- smoothing and regularization (`filter_smooth`, `reg_strength`)
 
-If step response or group delay looks spiky, 2058-safe mode is the fast way to return to predictable behavior.
+Shape bounds:
+- slope limits (`max_slope_db_per_oct`)
+- optional asymmetric slope limits for boost vs cut
 
-## 5) Separation of problems (less interaction, more stability)
-CamillaFIR treats different physical effects as different DSP steps:
-- propagation delay / alignment
-- crossover linearization (theoretical phase)
-- magnitude correction
-- decay shaping (TDC)
+Decay bounds:
+- TDC strength and max reduction limits
+- optional TDC slope limit
 
-Because these are separated and bounded, you avoid feedback-like interactions where fixing one problem breaks another.
+When limits are active, behavior remains controlled instead of extreme.
 
-## 6) Multi-rate output and reproducible evaluation
-Multi-rate generation creates filters for multiple sample rates. That is good for deployment, but it can make "scores" look different because FFT binning changes with fs/taps.
+## 4) Confidence-guided correction improves repeatability
 
-To keep evaluation comparable, v2.7.7 supports **comparison mode**:
-- scoring and match metrics are locked to a reference grid (for example 44.1 kHz / 65536 taps)
-- you can still generate multi-rate filters, but the analysis stays apples-to-apples
+Room data confidence is frequency-dependent.
+CamillaFIR uses confidence-aware behavior to avoid overreacting to artifacts:
+- Confidence Pull logic
+- A-FDW support
+- smoothing that favors robust trends over narrow features
 
-## 7) Numerical robustness and edge-case handling
-v2.7.7 includes guard code specifically for real-world edge cases:
-- empty masks (no valid points in a window)
-- NaN/inf values from division or log operations
-- out-of-range indexing and "no data" conditions
+Practical effect: small mic-position changes usually alter details, not the whole correction profile.
 
-Level matching was moved to a dedicated module so it is easier to test and less likely to regress. The key promise: the applied offset value is always defined and finite.
+## 5) Phase-domain safeguards
 
-## 8) Auditing: logs and Summary
-For reproducibility you need traceability:
-- the UI/settings are recorded in the generated report/summary
-- stage probes can log peak boost/cut evolution through the pipeline
+Phase processing is constrained by design:
+- `phase_limit` bounds correction bandwidth
+- optional `phase_safe_2058` disables room phase correction when needed
+- Mixed-phase excess correction is faded from LF to HF
+- Mixed-only limits cap excess delay and pre-ringing risk
+- adaptive excess-phase clamping and conditional GD spike guards improve robustness
 
-If two runs sound different, these logs tell you *why* (changed settings, different masks, different bounds), not just that they differ.
+These controls prevent unstable phase behavior and reduce ringing risk.
+
+## 6) Headroom reproducibility and stereo consistency
+
+Level handling is deterministic and tied to realized correction:
+- auto-headroom model computes attenuation from realized max boost + margin
+- shared auto-gain behavior is available for stereo-linked runs
+- plot-only compensation keeps analysis visuals readable while preserving output safety
+
+This keeps output gain decisions consistent across repeated runs.
+
+## 7) Comparable evaluation across fs/taps
+
+Changing fs/taps can change analysis grids even when audible behavior is similar.
+CamillaFIR addresses this with:
+- comparison mode (fixed reference grid for scoring/match)
+- multi-rate export with time-length-aware tap mapping
+
+So you can compare settings more fairly without grid-induced score drift.
+
+## 8) Observability and audit trail
+
+Reproducibility needs traceability.
+CamillaFIR provides:
+- Summary version stamp and key effective parameters
+- run timing breakdown (Read, DSP, ZIP/PNG, Render, Total)
+- expanded System Health warnings for source completeness and risky settings
+
+If two runs differ, diagnostics help explain why.
 
 ---
 
 ## Reproducible-run checklist
-Use this when you want repeatable results across machines or over time.
 
-1. Use the same CamillaFIR version (tag releases).
-2. Use the same measurement export format and resolution.
-3. Keep base fs/taps the same, or enable comparison mode for stable scoring.
-4. Keep smoothing type + smoothing resolution fixed.
-5. Keep all guardrails fixed: max boost/cut, slope limits, reg_strength, phase_limit.
-6. If testing phase behavior, note whether 2058-safe is ON/OFF.
+1. Use the same app version (`v3.1.1.2` or newer pinned release).
+2. Use identical measurement sources and source type (TXT vs WAV) per comparison.
+3. Keep base fs/taps fixed, or enable comparison mode.
+4. Keep correction guardrails fixed (boost/cut/slope/regularization/phase limit).
+5. Keep phase strategy and `phase_safe_2058` state fixed.
+6. Keep headroom margin and stereo-link policy fixed.
+7. Verify System Health is clean before exporting.
+8. Compare Summary outputs and timing data when validating repeated runs.
 
-**Bottom line:** CamillaFIR is predictable because it is bounded, confidence-aware, and deterministic.
+**Bottom line:** CamillaFIR is reproducible because correction strength is bounded, phase is safety-limited, and the full run is observable end-to-end.

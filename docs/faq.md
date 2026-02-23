@@ -126,6 +126,14 @@ permalink: /faq/
         "@type":"Answer",
         "text":"Yes. Always verify by re-measuring with the filter active. This confirms that the correction behaves as expected and that gain staging/headroom is safe."
       }
+    },
+    {
+      "@type":"Question",
+      "name":"How should I export measurements from REW for CamillaFIR?",
+      "acceptedAnswer":{
+        "@type":"Answer",
+        "text":"Before measuring, load your microphone calibration file in REW. For TXT export, include Frequency, Magnitude, and Phase. For WAV/IR workflow, use Mono, float32, Normalise, and Place t=0 (256)."
+      }
     }
   ]
 }
@@ -146,6 +154,11 @@ A FIR filter maker generates convolution FIR filters from measurement data and a
 ### Where can I download CamillaFIR?
 Download the latest version from GitHub Releases:  
 https://github.com/VilhoValittu/CamillaFIR/releases
+
+### How should I export measurements from REW for CamillaFIR?
+Load your microphone calibration file in REW before measuring.
+For TXT export, include Frequency + Magnitude + Phase.
+For WAV/IR workflow, use `Mono`, `float32`, `Normalise`, `Place t=0 (256)`.
 
 ## Compatibility
 

@@ -1,106 +1,119 @@
-# Why CamillaFIR Works (v2.7.7)
+# Why CamillaFIR Works (v3.1.1.2)
 
-CamillaFIR is not "magic EQ". It is a set of DSP decisions that follow a simple rule:
+CamillaFIR is not "magic EQ". It is a bounded DSP workflow built for real room data.
 
-> Correct what is physically plausible and perceptually relevant, and refuse to overfit the measurement.
+Core rule:
 
-This page explains the main ideas in practical terms.
+> Correct what is physically plausible and perceptually useful, and avoid inverting unreliable measurement detail.
 
-## 1) Time first, then frequency
-In-room measurements mix multiple phenomena:
-- propagation delay (distance)
+This page explains why that approach stays stable and audible in practice.
+
+## 1) Time-domain first, then frequency-domain shaping
+
+In-room measurements combine multiple phenomena:
+- propagation delay (time-of-flight)
 - loudspeaker/crossover behavior
-- room reflections
-- true resonances (energy storage)
+- room reflections and comb filtering
+- modal energy storage (ringing)
 
-If you treat all of that as one frequency response and invert it, you get unstable filters.
-CamillaFIR instead separates the problems:
-- **time alignment** handles arrival-time differences
-- **crossover linearization** uses theoretical crossover phase where you want it
-- **magnitude correction** is applied only within user limits
-- **TDC** (Temporal Decay Control) targets ringing (decay) rather than amplitude alone
+A pure inverse-EQ approach mixes these into one problem and tends to overcorrect.
+CamillaFIR separates them:
+- TOF is aligned before phase analysis
+- magnitude correction is bounded
+- phase is reconstructed with explicit strategy and limits
+- decay is treated separately via TDC
 
-## 2) Confidence-guided DSP (do not trust every dip)
-A deep dip in an in-room response is often a cancellation from reflections. Boosting it can:
-- waste headroom
-- increase distortion
-- change drastically with small mic moves
+## 2) Confidence-weighted correction instead of blind inversion
 
-CamillaFIR uses a confidence concept to reduce over-correction:
-- unreliable regions are **smoothed**, not aggressively inverted
-- optional **Adaptive FDW (A-FDW)** shortens the time window when confidence is low
+Not every dip is correctable. Reflection cancellations and low-confidence bins can move with tiny mic-position changes.
 
-The result is a filter that changes less when the measurement changes a little.
+CamillaFIR reduces overfit using:
+- confidence-aware shaping
+- smoothing and regularization
+- optional Adaptive FDW (A-FDW)
+- Confidence Pull behavior in uncertain regions
 
-## 3) Guardrails that prevent "inverse filter" behavior
-Most audible failures come from unbounded correction. v2.7.7 makes the limits explicit:
+Result: corrections track robust trends instead of chasing fragile artifacts.
 
-- **max_boost_db**: cap boosts (soft-limited)
-- **max_cut_db**: cap attenuation depth
-- **low_bass_cut_hz**: below this frequency allow only cuts (protects from risky sub-bass boosts)
-- **max_slope_db_per_oct**: limit how fast the correction curve can change with frequency
-- **max_slope_boost_db_per_oct / max_slope_cut_db_per_oct**: optional asymmetric slope limits so boosts and cuts can be constrained differently
-- **reg_strength**: reduces the urge to "fill" deep nulls with huge boosts
+## 3) Explicit guardrails keep filters physically sane
 
-These limits are what make the correction listenable and repeatable.
+Most failures in room correction come from unbounded boosts and steep local corrections.
+CamillaFIR uses explicit limits, including:
+- `max_boost_db`, `max_cut_db`
+- `max_slope_db_per_oct` and optional split slope limits for boost vs cut
+- `low_bass_cut_hz` / excursion-oriented low-bass safety
+- `reg_strength` to avoid null-filling behavior
 
-## 4) Phase handling that you can trust
-Phase correction is useful when it is based on reliable information, and harmful when it chases noise.
+These are not cosmetic settings. They prevent unstable inverse-filter behavior.
 
-CamillaFIR provides three safety layers:
-1. **phase_limit (Hz)**: only do phase work up to a chosen frequency.
-2. **FDW (cycles)** and optional **A-FDW**: windowing reduces reflection-driven phase noise.
-3. **2058-safe phase mode**: disables room phase correction (confidence/FDW/excess-phase) and uses only theoretical crossover phase and minimum-phase where applicable.
+## 4) Phase reconstruction with layered safety
 
-If group delay looks spiky or step response rings, 2058-safe mode is the fast path back to predictable behavior.
+Phase correction can improve transients, but only if it is constrained.
 
-## 5) Mixed-phase done safely
-The Linear/Minimum/Mixed strategies exist because "perfect" is not the goal; *useful* is.
+CamillaFIR provides multiple safety layers:
+- `phase_limit` to bound correction bandwidth
+- FDW / A-FDW to reduce reflection-driven phase noise
+- `phase_safe_2058` mode to disable room phase correction when needed
+- Mixed-phase excess correction fade (LF full correction -> HF no correction)
+- Mixed-only guards: `max_excess_delay_ms` and `max_pre_ringing_db`
+- adaptive excess-phase clamp behavior for robust operation
+- conditional GD spike guarding in bass-focused high-risk cases
 
-- **Linear phase** keeps timing consistent but can pre-ring.
-- **Minimum phase** avoids pre-ringing but does not preserve absolute timing.
-- **Mixed phase** splits behavior: linear where it matters (typically low frequencies) and minimum where it reduces artifacts (typically higher frequencies).
+This keeps phase work useful without forcing textbook-flat but fragile phase curves.
 
-The point is not a textbook ideal, but a controlled tradeoff that stays stable under measurement variance.
+## 5) TDC targets ringing that EQ alone cannot fix
 
-## 6) TDC: fixing what EQ cannot
-Room modes are not just amplitude peaks. They are **energy storage** problems.
+Room modes are not only amplitude peaks; they are time-domain energy storage.
 
-EQ changes the steady-state amplitude. It does not directly shorten the decay tail.
-**Temporal Decay Control (TDC)** shapes the target so resonances stop faster.
+Temporal Decay Control (TDC):
+- shapes decay behavior directly
+- is independent from static magnitude EQ
+- includes bounded controls (`tdc_strength`, `tdc_max_reduction_db`, optional `tdc_slope_db_per_oct`)
 
-v2.7.7 adds two important safety brakes:
-- **tdc_max_reduction_db**: caps total TDC reduction per frequency bin (prevents stacked deep notches)
-- **tdc_slope_db_per_oct**: optional slope limit for the TDC reduction curve (keeps it smooth and predictable)
+This is why bass can become tighter without simply reducing bass level.
 
-Conceptually, this is why you can get "tighter bass" without simply turning bass down.
+## 6) Headroom and channel consistency are part of DSP safety
 
-## 7) Consistent behavior across sample rates and taps
-Changing fs/taps changes FFT binning and smoothing behavior. That can make analysis and scores look different even if the audible result is similar.
+A "good" filter that clips is still a bad filter.
 
-v2.7.7 includes tools to keep comparisons fair:
-- **multi-rate generation** for deployment across 44.1/48/88.2/96/176.4/192 kHz
-- **comparison mode** to lock scoring and match metrics to a reference grid (apples-to-apples)
-- **DF smoothing (experimental)** to keep smoothing width more constant in Hz across fs/taps
+CamillaFIR uses an auto-headroom model:
+- output attenuation follows realized max boost plus margin
+- normalization remains optional as extra safety
+- stereo-link can force shared attenuation behavior between channels
 
-## 8) The practical takeaway
-CamillaFIR works because it:
-- separates different physical causes (delay, crossover, magnitude, decay)
-- distrusts low-confidence measurement detail
-- enforces hard bounds so the filter cannot become extreme
-- gives you safe phase options, including a "no room phase correction" mode
-- targets decay (TDC) where amplitude EQ is insufficient
+So output level handling is integrated into correction quality, not left as an afterthought.
 
-If you want a simple workflow:
-1. Get magnitude stable (smoothing + guardrails + regularization).
-2. Add phase only where it stays clean (phase_limit + FDW/A-FDW).
-3. Add TDC carefully (cap + slope) for tighter decay.
-4. Use comparison mode when you are doing A/B tests across settings.
+## 7) Reproducibility across fs/taps and input formats
 
-## 9) Seeing the effect
-A resonance problem often looks like a long ringing tail in the impulse response. TDC aims to reduce that tail.
+CamillaFIR includes features for apples-to-apples evaluation:
+- comparison mode with fixed analysis grid
+- multi-rate generation with auto-taps time-length mapping
+- deterministic WAV policy aligned with TXT baseline behavior
 
-If you include the example plot in your docs, reference it like this:
-- `tdc_impulse_example.png` (Before vs After TDC)
+The goal is stable interpretation when you compare settings, sample rates, or tap counts.
 
-CamillaFIR also writes a human-readable summary (and optional debug probes) so you can connect what you hear to what changed in the DSP.
+## 8) Operational transparency
+
+The workflow is observable, not opaque:
+- System Health checks highlight risky settings and missing sources
+- Summary includes version stamp and key effective parameters
+- run timing breakdown exposes read/DSP/export/render stages
+
+This makes tuning and troubleshooting traceable.
+
+## 9) Practical takeaway
+
+CamillaFIR works because it combines:
+- explicit separation of delay, magnitude, phase, and decay
+- confidence-aware correction strength
+- hard safety bounds
+- deterministic processing and reproducible comparison tools
+
+If you want a robust workflow:
+1. Start with bounded magnitude correction and sane headroom.
+2. Add phase only within clean confidence and frequency limits.
+3. Apply TDC carefully for modal decay problems.
+4. Use comparison mode when doing A/B decisions.
+5. Re-check output diagnostics and Summary before final deployment.
+
+See also image reference: `docs/pics/tdc_impulse_example.png`

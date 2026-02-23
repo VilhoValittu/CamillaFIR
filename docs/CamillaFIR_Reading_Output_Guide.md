@@ -1,140 +1,132 @@
-# Reading CamillaFIR Output
+# Reading CamillaFIR Output (Current Behavior)
 
-*A practical guide to understanding generated filters, dashboards and
-summaries*
+This guide reflects the current code path in CamillaFIR (v3.1.x line).
 
-CamillaFIR generates three main types of output:
+## 1. What you get after a run
 
-1.  Dashboard plot (PNG)
-2.  Filter files (WAV/TXT)
-3.  Generation Summary (.txt report)
+CamillaFIR produces:
 
-This document explains how to interpret them correctly.
+1. Interactive dashboards in the UI (Left/Right analysis view).
+2. A ZIP package saved to `filters/`:
+   - FIR WAV files (`L_...wav`, `R_...wav`)
+   - Summary report (`Summary_<type>_<fs>Hz.txt`)
+   - Convolver configs (`Config_...cfg`, `camilladsp_...yml`)
 
-------------------------------------------------------------------------
+Important current detail:
+- ZIP dashboard PNG export is currently disabled by default.
+- TXT FIR export is not part of the current ZIP export path.
 
-# 1. Dashboard Plot Explained
+## 2. Reading the dashboard (UI)
 
-## 1.1 Magnitude & Alignment
+The UI dashboard has 5 panels:
 
-This graph shows: - Measured response - Target curve - Predicted
-corrected response - Confidence weighting - Level reference window
+### 2.1 Magnitude and Alignment
 
-What to look for: - Predicted should follow Target smoothly - No extreme
-narrow boosts - Bass region (20--200 Hz) controlled but not
-over-equalized - Large boost areas = potential headroom risk
+Shows:
+- Measured (blue)
+- Target (green dashed)
+- Predicted (orange)
+- Confidence line (magenta)
+- Level reference line and smart scan window shading
+- Correction range shading (`mag_c_min` to `mag_c_max`)
 
-------------------------------------------------------------------------
+Read it like this:
+- Predicted should track target without narrow high-Q spikes.
+- Red-tinted bands indicate low confidence regions.
+- Strong LF lift means headroom risk; check Summary headroom section.
 
-## 1.2 Phase
+### 2.2 Phase
 
-Shows: - Wrapped phase - Mixed-phase behaviour - Crossover influence -
-Phase correction clamping
+Shows wrapped phase of the predicted response.
+Use it mainly to see whether behavior looks smooth around crossover and correction limits.
 
-If phase correction is clamped (e.g. 54° -\> 45°), protection is active
-to maintain time-domain stability.
+### 2.3 Group Delay
 
-------------------------------------------------------------------------
+Highlights delay structure over frequency.
+- Broad LF structures often relate to room modes.
+- Sharp local spikes can indicate reflection-related behavior.
 
-## 1.3 Group Delay (GD)
+### 2.4 Filter (dB)
 
--   Large peaks in bass → room modes
--   Narrow spikes → reflections
--   Small bumps near crossover are normal
+This is the FIR gain curve after level-compensated plotting.
+Use it to confirm boost/cut aggressiveness and low-frequency policy behavior.
 
-Healthy crossover GD impact should remain low (\<1 ms).
+### 2.5 A-FDW Effective BW (oct)
 
-------------------------------------------------------------------------
+Shows effective adaptive bandwidth when available.
+If unavailable, the panel displays "No A-FDW BW data (...)". This is expected in some modes.
 
-## 1.4 Filter (dB)
+## 3. Reading `Summary_...txt`
 
-This is the actual FIR gain curve.
+The summary is layered. Main blocks:
 
-Recommended: - Keep max boost ≤ +3 dB - Deep cuts are acceptable - Avoid
-large LF boost for headroom safety
+### 3.1 Executive Summary
 
-------------------------------------------------------------------------
+Includes:
+- Acoustic Score (L/R)
+- Target Match (percentage + RMS dB)
+- Confidence (L/R)
+- RT60 wideband (L/R)
+- Worst detected event (L/R)
 
-## 1.5 A-FDW Effective Bandwidth
+### 3.2 Core Settings and Analysis Mode
 
-Shows adaptive smoothing bandwidth per frequency.
+Includes:
+- Key settings used for generation
+- Analysis mode (`native` or `comparison`)
+- Comparison grid metadata when comparison mode is active
 
-Typical: - \~1/5 octave average - Wider smoothing in bass - Narrower in
-midrange
+### 3.3 Guards and control blocks
 
-Prevents overfitting noise.
+Includes:
+- Correction Guards (max cut, slope limits, low-bass cut policy)
+- Temporal Decay Control (TDC) status and limits
+- A-FDW status and effective bandwidth stats
+- XO and phase clamp lines
 
-------------------------------------------------------------------------
+### 3.4 RT60 and matching blocks
 
-# 2. Understanding the Generation Summary
+Includes:
+- RT60 wideband and optional per-band values
+- Confidence and leveling window info
+- Target curve match lines for left/right
 
-## 2.1 Target Curve Match
+### 3.5 Alignment and gain staging
 
--   Above 90% = excellent
--   RMS error \< 1 dB = very accurate correction
+Includes:
+- Peak (pre-norm), global offset, auto gain margin, applied auto gain
+- Additional sections appended during export:
+  - `DSP EFFECTIVE PARAMS`
+  - `LEVELING`
+  - `HEADROOM MANAGEMENT`
+  - `BOOST/CUT DIAGNOSTICS`
+  - `CLAMP DIAGNOSTICS`
+  - `STAGE CHECKPOINTS`
+  - `BASS-FIRST AI`
+  - `AUTO-ALIGN`
+  - `ACOUSTIC EVENTS` (when detected)
 
-------------------------------------------------------------------------
+## 4. Practical pass/fail checks
 
-## 2.2 Acoustic Score
+Use these first:
 
-Combines: - Match accuracy - Temporal behavior - RT60 balance - Boost
-safety
+1. `Target Match` improves clearly versus uncorrected.
+2. `Net boost peak (post global/headroom)` is not positive or only slightly positive.
+3. `hard_clamp`/`soft_clip` counters are not excessive.
+4. No unexpected large tilt in `LEVELING`.
+5. `Final Max (filter+auto_gain+headroom)` stays sensible for your playback headroom.
 
-90 ≈ very controlled room\
-70--80 ≈ average untreated room\
-\<60 = significant acoustic issues
+## 5. If the result sounds wrong
 
-------------------------------------------------------------------------
+- Too little bass:
+  - Check `low_bass_cut_hz`
+  - Check effective max boost and blocked boost reason
+  - Check correction range upper/lower bounds
+- Too bright or sharp:
+  - Reduce correction range in upper mids/highs
+  - Increase smoothing / reduce aggressive slope behavior
+- Unstable imaging or odd timing:
+  - Check `AUTO-ALIGN` delay and gain difference
+  - Re-verify measurement consistency
 
-## 2.3 RT60
-
--   0.2--0.4s typical domestic room
--   Bass RT60 usually higher
--   If RT60 \> 0.6s → EQ alone is insufficient
-
-Resonances show decay time, not distance.\
-Reflections show equivalent path-length distance.
-
-------------------------------------------------------------------------
-
-## 2.4 Boost / Cut Diagnostics
-
-Check: - boost_peak - hard_clamp activity
-
-If boost_peak \> 6 dB → reduce boost limit.
-
-------------------------------------------------------------------------
-
-## 2.5 Bass-First AI
-
-When active: - 20--200 Hz gets correction priority - Protection prevents
-unnatural HF shaping
-
-------------------------------------------------------------------------
-
-## 2.6 Headroom Management
-
-If Normalize is ON: - FIR peak reduced to prevent clipping
-
-Recommendation: Keep max boost ≤ +3 dB unless system headroom allows
-more.
-
-------------------------------------------------------------------------
-
-# 3. How To Judge If A Filter Is Good
-
-A healthy filter typically shows: - Match \> 90% - RMS error \< 1 dB -
-Boost ≤ 3 dB - No excessive clamp warnings - Smooth GD below 500 Hz
-
-If these are met, the filter is technically sound.
-
-------------------------------------------------------------------------
-
-# 4. When Things Look Wrong
-
-Too little bass: - Check low_bass_cut_hz - Check max_boost - Check
-correction range
-
-Too harsh: - Over-correction above 2--4 kHz - Too narrow smoothing
-
-Remember: Room treatment always beats excessive EQ.
+Use re-measurement with filter enabled as the final validation.

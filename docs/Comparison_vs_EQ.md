@@ -1,38 +1,42 @@
-# CamillaFIR vs Conventional EQ-Based Room Correction (v2.7.7)
+# CamillaFIR vs Conventional EQ-Based Room Correction (v3.1.1.2)
 
 ## Conventional approach (typical IIR / minimum-phase EQ)
-Most room correction systems:
-- treat deviations as magnitude errors
-- apply IIR/PEQ or minimum-phase EQ
-- ignore (or cannot control) time-domain decay
-- implicitly mix distance, phase, and room effects
+Many room-correction workflows:
+- treat response errors mainly as magnitude EQ problems
+- focus on PEQ/IIR fitting with limited phase-domain control
+- do not directly control decay behavior
+- can overfit reflection-driven dips and combing
 
 ### Common consequences
-- bass gets quieter but not tighter (decay unchanged)
-- harsh or “glassy” treble if small combing dips are inverted
-- results vary strongly with microphone position
+- bass can get flatter but still ring
+- narrow treble corrections can sound harsh
+- results may change noticeably with small mic-position differences
 
 ---
 
-## CamillaFIR approach
+## CamillaFIR approach (current)
 
 | Aspect | Conventional EQ | CamillaFIR |
 |---|---|---|
-| Propagation delay (TOF) | ignored | explicitly removed before phase analysis |
-| Excess phase | limited / implicit | selectable FIR phase strategies |
-| Room modes | amplitude EQ | **Temporal Decay Control (TDC)** targets decay |
-| Reflections / combing | often inverted | confidence-masked + smoothing / A-FDW |
-| Correction bounds | varies | hard limits: boost, cut, slope, phase bandwidth |
-| Slope control | usually none | dB/oct limiting, optionally **separate boost vs cut** |
-| Reproducible A/B | hard (grid changes) | optional **comparison mode** with fixed analysis grid |
-| Multi-rate export | not typical | native multi-rate generation |
+| Input sources | usually frequency-response only | REW TXT + WAV/IR inputs |
+| Propagation delay (TOF) | often implicit | explicitly removed before phase analysis |
+| Phase strategy | mostly minimum-phase behavior | Linear / Minimum / Mixed / Asymmetric + optional 2058-safe mode |
+| Excess-phase safety | limited | Mixed-phase fade + excess-delay and pre-ringing guards |
+| Room modes / ringing | mainly amplitude shaping | **Temporal Decay Control (TDC)** with strength + max reduction + slope limit |
+| Reflection handling | may invert combing dips | confidence-weighted correction + smoothing + A-FDW |
+| Correction bounds | tool-dependent | explicit limits for boost/cut/slope/phase band and low-bass safety |
+| Headroom handling | manual gain staging | auto-headroom gain model with configurable margin |
+| Stereo consistency | often per-channel behavior | stereo-link options and shared gain behavior |
+| Reproducible A/B | harder across fs/taps | optional **comparison mode** with fixed analysis grid |
+| Multi-rate output | uncommon | native multi-rate FIR export |
+| Runtime diagnostics | often limited | Summary version stamp, timing breakdown, and System Health checks |
 
 ---
 
 ## Audible result (typical)
-- bass notes stop faster (less overhang)
-- transients stay intact
-- treble stays natural because low-confidence interference is not inverted
-- tuning is repeatable and predictable
+- tighter bass decay (less overhang)
+- fewer "false-detail" treble corrections
+- cleaner transients with safer phase behavior
+- more repeatable tuning between runs
 
-CamillaFIR corrects **less**, but corrects **the right things**.
+CamillaFIR intentionally avoids aggressive inversion and prioritizes corrections that remain stable and physically plausible.
