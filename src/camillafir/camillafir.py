@@ -108,6 +108,22 @@ def _irwin_tag(mode: typing.Any) -> str:
         return m
     return "auto"
 
+def _resolve_ui_stats_fs(ui_stats_fs: typing.Any, selected_fs: typing.Any) -> int:
+    """
+    Valitsee UI-statistiikalle oikean sample raten.
+
+    Priorisoi dashboardille valitun analyysinopeuden (`ui_stats_fs`) ja
+    kaatuu turvallisesti UI-valintaan (`selected_fs`) tai 44100 Hz:iin.
+    """
+    for cand in (ui_stats_fs, selected_fs, 44100):
+        try:
+            fs_i = int(cand)
+        except Exception:
+            continue
+        if fs_i > 0:
+            return fs_i
+    return 44100
+
 def _shift_zeropad_1d(x: np.ndarray, shift: int) -> np.ndarray:
     """
     Siirtaa 1D-signaalia kokonaisilla naytteilla nollataytolla.
@@ -312,6 +328,7 @@ def process_run():
     ft_short = filter_type_short(data['filter_type'])
     split, zoom = data['mixed_freq'], t('zoom_hint')
     l_st_f, r_st_f, l_imp_f, r_imp_f = None, None, None, None
+    ui_stats_fs = None
     ui_dashboards = {}
     logger.warning(
         f"EXPORT IR (UI): shape={data.get('ir_export_window_shape')}, "
@@ -521,6 +538,7 @@ def process_run():
 
             if fs_v == dash_fs:
                 l_st_f, r_st_f, l_imp_f, r_imp_f = l_st, r_st, l_imp, r_imp
+                ui_stats_fs = int(fs_v)
 
             
 
@@ -606,8 +624,9 @@ def process_run():
         fs_sel = int(data.get('fs') or 44100)
     except Exception:
         fs_sel = 44100
-    _inject_filter_mags_for_ui(l_st_f, l_imp_f, fs_sel)
-    _inject_filter_mags_for_ui(r_st_f, r_imp_f, fs_sel)
+    fs_ui_stats = _resolve_ui_stats_fs(ui_stats_fs, fs_sel)
+    _inject_filter_mags_for_ui(l_st_f, l_imp_f, fs_ui_stats)
+    _inject_filter_mags_for_ui(r_st_f, r_imp_f, fs_ui_stats)
 
     logger.info(f"UI stats mode L/R: {l_st_f.get('analysis_mode')}/{r_st_f.get('analysis_mode')} | "
                 f"len cmp f/m/t = {len(l_st_f.get('cmp_freq_axis',[]))}/{len(l_st_f.get('cmp_measured_mags',[]))}/{len(l_st_f.get('cmp_target_mags',[]))}")
@@ -717,8 +736,8 @@ def _ensure_scoring_keys(st, f_in, m_in, hc_f, hc_m):
         if st is None:
             return st
 
-        f = np.asarray(f_in or [], dtype=float)
-        m = np.asarray(m_in or [], dtype=float)
+        f = np.asarray(f_in if f_in is not None else [], dtype=float)
+        m = np.asarray(m_in if m_in is not None else [], dtype=float)
         if f.size > 1 and m.size > 1:
             if st.get("freq_axis") is None:
                 st["freq_axis"] = f
@@ -727,8 +746,8 @@ def _ensure_scoring_keys(st, f_in, m_in, hc_f, hc_m):
 
         if st.get("target_mags") is None:
             try:
-                hf = np.asarray(hc_f or [], dtype=float)
-                hm = np.asarray(hc_m or [], dtype=float)
+                hf = np.asarray(hc_f if hc_f is not None else [], dtype=float)
+                hm = np.asarray(hc_m if hc_m is not None else [], dtype=float)
                 if f.size > 1 and hf.size > 1 and hm.size > 1:
                     st["target_mags"] = np.interp(f, hf, hm)
             except Exception:
@@ -799,7 +818,8 @@ def _avg_confidence_pct(st: dict) -> float:
                 return float(v)
             except Exception:
                 pass
-        cm = np.asarray(st.get("cmp_confidence_mask", []) or [], dtype=float)
+        cm_src = st.get("cmp_confidence_mask", None)
+        cm = np.asarray(cm_src if cm_src is not None else [], dtype=float)
         if cm.size:
             return float(np.mean(cm) * 100.0)
         return 0.0
@@ -809,7 +829,8 @@ def _avg_confidence_pct(st: dict) -> float:
             return float(v)
         except Exception:
             pass
-    cm = np.asarray(st.get("confidence_mask", []) or [], dtype=float)
+    cm_src = st.get("confidence_mask", None)
+    cm = np.asarray(cm_src if cm_src is not None else [], dtype=float)
     if cm.size:
         return float(np.mean(cm) * 100.0)
     return 0.0
@@ -847,7 +868,8 @@ def _inject_filter_mags_for_ui(st: dict, filt_ir, fs: int):
         if st.get(key_g) is not None:
             return
 
-        f_axis = np.asarray(st.get(key_f, []) or [], dtype=float)
+        f_src = st.get(key_f, None)
+        f_axis = np.asarray(f_src if f_src is not None else [], dtype=float)
         if f_axis.size < 4:
             return
 

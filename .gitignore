@@ -12,7 +12,9 @@ build/
 config.json
 filters/
 tools/
-tests/
+tests/.pytest_cache/
+tests/pytest-cache-files-*/
+tests/logs/*.log
 pytest.ini
 src/camillafir/bass_integration/
 specs.txt

@@ -18,6 +18,16 @@ def _to_float(x, default: float) -> float:
         return float(default)
     return float(v)
 
+def _remember_leveling_error(cfg, stage: str, exc: Exception | None = None) -> None:
+    try:
+        if exc is None:
+            msg = str(stage)
+        else:
+            msg = f"{stage}:{type(exc).__name__}"
+        setattr(cfg, "_lvl_last_error", msg)
+    except Exception:
+        return
+
 def _tilt_aware_offset_db(
     freq_axis: np.ndarray,
     diff_db: np.ndarray,
@@ -231,6 +241,11 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
     tilt_max_db_per_oct = _to_float(getattr(cfg, "lvl_tilt_max_db_per_oct", 2.0), 2.0)
 
     try:
+        setattr(cfg, "_lvl_last_error", None)
+    except Exception:
+        pass
+
+    try:
         setattr(cfg, "_lvl_tilt_slope_db_per_oct", None)
     except Exception:
         pass
@@ -333,8 +348,8 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
                 float(ss_min),
                 float(ss_max),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            _remember_leveling_error(cfg, "forced_window", exc)
 
 
     if "Manual" in mode:
@@ -376,7 +391,8 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
     if hpf_settings:
         try:
             hpf_freq = _to_float(hpf_settings.get("freq", 0.0), 0.0)
-        except Exception:
+        except Exception as exc:
+            _remember_leveling_error(cfg, "hpf_settings", exc)
             hpf_freq = 0.0
 
     ss_min, ss_max = find_stable_level_window(

@@ -19,6 +19,20 @@ def _sigma_bins_from_hz(freq_axis, sigma_hz: float, fallback_bins: float = 3.0) 
         return float(fallback_bins)
 
 
+def _distance_bins_from_hz(freq_axis, distance_hz: float, fallback_bins: int = 100) -> int:
+    try:
+        f = np.asarray(freq_axis, dtype=float)
+        if f.size < 4:
+            return int(fallback_bins)
+        df = float(np.median(np.diff(f)))
+        if not np.isfinite(df) or df <= 0.0:
+            return int(fallback_bins)
+        bins = int(round(float(distance_hz) / df))
+        return int(max(1, bins))
+    except Exception:
+        return int(fallback_bins)
+
+
 def calculate_group_delay(freqs, phases_deg):
     phase_rad = np.unwrap(np.deg2rad(phases_deg))
     d_phi_d_f = np.gradient(phase_rad, freqs)
@@ -37,17 +51,27 @@ def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
     gd_smooth = scipy.ndimage.gaussian_filter1d(gd_ms, sigma=sigma_bins)
     gd_diff = np.abs(gd_ms - gd_smooth)
 
-    threshold_ms = 2.5
+    valid_idx = np.where(freq_axis > 20)[0]
+    gd_eval = gd_diff[valid_idx] if valid_idx.size else gd_diff
+    if gd_eval.size:
+        p70 = float(np.percentile(gd_eval, 70.0))
+        threshold_ms = float(np.clip(max(2.5, p70), 2.5, 8.0))
+    else:
+        threshold_ms = 2.5
     x = 1.5 * (gd_diff - threshold_ms)
     x = np.clip(x, -60.0, 60.0)
     confidence_mask = 1.0 / (1.0 + np.exp(x))
     peaks = np.array([], dtype=int)
 
     reflection_nodes = []
-    valid_idx = np.where(freq_axis > 20)[0]
-
-    if len(valid_idx) > 0:
-        peaks, _props = scipy.signal.find_peaks(gd_diff[valid_idx], height=2.0, distance=100)
+    if valid_idx.size > 0:
+        peak_distance = _distance_bins_from_hz(freq_axis[valid_idx], distance_hz=120.0, fallback_bins=100)
+        peak_height = max(2.0, 0.8 * threshold_ms)
+        peaks, _props = scipy.signal.find_peaks(
+            gd_diff[valid_idx],
+            height=peak_height,
+            distance=peak_distance,
+        )
 
     raw_nodes = []
     for p in peaks:
