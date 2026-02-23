@@ -24,30 +24,84 @@ OCA's videos motivated me to develop the program further.
 
 - Windows: https://github.com/VilhoValittu/CamillaFIR/releases/latest
 - macOS (Intel + Apple Silicon): https://github.com/VilhoValittu/CamillaFIR/releases/latest
-    -macOS builds are community-supported. Limited direct testing.
+- macOS builds are community-supported. Limited direct testing.
 - Linux: https://github.com/VilhoValittu/CamillaFIR/releases/latest
 - All releases: https://github.com/VilhoValittu/CamillaFIR/releases
 
-## Quickstart (source)
+## Run From Release Package (Recommended)
+
+### Windows
+
+1. Download `CamillaFIR_<version>_windows.zip` from Releases.
+2. Extract the ZIP.
+3. Run `CamillaFIR.exe`.
+4. If SmartScreen appears, choose `More info` -> `Run anyway`.
+5. Open `http://127.0.0.1:8080` if browser does not open automatically.
+
+### Ubuntu / Debian Linux
+
+1. Download `CamillaFIR_<version>_linux.tar.gz` from Releases.
+2. Extract the archive.
+3. Open Terminal in the extracted folder and run:
+
+```bash
+./run.sh
+```
+
+4. Open `http://127.0.0.1:8080` if browser does not open automatically.
+
+### macOS (Intel + Apple Silicon)
+
+1. Download `CamillaFIR_<version>_macos.tar.gz` from Releases.
+2. Extract the archive.
+3. Open Terminal in the extracted folder and run:
+
+```bash
+chmod +x CamillaFIR
+./CamillaFIR
+```
+
+4. If macOS blocks first launch, open `System Settings -> Privacy & Security -> Open Anyway`.
+5. Open `http://127.0.0.1:8080` if browser does not open automatically.
+
+## Run From Source (Detailed)
+
+### Windows (PowerShell)
+
+```powershell
+git clone https://github.com/VilhoValittu/CamillaFIR.git
+cd CamillaFIR
+python -m venv venv
+.\venv\Scripts\activate
+pip install -r requirements.txt
+python src/camillafir/camillafir.py
+```
+
+### Ubuntu (from source)
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip chromium-browser
+git clone https://github.com/VilhoValittu/CamillaFIR.git
+cd CamillaFIR
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements-linux.txt
+python3 src/camillafir/camillafir.py
+```
+
+### macOS (from source)
 
 ```bash
 git clone https://github.com/VilhoValittu/CamillaFIR.git
 cd CamillaFIR
-python -m venv venv
-# Windows:
-#   .\venv\Scripts\activate
-# Linux/macOS:
-#   source venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
-# Linux:
-#   pip install -r requirements-linux.txt
-
-python src/camillafir/camillafir.py
-# Linux:
-#   python3 src/camillafir/camillafir.py
+python3 src/camillafir/camillafir.py
 ```
 
-UI opens in browser at `http://localhost:8080`.
+UI opens in browser at `http://127.0.0.1:8080`.
 
 ## What You Get
 
