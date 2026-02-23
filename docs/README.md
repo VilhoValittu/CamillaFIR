@@ -229,8 +229,18 @@ Workarounds:
 ### 6. XO
 ![Crossover (XO)](pics/ui_6.png)
 
+### Results 1
+![Results 1](pics/ui_7.png)
+
+### Results 2
+![Results 2](pics/ui_8.png)
+
+---
+
 ### TDC
 ![Effect of Temporal Decay Control](pics/tdc_impulse_example.png)
+
+---
 
 ### Disclaimer
 AI was used to translate this document from Finnish to English.
