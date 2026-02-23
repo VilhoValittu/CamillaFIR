@@ -63,21 +63,17 @@ If you want full control and better bass integration, a **FIR filter maker** lik
 
 # 3. Step 1 – Measure Your Speakers in REW
 
-1. Measure left and right speakers separately.
-2. Use proper mic calibration.
-3. Avoid clipping.
-4. Use appropriate smoothing for analysis (not baked into export).
-
-For best results:
-- Keep boost targets conservative.
-- Avoid trying to fix deep nulls.
-- Focus correction on realistic frequency ranges.
+1. Use proper mic calibration file provided by your mics manufactorer.
+2. Measure left and right speakers separately. Use 48khz samplerate and 0-24000hz range.
+3. Avoid clipping. Repeat if necessary.
 
 ---
 
 # 4. Step 2 – Export Measurement Data from REW
 
-Export frequency response as text file.
+Export frequency response as .txt / .wav file.
+Remember include phase on text file.
+If you import the loudspeaker measurement data in WAV format, use: (Mono, float32, Normalise & Place t=0 (256)).
 
 Recommended:
 - No excessive smoothing
@@ -152,7 +148,7 @@ These work with:
 # 8. Step 5 – Load FIR Filters into Your DSP
 
 ## CamillaDSP
-Load WAV file into convolution block.
+Load WAV file into convolution block. Camillafir creates CamillaDSP compatible .yml settings file for 2 chl setups.
 
 ## Roon
 Use convolution engine → upload FIR WAV.
@@ -160,7 +156,7 @@ Use convolution engine → upload FIR WAV.
 ## Equalizer APO
 Use convolution module → load WAV filter.
 
-Always verify gain staging.
+Always verify gain staging. CamillaFIR uses Auto Headroom feature for filters. Filters are always atleat -0.1db below clipping rate.
 
 ---
 

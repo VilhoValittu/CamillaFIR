@@ -122,8 +122,13 @@ at a more technical level than the simplified pipeline overview.
 - Python 3.10+ (3.11 recommended)
 - Git (optional, but recommended)
 
-### Option A: Standalone EXE (Windows)
-**[Download Standalone EXE](https://drive.google.com/drive/folders/1AkESLDo-UhPqxDCdaZuXE6u8-H4EDuOI)**
+## Option A: Download
+
+- Windows: https://github.com/VilhoValittu/CamillaFIR/releases/latest
+- macOS (Intel + Apple Silicon): https://github.com/VilhoValittu/CamillaFIR/releases/latest
+    -macOS builds are community-supported. Limited direct testing.
+- Linux: https://github.com/VilhoValittu/CamillaFIR/releases/latest
+- All releases: https://github.com/VilhoValittu/CamillaFIR/releases
 
 ### Option B: Run from source
 
@@ -185,7 +190,7 @@ Tips:
 - **Mixed Phase:** linear phase below a split frequency, minimum phase above.
 - **Asymmetric Linear:** linear phase, but with an asymmetric time window to suppress audible pre-ringing while preserving the leading edge.
 
-#### Asymmetric Linear (REW Asym)
+#### Asymmetric Linear
 
 Asymmetric Linear is a **low-latency linear-phase mode** that reduces audible pre-ringing
 by shifting the impulse peak earlier in time.
@@ -196,9 +201,9 @@ Legacy **Symmetric** and **Off** modes have been removed to simplify the UI
 and focus on the most effective REW-based strategies.
 
 **Practical guidance:**
-- **10 ms (default):** best balance between low latency and stable bass correction
-- **5–15 ms:** safe operating range
-- **< 5 ms:** extreme low-latency mode, expert use only
+- **85 ms (default):** best balance between low latency and stable bass correction
+- **80–150 ms:** safe operating range
+- **< 50 ms:** extreme low-latency mode, expert use only
 
 ##### Automatic safety behavior (important)
 
@@ -214,10 +219,11 @@ These safeguards do **not** reduce correction quality at mid and high frequencie
 but prevent excessive ripple and instability in the bass region.
 
 
-### 5.3 Smoothing
-- **Standard smoothing:** classic fractional-octave smoothing.
-- **Psychoacoustic smoothing:** heavier smoothing where the ear is less sensitive (useful for robust targets).
-- **Adaptive FDW (A-FDW):** dynamically adjusts the effective window based on confidence. Low confidence → heavier smoothing.
+### 5.3 Smoothing for plots/filters
+- **Standard smoothing (1/6, 1/12 etc):** classic fractional-octave smoothing.
+- **CamillaFIR Reference:** heavier smoothing where the ear is less sensitive (useful for robust targets).
+
+- Filters smoothing is not really readable in CamillaFIRs graphs, due space limits. 
 
 ### 5.4 Safety limits (highly recommended)
 - **Max boost (dB):** hard safety ceiling for positive gain.
@@ -264,20 +270,7 @@ When to reduce or disable:
 
 ---
 
-## 7. 2058-safe phase mode
-**2058-safe** disables room phase correction (confidence/FDW/excess-phase).
-It uses only:
-- theoretical crossover phase (if crossover linearization is used)
-- minimum-phase where applicable
-
-Use 2058-safe when:
-- phase or group delay plots look “spiky”
-- step response rings more after phase correction
-- you want magnitude correction plus the most conservative phase behavior
-
----
-
-## 8. Outputs
+## 7. Outputs
 Typical output package contains:
 - FIR filters (`.wav` 32-bit float or text)
 - Summary report (`Summary.txt`)
@@ -307,7 +300,7 @@ See:
 
 ---
 
-## 9. MiniDSP / limited-taps workflow (practical)
+## 8. MiniDSP / limited-taps workflow (practical)
 Many MiniDSP devices have limited FIR taps per channel.
 A reliable approach is:
 
@@ -320,12 +313,7 @@ A reliable approach is:
 
 ---
 
-## 10. Troubleshooting
-
-### “Spiky” phase / odd step response
-- Enable **2058-safe** and retest.
-- Reduce phase correction limit.
-- Increase smoothing (or enable A-FDW).
+## 9. Troubleshooting
 
 ### Too aggressive treble
 - Use heavier smoothing.
@@ -344,12 +332,12 @@ A reliable approach is:
 
 ---
 
-## 11. DSP Design Rationale
+## 10. DSP Design Rationale
 
 CamillaFIR is built around a small set of explicit design principles.
 This section summarizes the reasoning behind the architecture.
 
-### 11.1 Separation of physical phenomena
+### 10.1 Separation of physical phenomena
 
 Room measurements contain multiple independent effects:
 
@@ -372,7 +360,7 @@ phase, and decay shaping.
 
 ---
 
-### 11.2 Confidence-weighted correction
+### 10.2 Confidence-weighted correction
 
 Measured data is not equally reliable across frequency.
 Reflection density, windowing, and signal-to-noise ratio
@@ -390,7 +378,7 @@ preventing aggressive corrections driven by measurement artefacts.
 
 ---
 
-### 11.3 Phase reconstruction philosophy
+### 10.3 Phase reconstruction philosophy
 
 Phase correction is applied to excess-phase only.
 Loudspeaker minimum-phase and theoretical crossover phase
@@ -410,7 +398,7 @@ not visual flatness of group delay.
 
 ---
 
-### 11.4 Time-domain priority
+### 10.4 Time-domain priority
 
 Many correction systems optimize magnitude first
 and treat time-domain behaviour as secondary.
@@ -427,7 +415,7 @@ and preserves leading-edge clarity.
 
 ---
 
-### 11.5 Determinism and reproducibility
+### 10.5 Determinism and reproducibility
 
 Given identical inputs and configuration,
 CamillaFIR produces deterministic outputs.
@@ -445,7 +433,7 @@ transparent, repeatable, and technically defensible.
 
 ---
 
-### 11.6 Group-delay gradient limiter (mathematical definition)
+### 10.6 Group-delay gradient limiter (mathematical definition)
 
 CamillaFIR includes an optional group-delay (GD) gradient limiter used as a **conditional spike guard**
 to prevent artificial phase “kinks” (typically from unwrap/interpolation artefacts)
@@ -515,7 +503,7 @@ liveliness or alter broadband phase behaviour
 
 ---
 
-### 11.7 FIR length vs time / frequency resolution (practical tradeoff)
+### 10.7 FIR length vs time / frequency resolution (practical tradeoff)
 
 FIR design always trades time-domain behaviour against frequency-domain resolution.
 For a filter with \(N\) taps at sample rate \(f_s\):
