@@ -11,6 +11,7 @@ import plotly.io as pio
 from plotly.subplots import make_subplots
 from datetime import datetime
 from ..dsp.smoothing import apply_smoothing_std, psychoacoustic_smoothing
+from ..dsp.target_match import target_match_from_stats as _target_match_from_stats_ssot
 PHASE_SMOOTH_OCT = 5.5
 GD_SMOOTH_OCT    = 3.0
 
@@ -145,60 +146,12 @@ def calc_ai_summary_from_stats(stats: dict) -> dict:
 
 def _calc_target_match(stats):
     """Sisainen apufunktio: calc target match."""
-    def _as_np(stats, key):
-        v = stats.get(key, None)
-        if v is None:
-            return None
-        try:
-            return np.asarray(v, dtype=float)
-        except Exception:
-            return None
-
-    def _pick(stats, base_key: str):
-        if not stats:
-            return base_key
-        mode = str(stats.get("analysis_mode", "native") or "native").lower()
-        if mode == "comparison":
-            ck = "cmp_" + base_key
-            if ck in stats and stats.get(ck) is not None:
-                return ck
-        return base_key
-
-    f = _as_np(stats, _pick(stats, 'freq_axis'))
-    t = _as_np(stats, _pick(stats, 'target_mags'))
-    m = _as_np(stats, _pick(stats, 'measured_mags'))
-    c = _as_np(stats, _pick(stats, 'confidence_mask'))
-
-    if f is None or t is None or m is None:
-        return None, None
-
-    rng = stats.get(_pick(stats, 'smart_scan_range'), None)
-    if isinstance(rng, (list, tuple)) and len(rng) == 2:
-        fmin, fmax = float(rng[0]), float(rng[1])
-    else:
-        fmin, fmax = 200.0, 5000.0
-
-    mask = (f >= fmin) & (f <= fmax)
-    if np.count_nonzero(mask) < 10:
-        return None, None
-
-    diff = (m - t)[mask]
-
-    if c is not None and c.shape == f.shape:
-        w = np.clip(c[mask], 0.0, 1.0)
-        w = np.maximum(w, 0.05)
-        rms = float(np.sqrt(np.sum(w * diff * diff) / np.sum(w)))
-    else:
-        rms = float(np.sqrt(np.mean(diff * diff)))
-
-    m50 = 3.2
-    s = 0.9
-    match_pct = 100.0 / (1.0 + np.exp((rms - m50) / s))
-    match_pct = float(np.clip(match_pct, 0.0, 100.0))
-    if rms <= 0.4:
-        match_pct = 99.0
-
-    return rms, match_pct
+    return _target_match_from_stats_ssot(
+        stats or {},
+        include_filter=True,
+        use_confidence=True,
+        use_smart_scan_range=True,
+    )
 
 def calc_target_match_from_stats(stats: dict):
     """Laskee: calc target match from stats."""
@@ -316,6 +269,18 @@ def format_summary_content(settings, l_stats, r_stats):
     r_conf = _safe_float(r_stats.get("cmp_avg_confidence", r_stats.get("avg_confidence", 0.0)), 0.0)
     l_rms, l_match = _calc_target_match(l_stats)
     r_rms, r_match = _calc_target_match(r_stats)
+    l_rms_raw, l_match_raw = _target_match_from_stats_ssot(
+        l_stats or {},
+        include_filter=False,
+        use_confidence=True,
+        use_smart_scan_range=True,
+    )
+    r_rms_raw, r_match_raw = _target_match_from_stats_ssot(
+        r_stats or {},
+        include_filter=False,
+        use_confidence=True,
+        use_smart_scan_range=True,
+    )
 
     l_score = None
     if l_match is not None:
@@ -447,6 +412,11 @@ def format_summary_content(settings, l_stats, r_stats):
     lines.append("\n--- Target Curve Match ---")
     lines.append(f"Left:  {_fmt_match(l_match, l_rms)}")
     lines.append(f"Right: {_fmt_match(r_match, r_rms)}")
+    lines.append(
+        "Debug raw->pred: "
+        f"L {_fmt_match(l_match_raw, l_rms_raw)} -> {_fmt_match(l_match, l_rms)} | "
+        f"R {_fmt_match(r_match_raw, r_rms_raw)} -> {_fmt_match(r_match, r_rms)}"
+    )
 
     lines.append("\n--- Alignment and Peaks ---")
     lines.append(f"L peak (pre-norm): {_safe_float(l_stats.get('peak_before_norm', 0), 0):.2f} dB")

@@ -43,6 +43,7 @@ from .config.camillafir_pipeline import (
 )
 from .ui.camillafir_export import _write_fs_outputs
 from .dsp import camillafir_dsp as dsp
+from .dsp.target_match import target_match_from_stats
 from .ui import camillafir_plot as plots
 from camillafir.config.models import FilterConfig
 from .ui.camillafir_modes import apply_mode_to_cfg
@@ -771,45 +772,13 @@ def calculate_target_match(st):
     Vertailu tehdaan kayrille `(measured + filter)` vs. `target`, jonka
     RMS-virhe muunnetaan sigmoidilla prosenttipisteiksi.
     """
-    if not st:
-        return 0.0
-
-    freqs = np.asarray(_ui_pick(st, 'freq_axis') or [], dtype=float)
-    meas  = np.asarray(_ui_pick(st, 'measured_mags') or [], dtype=float)
-    target = np.asarray(_ui_pick(st, 'target_mags') or [], dtype=float)
-    filt  = np.asarray(_ui_pick(st, 'filter_mags') or [], dtype=float)
-
-    if freqs.size == 0 or meas.size == 0 or target.size == 0:
-        return 0.0
-
-    if filt.size == 0:
-        filt = np.zeros_like(meas, dtype=float)
-    if filt.size == 0:
-        filt = np.zeros_like(meas, dtype=float)
-
-    if target.size != freqs.size:
-        if target.size == _HOUSE_FREQS.size:
-            target = _resample_to_freq_axis(freqs, target, _HOUSE_FREQS)
-        else:
-            n = min(freqs.size, meas.size, target.size)
-            freqs, meas, target = freqs[:n], meas[:n], target[:n]
-
-    if filt.size != freqs.size:
-        if filt.size == _HOUSE_FREQS.size:
-            filt = _resample_to_freq_axis(freqs, filt, _HOUSE_FREQS)
-        else:
-            n = min(freqs.size, meas.size, filt.size, target.size)
-            freqs, meas, target, filt = freqs[:n], meas[:n], target[:n], filt[:n]
-
-    diff = (meas + filt) - target
-    rms = float(np.sqrt(np.mean(diff * diff)))
-
-    m0 = 3.2
-    s0 = 0.9
-    match_pct = 100.0 / (1.0 + np.exp((rms - m0) / s0))
-    if rms <= 0.4:
-        match_pct = 99.0
-    return float(np.clip(match_pct, 0.0, 100.0))
+    _rms, match_pct = target_match_from_stats(
+        st or {},
+        include_filter=True,
+        use_confidence=True,
+        use_smart_scan_range=True,
+    )
+    return float(match_pct) if match_pct is not None else 0.0
 
 
 
@@ -853,22 +822,13 @@ def calculate_target_match_unfiltered(st: dict) -> float:
     Vertailu tehdaan suoraan kayrille `measured` vs. `target` samalla
     sigmoidikartoituksella kuin suodatetussa target-match-laskennassa.
     """
-    if not st:
-        return 0.0
-    meas = np.asarray(_ui_pick(st, 'measured_mags') or [], dtype=float)
-    target = np.asarray(_ui_pick(st, 'target_mags') or [], dtype=float)
-    if meas.size == 0 or target.size == 0:
-        return 0.0
-    n = min(meas.size, target.size)
-    meas, target = meas[:n], target[:n]
-    diff = meas - target
-    rms = float(np.sqrt(np.mean(diff * diff)))
-    m0 = 3.2
-    s0 = 0.9
-    match_pct = 100.0 / (1.0 + np.exp((rms - m0) / s0))
-    if rms <= 0.4:
-        match_pct = 99.0
-    return float(np.clip(match_pct, 0.0, 100.0))
+    _rms, match_pct = target_match_from_stats(
+        st or {},
+        include_filter=False,
+        use_confidence=True,
+        use_smart_scan_range=True,
+    )
+    return float(match_pct) if match_pct is not None else 0.0
 
 def _inject_filter_mags_for_ui(st: dict, filt_ir, fs: int):
     """
@@ -924,34 +884,15 @@ def calculate_score(st, is_predicted=False):
     conf = float(st.get('cmp_avg_confidence', st.get('avg_confidence', 0.0)) or 0.0)
     conf = float(np.clip(conf, 0.0, 100.0))
 
-    meas = np.asarray(_ui_pick(st, 'measured_mags') or [], dtype=float)
-    target = np.asarray(_ui_pick(st, 'target_mags') or [], dtype=float)
-    filt = np.asarray(_ui_pick(st, 'filter_mags') or [], dtype=float)
-
-    if meas.size == 0 or target.size == 0:
+    _rms, match_pct = target_match_from_stats(
+        st or {},
+        include_filter=bool(is_predicted),
+        use_confidence=True,
+        use_smart_scan_range=True,
+    )
+    if match_pct is None:
         return float(np.clip(conf, 0.0, 99.0))
-
-    n = min(meas.size, target.size)
-    meas, target = meas[:n], target[:n]
-
-    if is_predicted:
-        if filt.size >= n:
-            filt = filt[:n]
-        elif filt.size > 0:
-            filt = np.pad(filt, (0, n - filt.size), mode='edge')
-        else:
-            filt = np.zeros(n, dtype=float)
-        diff = (meas + filt) - target
-    else:
-        diff = meas - target
-
-    rms = float(np.sqrt(np.mean(diff * diff)))
-    m0 = 3.2
-    s0 = 0.9
-    match_pct = 100.0 / (1.0 + np.exp((rms - m0) / s0))
-    if rms <= 0.4:
-        match_pct = 99.0
-    match_pct = float(np.clip(match_pct, 0.0, 100.0))
+    match_pct = float(match_pct)
 
     base = 0.55 * match_pct + 0.35 * conf
 
