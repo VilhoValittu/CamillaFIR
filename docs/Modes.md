@@ -1,4 +1,4 @@
-# CamillaFIR Modes: BASIC vs ADVANCED (v3.1.1.2)
+# CamillaFIR Modes: BASIC vs ADVANCED (v3.2.0)
 
 CamillaFIR has two operating modes.
 The DSP engine is the same in both modes. Modes change:

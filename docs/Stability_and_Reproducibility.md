@@ -1,4 +1,4 @@
-# Stability and Reproducibility (v3.1.1.2)
+# Stability and Reproducibility (v3.2.0)
 
 CamillaFIR is designed to avoid the classic failure mode:
 
@@ -17,7 +17,7 @@ Given the same:
 CamillaFIR produces repeatable outputs.
 
 The pipeline does not use stochastic optimization or random restarts.
-Release `v3.1.1.2` (2026-02-22) keeps this deterministic model and adds stronger startup validation in CI.
+Release `v3.2.0` (2026-02-23) keeps this deterministic model and adds stronger startup validation in CI.
 
 ## 2) Input robustness: TXT and WAV/IR
 
@@ -102,7 +102,7 @@ If two runs differ, diagnostics help explain why.
 
 ## Reproducible-run checklist
 
-1. Use the same app version (`v3.1.1.2` or newer pinned release).
+1. Use the same app version (`v3.2.0` or newer pinned release).
 2. Use identical measurement sources and source type (TXT vs WAV) per comparison.
 3. Keep base fs/taps fixed, or enable comparison mode.
 4. Keep correction guardrails fixed (boost/cut/slope/regularization/phase limit).

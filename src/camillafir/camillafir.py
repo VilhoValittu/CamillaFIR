@@ -56,7 +56,7 @@ from .ui.camillafir_utils import scale_taps_with_fs
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("CamillaFIR")
 
-VERSION = "v.3.1.1.2"
+VERSION = "v.3.2.0"
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000

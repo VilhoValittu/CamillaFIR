@@ -4,6 +4,17 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.2.0] - 2026-02-23
+
+### Core
+- Bumped app version to `v.3.2.0`.
+
+### Docs
+- Updated documentation version references to `v3.2.0`.
+- Updated citation metadata version to `3.2.0`.
+
+---
+
 ## [3.1.1.2] - 2026-02-22
 
 ### Build / CI
