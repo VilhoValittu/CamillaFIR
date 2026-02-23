@@ -64,7 +64,6 @@ Practical effect: small mic-position changes usually alter details, not the whol
 
 Phase processing is constrained by design:
 - `phase_limit` bounds correction bandwidth
-- optional `phase_safe_2058` disables room phase correction when needed
 - Mixed-phase excess correction is faded from LF to HF
 - Mixed-only limits cap excess delay and pre-ringing risk
 - adaptive excess-phase clamping and conditional GD spike guards improve robustness
@@ -107,7 +106,7 @@ If two runs differ, diagnostics help explain why.
 2. Use identical measurement sources and source type (TXT vs WAV) per comparison.
 3. Keep base fs/taps fixed, or enable comparison mode.
 4. Keep correction guardrails fixed (boost/cut/slope/regularization/phase limit).
-5. Keep phase strategy and `phase_safe_2058` state fixed.
+5. Keep phase strategy fixed.
 6. Keep headroom margin and stereo-link policy fixed.
 7. Verify System Health is clean before exporting.
 8. Compare Summary outputs and timing data when validating repeated runs.

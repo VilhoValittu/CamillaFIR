@@ -53,7 +53,6 @@ Phase correction can improve transients, but only if it is constrained.
 CamillaFIR provides multiple safety layers:
 - `phase_limit` to bound correction bandwidth
 - FDW / A-FDW to reduce reflection-driven phase noise
-- `phase_safe_2058` mode to disable room phase correction when needed
 - Mixed-phase excess correction fade (LF full correction -> HF no correction)
 - Mixed-only guards: `max_excess_delay_ms` and `max_pre_ringing_db`
 - adaptive excess-phase clamp behavior for robust operation
