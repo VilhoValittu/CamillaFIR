@@ -539,3 +539,6 @@ Practical guidance:
 - Use more taps when you need finer low-frequency control (room modes / long decay).
 - Use shorter time length when low latency is required (live monitoring / AV sync),
   accepting reduced LF resolution and relying more on conservative phase behaviour and safety guards.
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.

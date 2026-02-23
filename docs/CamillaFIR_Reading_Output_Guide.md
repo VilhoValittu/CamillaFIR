@@ -130,3 +130,6 @@ Use these first:
   - Re-verify measurement consistency
 
 Use re-measurement with filter enabled as the final validation.
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.

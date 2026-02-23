@@ -40,3 +40,6 @@ Many room-correction workflows:
 - more repeatable tuning between runs
 
 CamillaFIR intentionally avoids aggressive inversion and prioritizes corrections that remain stable and physically plausible.
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.

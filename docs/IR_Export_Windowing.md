@@ -68,3 +68,6 @@ For this reason, CamillaFIR:
 In short:  
 **DSP correction defines the filter behavior.  
 IR export windowing defines how that behavior is packaged in time.**
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.

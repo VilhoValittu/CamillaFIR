@@ -112,3 +112,6 @@ If two runs differ, diagnostics help explain why.
 8. Compare Summary outputs and timing data when validating repeated runs.
 
 **Bottom line:** CamillaFIR is reproducible because correction strength is bounded, phase is safety-limited, and the full run is observable end-to-end.
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.

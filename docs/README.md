@@ -99,3 +99,6 @@ Workarounds:
 
 ### TDC
 ![Effect of Temporal Decay Control](pics/tdc_impulse_example.png)
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.

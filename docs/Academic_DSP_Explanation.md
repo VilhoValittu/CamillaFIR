@@ -198,3 +198,6 @@ CamillaFIR stability is based on layered constraints:
 - excursion/low-bass safety policies,
 - bounded phase correction with adaptive clamp and mixed guards,
 - optional fixed comparison grid for repeatable scoring.
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.

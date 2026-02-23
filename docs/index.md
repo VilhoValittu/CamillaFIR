@@ -89,3 +89,6 @@ If you search for *“FIR filter maker”*, *“FIR filter generator”*, or *�
 
 👉 Go to the **latest release** and download the build for your OS:  
 https://github.com/VilhoValittu/CamillaFIR/releases
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.

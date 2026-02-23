@@ -148,3 +148,6 @@ Always re-measure with filter active:
 ## Download
 
 https://github.com/VilhoValittu/CamillaFIR/releases
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.

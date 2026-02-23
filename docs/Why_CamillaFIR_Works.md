@@ -116,3 +116,6 @@ If you want a robust workflow:
 5. Re-check output diagnostics and Summary before final deployment.
 
 See also image reference: `docs/pics/tdc_impulse_example.png`
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.

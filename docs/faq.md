@@ -192,3 +192,6 @@ Usually not. Deep nulls are typically position/room related, and boosting them o
 
 ### Do I need to re-measure?
 Yes—always verify with a measurement after applying the FIR filter.
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.

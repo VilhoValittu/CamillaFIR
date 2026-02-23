@@ -104,3 +104,6 @@ Goal: fewer policy constraints.
 - `src/camillafir/config/camillafir_pipeline.py` (BASIC leveling and pipeline policy)
 - `src/camillafir/ui/system_health.py` (BASIC health-gate blocking behavior)
 - `src/camillafir/camillafir.py` (runtime clamp reapply + global max boost safety cap)
+
+### Disclaimer
+AI was used to translate this document from Finnish to English.
