@@ -95,6 +95,42 @@ Alternative (Homebrew):
 brew install git
 ```
 
+### Update CamillaFIR With Git
+
+If you have no local changes:
+
+```bash
+cd CamillaFIR
+git pull
+```
+
+If you have local changes and want to keep them:
+
+```bash
+cd CamillaFIR
+git stash
+git pull
+git stash pop
+```
+
+After updating, activate your virtual environment and refresh dependencies:
+
+```bash
+# Windows (PowerShell)
+.\venv\Scripts\activate
+pip install -r requirements.txt
+
+# Ubuntu/macOS
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+For Ubuntu/Linux source installs, also run:
+
+```bash
+pip install -r requirements-linux.txt
+```
+
 ### Windows (PowerShell)
 
 ```powershell
