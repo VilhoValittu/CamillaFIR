@@ -1,6 +1,3 @@
-"""Moduulin suomenkielinen kuvaus."""
-
-
 def _tc_segment(target_curve_tag: str | None) -> str:
     tag = str(target_curve_tag or "").strip()
     return f"_{tag}" if tag else ""
@@ -89,7 +86,7 @@ def generate_raspberry_yaml(
         names: [mastergain, ir_right]
 
     processors: null
-    title: {ft_short} Window {irw_tag}
+    title: {ft_short} Window {irw_tag}{tc} {file_ts}
     """).strip()
 
 
