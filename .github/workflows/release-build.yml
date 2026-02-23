@@ -38,7 +38,7 @@ jobs:
       - name: Run tests
         shell: bash
         run: |
-          python -m pytest -q
+          python -m pytest -q tests
 
   build:
     name: Build on ${{ matrix.os }}

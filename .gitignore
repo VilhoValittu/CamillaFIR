@@ -22,4 +22,9 @@ analysis/
 .tmp_run_en_server.py
 build_pyival/
 dist_pyival/
-tests/data/
+tests/data/*
+!tests/data/L.txt
+!tests/data/golden/
+!tests/data/golden/diag_linear_44100.json
+!tests/data/summary/
+!tests/data/summary/Summary_Linear_44100Hz.txt
