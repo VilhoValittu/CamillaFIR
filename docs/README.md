@@ -20,6 +20,8 @@ OCA's videos motivated me to develop the program further.
 - Added run timing visibility in UI (read, DSP, ZIP/PNG, render, total).
 - Summary export now includes program version (`Version: v.3.2.0`).
 
+---
+
 ## Download
 
 - Windows: https://github.com/VilhoValittu/CamillaFIR/releases/latest
@@ -27,6 +29,8 @@ OCA's videos motivated me to develop the program further.
 - macOS builds are community-supported. Limited direct testing.
 - Linux: https://github.com/VilhoValittu/CamillaFIR/releases/latest
 - All releases: https://github.com/VilhoValittu/CamillaFIR/releases
+
+---
 
 ## Run From Release Package (Recommended)
 
@@ -94,42 +98,7 @@ Alternative (Homebrew):
 ```bash
 brew install git
 ```
-
-### Update CamillaFIR With Git
-
-If you have no local changes:
-
-```bash
-cd CamillaFIR
-git pull
-```
-
-If you have local changes and want to keep them:
-
-```bash
-cd CamillaFIR
-git stash
-git pull
-git stash pop
-```
-
-After updating, activate your virtual environment and refresh dependencies:
-
-```bash
-# Windows (PowerShell)
-.\venv\Scripts\activate
-pip install -r requirements.txt
-
-# Ubuntu/macOS
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-For Ubuntu/Linux source installs, also run:
-
-```bash
-pip install -r requirements-linux.txt
-```
+---
 
 ### Windows (PowerShell)
 
@@ -167,6 +136,44 @@ python3 src/camillafir/camillafir.py
 ```
 
 UI opens in browser at `http://127.0.0.1:8080`.
+
+---
+
+### Update CamillaFIR With Git
+
+If you have no local changes:
+
+```bash
+cd CamillaFIR
+git pull
+```
+
+If you have local changes and want to keep them:
+
+```bash
+cd CamillaFIR
+git stash
+git pull
+git stash pop
+```
+
+After updating, activate your virtual environment and refresh dependencies:
+
+```bash
+# Windows (PowerShell)
+.\venv\Scripts\activate
+pip install -r requirements.txt
+
+# macOS
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Ubuntu/Linux
+source venv/bin/activate
+pip install -r requirements-linux.txt
+```
+
+---
 
 ## What You Get
 
