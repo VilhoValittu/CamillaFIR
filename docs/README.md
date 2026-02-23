@@ -6,6 +6,12 @@ Stable release - feedback welcome: camillafir.py@gmail.com
 CamillaFIR generates high-resolution FIR room-correction filters from REW exports
 (magnitude + phase) and WAV/IR measurements.
 
+## Inspiration
+
+This program was inspired by OCA (https://www.youtube.com/@ocaudiophile).
+Originally, it was just a small phase-correction code snippet I wrote during the COVID-19 lockdowns.
+OCA's videos motivated me to develop the program further.
+
 ## v3.1.1 Highlights
 
 - WAV input parsing is aligned to a deterministic TXT-baseline policy for more consistent WAV vs TXT behavior.
