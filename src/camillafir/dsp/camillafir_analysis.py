@@ -19,6 +19,14 @@ def _sigma_bins_from_hz(freq_axis, sigma_hz: float, fallback_bins: float = 3.0) 
         return float(fallback_bins)
 
 
+def calculate_group_delay(freqs, phases_deg):
+    phase_rad = np.unwrap(np.deg2rad(phases_deg))
+    d_phi_d_f = np.gradient(phase_rad, freqs)
+    gd_ms = -d_phi_d_f / (2 * np.pi) * 1000.0
+    sigma_bins = _sigma_bins_from_hz(freqs, sigma_hz=2.0, fallback_bins=3.0)
+    return scipy.ndimage.gaussian_filter1d(gd_ms, sigma=sigma_bins)
+
+
 def analyze_acoustic_confidence(freq_axis, complex_meas, fs):
     phase_rad = np.unwrap(np.angle(complex_meas))
     df = np.gradient(freq_axis) + 1e-12

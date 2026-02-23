@@ -5,7 +5,7 @@ import numpy as np
 import scipy.fft
 import scipy.ndimage
 
-from .analysis import _sigma_bins_from_hz
+from .camillafir_analysis import _sigma_bins_from_hz
 from .limits import limit_slope_per_octave, limit_slope_per_octave_asym, soft_clip_gain
 from .phase import calculate_minimum_phase, calculate_theoretical_phase, combine_mixed_phase
 from .smoothing import smooth_gain_fractional_octave

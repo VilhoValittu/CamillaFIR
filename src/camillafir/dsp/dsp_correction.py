@@ -4,7 +4,7 @@ import numpy as np
 import scipy.ndimage
 
 from . import bassfirst as bf
-from .analysis import _sigma_bins_from_hz, calculate_rt60, calculate_rt60_bands
+from .camillafir_analysis import _sigma_bins_from_hz, calculate_rt60, calculate_rt60_bands
 from .camillafir_leveling import compute_leveling
 from .limits import (
     build_slope_limit_envelope,

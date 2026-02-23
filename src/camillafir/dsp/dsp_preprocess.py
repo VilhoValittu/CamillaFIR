@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .analysis import analyze_acoustic_confidence
+from .camillafir_analysis import analyze_acoustic_confidence
 from .camillafir_leveling import compute_leveling
 from .phase import remove_time_of_flight
 from .smoothing import apply_adaptive_fdw, apply_smoothing_std, psychoacoustic_smoothing
