@@ -97,52 +97,73 @@ def _raised_cosine_lp(freqs: np.ndarray, f0: float, f1: float) -> np.ndarray:
 
 def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=120.0, transition_hz=120.0):
     """
-    Yhdistaa lineaarivaiheisen ja minimivaiheisen impulssivasteen.
+    Combine linear-phase and minimum-phase IRs using EXCESS-phase blending.
 
-    Menetelma kohdistaa ensin huiput aikatasossa, sekoittaa sitten vaihe- ja
-    amplituditiedon taajuustasossa `split_freq`-kohdan ymparilla ja palauttaa
-    yhdistetyn aikatasoisen IR:n.
+    Idea:
+      phi_lin = phi_min + phi_excess
+      blend phi_excess in LF (linear) region and add it on top of phi_min
+
+    This tends to preserve a more "physical" phase transition and usually yields
+    smoother GD behavior than directly averaging absolute phases.
+
+    Args:
+        ir_lin, ir_min: time-domain impulses (same length)
+        fs: sample rate (Hz)
+        split_freq: center of crossfade (Hz). Below -> more linear, above -> more minimum.
+        transition_hz: width of raised-cosine crossfade band (Hz)
+
+    Returns:
+        Mixed-phase IR (time-domain), length = len(ir_lin)
     """
-    ir_lin = np.asarray(ir_lin, dtype=float)
-    ir_min = np.asarray(ir_min, dtype=float)
+    ir_lin = np.asarray(ir_lin, dtype=float).reshape(-1)
+    ir_min = np.asarray(ir_min, dtype=float).reshape(-1)
 
-    n = len(ir_lin)
-    if len(ir_min) != n:
+    n = int(ir_lin.size)
+    if ir_min.size != n:
         raise ValueError("ir_lin and ir_min must have the same length")
-
     if n < 8:
         return ir_lin.copy()
 
+    # --- time align peaks (same as your original) ---
     idx_lin = int(np.argmax(np.abs(ir_lin)))
     idx_min = int(np.argmax(np.abs(ir_min)))
     shift = idx_lin - idx_min
     ir_min_aligned = _shift_zeropad(ir_min, shift)
 
+    # --- FFT ---
     H_lin = np.fft.rfft(ir_lin)
     H_min = np.fft.rfft(ir_min_aligned)
     freqs = np.fft.rfftfreq(n, d=1.0 / float(fs))
 
+    # --- build raised-cosine LP weight (linear in LF) ---
     transition_hz = float(transition_hz)
-    if transition_hz <= 0:
-        W_lp = (freqs <= float(split_freq)).astype(float)
+    split_freq = float(split_freq)
+
+    if transition_hz <= 0.0:
+        W_lp = (freqs <= split_freq).astype(float)
     else:
-        f0 = max(0.0, float(split_freq) - transition_hz / 2.0)
-        f1 = float(split_freq) + transition_hz / 2.0
+        f0 = max(0.0, split_freq - transition_hz / 2.0)
+        f1 = split_freq + transition_hz / 2.0
         W_lp = _raised_cosine_lp(freqs, f0, f1)
 
-    W_hp = 1.0 - W_lp
-
+    # --- unwrap phases ---
     phi_lin = np.unwrap(np.angle(H_lin))
     phi_min = np.unwrap(np.angle(H_min))
-    phi = (W_lp * phi_lin) + (W_hp * phi_min)
 
+    # --- EXCESS phase relative to min-phase baseline ---
+    # Map to principal region first to avoid huge unwrap drift, then unwrap.
+    phi_excess = np.unwrap(np.angle(np.exp(1j * (phi_lin - phi_min))))
+
+    # Blend excess only in LF: min-phase + (LF-weighted excess)
+    phi = phi_min + (W_lp * phi_excess)
+
+    # Magnitude blend
     mag_lin = np.abs(H_lin)
     mag_min = np.abs(H_min)
-    mag = np.maximum((W_lp * mag_lin) + (W_hp * mag_min), 1e-12)
+    mag = np.maximum((W_lp * mag_lin) + ((1.0 - W_lp) * mag_min), 1e-12)
+
     H = mag * np.exp(1j * phi)
-
     ir = np.fft.irfft(H, n=n)
-
     return ir
     
 

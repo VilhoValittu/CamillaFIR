@@ -1,70 +1,90 @@
 from __future__ import annotations
 
-import math
 import numpy as np
-import scipy.fft
-import scipy.ndimage
 
-from .camillafir_analysis import _sigma_bins_from_hz
-from .limits import limit_slope_per_octave, limit_slope_per_octave_asym, soft_clip_gain
-from .phase import calculate_minimum_phase, calculate_theoretical_phase, combine_mixed_phase
-from .smoothing import smooth_gain_fractional_octave
+from .phase_ir_autogain import compute_auto_gain_and_headroom
+from .phase_ir_build import build_phase_and_ir
+from .phase_ir_phase import _compute_excess_phase
+from .phase_ir_residual import apply_residual_pass_if_enabled
+from .phase_ir_theoretical import compute_theoretical_phase_and_store_stats
+from .phase_ir_types import PhaseIRInputs, PhaseIROutputs
 
+__all__ = ("run_phase_ir_stage", "_compute_excess_phase")
 
-def _smoothstep01(x: np.ndarray) -> np.ndarray:
-    x = np.clip(np.asarray(x, dtype=float), 0.0, 1.0)
-    return x * x * (3.0 - 2.0 * x)
+_THEORETICAL_ALLOWED_KEYS = frozenset(
+    {
+        "theo_xo",
+        "theo_on_raw",
+        "theo_off_raw",
+        "xo_txt",
+        "hpf_txt",
+        "hpf_freq",
+        "hpf_slope",
+        "p_rad_interp",
+    }
+)
 
+_AUTOGAIN_ALLOWED_KEYS = frozenset(
+    {
+        "current_peak_gain",
+        "gain_margin_db",
+        "auto_global_gain_db",
+        "auto_headroom_db",
+        "final_gain_total",
+    }
+)
 
-def _mixed_excess_weight(freqs: np.ndarray, full_hz: float, none_hz: float) -> np.ndarray:
-    f = np.asarray(freqs, dtype=float)
-    w = np.zeros_like(f, dtype=float)
-    valid = np.isfinite(f) & (f > 0.0)
-    if not np.any(valid):
-        return w
-
-    f_full = float(max(20.0, full_hz))
-    f_none = float(max(f_full + 1.0, none_hz))
-
-    low = valid & (f <= f_full)
-    w[low] = 1.0
-    mid = valid & (f > f_full) & (f < f_none)
-    if np.any(mid):
-        x = (f[mid] - f_full) / (f_none - f_full)
-        w[mid] = 0.5 * (1.0 + np.cos(np.pi * x))
-    return np.clip(w, 0.0, 1.0)
-
-
-def _max_abs_group_delay_ms(freqs: np.ndarray, phase_rad: np.ndarray, mask: np.ndarray | None = None) -> float:
-    f = np.asarray(freqs, dtype=float)
-    p = np.unwrap(np.asarray(phase_rad, dtype=float))
-    if f.size < 4 or p.size != f.size:
-        return 0.0
-    w = 2.0 * np.pi * f
-    dw = np.gradient(w) + 1e-30
-    gd_ms = (-np.gradient(p) / dw) * 1000.0
-    if mask is None:
-        sel = np.isfinite(gd_ms)
-    else:
-        sel = np.asarray(mask, dtype=bool) & np.isfinite(gd_ms)
-    if not np.any(sel):
-        return 0.0
-    try:
-        return float(np.max(np.abs(gd_ms[sel])))
-    except Exception:
-        return 0.0
+_BUILD_ALLOWED_KEYS = frozenset(
+    {
+        "impulse",
+        "total_mag",
+        "min_phase",
+        "final_phase",
+        "mixed_split_hz",
+        "mixed_transition_hz",
+    }
+)
 
 
-def _pre_ringing_db(ir: np.ndarray) -> float:
-    x = np.asarray(ir, dtype=float)
-    if x.size < 8:
-        return float("-inf")
-    peak = int(np.argmax(np.abs(x)))
-    if peak <= 0:
-        return float("-inf")
-    pre_e = float(np.sum(np.square(x[:peak])))
-    post_e = float(np.sum(np.square(x[peak + 1:])))
-    return float(10.0 * np.log10((pre_e + 1e-30) / (post_e + 1e-30)))
+def _arrays_equal_strict(lhs, rhs) -> bool:
+    a = np.asarray(lhs)
+    b = np.asarray(rhs)
+    if a.shape != b.shape:
+        return False
+    if a.dtype.kind in ("f", "c") or b.dtype.kind in ("f", "c"):
+        return bool(np.allclose(a, b, atol=0.0, rtol=0.0, equal_nan=True))
+    return bool(np.array_equal(a, b))
+
+
+def _require_unchanged(stage: str, value_name: str, before, after) -> None:
+    if _arrays_equal_strict(before, after):
+        return
+    raise RuntimeError(
+        f"Phase-IR contract breach in {stage}: '{value_name}' was modified, "
+        "but this stage is not allowed to mutate it."
+    )
+
+
+def _require_scalar_unchanged(stage: str, value_name: str, before, after) -> None:
+    if bool(np.isclose(float(before), float(after), atol=0.0, rtol=0.0, equal_nan=True)):
+        return
+    raise RuntimeError(
+        f"Phase-IR contract breach in {stage}: scalar '{value_name}' changed "
+        "but must remain immutable in this stage."
+    )
+
+
+def _require_allowed_keys(stage: str, obj, allowed: frozenset[str]) -> None:
+    if not isinstance(obj, dict):
+        raise RuntimeError(
+            f"Phase-IR contract breach in {stage}: expected dict output, got {type(obj).__name__}."
+        )
+    extra = set(obj.keys()) - set(allowed)
+    if extra:
+        keys_txt = ", ".join(sorted(str(k) for k in extra))
+        raise RuntimeError(
+            f"Phase-IR contract breach in {stage}: unexpected output keys: {keys_txt}."
+        )
 
 
 def run_phase_ir_stage(
@@ -92,267 +112,86 @@ def run_phase_ir_stage(
     limit_gd_gradient_ms_per_oct_fn,
     cfg_float_allow_zero_fn,
 ):
-    apply_hpf_to_mags = apply_hpf_to_mags_fn
-    _limit_gd_gradient_ms_per_oct = limit_gd_gradient_ms_per_oct_fn
-    _cfg_float_allow_zero = cfg_float_allow_zero_fn
+    inputs = PhaseIRInputs(
+        cfg=cfg,
+        freq_axis=freq_axis,
+        n_fft=n_fft,
+        gain_db=gain_db,
+        p_rad_interp=p_rad_interp,
+        conf_mask=conf_mask,
+        m_anal=m_anal,
+        calc_offset_db=calc_offset_db,
+        target_mags=target_mags,
+        st=st,
+        mask_c=mask_c,
+        base_sigma=base_sigma,
+        filter_smooth=_filter_smooth,
+        df_mode=df_mode,
+        raw_g=raw_g,
+        final_g=final_g,
+        use_bassfirst=use_bassfirst,
+        afdw_on=afdw_on,
+        logger=logger,
+        apply_hpf_to_mags_fn=apply_hpf_to_mags_fn,
+        limit_gd_gradient_ms_per_oct_fn=limit_gd_gradient_ms_per_oct_fn,
+        cfg_float_allow_zero_fn=cfg_float_allow_zero_fn,
+    )
+    return _run_phase_ir_stage(inputs).to_legacy_dict()
 
-    hpf_freq = None
-    hpf_slope = None
+
+def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
+    cfg = inputs.cfg
+    freq_axis = np.asarray(inputs.freq_axis, dtype=float)
+    n_fft = int(inputs.n_fft)
+    gain_db = np.asarray(inputs.gain_db, dtype=float).copy()
+    p_rad_interp = np.asarray(inputs.p_rad_interp, dtype=float).copy()
+    conf_mask = inputs.conf_mask
+    m_anal = np.asarray(inputs.m_anal, dtype=float)
+    calc_offset_db = float(inputs.calc_offset_db)
+    target_mags = np.asarray(inputs.target_mags, dtype=float)
+    st = inputs.st
+    mask_c = np.asarray(inputs.mask_c, dtype=bool)
+    base_sigma = inputs.base_sigma
+    _filter_smooth = inputs.filter_smooth
+    df_mode = inputs.df_mode
+    raw_g = inputs.raw_g
+    final_g = inputs.final_g
+    use_bassfirst = bool(inputs.use_bassfirst)
+    afdw_on = bool(inputs.afdw_on)
+    logger = inputs.logger
+    apply_hpf_to_mags = inputs.apply_hpf_to_mags_fn
+    _limit_gd_gradient_ms_per_oct = inputs.limit_gd_gradient_ms_per_oct_fn
+    _cfg_float_allow_zero = inputs.cfg_float_allow_zero_fn
+
+    gain_db_before_theoretical = gain_db.copy()
+    p_rad_input_for_theoretical = p_rad_interp.copy()
+    theo = compute_theoretical_phase_and_store_stats(
+        cfg=cfg,
+        freq_axis=freq_axis,
+        p_rad_interp=p_rad_input_for_theoretical,
+        st=st,
+        logger=logger,
+    )
+    _require_allowed_keys("phase_ir_theoretical", theo, _THEORETICAL_ALLOWED_KEYS)
+    _require_unchanged(
+        "phase_ir_theoretical",
+        "gain_db",
+        gain_db_before_theoretical,
+        gain_db,
+    )
+    _require_unchanged(
+        "phase_ir_theoretical",
+        "p_rad_interp input",
+        p_rad_interp,
+        p_rad_input_for_theoretical,
+    )
+
+    theo_xo = np.asarray(theo["theo_xo"], dtype=float)
+    hpf_freq = theo.get("hpf_freq", None)
+    hpf_slope = theo.get("hpf_slope", None)
+    p_rad_interp = np.asarray(theo.get("p_rad_interp", p_rad_interp), dtype=float)
+
     hs = cfg.hpf_settings
-
-    if isinstance(hs, dict) and hs.get('enabled'):
-        hpf_freq = float(hs.get('freq', 0.0) or 0.0)
-        hpf_order = int(hs.get('order', 0) or 0)
-        if hpf_freq > 0 and hpf_order > 0:
-            hpf_slope = float(hpf_order * 6)
-
-    try:
-        xo_list = getattr(cfg, "crossovers", None) or []
-        if xo_list:
-            xo_txt = ", ".join([
-                f"{float(x.get('freq',0.0)):.1f}Hz/{int(x.get('slope', int(x.get('order',1))*6))}dB/oct"
-                for x in xo_list if x.get("freq", None) is not None
-            ])
-        else:
-            xo_txt = "off"
-        if hpf_freq and hpf_slope and float(hpf_freq) > 0 and float(hpf_slope) > 0:
-            hpf_txt = f"{float(hpf_freq):.1f}Hz/{int(round(float(hpf_slope)))}dB/oct"
-        else:
-            hpf_txt = "off"
-        logger.info(f"Phase model: XO={xo_txt} | HPF={hpf_txt}")
-    except Exception:
-        xo_txt = "n/a"
-        hpf_txt = "n/a"
-
-    theo_on_raw = calculate_theoretical_phase(
-        freq_axis,
-        cfg.crossovers,
-        hpf_freq=hpf_freq,
-        hpf_slope=hpf_slope,
-        max_phase_deg=None
-    )
-    theo_off_raw = calculate_theoretical_phase(
-        freq_axis,
-        [],
-        hpf_freq=None,
-        hpf_slope=None,
-        max_phase_deg=None
-    )
-
-    theo_xo = calculate_theoretical_phase(
-        freq_axis,
-        cfg.crossovers,
-        hpf_freq=hpf_freq,
-        hpf_slope=hpf_slope,
-        max_phase_deg=None
-    )
-    try:
-        xo_list = getattr(cfg, "crossovers", None) or []
-        hpf_on = (hpf_freq and hpf_slope and float(hpf_freq) > 0 and float(hpf_slope) > 0)
-
-        if xo_list or hpf_on:
-            f = np.asarray(freq_axis, float)
-
-            theo_on_raw = calculate_theoretical_phase(
-                f,
-                xo_list,
-                hpf_freq=hpf_freq,
-                hpf_slope=hpf_slope,
-                max_phase_deg=None
-            )
-            theo_off_raw = calculate_theoretical_phase(
-                f,
-                [],
-                hpf_freq=None,
-                hpf_slope=None,
-                max_phase_deg=None
-            )
-
-            dphi_raw = np.unwrap(np.asarray(theo_on_raw, float) - np.asarray(theo_off_raw, float))
-            dphi_raw_deg = np.rad2deg(dphi_raw)
-
-            def _wrap_deg(x_deg: np.ndarray) -> np.ndarray:
-                return (x_deg + 180.0) % 360.0 - 180.0
-
-            dphi_wrapped_deg = _wrap_deg(dphi_raw_deg)
-
-            xo_mask = np.zeros_like(f, dtype=bool)
-            xo_band_masks = []
-            for xo in xo_list:
-                try:
-                    fc = float(xo.get("freq", 0.0) or 0.0)
-                except Exception:
-                    continue
-                if fc > 0:
-                    m = (f >= fc / 4.0) & (f <= fc * 4.0)
-                    xo_mask |= m
-                    xo_band_masks.append((fc, m))
-
-            hpf_mask = np.zeros_like(f, dtype=bool)
-            if hpf_on:
-                fc = float(hpf_freq)
-                hpf_mask |= (f >= max(fc / 8.0, 10.0)) & (f <= fc * 2.0)
-
-            wide_mask = np.isfinite(f) & (f >= 20.0) & (f <= float(np.nanmax(f)))
-            if np.count_nonzero(xo_mask) < 8:
-                xo_mask = wide_mask
-            if np.count_nonzero(hpf_mask) < 8:
-                hpf_mask = wide_mask if hpf_on else np.zeros_like(f, dtype=bool)
-
-            def _max_abs_in_mask(arr, mask):
-                a = np.asarray(arr, float)
-                m = np.asarray(mask, bool)
-                if np.count_nonzero(m) < 8:
-                    return None, None
-                aa = np.where(m, np.abs(a), -1.0)
-                idx = int(np.argmax(aa))
-                if aa[idx] < 0:
-                    return None, None
-                return float(np.abs(a[idx])), float(f[idx])
-
-            xo_phi, xo_phi_hz = _max_abs_in_mask(dphi_wrapped_deg, xo_mask)
-            if xo_phi is not None:
-                st["xo_diff_raw_max_phase_deg"] = xo_phi
-                st["xo_diff_raw_max_phase_hz"] = xo_phi_hz
-
-                best_fc = None
-                if xo_band_masks:
-                    candidates = []
-                    for fc, m in xo_band_masks:
-                        try:
-                            idx_win = int(np.argmin(np.abs(f - xo_phi_hz)))
-                        except Exception:
-                            continue
-                        if bool(m[idx_win]):
-                            candidates.append(fc)
-                    if candidates:
-                        best_fc = float(min(candidates, key=lambda c: abs(float(c) - float(xo_phi_hz))))
-                    else:
-                        best_fc = float(min([fc for fc, _ in xo_band_masks], key=lambda c: abs(float(c) - float(xo_phi_hz))))
-                if best_fc is not None:
-                    st["xo_diff_raw_max_phase_xo_fc_hz"] = float(best_fc)
-
-            for i, xo in enumerate(xo_list, start=1):
-                try:
-                    fc = float(xo.get("freq", 0.0) or 0.0)
-                except Exception:
-                    continue
-                if fc <= 0:
-                    continue
-                idx_fc = int(np.argmin(np.abs(f - fc)))
-                st[f"xo{i}_dphi_wrapped_deg@fc"] = float(dphi_wrapped_deg[idx_fc])
-
-            for i, xo in enumerate(xo_list, start=1):
-                try:
-                    fc = float(xo.get("freq", 0.0) or 0.0)
-                except Exception:
-                    continue
-                if fc <= 0:
-                    continue
-                idx_fc = int(np.argmin(np.abs(f - fc)))
-                try:
-                    st[f"xo{i}_dgd_ms@fc"] = float(dgd[idx_fc])
-                except Exception:
-                    pass
-
-            hpf_phi, hpf_phi_hz = _max_abs_in_mask(dphi_raw_deg, hpf_mask)
-            if hpf_on and hpf_phi is not None:
-                st["hpf_diff_raw_max_phase_deg"] = hpf_phi
-                st["hpf_diff_raw_max_phase_hz"] = hpf_phi_hz
-
-            w = 2.0 * math.pi * f
-            dw = np.gradient(w) + 1e-30
-            ph_on = np.unwrap(np.asarray(theo_on_raw, float))
-            ph_off = np.unwrap(np.asarray(theo_off_raw, float))
-            gd_on = (-np.gradient(ph_on) / dw) * 1000.0
-            gd_off = (-np.gradient(ph_off) / dw) * 1000.0
-            dgd = gd_on - gd_off
-
-            for i, xo in enumerate(xo_list, start=1):
-                try:
-                    fc = float(xo.get("freq", 0.0) or 0.0)
-                except Exception:
-                    continue
-                if fc <= 0:
-                    continue
-                idx_fc = int(np.argmin(np.abs(f - fc)))
-                try:
-                    st[f"xo{i}_dgd_ms@fc"] = float(dgd[idx_fc])
-                except Exception:
-                    pass
-
-            xo_gd, xo_gd_hz = _max_abs_in_mask(dgd, xo_mask)
-            if xo_gd is not None:
-                st["xo_diff_raw_max_gd_ms"] = xo_gd
-                st["xo_diff_raw_max_gd_hz"] = xo_gd_hz
-                try:
-                    best_fc_gd = None
-                    if xo_band_masks:
-                        idx_win = int(np.argmin(np.abs(f - xo_gd_hz)))
-                        candidates = [fc for fc, m in xo_band_masks if bool(m[idx_win])]
-                        if candidates:
-                            best_fc_gd = float(min(candidates, key=lambda c: abs(float(c) - float(xo_gd_hz))))
-                        else:
-                            best_fc_gd = float(min([fc for fc, _ in xo_band_masks], key=lambda c: abs(float(c) - float(xo_gd_hz))))
-                    if best_fc_gd is not None:
-                        st["xo_diff_raw_max_gd_xo_fc_hz"] = float(best_fc_gd)
-                except Exception:
-                    pass
-
-            hpf_gd, hpf_gd_hz = _max_abs_in_mask(dgd, hpf_mask)
-            if hpf_on and hpf_gd is not None:
-                st["hpf_diff_raw_max_gd_ms"] = hpf_gd
-                st["hpf_diff_raw_max_gd_hz"] = hpf_gd_hz
-
-    except Exception as e:
-        logger.debug("XO raw diff indicator failed: %s", e)
-
-
-
-    try:
-        st["xo_summary"] = xo_txt
-        st["hpf_summary"] = hpf_txt
-        for fchk in (20.0, 80.0, 200.0, 1000.0, 5000.0):
-            idx = int(np.argmin(np.abs(freq_axis - fchk)))
-            st[f"theo_xo_deg@{int(fchk)}Hz"] = float(np.rad2deg(theo_xo[idx]))
-    except Exception:
-        pass
-
-    try:
-        phase_lim = float(getattr(cfg, "phase_limit", 0.0) or 0.0)
-        if phase_lim > 0.0 and freq_axis.size == theo_xo.size:
-            f0 = float(phase_lim)
-            f1 = float(phase_lim) * 1.41
-
-            f_min = float(freq_axis[0]) if freq_axis.size else 0.0
-            f_max = float(freq_axis[-1]) if freq_axis.size else 0.0
-            f0 = max(f0, max(f_min, 1e-6))
-            f1 = min(f1, f_max)
-
-            if f1 <= f0:
-                mask = freq_axis <= f0
-                p_rad_interp = np.where(mask, p_rad_interp, theo_xo)
-            else:
-                w = (freq_axis - f0) / (f1 - f0)
-                w = np.clip(w, 0.0, 1.0)
-
-                p_rad_interp = (1.0 - w) * p_rad_interp + w * theo_xo
-    except Exception:
-        pass
-
-    if hpf_freq and hpf_slope:
-        logger.info(
-            f"Theoretical phase includes HPF: f={hpf_freq:.1f} Hz, "
-            f"slope={hpf_slope:.0f} dB/oct (order={int(hpf_slope/6)})"
-        )
-    else:
-        logger.info("Theoretical phase: HPF not included")
-    
-    if getattr(cfg, "phase_safe_2058", False):
-        logger.info("Phase mode: 2058-safe (no room phase correction)")
-    else:
-        logger.info("Phase mode: modern (excess-phase + confidence + FDW)")
-
     if isinstance(hs, dict) and hs.get('enabled'):
         hpf_f = float(hs.get('freq', 0.0) or 0.0)
         hpf_order = int(hs.get('order', 0) or 0)
@@ -369,857 +208,178 @@ def run_phase_ir_stage(
             except Exception:
                 pass
 
-    if bool(getattr(cfg, "enable_residual_pass", False)) and bool(getattr(cfg, "enable_mag_correction", True)):
-        try:
-            def _reapply_mag_constraints(_g):
-                """Sisainen apufunktio: reapply mag constraints."""
-                _g = np.asarray(_g, dtype=float).copy()
-
-                try:
-                    low_hz = _cfg_float_allow_zero(cfg, "low_bass_cut_hz", 40.0)
-                    low_mask = mask_c & (freq_axis > 0) & (freq_axis <= low_hz)
-                    if np.any(low_mask):
-                        _g[low_mask] = np.minimum(_g[low_mask], 0.0)
-                        if 'raw_g' in locals() and 'final_g' in locals():
-                            low_cut = np.minimum(final_g[low_mask], raw_g[low_mask])
-                            low_cut = np.minimum(low_cut, 0.0)
-                            _g[low_mask] = np.minimum(_g[low_mask], low_cut)
-                except Exception:
-                    pass
-
-                try:
-                    max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
-                    _g = soft_clip_gain(
-                        _g,
-                        float(getattr(cfg, "max_boost_db", 0.0) or 0.0),
-                        max_cut_db
-                    )
-                except Exception:
-                    pass
-
-                try:
-                    max_slope = float(getattr(cfg, "max_slope_db_per_oct", 24.0) or 0.0)
-                    max_slope_boost = float(getattr(cfg, "max_slope_boost_db_per_oct", 0.0) or 0.0)
-                    max_slope_cut   = float(getattr(cfg, "max_slope_cut_db_per_oct", 0.0) or 0.0)
-                    if max_slope_boost <= 0.0:
-                        max_slope_boost = max_slope
-                    if max_slope_cut <= 0.0:
-                        max_slope_cut = max_slope
-
-                    if max_slope > 0 or max_slope_boost > 0 or max_slope_cut > 0:
-                        if max_slope_boost == max_slope_cut and max_slope_boost > 0:
-                            _g = limit_slope_per_octave(freq_axis, _g, max_db_per_oct=float(max_slope_boost))
-                        else:
-                            _g = limit_slope_per_octave_asym(
-                                freq_axis,
-                                _g,
-                                max_db_per_oct_boost=float(max_slope_boost),
-                                max_db_per_oct_cut=float(max_slope_cut),
-                            )
-                except Exception:
-                    pass
-
-                try:
-                    mag_c_min = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
-                    mag_c_max = float(getattr(cfg, "mag_c_max", 0.0) or 0.0)
-                    trans_w   = float(getattr(cfg, "trans_width", 0.0) or 0.0)
-                    if mag_c_max > 0 and trans_w > 0:
-                        f_start = max(mag_c_max - trans_w, mag_c_min)
-                        f_mask = (freq_axis > f_start) & (freq_axis <= mag_c_max)
-                        fade_len = mag_c_max - f_start
-                        if np.any(f_mask) and fade_len > 0:
-                            _g[f_mask] *= (mag_c_max - freq_axis[f_mask]) / fade_len
-                except Exception:
-                    pass
-
-                try:
-                    if bool(getattr(cfg, "is_wav_source", False)):
-                        mag_c_min = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
-                        mag_c_max = float(getattr(cfg, "mag_c_max", 0.0) or 0.0)
-                        trans_w = float(getattr(cfg, "trans_width", 0.0) or 0.0)
-                        if np.isfinite(mag_c_min) and np.isfinite(mag_c_max) and (mag_c_max > mag_c_min):
-                            if (not np.isfinite(trans_w)) or trans_w <= 0.0:
-                                trans_w = max(50.0, 0.4 * mag_c_max)
-
-                            f_lo = max(mag_c_min, mag_c_max - 1.00 * trans_w)
-                            f_hi = min(float(np.max(freq_axis)), mag_c_max + 1.50 * trans_w)
-                            z = (freq_axis >= f_lo) & (freq_axis <= f_hi)
-                            if int(np.count_nonzero(z)) >= 8:
-                                g0 = np.asarray(_g, dtype=float).copy()
-                                sigma_bins = _sigma_bins_from_hz(freq_axis, sigma_hz=8.0, fallback_bins=12.0)
-                                g_sm = scipy.ndimage.gaussian_filter1d(g0, sigma=float(max(2.0, sigma_bins)))
-
-                                x = np.zeros_like(g0, dtype=float)
-                                span = max(1e-9, float(f_hi - f_lo))
-                                x[z] = np.clip((freq_axis[z] - f_lo) / span, 0.0, 1.0)
-                                w = np.zeros_like(g0, dtype=float)
-                                w[z] = 0.5 - 0.5 * np.cos(np.pi * x[z])
-
-                                _g = g0 + (g_sm - g0) * (0.95 * w)
-                except Exception:
-                    pass
-
-                try:
-                    if bool(getattr(cfg, "exc_prot", False)):
-                        f_start = float(getattr(cfg, "exc_freq", 0.0) or 0.0)
-                        if f_start > 0:
-                            f_end = f_start * 1.41
-                            prot_mask = freq_axis < f_start
-                            _g[prot_mask] = np.minimum(_g[prot_mask], 0.0)
-                            trans_mask = (freq_axis >= f_start) & (freq_axis <= f_end)
-                            if np.any(trans_mask):
-                                fade = (freq_axis[trans_mask] - f_start) / (f_end - f_start)
-                                allowed_boost = fade * float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
-                                _g[trans_mask] = np.minimum(_g[trans_mask], allowed_boost)
-                except Exception:
-                    pass
-
-
-                try:
-                    max_cut_db2 = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
-                    _g = np.minimum(_g, float(getattr(cfg, "max_boost_db", 0.0) or 0.0))
-                    _g = np.maximum(_g, -max_cut_db2)
-                except Exception:
-                    pass
-
-                return _g
-
-            measured_aligned = (m_anal - calc_offset_db)
-            pred0 = measured_aligned + gain_db
-            resid0 = (target_mags - pred0)
-
-            resid = np.zeros_like(gain_db, dtype=float)
-            resid[mask_c] = resid0[mask_c]
-
-            k = float(getattr(cfg, "residual_conf_power", 2.0) or 2.0)
-            try:
-                if conf_mask is not None:
-                    resid[mask_c] *= np.clip(conf_mask[mask_c], 0.0, 1.0) ** k
-            except Exception:
-                pass
-
-            strength = float(getattr(cfg, "residual_strength", 0.6) or 0.6)
-            strength = float(np.clip(strength, 0.0, 1.0))
-            mult = float(getattr(cfg, "residual_smoothing_mult", 2.0) or 2.0)
-            mult = max(1.0, float(mult))
-
-            _base_sigma = locals().get('base_sigma', 60 // (_filter_smooth / 12 if _filter_smooth > 0 else 1))
-            _df_mode = bool(locals().get('df_mode', bool(getattr(cfg, "df_smoothing", False))))
-            if _df_mode:
-                df_ref = 44100.0 / 65536.0
-                sigma_hz = float(_base_sigma) * df_ref * mult
-                sigma_bins = _sigma_bins_from_hz(
-                    freq_axis,
-                    sigma_hz=sigma_hz,
-                    fallback_bins=max(2.0, float(_base_sigma) * mult)
-                )
-                resid_sm = scipy.ndimage.gaussian_filter1d(resid, sigma=float(sigma_bins))
-            else:
-                resid_sm = smooth_gain_fractional_octave(
-                    freq_axis,
-                    resid,
-                    _filter_smooth,
-                    mult=mult,
-                )
-
-            gain_db[mask_c] = gain_db[mask_c] + (resid_sm[mask_c] * strength)
-
-            gain_db = _reapply_mag_constraints(gain_db)
-
-            try:
-                if isinstance(st, dict):
-                    st["residual_pass_enabled"] = True
-                    st["residual_strength"] = float(strength)
-                    st["residual_smoothing_mult"] = float(mult)
-                    st["residual_conf_power"] = float(k)
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-    try:
-        _g_all = np.asarray(gain_db, dtype=float)
-        _g_all = _g_all[np.isfinite(_g_all)]
-        current_peak_gain = float(np.max(_g_all)) if _g_all.size else 0.0
-    except Exception:
-        current_peak_gain = 0.0
-
-    try:
-        gain_margin_db = float(
-            getattr(cfg, "auto_gain_margin_db", getattr(cfg, "global_gain_db", 0.0)) or 0.0
-        )
-    except Exception:
-        gain_margin_db = 0.0
-    if (not np.isfinite(gain_margin_db)) or (gain_margin_db < 0.0):
-        gain_margin_db = 0.0
-
-    auto_headroom_db = 0.0
-    auto_global_gain_db = 0.0
-    try:
-        if bool(getattr(cfg, "debug_stage_stats", True)):
-            _v = np.asarray(gain_db, dtype=float)
-            _m = np.asarray(mask_c, dtype=bool)
-            _vv = _v[_m] if (_m.shape == _v.shape and np.any(_m)) else _v
-            _vv = _vv[np.isfinite(_vv)]
-            if _vv.size >= 4:
-                logger.info(
-                    "StageStats: gain_db_pre_headroom: "
-                    f"max={float(np.max(_vv)):.3f} dB, "
-                    f"min={float(np.min(_vv)):.3f} dB, "
-                    f"rms={float(np.sqrt(np.mean(_vv * _vv))):.3f} dB"
-                )
-    except Exception:
-        pass
-
-    try:
-        _override = getattr(cfg, "auto_gain_db_override", None)
-        if _override is None:
-            raise ValueError("no override")
-        auto_global_gain_db = float(_override)
-        if not np.isfinite(auto_global_gain_db):
-            raise ValueError("non-finite override")
-        logger.info(
-            f"Auto Level: using shared override {auto_global_gain_db:.2f} dB "
-            f"(peak={current_peak_gain:.2f} dB, margin={gain_margin_db:.2f} dB)"
-        )
-    except Exception:
-        auto_global_gain_db = -max(0.0, float(current_peak_gain)) - float(gain_margin_db)
-        logger.info(
-            f"Auto Level: peak={current_peak_gain:.2f} dB + margin={gain_margin_db:.2f} dB "
-            f"-> auto_global_gain={auto_global_gain_db:.2f} dB"
-        )
-
-    if bool(getattr(cfg, "do_normalize", False)):
-        peak_after_auto = float(current_peak_gain + auto_global_gain_db)
-        if peak_after_auto > -0.1:
-            auto_headroom_db = -peak_after_auto - 0.1
-            logger.info(
-                f"Clip Prevention (Normalize ON): post-auto peak={peak_after_auto:.2f} dB "
-                f"-> extra headroom={auto_headroom_db:.2f} dB"
-            )
-        else:
-            logger.info(
-                f"Clip Prevention (Normalize ON): no extra headroom needed "
-                f"(post-auto peak={peak_after_auto:.2f} dB)"
-            )
-
-    final_gain_total = gain_db + auto_global_gain_db + auto_headroom_db
-    total_mag = 10**(final_gain_total / 20.0)
-    min_p = calculate_minimum_phase(total_mag, max_phase_deg=None)
-
-
-    is_mixed = ('Mixed' in cfg.filter_type_str)
-    low_phase = None
-    mixed_split_hz = float(np.clip(
-        float(getattr(cfg, "mixed_split_freq", 300.0) or 300.0),
-        20.0,
-        float(cfg.fs) * 0.49,
-    ))
-    mixed_transition_hz = float(getattr(cfg, "trans_width", mixed_split_hz) or mixed_split_hz)
-    if not np.isfinite(mixed_transition_hz) or mixed_transition_hz < 0.0:
-        mixed_transition_hz = mixed_split_hz
-
-    if bool(getattr(cfg, "phase_safe_2058", False)):
-
-        if 'Min' in cfg.filter_type_str:
-            final_phase = min_p
-
-        elif is_mixed:
-            low_phase = -theo_xo
-            final_phase = low_phase
-
-        else:
-            final_phase = -theo_xo
-
-    else:
-
-        try:
-            conf_arr = np.asarray(conf_mask, dtype=float) if conf_mask is not None else np.ones_like(freq_axis, dtype=float)
-            conf_s = scipy.ndimage.gaussian_filter1d(conf_arr, sigma=2)
-            conf_s = np.clip(conf_s, 0.0, 1.0)
-        except Exception:
-            conf_s = np.clip(conf_arr if 'conf_arr' in locals() else np.ones_like(freq_axis, dtype=float), 0.0, 1.0)
-
-        phase_lim_hz = float(getattr(cfg, "phase_limit", 1000.0))
-        phase_mask = (freq_axis > 0) & (freq_axis <= phase_lim_hz)
-
-        try:
-            fade_oct = 1.0 / 1.0
-            f1 = float(phase_lim_hz)
-            f0_fade = f1 / (2.0 ** fade_oct)
-            if f0_fade < (f1 - 1.0):
-                x = (freq_axis - f0_fade) / (f1 - f0_fade + 1e-12)
-                x = np.clip(x, 0.0, 1.0)
-                w_hi = 0.5 * (1.0 + np.cos(np.pi * x))
-                w_hi = np.where(freq_axis <= f0_fade, 1.0, w_hi)
-                w_hi = np.where(freq_axis >= f1, 0.0, w_hi)
-            else:
-                w_hi = np.ones_like(freq_axis, dtype=float)
-        except Exception:
-            w_hi = np.ones_like(freq_axis, dtype=float)
-        excess_phase = (p_rad_interp - theo_xo)
-
-        phase_weight = np.zeros_like(freq_axis, dtype=float)
-        if is_mixed:
-            full_hz = float(getattr(cfg, "low_freq_full_correction_hz", mixed_split_hz) or mixed_split_hz)
-            none_hz = float(getattr(cfg, "high_freq_no_correction_hz", phase_lim_hz) or phase_lim_hz)
-            if phase_lim_hz > 0.0:
-                none_hz = min(none_hz, phase_lim_hz)
-            if none_hz <= (full_hz + 1.0):
-                none_hz = full_hz + 1.0
-
-            phase_weight = _mixed_excess_weight(freq_axis, full_hz, none_hz)
-            phase_weight *= phase_mask.astype(float)
-
-            strength = float(getattr(cfg, "excess_phase_strength", 0.9) or 0.0)
-            strength = float(np.clip(strength, 0.0, 1.0))
-            phase_weight *= strength
-
-            try:
-                if isinstance(st, dict):
-                    st["mixed_phase_strength"] = float(strength)
-                    st["mixed_phase_full_correction_hz"] = float(full_hz)
-                    st["mixed_phase_no_correction_hz"] = float(none_hz)
-            except Exception:
-                pass
-        else:
-            bass_f2 = float(np.clip(phase_lim_hz, 20.0, 400.0))
-            f0, w0 = 20.0, 0.30
-            f2, w2 = bass_f2, 0.00
-            f1 = float(np.clip(0.5 * f2, 80.0, 140.0))
-            w1 = float(np.clip(0.20 - 0.04 * ((f1 - 100.0) / 40.0), 0.14, 0.20))
-            if f2 <= (f1 + 1.0):
-                f2 = f1 + 1.0
-
-            bass_band = phase_mask & (freq_axis >= f0) & (freq_axis <= f2)
-            f = freq_axis[bass_band]
-            w = np.empty_like(f, dtype=float)
-            seg1 = f <= f1
-            x1 = (f[seg1] - f0) / (f1 - f0)
-            s1 = _smoothstep01(x1)
-            w[seg1] = w0 + (w1 - w0) * s1
-            seg2 = ~seg1
-            x2 = (f[seg2] - f1) / (f2 - f1)
-            s2 = _smoothstep01(x2)
-            w[seg2] = w1 + (w2 - w1) * s2
-            phase_weight[bass_band] = np.maximum(phase_weight[bass_band], w)
-
-        try:
-            phase_weight *= w_hi
-        except Exception:
-            pass
-
-        try:
-            conf_floor = 0.10
-            conf_power = 1.25
-            conf_gain = np.clip(conf_s, 0.0, 1.0) ** conf_power
-            conf_gain = conf_floor + (1.0 - conf_floor) * conf_gain
-            phase_weight *= conf_gain
-        except Exception:
-            pass
-
-        extra_phase = -excess_phase * phase_weight
-
-        try:
-            extra_phase_before = np.asarray(extra_phase, dtype=float).copy()
-
-            if is_mixed:
-                clamp_max_deg = float(getattr(cfg, "mixed_phase_budget_lf_deg", 45.0) or 45.0)
-                clamp_min_deg = float(getattr(cfg, "mixed_phase_budget_hf_deg", 22.5) or 22.5)
-            else:
-                clamp_max_deg = 45.0
-                clamp_min_deg = 15.0
-            if clamp_max_deg < clamp_min_deg:
-                clamp_max_deg, clamp_min_deg = clamp_min_deg, clamp_max_deg
-
-            conf_part = np.clip(conf_s, 0.0, 1.0) ** 0.85
-
-            if phase_lim_hz > 0.0:
-                freq_rel = np.clip((phase_lim_hz - freq_axis) / max(phase_lim_hz, 1e-9), 0.0, 1.0)
-            else:
-                freq_rel = np.ones_like(freq_axis, dtype=float)
-            freq_part = np.sqrt(freq_rel)
-
-            blend = 0.70 * conf_part + 0.30 * freq_part
-            limit_deg_arr = clamp_min_deg + (clamp_max_deg - clamp_min_deg) * blend
-            limit_deg_arr = np.clip(limit_deg_arr, clamp_min_deg, clamp_max_deg)
-            limit_rad_arr = np.deg2rad(limit_deg_arr)
-
-            _before_rad = float(np.max(np.abs(extra_phase)))
-            extra_phase = np.clip(extra_phase, -limit_rad_arr, limit_rad_arr)
-            _after_rad = float(np.max(np.abs(extra_phase)))
-
-            _before_deg = float(np.rad2deg(_before_rad))
-            _after_deg = float(np.rad2deg(_after_rad))
-            _clipped = bool(np.any(np.abs(extra_phase_before) > (limit_rad_arr + 1e-12)))
-
-            try:
-                _clipped_bins = int(np.sum((np.abs(extra_phase_before) > (limit_rad_arr + 1e-12)) & phase_mask))
-            except Exception:
-                _clipped_bins = int(_clipped)
-            if _clipped:
-                msg = (
-                    "Phase Correction Clamp (adaptive): "
-                    f"max={_before_deg:.1f} deg -> {_after_deg:.1f} deg "
-                    f"(limit {clamp_min_deg:.1f}..{clamp_max_deg:.1f} deg, clipped_bins={_clipped_bins})"
-                )
-            else:
-                msg = (
-                    "Phase Correction Clamp (adaptive): "
-                    f"max={_before_deg:.1f} deg (limit {clamp_min_deg:.1f}..{clamp_max_deg:.1f} deg)"
-                )
-            logger.info(msg)
-
-            try:
-                if isinstance(st, dict):
-                    st["phase_corr_clamp_deg"] = float(clamp_max_deg)
-                    st["phase_corr_clamp_min_deg"] = float(clamp_min_deg)
-                    st["phase_corr_clamp_max_deg"] = float(clamp_max_deg)
-                    st["phase_corr_clamp_mean_deg"] = float(np.mean(limit_deg_arr[phase_mask])) if np.any(phase_mask) else float(np.mean(limit_deg_arr))
-                    st["phase_corr_max_before_deg"] = float(_before_deg)
-                    st["phase_corr_max_after_deg"] = float(_after_deg)
-                    st["phase_corr_clipped"] = bool(_clipped)
-                    st["phase_corr_clipped_bins"] = int(_clipped_bins)
-                    st["phase_corr_clamp_msg"] = str(msg)
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-        try:
-            _use_bassfirst = bool(locals().get("use_bassfirst", False))
-            _afdw_on = bool(locals().get("afdw_on", False))
-
-            try:
-                _win_mode = str(getattr(cfg, "ir_export_window_mode", "auto") or "auto").strip().lower()
-            except Exception:
-                _win_mode = "auto"
-            try:
-                _left_ms = float(getattr(cfg, "ir_window_left", getattr(cfg, "ir_window_ms_left", 0.0)) or 0.0)
-            except Exception:
-                _left_ms = 0.0
-            if not np.isfinite(_left_ms):
-                _left_ms = 0.0
-
-            _rew_asym_tight = (_win_mode == "rew_asym" and _left_ms > 0.0 and _left_ms < 15.0)
-            _legacy_mode = (not _use_bassfirst) and (not _afdw_on)
-
-            _gd_grad_enable = bool(_rew_asym_tight or _legacy_mode)
-
-            if _gd_grad_enable:
-                _gd_grad_lim = 8.0 if _rew_asym_tight else 20.0
-
-                extra_phase = _limit_gd_gradient_ms_per_oct(
-                    freq_axis,
-                    extra_phase,
-                    mask=phase_mask,
-                    max_grad_ms_per_oct=_gd_grad_lim,
-                )
-
-            try:
-                if isinstance(st, dict):
-                    st["gd_grad_limiter_enabled"] = bool(_gd_grad_enable)
-                    st["gd_grad_limit_ms_per_oct"] = float(_gd_grad_lim) if _gd_grad_enable else None
-                    st["gd_grad_limiter_reason"] = (
-                        "rew_asym_tight_left" if _rew_asym_tight else
-                        ("legacy_no_bassfirst_no_afdw" if _legacy_mode else
-                         "skipped_bassfirst_or_afdw")
-                    )
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-        if is_mixed:
-            try:
-                max_excess_delay_ms = float(getattr(cfg, "max_excess_delay_ms", 2.5) or 0.0)
-            except Exception:
-                max_excess_delay_ms = 0.0
-            if np.isfinite(max_excess_delay_ms) and max_excess_delay_ms > 0.0:
-                try:
-                    max_gd_ms = _max_abs_group_delay_ms(freq_axis, extra_phase, phase_mask)
-                    if np.isfinite(max_gd_ms) and max_gd_ms > max_excess_delay_ms:
-                        gd_scale = float(np.clip(max_excess_delay_ms / max(max_gd_ms, 1e-9), 0.05, 1.0))
-                        extra_phase *= gd_scale
-                        logger.info(
-                            "Mixed phase excess-delay guard: "
-                            f"max|GD|={max_gd_ms:.2f} ms -> target<={max_excess_delay_ms:.2f} ms "
-                            f"(scale={gd_scale:.3f})"
-                        )
-                        try:
-                            if isinstance(st, dict):
-                                st["mixed_max_excess_delay_ms"] = float(max_excess_delay_ms)
-                                st["mixed_excess_delay_before_ms"] = float(max_gd_ms)
-                                st["mixed_excess_delay_scale"] = float(gd_scale)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-        low_phase = (-theo_xo) + extra_phase
-
-        if is_mixed:
-            try:
-                max_pre_db = float(getattr(cfg, "max_pre_ringing_db", -35.0) or -35.0)
-            except Exception:
-                max_pre_db = -35.0
-            if np.isfinite(max_pre_db):
-                max_pre_db = float(min(max_pre_db, 0.0))
-                extra_guard = np.asarray(extra_phase, dtype=float).copy()
-                pre_before_db = None
-                pre_after_db = None
-                guard_scale_total = 1.0
-                h_min = total_mag * np.exp(1j * min_p)
-                ir_min = scipy.fft.irfft(h_min, n=n_fft)
-
-                for i in range(3):
-                    h_lin_guard = total_mag * np.exp(1j * ((-theo_xo) + extra_guard))
-                    ir_lin_guard = scipy.fft.irfft(h_lin_guard, n=n_fft)
-                    ir_mixed_guard = combine_mixed_phase(
-                        ir_lin_guard,
-                        ir_min,
-                        fs=float(cfg.fs),
-                        split_freq=mixed_split_hz,
-                        transition_hz=mixed_transition_hz,
-                    )
-                    pre_now_db = _pre_ringing_db(ir_mixed_guard)
-                    if i == 0:
-                        pre_before_db = float(pre_now_db)
-                    pre_after_db = float(pre_now_db)
-                    if (not np.isfinite(pre_now_db)) or (pre_now_db <= max_pre_db):
-                        break
-
-                    ratio_now = 10.0 ** (pre_now_db / 10.0)
-                    ratio_target = 10.0 ** (max_pre_db / 10.0)
-                    step_scale = float(np.clip(np.sqrt(ratio_target / max(ratio_now, 1e-30)), 0.20, 0.95))
-                    extra_guard *= step_scale
-                    guard_scale_total *= step_scale
-
-                if guard_scale_total < 0.999:
-                    extra_phase = extra_guard
-                    low_phase = (-theo_xo) + extra_phase
-                    logger.info(
-                        "Mixed phase pre-ringing guard: "
-                        f"{pre_before_db:.1f} dB -> {pre_after_db:.1f} dB "
-                        f"(limit={max_pre_db:.1f} dB, scale={guard_scale_total:.3f})"
-                    )
-                try:
-                    if isinstance(st, dict):
-                        st["mixed_max_pre_ringing_db"] = float(max_pre_db)
-                        st["mixed_pre_ringing_before_db"] = (
-                            None if pre_before_db is None else float(pre_before_db)
-                        )
-                        st["mixed_pre_ringing_after_db"] = (
-                            None if pre_after_db is None else float(pre_after_db)
-                        )
-                        st["mixed_pre_ringing_scale"] = float(guard_scale_total)
-                except Exception:
-                    pass
-
-            try:
-                corr_band = phase_mask & (np.abs(excess_phase) > 1e-12)
-                if np.any(corr_band):
-                    eff = np.abs(extra_phase[corr_band]) / np.maximum(np.abs(excess_phase[corr_band]), 1e-12)
-                    if isinstance(st, dict):
-                        st["mixed_phase_eff_strength_mean"] = float(np.mean(eff))
-                        st["mixed_phase_eff_strength_max"] = float(np.max(eff))
-            except Exception:
-                pass
-
-        if is_mixed:
-            f_center = float(mixed_split_hz)
-        else:
-            f_center = float(getattr(cfg, "phase_limit", 1000.0) or 1000.0)
-
-        f_center = float(np.clip(
-            f_center, 20.0,
-            float(freq_axis[-1] if freq_axis.size else 20000.0)
-        ))
-
-        safe_freqs = np.maximum(freq_axis, 1.0)
-        octave_dist = np.log2(safe_freqs / f_center)
-        mask = np.clip((octave_dist + 0.5), 0.0, 1.0)
-        sm_mask = 3.0 * mask**2 - 2.0 * mask**3
-
-        if 'Min' in cfg.filter_type_str:
-            final_phase = min_p
-        elif is_mixed:
-            final_phase = low_phase
-        else:
-            final_phase = (1.0 - sm_mask) * low_phase + sm_mask * min_p
-
-    if is_mixed and low_phase is not None:
-        try:
-            if isinstance(st, dict):
-                st["mixed_blend_split_hz"] = float(mixed_split_hz)
-                st["mixed_blend_transition_hz"] = float(mixed_transition_hz)
-        except Exception:
-            pass
-
-        h_lin = total_mag * np.exp(1j * low_phase)
-        h_min = total_mag * np.exp(1j * min_p)
-        ir_lin = scipy.fft.irfft(h_lin, n=n_fft)
-        ir_min = scipy.fft.irfft(h_min, n=n_fft)
-        raw_imp = combine_mixed_phase(
-            ir_lin,
-            ir_min,
-            fs=float(cfg.fs),
-            split_freq=mixed_split_hz,
-            transition_hz=mixed_transition_hz,
-        )
-        final_phase = np.angle(scipy.fft.rfft(raw_imp))
-    else:
-        h_complex = total_mag * np.exp(1j * final_phase)
-        raw_imp = scipy.fft.irfft(h_complex, n=n_fft)
-    requested_win_mode = str(getattr(cfg, 'ir_export_window_mode', 'auto') or 'auto').strip().lower()
-    is_min_filter = ('Min' in cfg.filter_type_str)
-    min_strict_off = bool(getattr(cfg, "min_strict_off", False))
-    win_mode = 'off' if (is_min_filter and min_strict_off) else requested_win_mode
-    if is_min_filter and min_strict_off and requested_win_mode != 'off':
-        logger.info(
-            f"IR export: forcing mode=off for Minimum filter (requested={requested_win_mode}, strict)"
-        )
-
-    def _ms(name_ms: str, name_alias: str, default: float = 0.0) -> float:
-        """Sisainen apufunktio: ms."""
-        v = getattr(cfg, name_ms, None)
-        if v is None:
-            v = getattr(cfg, name_alias, default)
-        try:
-            return float(v or 0.0)
-        except Exception:
-            return float(default)
-
-    left_ms  = _ms('ir_window_ms_left',  'ir_window_left',  0.0)
-    right_ms = _ms('ir_window_ms_right', 'ir_window_right',
-                   _ms('ir_window_ms', 'ir_window', 0.0))
-
-
-    if ('Asym' in cfg.filter_type_str):
-        shift = min(
-            int(left_ms * cfg.fs / 1000.0),
-            int(n_fft * 0.4)
-        )
-        impulse = np.roll(raw_imp, shift)
-    elif 'Min' in cfg.filter_type_str:
-        impulse = raw_imp
-    else:
-        impulse = np.roll(raw_imp, n_fft // 2)
-
-    def _shift_zeropad_local(x: np.ndarray, shift_samp: int) -> np.ndarray:
-        """Sisainen apufunktio: shift zeropad local."""
-        n_loc = int(len(x))
-        if n_loc == 0 or int(shift_samp) == 0:
-            return x
-        if shift_samp > 0:
-            if shift_samp >= n_loc:
-                return np.zeros_like(x)
-            return np.concatenate((np.zeros(shift_samp, dtype=x.dtype), x[:-shift_samp]))
-        s = -int(shift_samp)
-        if s >= n_loc:
-            return np.zeros_like(x)
-        return np.concatenate((x[s:], np.zeros(s, dtype=x.dtype)))
-
-    if is_min_filter and win_mode == "off":
-        try:
-            peak_now = int(np.argmax(np.abs(impulse))) if impulse.size else 0
-        except Exception:
-            peak_now = 0
-        shift_samp = -int(peak_now)
-        if shift_samp != 0:
-            impulse = _shift_zeropad_local(np.asarray(impulse), shift_samp)
-            try:
-                if isinstance(st, dict):
-                    st["min_off_peak_shift_samples"] = int(shift_samp)
-                    st["min_off_peak_before_samples"] = int(peak_now)
-            except Exception:
-                pass
-            logger.info(
-                f"Minimum OFF causal shift applied: peak {peak_now} -> 0 (shift={shift_samp})"
-            )
-    win_shape = str(getattr(cfg, 'ir_export_window_shape', 'hann') or 'hann').strip().lower()
-    try:
-        tukey_alpha = float(getattr(cfg, 'ir_export_tukey_alpha', 0.25))
-    except Exception:
-        tukey_alpha = 0.25
-    if not np.isfinite(tukey_alpha):
-        tukey_alpha = 0.25
-    tukey_alpha = float(np.clip(tukey_alpha, 0.0, 1.0))
-    if win_shape not in ('hann', 'tukey'):
-        win_shape = 'hann'
-
-    n = len(impulse)
-    peak_idx = int(np.argmax(np.abs(impulse)))
-
-    s_left = int(left_ms * cfg.fs / 1000.0)
-    s_right = int(right_ms * cfg.fs / 1000.0)
-
-    logger.info(
-        f"IR export: mode={win_mode}, peak={peak_idx}, user_s_left={s_left}, user_s_right={s_right}"
+    gain_db_before_residual = gain_db.copy()
+    freq_axis_before_residual = freq_axis.copy()
+    p_rad_before_residual = p_rad_interp.copy()
+    m_anal_before_residual = m_anal.copy()
+    target_mags_before_residual = target_mags.copy()
+    mask_c_before_residual = mask_c.copy()
+    gain_db = apply_residual_pass_if_enabled(
+        cfg=cfg,
+        freq_axis=freq_axis,
+        gain_db=gain_db,
+        conf_mask=conf_mask,
+        m_anal=m_anal,
+        calc_offset_db=calc_offset_db,
+        target_mags=target_mags,
+        st=st,
+        mask_c=mask_c,
+        base_sigma=base_sigma,
+        filter_smooth=_filter_smooth,
+        df_mode=df_mode,
+        raw_g=raw_g,
+        final_g=final_g,
+        logger=logger,
+        cfg_float_allow_zero_fn=_cfg_float_allow_zero,
     )
-    logger.info(f"IR export: shape={win_shape}, tukey_alpha={tukey_alpha:.2f}")
-
-    if win_mode == 'off':
-        window = np.ones(n, dtype=float)
-        s_left = 0
-        s_right = 0
-    else:
-        window = np.zeros(n, dtype=float)
-
-        if win_mode in ('rew_sym', 'rew_asym'):
-            radius = max(s_left, s_right)
-            s_left = radius
-            s_right = radius
-            logger.info(f"IR export: mode={win_mode}, eff_radius={radius}")
-        elif win_mode == 'auto':
-            if not ('Asym' in cfg.filter_type_str or 'Min' in cfg.filter_type_str):
-                radius = s_right
-                s_left = radius
-                s_right = radius
-
-        def _edge_taper(L: int, *, alpha: float, side: str) -> np.ndarray:
-            """Sisainen apufunktio: edge taper."""
-            L = int(L)
-            if L <= 0:
-                return np.zeros(0, dtype=float)
-            if win_shape == 'hann' or alpha >= 0.999:
-                if side == 'left':
-                    return (np.sin(np.linspace(0, np.pi / 2, L + 1))[:-1] ** 2).astype(float)
-                else:
-                    return (np.cos(np.linspace(0, np.pi / 2, L + 1))[1:] ** 2).astype(float)
-
-            a = float(np.clip(alpha, 0.0, 1.0))
-            taper_len = int(max(1, round(a * L)))
-            plateau_len = int(max(0, L - taper_len))
-
-            k = (np.arange(L)[::-1] if side == 'left' else np.arange(L)).astype(float)
-            w = np.ones(L, dtype=float)
-            if plateau_len > 0:
-                w[k >= plateau_len] = 0.0
-                w[k < plateau_len] = 1.0
-            else:
-                w[:] = 0.0
-
-            kk = np.clip(k - plateau_len, 0.0, float(taper_len))
-            x = kk / float(max(taper_len, 1))
-            taper = 0.5 * (1.0 + np.cos(np.pi * x))
-
-            mask = (k >= plateau_len)
-            w[mask] = taper[mask]
-            return np.clip(w, 0.0, 1.0)
-
-        if s_left > 0:
-            win_rise = _edge_taper(s_left, alpha=tukey_alpha, side='left')
-            start_idx = peak_idx - s_left
-            if start_idx >= 0:
-                window[start_idx:peak_idx] = win_rise
-            else:
-                window[0:peak_idx] = win_rise[-start_idx:]
-
-        if s_right > 0:
-            win_fall = _edge_taper(s_right, alpha=tukey_alpha, side='right')
-            end_idx = peak_idx + 1 + s_right
-            if end_idx <= n:
-                window[peak_idx + 1:end_idx] = win_fall
-            else:
-                avail = n - (peak_idx + 1)
-                if avail > 0:
-                    window[peak_idx + 1:n] = win_fall[:avail]
-
-        window[peak_idx] = 1.0
-
-    impulse_before = impulse.copy()
-    impulse *= window
-
-    if win_mode == 'rew_asym' and n > 0:
-        desired_peak = int(np.clip(int(left_ms * cfg.fs / 1000.0), 0, n - 1))
-        peak_now = int(np.argmax(np.abs(impulse)))
-        shift_samp = desired_peak - peak_now
-        if shift_samp != 0:
-            if shift_samp > 0:
-                if shift_samp >= n:
-                    impulse[:] = 0.0
-                else:
-                    impulse = np.concatenate((np.zeros(shift_samp, dtype=impulse.dtype),
-                                              impulse[:-shift_samp]))
-            else:
-                s = -shift_samp
-                if s >= n:
-                    impulse[:] = 0.0
-                else:
-                    impulse = np.concatenate((impulse[s:],
-                                              np.zeros(s, dtype=impulse.dtype)))
-
-    if is_min_filter and win_mode == "off" and n > 16:
-        try:
-            taper_ms = float(getattr(cfg, "min_off_tail_taper_ms", 2.0) or 2.0)
-        except Exception:
-            taper_ms = 2.0
-        if not np.isfinite(taper_ms):
-            taper_ms = 2.0
-        taper_ms = float(np.clip(taper_ms, 0.0, 20.0))
-        taper_n = int(round((taper_ms / 1000.0) * float(cfg.fs)))
-        taper_n = int(np.clip(taper_n, 8, max(8, n // 8)))
-        if taper_n < n:
-            t = (np.cos(np.linspace(0.0, np.pi / 2.0, taper_n, endpoint=True)) ** 2).astype(float)
-            impulse[-taper_n:] *= t
-            try:
-                if isinstance(st, dict):
-                    st["min_off_tail_taper_ms"] = float(taper_ms)
-                    st["min_off_tail_taper_samples"] = int(taper_n)
-            except Exception:
-                pass
-            logger.info(
-                f"Minimum OFF anti-wrap taper applied: {taper_ms:.2f} ms ({taper_n} samples)"
-            )
-
-    if win_shape == "tukey" and tukey_alpha > 0.0 and win_mode != "off":
-        try:
-            d = float(np.max(np.abs(impulse - impulse_before)))
-        except Exception:
-            d = 0.0
-        if (not math.isfinite(d)) or (d <= 0.0):
-            logger.warning(
-                "IR export window: Tukey had no measurable effect on impulse "
-                f"(mode={win_mode}, alpha={tukey_alpha:.3f}). Continuing."
-            )
-    if win_mode != "off":
-        try:
-            w_sum = float(np.sum(window))
-            if w_sum > 0.0:
-                dc = float(np.sum(impulse) / w_sum)
-                impulse = impulse - (dc * window)
-        except Exception:
-            pass
-
-    if is_mixed and n > 0:
-        mixed_forced_peak_ms = 90.0
-        desired_peak = int(np.clip(int(round(mixed_forced_peak_ms * cfg.fs / 1000.0)), 0, n - 1))
-        peak_now = int(np.argmax(np.abs(impulse)))
-        shift_samp = desired_peak - peak_now
-        if shift_samp != 0:
-            impulse = _shift_zeropad_local(np.asarray(impulse), int(shift_samp))
-        try:
-            if isinstance(st, dict):
-                st["mixed_forced_peak_ms"] = float(mixed_forced_peak_ms)
-                st["mixed_forced_peak_samples"] = int(desired_peak)
-                st["mixed_forced_shift_samples"] = int(shift_samp)
-        except Exception:
-            pass
-        logger.info(
-            f"Mixed forced peak shift applied: peak {peak_now} -> {desired_peak} "
-            f"({mixed_forced_peak_ms:.1f} ms, shift={shift_samp})"
+    gain_db = np.asarray(gain_db, dtype=float)
+    if gain_db.shape != gain_db_before_residual.shape:
+        raise RuntimeError(
+            "Phase-IR contract breach in phase_ir_residual: "
+            "gain_db shape changed unexpectedly."
         )
+    _require_unchanged(
+        "phase_ir_residual",
+        "freq_axis",
+        freq_axis_before_residual,
+        freq_axis,
+    )
+    _require_unchanged(
+        "phase_ir_residual",
+        "p_rad_interp",
+        p_rad_before_residual,
+        p_rad_interp,
+    )
+    _require_unchanged(
+        "phase_ir_residual",
+        "m_anal",
+        m_anal_before_residual,
+        m_anal,
+    )
+    _require_unchanged(
+        "phase_ir_residual",
+        "target_mags",
+        target_mags_before_residual,
+        target_mags,
+    )
+    _require_unchanged(
+        "phase_ir_residual",
+        "mask_c",
+        mask_c_before_residual,
+        mask_c,
+    )
 
+    gain_db_before_autogain = gain_db.copy()
+    gain_db_for_autogain = gain_db.copy()
+    ag = compute_auto_gain_and_headroom(
+        cfg=cfg,
+        gain_db=gain_db_for_autogain,
+        mask_c=mask_c,
+        logger=logger,
+    )
+    _require_allowed_keys("phase_ir_autogain", ag, _AUTOGAIN_ALLOWED_KEYS)
+    _require_unchanged(
+        "phase_ir_autogain",
+        "gain_db input",
+        gain_db_before_autogain,
+        gain_db_for_autogain,
+    )
+    _require_unchanged(
+        "phase_ir_autogain",
+        "gain_db",
+        gain_db_before_autogain,
+        gain_db,
+    )
 
+    current_peak_gain = float(ag["current_peak_gain"])
+    gain_margin_db = float(ag["gain_margin_db"])
+    auto_global_gain_db = float(ag["auto_global_gain_db"])
+    auto_headroom_db = float(ag["auto_headroom_db"])
+    final_gain_total = np.asarray(ag["final_gain_total"], dtype=float)
+    expected_final_gain_total = gain_db + auto_global_gain_db + auto_headroom_db
+    _require_unchanged(
+        "phase_ir_autogain",
+        "final_gain_total formula",
+        expected_final_gain_total,
+        final_gain_total,
+    )
 
+    gain_db_before_build = gain_db.copy()
+    p_rad_before_build = p_rad_interp.copy()
+    final_gain_total_before_build = final_gain_total.copy()
+    auto_global_gain_db_before_build = float(auto_global_gain_db)
+    auto_headroom_db_before_build = float(auto_headroom_db)
+    gain_db_for_build = gain_db.copy()
+    p_rad_for_build = p_rad_interp.copy()
+    final_gain_total_for_build = final_gain_total.copy()
+    built = build_phase_and_ir(
+        cfg=cfg,
+        freq_axis=freq_axis,
+        n_fft=n_fft,
+        gain_db=gain_db_for_build,
+        p_rad_interp=p_rad_for_build,
+        conf_mask=conf_mask,
+        st=st,
+        mask_c=mask_c,
+        use_bassfirst=use_bassfirst,
+        afdw_on=afdw_on,
+        logger=logger,
+        theo_xo=theo_xo,
+        auto_global_gain_db=auto_global_gain_db,
+        auto_headroom_db=auto_headroom_db,
+        final_gain_total=final_gain_total_for_build,
+        limit_gd_gradient_ms_per_oct_fn=_limit_gd_gradient_ms_per_oct,
+    )
+    _require_allowed_keys("phase_ir_build", built, _BUILD_ALLOWED_KEYS)
+    _require_unchanged(
+        "phase_ir_build",
+        "gain_db input",
+        gain_db_before_build,
+        gain_db_for_build,
+    )
+    _require_unchanged(
+        "phase_ir_build",
+        "p_rad_interp input",
+        p_rad_before_build,
+        p_rad_for_build,
+    )
+    _require_unchanged(
+        "phase_ir_build",
+        "final_gain_total input",
+        final_gain_total_before_build,
+        final_gain_total_for_build,
+    )
+    _require_unchanged(
+        "phase_ir_build",
+        "gain_db",
+        gain_db_before_build,
+        gain_db,
+    )
+    _require_unchanged(
+        "phase_ir_build",
+        "final_gain_total",
+        final_gain_total_before_build,
+        final_gain_total,
+    )
+    _require_scalar_unchanged(
+        "phase_ir_build",
+        "auto_global_gain_db",
+        auto_global_gain_db_before_build,
+        auto_global_gain_db,
+    )
+    _require_scalar_unchanged(
+        "phase_ir_build",
+        "auto_headroom_db",
+        auto_headroom_db_before_build,
+        auto_headroom_db,
+    )
 
-    return {
-        "impulse": impulse,
-        "gain_db": gain_db,
-        "auto_global_gain_db": float(locals().get("auto_global_gain_db", 0.0)),
-        "gain_margin_db": float(locals().get("gain_margin_db", 0.0)),
-        "auto_headroom_db": float(locals().get("auto_headroom_db", 0.0)),
-        "current_peak_gain": float(locals().get("current_peak_gain", 0.0)),
-        "final_gain_total": np.asarray(locals().get("final_gain_total", gain_db), dtype=float),
-    }
+    return PhaseIROutputs(
+        impulse=np.asarray(built["impulse"], dtype=float),
+        gain_db=np.asarray(gain_db, dtype=float),
+        auto_global_gain_db=float(auto_global_gain_db),
+        gain_margin_db=float(gain_margin_db),
+        auto_headroom_db=float(auto_headroom_db),
+        current_peak_gain=float(current_peak_gain),
+        final_gain_total=np.asarray(final_gain_total, dtype=float),
+    )

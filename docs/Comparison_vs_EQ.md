@@ -1,4 +1,4 @@
-# CamillaFIR vs Conventional EQ-Based Room Correction (v3.2.0)
+# CamillaFIR vs Conventional EQ-Based Room Correction (v3.3.0)
 
 ## Conventional approach (typical IIR / minimum-phase EQ)
 Many room-correction workflows:

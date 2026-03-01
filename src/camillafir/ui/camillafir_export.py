@@ -1,8 +1,16 @@
 import json
+import io
 import logging
 import os
+import time
+import zipfile
+from typing import Any
+
+import scipy.io.wavfile
+
 from . import camillafir_plot as plots
 from ..config.camillafir_convolver_configs import generate_hlc_config, generate_raspberry_yaml
+from ..config.results import FilterResult
 from ..dsp.smoothing import AFDW_BW_MAX_OCT, AFDW_BW_MIN_OCT
 logger = logging.getLogger("CamillaFIR")
 
@@ -196,6 +204,24 @@ def _append_acoustic_events(summary_content, l_st, r_st):
 
     return summary_content
 
+
+def _extract_result_payload(result: FilterResult) -> tuple[Any, ...]:
+    meas = dict(getattr(result, "measurements", {}) or {})
+    return (
+        int(result.fs),
+        meas.get("f_l"),
+        meas.get("m_l"),
+        meas.get("p_l"),
+        result.l_ir,
+        result.l_st,
+        meas.get("f_r"),
+        meas.get("m_r"),
+        meas.get("p_r"),
+        result.r_ir,
+        result.r_st,
+    )
+
+
 def _write_fs_outputs(
     zf,
     data,
@@ -213,10 +239,26 @@ def _write_fs_outputs(
     r_imp,
     r_st,
     *,
+    result: FilterResult | None = None,
     write_dashboards: bool = True,
     irw_tag: str = "auto",
     ui_dashboards: dict | None = None,
 ):
+    if result is not None:
+        (
+            fs_v,
+            f_l,
+            m_l,
+            p_l,
+            l_imp,
+            l_st,
+            f_r,
+            m_r,
+            p_r,
+            r_imp,
+            r_st,
+        ) = _extract_result_payload(result)
+
     sum_name = f"Summary_{ft_short}_{fs_v}Hz.txt"
     l_dash_name = f"L_Dashboard_{ft_short}_{fs_v}Hz.png"
     r_dash_name = f"R_Dashboard_{ft_short}_{fs_v}Hz.png"
@@ -357,3 +399,111 @@ def _write_fs_outputs(
             target_curve_tag=target_curve_tag,
         )
         zf.writestr(f"camilladsp_{ft_short}_{fs_v}Hz_{irw_tag}.yml", yaml_content)
+
+
+def build_export_zip(
+    *,
+    data: dict,
+    results: list[FilterResult],
+    ft_short: str,
+    file_ts: str,
+    irw_tag: str = "auto",
+    write_dashboards: bool = False,
+    dash_fs: int | None = None,
+) -> tuple[io.BytesIO, dict, dict]:
+    """
+    Build full export ZIP from pipeline results.
+
+    Returns:
+    - zip_buffer: in-memory ZIP payload
+    - ui_dashboards: optional dashboard HTML payloads
+    - perf: {"zip_png_s": float, "per_fs_stats": {fs: {"zip_png_s": float}}}
+    """
+    zip_buffer = io.BytesIO()
+    ui_dashboards: dict[str, Any] = {}
+    perf = {"zip_png_s": 0.0, "per_fs_stats": {}}
+    target_curve_tag = str(data.get("target_curve_tag", "") or "").strip()
+    multi_rate_on = bool(data.get("multi_rate_opt", False))
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for result in list(results or []):
+            fs_v = int(result.fs)
+            t0 = time.perf_counter()
+
+            wav_l = io.BytesIO()
+            wav_r = io.BytesIO()
+            scipy.io.wavfile.write(wav_l, fs_v, result.l_ir.astype("float32"))
+            scipy.io.wavfile.write(wav_r, fs_v, result.r_ir.astype("float32"))
+
+            zf.writestr(
+                f"L_{ft_short}_{fs_v}Hz_{target_curve_tag}_{file_ts}_{irw_tag}.wav",
+                wav_l.getvalue(),
+            )
+            zf.writestr(
+                f"R_{ft_short}_{fs_v}Hz_{target_curve_tag}_{file_ts}_{irw_tag}.wav",
+                wav_r.getvalue(),
+            )
+
+            write_dash = bool(write_dashboards and ((not multi_rate_on) or (dash_fs is not None and int(fs_v) == int(dash_fs))))
+            _write_fs_outputs(
+                zf,
+                data,
+                fs_v,
+                ft_short,
+                file_ts,
+                None,
+                None,
+                None,
+                None,
+                {},
+                None,
+                None,
+                None,
+                None,
+                {},
+                result=result,
+                write_dashboards=write_dash,
+                irw_tag=irw_tag,
+                ui_dashboards=ui_dashboards if (dash_fs is not None and int(fs_v) == int(dash_fs)) else None,
+            )
+
+            dt = max(0.0, float(time.perf_counter() - t0))
+            perf["zip_png_s"] = float(perf.get("zip_png_s", 0.0)) + dt
+            slot = perf["per_fs_stats"].setdefault(int(fs_v), {})
+            slot["zip_png_s"] = float(slot.get("zip_png_s", 0.0)) + dt
+
+        if multi_rate_on:
+            yaml_content = generate_raspberry_yaml(
+                int(data.get("fs") or 44100),
+                ft_short,
+                file_ts,
+                master_gain_db=0.0,
+                irw_tag=irw_tag,
+                target_curve_tag=target_curve_tag,
+            )
+            zf.writestr(f"camilladsp_{ft_short}_{irw_tag}.yml", yaml_content)
+
+    return zip_buffer, ui_dashboards, perf
+
+
+def save_export_bundle(
+    zip_buffer: io.BytesIO,
+    *,
+    ft_short: str,
+    irw_tag: str,
+    target_curve_tag: str,
+    ts: str,
+    output_dir: str | None = None,
+) -> tuple[str, str, str]:
+    filters_dir = output_dir or os.path.join(os.getcwd(), "filters")
+    os.makedirs(filters_dir, exist_ok=True)
+    fname = f"CamillaFIR_{ft_short}_{irw_tag}_{target_curve_tag}_{ts}.zip"
+    out_path = os.path.join(filters_dir, fname)
+
+    try:
+        with open(out_path, "wb") as f:
+            f.write(zip_buffer.getvalue())
+        save_msg = f"Saved: {os.path.abspath(out_path)}"
+    except Exception:
+        save_msg = "Zip saving failed."
+    return fname, os.path.abspath(filters_dir), save_msg

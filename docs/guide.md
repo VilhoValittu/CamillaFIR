@@ -7,7 +7,7 @@ permalink: /guide/
 
 # CamillaFIR Guide (Current Workflow)
 
-This guide reflects the current CamillaFIR workflow (v3.2.0 generation): from REW measurement data to convolution filters for CamillaDSP, Roon, and Equalizer APO.
+This guide reflects the current CamillaFIR workflow (v3.3.0 generation): from REW measurement data to convolution filters for CamillaDSP, Roon, and Equalizer APO.
 
 ## Quick workflow
 

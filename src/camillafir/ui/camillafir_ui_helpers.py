@@ -1,6 +1,6 @@
 import numpy as np
 import math
-from pywebio.output import *
+from pywebio.output import put_button, put_buttons, put_collapse, put_html, put_markdown, put_row, use_scope
 from pywebio.input import FLOAT
 from pywebio.pin import pin, pin_update, put_input, put_select
 
@@ -462,7 +462,7 @@ def update_mixed_freq_ui(_=None):
                 "mixed_freq",
                 label=t("mixed_freq"),
                 type=FLOAT,
-                value=float(_p("mixed_freq", 300.0) or 300.0),
+                value=float(_p("mixed_freq", 180.0) or 180.0),
                 help_text=t("mixed_freq_help"),
             )
             if not is_mixed:
@@ -674,6 +674,8 @@ def apply_mode_defaults_to_ui(_=None):
         "low_bass_cut_hz": "low_bass_cut_hz",
         "ir_window_ms": "ir_window",
         "ir_window_ms_left": "ir_window_left",
+        "ir_window_right": "ir_window",
+        "ir_window_left": "ir_window_left",
         "mixed_split_freq": "mixed_freq",
         "trans_width": "trans_width",
         "bass_first_mode_max_hz": "bass_first_mode_max_hz",
@@ -683,6 +685,11 @@ def apply_mode_defaults_to_ui(_=None):
         "lvl_manual_db": "lvl_manual_db",
         "lvl_min": "lvl_min",
         "lvl_max": "lvl_max",
+        "conf_pull_floor": "conf_pull_floor",
+        "conf_pull_max_hz": "conf_pull_max_hz",
+        "conf_pull_gamma_cut": "conf_pull_gamma_cut",
+        "conf_pull_gamma_boost": "conf_pull_gamma_boost",
+        "low_bass_cut_strength": "low_bass_cut_strength",
     }
     map_str = {
         "filter_type_str": "filter_type",
@@ -700,6 +707,7 @@ def apply_mode_defaults_to_ui(_=None):
         "bass_first_ai": "bass_first_ai",
         "phase_safe_2058": "phase_safe_2058",
         "stereo_link": "stereo_link",
+        "low_bass_cut_enable": "low_bass_cut_enable",
     }
 
     for cfg_k, pin_k in map_num.items():

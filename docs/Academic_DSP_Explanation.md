@@ -1,5 +1,5 @@
 # CamillaFIR: Time-Domain-First FIR Room Correction
-## Academic DSP Rationale and Mathematical Foundations (v3.2.0)
+## Academic DSP Rationale and Mathematical Foundations (v3.3.0)
 
 ### Abstract
 CamillaFIR is a FIR room-correction framework that separates:
@@ -8,7 +8,7 @@ CamillaFIR is a FIR room-correction framework that separates:
 - magnitude-domain target tracking,
 - temporal decay behavior (TDC).
 
-The current engine (v3.2.0) uses confidence-aware and safety-bounded processing in both magnitude and phase paths, with optional fixed-grid comparison analysis for reproducible scoring.
+The current engine (v3.3.0) uses confidence-aware and safety-bounded processing in both magnitude and phase paths, with optional fixed-grid comparison analysis for reproducible scoring.
 
 ---
 

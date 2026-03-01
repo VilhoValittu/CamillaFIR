@@ -4,6 +4,7 @@ from asyncio.log import logger
 from typing import Any, Dict, List, Optional, Tuple
 import logging
 import math
+import numpy as np
 
 def collect_ui_data(pin) -> Dict[str, Any]:
     """Funktio: collect ui data."""
@@ -13,7 +14,9 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "mag_c_min", "mag_c_max", "max_boost", "max_cut_db", "max_slope_db_per_oct",
         "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "mag_correct",
         "excess_phase_strength", "low_freq_full_correction_hz", "high_freq_no_correction_hz",
-        "max_pre_ringing_db", "max_excess_delay_ms",
+        "enable_ir_pre_energy_guard", "pre_energy_ratio_max", "pre_energy_guard_strength",
+        "max_pre_ringing_db", "max_excess_delay_ms", "gd_grad_limit_ms_per_oct",
+        "ir_anchor_mode", "min_causal_ms", "auto_asym_left_ratio", "auto_asym_left_max_ms",
         "lvl_mode", "reg_strength", "normalize_opt", "align_opt",
         "stereo_link", "exc_prot", "exc_freq", "low_bass_cut_hz", "low_bass_cut_enable", "hpf_enable", "hpf_freq",
         "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_window_right", "ir_export_window_mode", "ir_window_mode",
@@ -21,6 +24,10 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "local_path_l", "local_path_r", "fmt", "lvl_manual_db",
         "lvl_min", "lvl_max", "lvl_algo", "fdw_cycles",
         "trans_width", "smoothing_level", "filter_smooth", "plot_smoothing_level",
+        "bass_smooth_adaptive", "bass_smooth_hz", "bass_smooth_sigma_scale", "bass_smooth_conf_floor",
+        "bass_adaptive_isolation_mode",
+        "bass_boost_cap_enable", "bass_boost_cap_hz", "bass_boost_cap_extra_db", "bass_boost_cap_conf_min",
+        "bass_boost_post_restore_enable", "bass_boost_post_restore_strength",
         "enable_tdc", "tdc_strength", "tdc_max_reduction_db",
         "tdc_slope_db_per_oct", "enable_afdw", "df_smoothing", "comparison_mode",
         "bass_first_ai", "bass_first_mode_max_hz",
@@ -29,6 +36,8 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "conf_pull_gamma_cut", "conf_pull_gamma_boost",
         "conf_pull_conf_smooth_sigma",
         "conf_pull_bass_floor_hz", "conf_pull_bass_floor_min",
+        "conf_pull_bass_boost_floor_hz", "conf_pull_bass_boost_floor_min",
+        "conf_pull_bass_boost_restore",
         "low_bass_cut_strength", "hc_custom_file",
         "file_l", "file_r",
     ]
@@ -49,7 +58,11 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "mag_correct", "normalize_opt", "align_opt", "multi_rate_opt",
         "stereo_link", "exc_prot", "hpf_enable", "df_smoothing",
         "comparison_mode", "bass_first_ai", "phase_safe_2058",
-        "enable_tdc", "enable_afdw", "low_bass_cut_enable",
+        "enable_tdc", "enable_afdw", "low_bass_cut_enable", "enable_ir_pre_energy_guard",
+        "bass_smooth_adaptive",
+        "bass_adaptive_isolation_mode",
+        "bass_boost_cap_enable",
+        "bass_boost_post_restore_enable",
     ]:
         try:
             if isinstance(data.get(k, None), list):
@@ -108,6 +121,11 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     v = v if v in ("auto", "off", "rew_sym", "rew_asym") else "auto"
     data["ir_export_window_mode"] = v
     data["ir_window_mode"] = v
+
+    am = str(data.get("ir_anchor_mode", "min_causal") or "min_causal").strip().lower()
+    if am not in ("peak", "centroid", "min_causal"):
+        am = "min_causal"
+    data["ir_anchor_mode"] = am
 
     try:
         sh_raw = data.get("ir_export_window_shape", None)
@@ -301,6 +319,27 @@ def build_filter_config(
             return int(float(v))
         except Exception:
             return int(default)
+    def _as_bool_default(v, default: bool) -> bool:
+        """Sisainen apufunktio: as bool with None/empty fallback."""
+        if v is None:
+            return bool(default)
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s == "":
+                return bool(default)
+            if s in ("1", "true", "yes", "on"):
+                return True
+            if s in ("0", "false", "no", "off"):
+                return False
+        if isinstance(v, (list, tuple)):
+            if len(v) == 0:
+                return bool(default)
+            if len(v) == 1:
+                return _as_bool_default(v[0], default)
+        try:
+            return bool(v)
+        except Exception:
+            return bool(default)
     def _as_float_allow_zero(v, default: float) -> float:
         """Sisainen apufunktio: as float allow zero."""
         if v is None:
@@ -340,8 +379,18 @@ def build_filter_config(
     mixed_excess_phase_strength = _as_float_allow_zero(data.get("excess_phase_strength", None), 0.9)
     mixed_low_full_hz = _as_float_allow_zero(data.get("low_freq_full_correction_hz", None), 140.0)
     mixed_high_none_hz = _as_float_allow_zero(data.get("high_freq_no_correction_hz", None), 900.0)
+    enable_ir_pre_energy_guard = bool(data.get("enable_ir_pre_energy_guard", True))
+    pre_energy_ratio_max = _as_float_allow_zero(data.get("pre_energy_ratio_max", None), 0.25)
+    pre_energy_guard_strength = _as_float_allow_zero(data.get("pre_energy_guard_strength", None), 0.8)
     mixed_max_pre_db = _as_float_allow_zero(data.get("max_pre_ringing_db", None), -35.0)
     mixed_max_excess_delay_ms = _as_float_allow_zero(data.get("max_excess_delay_ms", None), 2.5)
+    gd_grad_limit_ms_per_oct = _as_float_allow_zero(data.get("gd_grad_limit_ms_per_oct", None), 20.0)
+    ir_anchor_mode = str(data.get("ir_anchor_mode", "min_causal") or "min_causal").strip().lower()
+    if ir_anchor_mode not in ("peak", "centroid", "min_causal"):
+        ir_anchor_mode = "min_causal"
+    min_causal_ms = _as_float_allow_zero(data.get("min_causal_ms", None), 80.0)
+    auto_asym_left_ratio = _as_float_allow_zero(data.get("auto_asym_left_ratio", None), 0.35)
+    auto_asym_left_max_ms = _as_float_allow_zero(data.get("auto_asym_left_max_ms", None), 25.0)
     mixed_kwargs = {}
     if hasattr(FilterConfig_cls, "excess_phase_strength"):
         mixed_kwargs["excess_phase_strength"] = float(max(0.0, min(1.0, mixed_excess_phase_strength)))
@@ -349,19 +398,104 @@ def build_filter_config(
         mixed_kwargs["low_freq_full_correction_hz"] = float(max(20.0, mixed_low_full_hz))
     if hasattr(FilterConfig_cls, "high_freq_no_correction_hz"):
         mixed_kwargs["high_freq_no_correction_hz"] = float(max(20.0, mixed_high_none_hz))
+    if hasattr(FilterConfig_cls, "enable_ir_pre_energy_guard"):
+        mixed_kwargs["enable_ir_pre_energy_guard"] = bool(enable_ir_pre_energy_guard)
+    if hasattr(FilterConfig_cls, "pre_energy_ratio_max"):
+        mixed_kwargs["pre_energy_ratio_max"] = float(max(0.0, pre_energy_ratio_max))
+    if hasattr(FilterConfig_cls, "pre_energy_guard_strength"):
+        mixed_kwargs["pre_energy_guard_strength"] = float(np.clip(pre_energy_guard_strength, 0.0, 1.0))
     if hasattr(FilterConfig_cls, "max_pre_ringing_db"):
         mixed_kwargs["max_pre_ringing_db"] = float(min(0.0, mixed_max_pre_db))
     if hasattr(FilterConfig_cls, "max_excess_delay_ms"):
         mixed_kwargs["max_excess_delay_ms"] = float(max(0.0, mixed_max_excess_delay_ms))
+    if hasattr(FilterConfig_cls, "gd_grad_limit_ms_per_oct"):
+        mixed_kwargs["gd_grad_limit_ms_per_oct"] = float(max(0.0, gd_grad_limit_ms_per_oct))
+    if hasattr(FilterConfig_cls, "ir_anchor_mode"):
+        mixed_kwargs["ir_anchor_mode"] = str(ir_anchor_mode)
+    if hasattr(FilterConfig_cls, "min_causal_ms"):
+        mixed_kwargs["min_causal_ms"] = float(max(0.0, min_causal_ms))
+    if hasattr(FilterConfig_cls, "auto_asym_left_ratio"):
+        mixed_kwargs["auto_asym_left_ratio"] = float(np.clip(auto_asym_left_ratio, 0.0, 1.0))
+    if hasattr(FilterConfig_cls, "auto_asym_left_max_ms"):
+        mixed_kwargs["auto_asym_left_max_ms"] = float(max(0.0, auto_asym_left_max_ms))
     lb_en = bool(data.get("low_bass_cut_enable", True))
     lb_raw = data.get("low_bass_cut_hz", "")
     if (not lb_en) or (lb_raw in (None, "", "None")):
         lb_hz = 0.0
     else:
         lb_hz = _as_float(lb_raw, 40.0)
-    df_smoothing = bool(_pin_get("df_smoothing", data.get("df_smoothing", False)))
-    enable_afdw = bool(_pin_get("enable_afdw", data.get("enable_afdw", False)))
-    enable_tdc = bool(_pin_get("enable_tdc", data.get("enable_tdc", False)))
+    df_smoothing = _as_bool_default(_pin_get("df_smoothing", data.get("df_smoothing", False)), False)
+    bass_smooth_adaptive = _as_bool_default(
+        _pin_get("bass_smooth_adaptive", data.get("bass_smooth_adaptive", True)),
+        True,
+    )
+    bass_smooth_hz = _as_float_allow_zero(data.get("bass_smooth_hz", None), 200.0)
+    bass_smooth_sigma_scale = _as_float_allow_zero(data.get("bass_smooth_sigma_scale", None), 1.4)
+    bass_smooth_conf_floor = _as_float_allow_zero(data.get("bass_smooth_conf_floor", None), 0.3)
+    mid_refit_enable = _as_bool_default(
+        _pin_get("mid_refit_enable", data.get("mid_refit_enable", True)),
+        True,
+    )
+    mid_refit_hz_lo = _as_float_allow_zero(data.get("mid_refit_hz_lo", None), 200.0)
+    mid_refit_hz_hi = _as_float_allow_zero(data.get("mid_refit_hz_hi", None), 2000.0)
+    mid_refit_k = _as_float_allow_zero(data.get("mid_refit_k", None), 0.45)
+    mid_refit_smooth_oct = _as_float_allow_zero(data.get("mid_refit_smooth_oct", None), 0.60)
+    mid_refit_conf_min_avg = _as_float_allow_zero(data.get("mid_refit_conf_min_avg", None), 0.20)
+    # process_run may enforce this in `data`; keep data as highest-priority source.
+    bass_adaptive_isolation_mode = _as_bool_default(
+        data.get("bass_adaptive_isolation_mode", _pin_get("bass_adaptive_isolation_mode", False)),
+        False,
+    )
+    bass_smooth_kwargs = {}
+    if hasattr(FilterConfig_cls, "bass_smooth_adaptive"):
+        bass_smooth_kwargs["bass_smooth_adaptive"] = bool(bass_smooth_adaptive)
+    if hasattr(FilterConfig_cls, "bass_smooth_hz"):
+        bass_smooth_kwargs["bass_smooth_hz"] = float(max(20.0, bass_smooth_hz))
+    if hasattr(FilterConfig_cls, "bass_smooth_sigma_scale"):
+        bass_smooth_kwargs["bass_smooth_sigma_scale"] = float(max(1.0, bass_smooth_sigma_scale))
+    if hasattr(FilterConfig_cls, "bass_smooth_conf_floor"):
+        bass_smooth_kwargs["bass_smooth_conf_floor"] = float(np.clip(bass_smooth_conf_floor, 0.05, 1.0))
+    if hasattr(FilterConfig_cls, "bass_adaptive_isolation_mode"):
+        bass_smooth_kwargs["bass_adaptive_isolation_mode"] = bool(bass_adaptive_isolation_mode)
+    if hasattr(FilterConfig_cls, "mid_refit_enable"):
+        bass_smooth_kwargs["mid_refit_enable"] = bool(mid_refit_enable)
+    if hasattr(FilterConfig_cls, "mid_refit_hz_lo"):
+        bass_smooth_kwargs["mid_refit_hz_lo"] = float(max(20.0, mid_refit_hz_lo))
+    if hasattr(FilterConfig_cls, "mid_refit_hz_hi"):
+        bass_smooth_kwargs["mid_refit_hz_hi"] = float(max(max(20.0, mid_refit_hz_lo) + 1.0, mid_refit_hz_hi))
+    if hasattr(FilterConfig_cls, "mid_refit_k"):
+        bass_smooth_kwargs["mid_refit_k"] = float(np.clip(mid_refit_k, 0.0, 1.0))
+    if hasattr(FilterConfig_cls, "mid_refit_smooth_oct"):
+        bass_smooth_kwargs["mid_refit_smooth_oct"] = float(np.clip(mid_refit_smooth_oct, 1.0 / 192.0, 1.0))
+    if hasattr(FilterConfig_cls, "mid_refit_conf_min_avg"):
+        bass_smooth_kwargs["mid_refit_conf_min_avg"] = float(np.clip(mid_refit_conf_min_avg, 0.0, 1.0))
+    bass_boost_cap_enable = _as_bool_default(
+        _pin_get("bass_boost_cap_enable", data.get("bass_boost_cap_enable", True)),
+        True,
+    )
+    bass_boost_cap_hz = _as_float_allow_zero(data.get("bass_boost_cap_hz", None), 200.0)
+    bass_boost_cap_extra_db = _as_float_allow_zero(data.get("bass_boost_cap_extra_db", None), 2.0)
+    bass_boost_cap_conf_min = _as_float_allow_zero(data.get("bass_boost_cap_conf_min", None), 0.55)
+    bass_boost_post_restore_enable = _as_bool_default(
+        _pin_get("bass_boost_post_restore_enable", data.get("bass_boost_post_restore_enable", True)),
+        True,
+    )
+    bass_boost_post_restore_strength = _as_float_allow_zero(data.get("bass_boost_post_restore_strength", None), 0.60)
+    bass_boost_cap_kwargs = {}
+    if hasattr(FilterConfig_cls, "bass_boost_cap_enable"):
+        bass_boost_cap_kwargs["bass_boost_cap_enable"] = bool(bass_boost_cap_enable)
+    if hasattr(FilterConfig_cls, "bass_boost_cap_hz"):
+        bass_boost_cap_kwargs["bass_boost_cap_hz"] = float(max(20.0, bass_boost_cap_hz))
+    if hasattr(FilterConfig_cls, "bass_boost_cap_extra_db"):
+        bass_boost_cap_kwargs["bass_boost_cap_extra_db"] = float(max(0.0, bass_boost_cap_extra_db))
+    if hasattr(FilterConfig_cls, "bass_boost_cap_conf_min"):
+        bass_boost_cap_kwargs["bass_boost_cap_conf_min"] = float(np.clip(bass_boost_cap_conf_min, 0.0, 0.99))
+    if hasattr(FilterConfig_cls, "bass_boost_post_restore_enable"):
+        bass_boost_cap_kwargs["bass_boost_post_restore_enable"] = bool(bass_boost_post_restore_enable)
+    if hasattr(FilterConfig_cls, "bass_boost_post_restore_strength"):
+        bass_boost_cap_kwargs["bass_boost_post_restore_strength"] = float(np.clip(bass_boost_post_restore_strength, 0.0, 1.0))
+    enable_afdw = _as_bool_default(_pin_get("enable_afdw", data.get("enable_afdw", False)), False)
+    enable_tdc = _as_bool_default(_pin_get("enable_tdc", data.get("enable_tdc", False)), False)
     tdc_max_red = _as_float(_pin_get("tdc_max_reduction_db", data.get("tdc_max_reduction_db", 9.0)), 9.0)
     tdc_slope = _as_float(_pin_get("tdc_slope_db_per_oct", data.get("tdc_slope_db_per_oct", 0.0)), 0.0)
     filter_smooth = _as_int(
@@ -432,8 +566,13 @@ def build_filter_config(
         conf_pull_conf_smooth_sigma=float(_as_float_allow_zero(data.get("conf_pull_conf_smooth_sigma", None), 2.0)),
         conf_pull_bass_floor_hz=float(_as_float_allow_zero(data.get("conf_pull_bass_floor_hz", None), 120.0)),
         conf_pull_bass_floor_min=float(_as_float_allow_zero(data.get("conf_pull_bass_floor_min", None), 0.25)),
+        conf_pull_bass_boost_floor_hz=float(_as_float_allow_zero(data.get("conf_pull_bass_boost_floor_hz", None), 200.0)),
+        conf_pull_bass_boost_floor_min=float(_as_float_allow_zero(data.get("conf_pull_bass_boost_floor_min", None), 0.45)),
+        conf_pull_bass_boost_restore=float(_as_float_allow_zero(data.get("conf_pull_bass_boost_restore", None), 0.55)),
         low_bass_cut_enable=bool(data.get("low_bass_cut_enable", True)),
         low_bass_cut_strength=float(max(0.0, min(1.0, _as_float_allow_zero(data.get("low_bass_cut_strength", None), 0.0)))),
+        **bass_smooth_kwargs,
+        **bass_boost_cap_kwargs,
         **mixed_kwargs,
     )
     try:

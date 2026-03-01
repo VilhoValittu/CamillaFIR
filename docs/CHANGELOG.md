@@ -4,6 +4,19 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.3.0] - 2026-03-01
+
+### Core
+- Bumped app version to `v.3.3.0`.
+- Refactored `camillafir.py` into smaller modules to improve maintainability and code manageability.
+- Refactored `camillafir_dsp.py` into smaller modules to improve maintainability and code manageability.
+
+### Docs
+- Updated documentation version references to `v3.3.0`.
+- Updated citation metadata version to `3.3.0`.
+
+---
+
 ## [3.2.0] - 2026-02-23
 
 ### Core

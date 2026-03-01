@@ -395,7 +395,10 @@
         "health_transition_width_wider": "Transition width is wider than split frequency.",
         "health_summary_errors": "System errors ({count}):",
         "health_summary_warnings": "System warnings ({count}):",
-        "health_summary_more": "...and {count} more"
+        "health_summary_more": "...and {count} more",
+        "plot_level_exported": "Exported",
+        "plot_level_compensated": "Compensated",
+        "plot_level_both": "Both"
         },
     
     "fi": {
@@ -790,6 +793,9 @@
         "health_transition_width_wider": "Transition width on suurempi kuin jakotaajuus.",
         "health_summary_errors": "Järjestelmän virheet ({count}):",
         "health_summary_warnings": "Järjestelmän varoitukset ({count}):",
-        "health_summary_more": "...ja {count} lisää"
+        "health_summary_more": "...ja {count} lisää",
+        "plot_level_exported": "Headroom leivottuna sisään",
+        "plot_level_compensated": "Headroom pois",
+        "plot_level_both": "Molemmat"
         }
 }

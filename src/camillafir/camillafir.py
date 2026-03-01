@@ -8,21 +8,17 @@ if __package__ in (None, ""):
         sys.path.insert(0, _src_root)
     __package__ = "camillafir"
 
-import io
 import logging
-import zipfile
 import typing
 import re
 import unicodedata
-import scipy.io.wavfile
 import math
 import time
 from datetime import datetime
 import numpy as np
 from pywebio import start_server
-from pywebio.input import *
-from pywebio.output import *
-from pywebio.pin import *
+from pywebio.output import put_processbar, put_scope, set_processbar
+from pywebio.pin import pin
 from .config.camillafir_config import save_config
 from .resources.i8n.camillafir_i18n import t
 from .ui.camillafir_housecurve import load_house_curve
@@ -41,24 +37,18 @@ from .config.camillafir_pipeline import (
     choose_target_rates,
     choose_dash_fs,
     detect_is_wav_source,
-    build_filter_config,
 )
-from .ui.camillafir_export import _write_fs_outputs
+from .ui.camillafir_export import build_export_zip, save_export_bundle
+from .engine import build_config, run_pipeline, summarize_run
 from .dsp import camillafir_dsp as dsp
 from .dsp.target_match import target_match_from_stats
-from .ui import camillafir_plot as plots
-from camillafir.config.models import FilterConfig
-from .ui.camillafir_modes import apply_mode_to_cfg
-from .config.camillafir_convolver_configs import (
-    generate_raspberry_yaml,
-)
 from .ui.camillafir_ui import _render_results
 from .ui.camillafir_utils import scale_taps_with_fs
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("CamillaFIR")
 
-VERSION = "v.3.2.0"
+VERSION = "v.3.3.0"
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
@@ -298,6 +288,12 @@ def process_run():
                 pass
 
     data = collect_ui_data(pin)
+    data["bass_adaptive_isolation_mode"] = True
+    # Target-lean trial tuning for bass adaptive smoothing.
+    data["bass_smooth_sigma_scale"] = 1.20
+    data["bass_smooth_conf_floor"] = 0.25
+    data["bass_smooth_w_gamma"] = 2.40
+    data["bass_smooth_w_max"] = 0.45
     data["program_version"] = VERSION
 
     try:
@@ -377,7 +373,7 @@ def process_run():
             logger.info("HPF (UI->CFG): off")
     except Exception:
         pass
-    df_on = log_df_smoothing_toggle(pin, logger)
+    log_df_smoothing_toggle(pin, logger)
 
 
     target_rates = choose_target_rates(data)
@@ -385,13 +381,10 @@ def process_run():
     dash_fs = choose_dash_fs(target_rates, multi_rate_on=multi_rate_on, forced_plot_fs_hz=int(FORCE_SINGLE_PLOT_FS_HZ))
     zip_dashboards_on = False
 
-    zip_buffer = io.BytesIO()
     ts = datetime.now().strftime('%d%m%y_%H%M')
     file_ts = datetime.now().strftime('%H%M_%d%m%y')
     ft_short = filter_type_short(data['filter_type'])
-    split, zoom = data['mixed_freq'], t('zoom_hint')
     l_st_f, r_st_f, l_imp_f, r_imp_f = None, None, None, None
-    ui_stats_fs = None
     ui_dashboards = {}
     logger.warning(
         f"EXPORT IR (UI): shape={data.get('ir_export_window_shape')}, "
@@ -407,296 +400,99 @@ def process_run():
     data['ir_export_window_mode'] = irw_mode
     irw_tag = _irwin_tag(irw_mode)
 
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for i, fs_v in enumerate(target_rates):
-            if bool(data.get('multi_rate_opt', False)):
-                taps_v = scale_taps_with_fs(fs_v, taps_base)
-                logger.info(f"Auto taps: {int(fs_v)} Hz -> {int(taps_v)} taps (ref 44100 Hz -> {taps_base} taps)")
-            else:
-                taps_v = taps_base
-            _status(f"Lasketaan {fs_v}Hz...")
-            set_processbar('bar', 0.2 + 0.6 * (i/len(target_rates)))
-            data["enable_residual_pass"] = True
+    is_wav_source = detect_is_wav_source(data, pin)
+    data["_is_wav_source"] = bool(is_wav_source)
 
-            cfg = build_filter_config(
-                FilterConfig_cls=FilterConfig,
-                fs_v=fs_v,
-                taps_v = taps_v,
-                data=data,
-                xos=xos,
-                hpf=hpf,
-                hc_f=hc_f,
-                hc_m=hc_m,
-                pin=pin,
-            )
+    results_by_fs = []
+    measurements = {
+        "f_l": np.asarray(f_l, dtype=float),
+        "m_l": np.asarray(m_l, dtype=float),
+        "p_l": np.asarray(p_l, dtype=float),
+        "f_r": np.asarray(f_r, dtype=float),
+        "m_r": np.asarray(m_r, dtype=float),
+        "p_r": np.asarray(p_r, dtype=float),
+        "hc_f": hc_f,
+        "hc_m": hc_m,
+        "ui_data": data,
+        "is_wav_source": bool(is_wav_source),
+    }
 
-            try:
-                mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
-            except Exception:
-                mode_u = "BASIC"
-            try:
-                apply_mode_to_cfg(cfg, mode_u, apply_defaults=False)
-            except Exception as e:
-                logger.warning(f"Mode clamp apply failed ({mode_u}): {e}")
+    for i, fs_v in enumerate(target_rates):
+        if bool(data.get('multi_rate_opt', False)):
+            taps_v = scale_taps_with_fs(fs_v, taps_base)
+            logger.info(f"Auto taps: {int(fs_v)} Hz -> {int(taps_v)} taps (ref 44100 Hz -> {taps_base} taps)")
+        else:
+            taps_v = taps_base
 
-            logger.info(
-                f"[{fs_v} Hz] EXPORT IR cfg: shape={cfg.ir_export_window_shape}, "
-                f"alpha={cfg.ir_export_tukey_alpha}"
-            )
-            setattr(cfg, 'ir_export_window_mode', irw_mode)
+        _status(f"{t('stat_calc')} {fs_v}Hz...")
+        set_processbar('bar', 0.2 + 0.6 * (i / len(target_rates)))
+        data["enable_residual_pass"] = bool(data.get("enable_residual_pass", False))
 
-            try:
-                setattr(cfg, 'ir_export_window_shape', str(data.get('ir_export_window_shape', 'hann') or 'hann').strip().lower())
-                setattr(cfg, 'ir_export_tukey_alpha', float(data.get('ir_export_tukey_alpha', 0.25) or 0.25))
-            except Exception:
-                pass
+        cfg = build_config(
+            data,
+            fs_v=int(fs_v),
+            taps_v=int(taps_v),
+            xos=xos,
+            hpf=hpf,
+            hc_f=hc_f,
+            hc_m=hc_m,
+            pin=pin,
+            max_safe_boost=float(MAX_SAFE_BOOST),
+        )
+        try:
+            setattr(cfg, "bass_smooth_w_gamma", float(data.get("bass_smooth_w_gamma", 2.40)))
+            setattr(cfg, "bass_smooth_w_max", float(data.get("bass_smooth_w_max", 0.45)))
+        except Exception:
+            pass
 
-            try:
-                setattr(cfg, 'ir_window', float(data.get('ir_window', getattr(cfg, 'ir_window', 500.0)) or 500.0))
-                setattr(cfg, 'ir_window_left', float(data.get('ir_window_left', getattr(cfg, 'ir_window_left', 120.0)) or 120.0))
-            except Exception:
-                pass
+        _status(f"{t('stat_calc')} {int(fs_v)} Hz")
+        _t_dsp = time.perf_counter()
+        result = run_pipeline(cfg, measurements)
+        result.metrics["summary"] = summarize_run(result)
+        _dsp_dt = max(0.0, float(time.perf_counter() - _t_dsp))
 
-            try:
-                _user_mb = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
-                setattr(cfg, "max_boost_db_user", _user_mb)
-                setattr(cfg, "max_safe_boost_db", float(MAX_SAFE_BOOST))
-                if _user_mb > 0.0 and float(MAX_SAFE_BOOST) > 0.0:
-                    _eff_mb = min(_user_mb, float(MAX_SAFE_BOOST))
-                    if _eff_mb < _user_mb - 1e-9:
-                        logger.info(
-                            f"Safety cap: max_boost_db user={_user_mb:.2f} dB -> effective={_eff_mb:.2f} dB "
-                            f"(MAX_SAFE_BOOST={float(MAX_SAFE_BOOST):.2f} dB)"
-                        )
-                    setattr(cfg, "max_boost_db", float(_eff_mb))
-            except Exception:
-                pass
+        perf_stats["dsp_s"] += _dsp_dt
+        _fs_k = int(fs_v)
+        _slot = per_fs_stats.setdefault(_fs_k, {})
+        _slot["dsp_s"] = float(_slot.get("dsp_s", 0.0)) + _dsp_dt
+        results_by_fs.append(result)
 
+        if int(fs_v) == int(dash_fs):
+            l_st_f, r_st_f = result.l_st, result.r_st
+            l_imp_f, r_imp_f = result.l_ir, result.r_ir
 
+    if not results_by_fs:
+        toast_measurement_files_missing()
+        return
 
-            is_wav = detect_is_wav_source(data, pin)
-            try:
-                setattr(cfg, "is_wav_source", bool(is_wav))
-            except Exception:
-                pass
+    _t_zip = time.perf_counter()
+    zip_buffer, ui_dashboards, zip_perf = build_export_zip(
+        data=data,
+        results=results_by_fs,
+        ft_short=ft_short,
+        file_ts=file_ts,
+        irw_tag=irw_tag,
+        write_dashboards=zip_dashboards_on,
+        dash_fs=int(dash_fs),
+    )
+    _zip_dt = max(0.0, float(time.perf_counter() - _t_zip))
+    perf_stats["zip_png_s"] += max(float(zip_perf.get("zip_png_s", 0.0) or 0.0), _zip_dt)
+    for fs_k, st in (zip_perf.get("per_fs_stats", {}) or {}).items():
+        slot = per_fs_stats.setdefault(int(fs_k), {})
+        slot["zip_png_s"] = float(slot.get("zip_png_s", 0.0)) + float(st.get("zip_png_s", 0.0) or 0.0)
 
+    fname, saved_filters_dir, _save_msg = save_export_bundle(
+        zip_buffer,
+        ft_short=ft_short,
+        irw_tag=irw_tag,
+        target_curve_tag=target_curve_tag,
+        ts=ts,
+    )
 
-
-            log_df_smoothing_toggle(cfg, df_on)
-            _status(f"{t('stat_calc')} {int(fs_v)} Hz")
-            _t_dsp = time.perf_counter()
-            if bool(getattr(cfg, "stereo_link", False)):
-                l_imp, l_st, r_imp, r_st = dsp.generate_filter_pair(
-                    f_l, m_l, p_l,
-                    f_r, m_r, p_r,
-                    cfg
-                )
-            else:
-                l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, cfg)
-                r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, cfg)
-            _dsp_dt = max(0.0, float(time.perf_counter() - _t_dsp))
-            perf_stats["dsp_s"] += _dsp_dt
-            _fs_k = int(fs_v)
-            _slot = per_fs_stats.setdefault(_fs_k, {})
-            _slot["dsp_s"] = float(_slot.get("dsp_s", 0.0)) + _dsp_dt
-
-            try:
-                rt_rel = 1.0 if bool(is_wav) else 0.25
-                rt_src = "WAV" if bool(is_wav) else "TXT/REW"
-                if isinstance(l_st, dict):
-                    l_st["rt60_reliability"] = float(rt_rel)
-                    l_st["rt60_source"] = rt_src
-                if isinstance(r_st, dict):
-                    r_st["rt60_reliability"] = float(rt_rel)
-                    r_st["rt60_source"] = rt_src
-            except Exception:
-                pass
-
-
-            l_st = _ensure_scoring_keys(l_st, f_l, m_l, hc_f, hc_m)
-            r_st = _ensure_scoring_keys(r_st, f_r, m_r, hc_f, hc_m)
-            if bool(data.get("comparison_mode", False)):
-                try:
-                    l_st = plots._make_comparison_stats(l_st, int(fs_v), int(taps_v))
-                    r_st = plots._make_comparison_stats(r_st, int(fs_v), int(taps_v))
-                except Exception as e:
-                    logger.warning(f"Comparison-mode stats failed: {e}")
-
-            d_s = None
-            align_method = "peak"
-            d_peak = int(np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp)))
-
-            d_delay = None
-            try:
-                dl = l_st.get('delay_samples', None) if isinstance(l_st, dict) else None
-                dr = r_st.get('delay_samples', None) if isinstance(r_st, dict) else None
-                if dl is not None and dr is not None:
-                    dl_i = int(round(float(dl)))
-                    dr_i = int(round(float(dr)))
-                    d_delay = dr_i - dl_i
-            except Exception:
-                d_delay = None
-
-            if d_delay is None:
-                d_s = d_peak
-                align_method = "peak"
-            else:
-                d_s = int(d_delay)
-                align_method = "delay_samples"
-
-                try:
-                    guard_samples = 8
-                    if abs(int(d_delay) - int(d_peak)) > int(guard_samples):
-                        d_s = int(d_peak)
-                        align_method = "peak_guard"
-                        logger.info(
-                            f"Alignment guard: delay_samples={int(d_delay)} vs peak={int(d_peak)} "
-                            f"(>{guard_samples} samp) -> using peak"
-                        )
-                except Exception:
-                    pass
-
-            if d_s > 0:
-                r_imp = _shift_zeropad_1d(r_imp, d_s)
-            elif d_s < 0:
-                l_imp = _shift_zeropad_1d(l_imp, -d_s)
-
-            _wav_like_fft_grid = False
-            try:
-                _fx = np.asarray(f_l if f_l is not None else [], dtype=float)
-                if _fx.size > 1024 and abs(float(_fx[0])) < 1e-9:
-                    _df = float(np.median(np.diff(_fx[: min(int(_fx.size), 4096)])))
-                    if np.isfinite(_df) and (0.0 < _df < 2.0):
-                        _wav_like_fft_grid = True
-            except Exception:
-                _wav_like_fft_grid = False
-
-            if bool(is_wav) or bool(_wav_like_fft_grid):
-                try:
-                    mc_min = float(getattr(cfg, "mag_c_min", data.get("mag_c_min", 10.0)) or 10.0)
-                    mc_max = float(getattr(cfg, "mag_c_max", data.get("mag_c_max", 230.0)) or 230.0)
-                    tr_w = float(getattr(cfg, "trans_width", data.get("trans_width", 100.0)) or 100.0)
-
-                    l_imp = _postpolish_wav_filter_ir(
-                        l_imp,
-                        int(fs_v),
-                        mag_c_min=mc_min,
-                        mag_c_max=mc_max,
-                        trans_width=tr_w,
-                    )
-                    r_imp = _postpolish_wav_filter_ir(
-                        r_imp,
-                        int(fs_v),
-                        mag_c_min=mc_min,
-                        mag_c_max=mc_max,
-                        trans_width=tr_w,
-                    )
-                    logger.info(
-                        f"WAV final IR polish applied at {int(fs_v)} Hz "
-                        f"(zone approx {max(mc_min, mc_max - 0.95*tr_w):.0f}-{mc_max + 1.45*tr_w:.0f} Hz, "
-                        f"is_wav={bool(is_wav)}, wav_like_fft_grid={bool(_wav_like_fft_grid)})"
-                    )
-                except Exception as e:
-                    logger.warning(f"WAV final IR polish failed: {e}")
-
-            if fs_v == dash_fs:
-                l_st_f, r_st_f, l_imp_f, r_imp_f = l_st, r_st, l_imp, r_imp
-                ui_stats_fs = int(fs_v)
-
-            
-
-            if isinstance(l_st, dict) and isinstance(r_st, dict):
-                try:
-                    delay_ms = round((float(d_s) / fs_v) * 1000, 3)
-                    distance_cm = round((delay_ms / 1000) * 34300, 2)
-                    gain_diff = round(float(l_st.get('offset_db', 0.0)) - float(r_st.get('offset_db', 0.0)), 2)
-                    l_st['auto_align'] = {
-                        'delay_ms': delay_ms,
-                        'distance_cm': distance_cm,
-                        'gain_diff_db': gain_diff,
-                        'method': str(align_method),
-                    }
-                except Exception:
-                    pass
-
-            _t_zip = time.perf_counter()
-            wav_l, wav_r = io.BytesIO(), io.BytesIO()
-            scipy.io.wavfile.write(wav_l, fs_v, l_imp.astype(np.float32))
-            scipy.io.wavfile.write(wav_r, fs_v, r_imp.astype(np.float32))
-            zf.writestr(
-                f"L_{ft_short}_{fs_v}Hz_{target_curve_tag}_{file_ts}_{irw_tag}.wav",
-                wav_l.getvalue(),
-            )
-            zf.writestr(
-                f"R_{ft_short}_{fs_v}Hz_{target_curve_tag}_{file_ts}_{irw_tag}.wav",
-                wav_r.getvalue(),
-            )
-
-            _write_fs_outputs(
-                zf,
-                data,
-                fs_v,
-                ft_short,
-                file_ts,
-                f_l,
-                m_l,
-                p_l,
-                l_imp,
-                l_st,
-                f_r,
-                m_r,
-                p_r,
-                r_imp,
-                r_st,
-                write_dashboards=zip_dashboards_on and ((not multi_rate_on) or (int(fs_v) == int(dash_fs))),
-                irw_tag=irw_tag,
-                ui_dashboards=ui_dashboards if int(fs_v) == int(dash_fs) else None,
-            )
-            _zip_dt = max(0.0, float(time.perf_counter() - _t_zip))
-            perf_stats["zip_png_s"] += _zip_dt
-            _slot["zip_png_s"] = float(_slot.get("zip_png_s", 0.0)) + _zip_dt
-
-        if bool(data.get("multi_rate_opt", False)):
-            yaml_content = generate_raspberry_yaml(
-                int(data.get("fs") or 44100),
-                ft_short,
-                file_ts,
-                master_gain_db=0.0,
-                irw_tag=irw_tag,
-                target_curve_tag=target_curve_tag,
-            )
-            zf.writestr(f"camilladsp_{ft_short}_{irw_tag}.yml", yaml_content)
-
-    filters_dir = os.path.join(os.getcwd(), "filters")
-    os.makedirs(filters_dir, exist_ok=True)
-
-    fname = f"CamillaFIR_{ft_short}_{irw_tag}_{target_curve_tag}_{ts}.zip"
-    out_path = os.path.join(filters_dir, fname)
-
-    try:
-        with open(out_path, "wb") as f:
-            f.write(zip_buffer.getvalue())
-        save_msg = f"Saved: {os.path.abspath(out_path)}"
-    except Exception:
-        save_msg = "Zip saving failed."
-
-
-    if l_st_f is None:
-        l_st_f = l_st
-    if r_st_f is None:
-        r_st_f = r_st
-    if l_imp_f is None:
-        l_imp_f = l_imp
-    if r_imp_f is None:
-        r_imp_f = r_imp
-
-    try:
-        fs_sel = int(data.get('fs') or 44100)
-    except Exception:
-        fs_sel = 44100
-    fs_ui_stats = _resolve_ui_stats_fs(ui_stats_fs, fs_sel)
-    _inject_filter_mags_for_ui(l_st_f, l_imp_f, fs_ui_stats)
-    _inject_filter_mags_for_ui(r_st_f, r_imp_f, fs_ui_stats)
+    if l_st_f is None or r_st_f is None or l_imp_f is None or r_imp_f is None:
+        fallback = results_by_fs[-1]
+        l_st_f, r_st_f = fallback.l_st, fallback.r_st
+        l_imp_f, r_imp_f = fallback.l_ir, fallback.r_ir
 
     logger.info(f"UI stats mode L/R: {l_st_f.get('analysis_mode')}/{r_st_f.get('analysis_mode')} | "
                 f"len cmp f/m/t = {len(l_st_f.get('cmp_freq_axis',[]))}/{len(l_st_f.get('cmp_measured_mags',[]))}/{len(l_st_f.get('cmp_target_mags',[]))}")
@@ -720,7 +516,7 @@ def process_run():
         run_started_at=run_started_at,
         perf_stats=perf_stats,
         per_fs_stats=per_fs_stats,
-        saved_filters_dir=os.path.abspath(filters_dir),
+        saved_filters_dir=saved_filters_dir,
     )
 
 def _ui_pick(stats, key):
@@ -768,15 +564,8 @@ def view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
 
     if isinstance(psl, str) and ("psy" in psl.lower()):
         try:
-            dummy = np.zeros_like(m)
-            m_heavy, _ = apply_smoothing_std(f, m, dummy, 1/3.0)
-            m_light, _ = apply_smoothing_std(f, m, dummy, 1/48.0)
-
-            ff = np.maximum(f, 1.0)
-            lo, hi = 200.0, 2000.0
-            w = (np.log10(ff) - np.log10(lo)) / (np.log10(hi) - np.log10(lo))
-            w = np.clip(w, 0.0, 1.0)
-            return (1.0 - w) * m_heavy + w * m_light
+            from .dsp.smoothing import psychoacoustic_smoothing
+            return psychoacoustic_smoothing(f, m)
         except Exception:
             return m
 
@@ -935,9 +724,6 @@ def _inject_filter_mags_for_ui(st: dict, filt_ir, fs: int):
         key_f = "cmp_freq_axis" if mode == "comparison" else "freq_axis"
         key_g = "cmp_filter_mags" if mode == "comparison" else "filter_mags"
 
-        if st.get(key_g) is not None:
-            return
-
         f_src = st.get(key_f, None)
         f_axis = np.asarray(f_src if f_src is not None else [], dtype=float)
         if f_axis.size < 4:
@@ -959,6 +745,7 @@ def _inject_filter_mags_for_ui(st: dict, filt_ir, fs: int):
         f_max = float(np.max(f_fft))
         f_q = np.clip(f_axis, f_min, f_max)
         st[key_g] = np.interp(f_q, f_fft, g_db).tolist()
+        st[f"{key_g}_source"] = "ir_fft_final"
     except Exception:
         return
 

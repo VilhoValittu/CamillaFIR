@@ -58,7 +58,11 @@ def apply_confidence_weighted_target_pull(
         w = (c - conf_floor) / (conf_ceil - conf_floor)
         w = np.clip(w, 0.0, 1.0)
 
-        is_cut = (t < 0.0)
+        # For target-pull, "cut direction" means target is BELOW measured
+        # (i.e. target requests attenuation at that frequency).
+        # Using (t < 0) is wrong here because target SPL is typically positive.
+        is_cut = (t < m) #leikkaus
+
         gc = float(gamma_cut) if np.isfinite(float(gamma_cut)) and float(gamma_cut) > 0 else 1.0
         gb = float(gamma_boost) if np.isfinite(float(gamma_boost)) and float(gamma_boost) > 0 else 1.0
         w_eff = np.where(is_cut, w ** gc, w ** gb)
@@ -113,59 +117,71 @@ def _limit_gd_gradient_ms_per_oct(
         return ph
 
     m = (np.asarray(mask, dtype=bool) if mask is not None else np.ones_like(f, dtype=bool))
-    m = m & (f > 0.0) & (f >= float(f_min)) & (f <= float(f_max))
+    m = m & np.isfinite(f) & np.isfinite(ph) & (f > 0.0) & (f >= float(f_min)) & (f <= float(f_max))
     if not np.any(m):
         return ph
 
     idx = np.where(m)[0]
     i0, i1 = int(idx[0]), int(idx[-1])
-    ff = f[i0:i1+1]
-    pp = ph[i0:i1+1]
+    ff = f[i0:i1 + 1]
+    pp = ph[i0:i1 + 1]
     if ff.size < 16:
+        return ph
+    if not np.all(np.diff(ff) > 0.0):
+        # Non-monotonic axis can explode derivative math.
         return ph
 
     pp_u = np.unwrap(pp)
 
-    df = np.gradient(ff) + 1e-12
-    gd_ms = (-np.gradient(pp_u) / (2.0 * np.pi * df)) * 1000.0
-    gd_ms = np.nan_to_num(gd_ms, nan=0.0, posinf=0.0, neginf=0.0)
+    # GD in seconds: gd_s = -dphi/d(2*pi*f); convert to ms.
+    omega = 2.0 * np.pi * ff
+    gd_s = -np.gradient(pp_u, omega)
+    gd_ms = np.nan_to_num(gd_s * 1000.0, nan=0.0, posinf=0.0, neginf=0.0)
 
-    log2f = np.log2(np.maximum(ff, 1e-9))
-    dlog = np.gradient(log2f) + 1e-12
-    gd_grad = np.gradient(gd_ms) / dlog
-
-    if grad_smooth_sigma and float(grad_smooth_sigma) > 0.0:
-        try:
-            gd_grad = scipy.ndimage.gaussian_filter1d(gd_grad, sigma=float(grad_smooth_sigma))
-        except Exception:
-            pass
-
+    log2f = np.log2(np.maximum(ff, 1e-12))
     lim = float(max(0.1, max_grad_ms_per_oct))
 
+    gd_l = gd_ms.copy()
+    try:
+        sigma = float(grad_smooth_sigma) if float(grad_smooth_sigma) > 0.0 else 0.6
+    except Exception:
+        sigma = 0.6
+    sigma = float(max(0.25, sigma))
+
+    # Iteratively smooth GD until gradient is under limit (or close).
+    for _ in range(14):
+        gd_grad_now = np.gradient(gd_l, log2f)
+        gd_grad_now = np.nan_to_num(gd_grad_now, nan=0.0, posinf=0.0, neginf=0.0)
+        if gd_grad_now.size == 0:
+            break
+        if float(np.max(np.abs(gd_grad_now))) <= (lim * 1.001):
+            break
+        gd_l = scipy.ndimage.gaussian_filter1d(gd_l, sigma=sigma, mode="nearest")
+        sigma *= 1.25
+
+    gd_grad = np.gradient(gd_l, log2f)
+    gd_grad = np.nan_to_num(gd_grad, nan=0.0, posinf=0.0, neginf=0.0)
     if soft_limit:
         gd_grad_l = lim * np.tanh(gd_grad / lim)
     else:
         gd_grad_l = np.clip(gd_grad, -lim, lim)
 
-    k0 = int(ff.size // 2)
-    gd0 = float(gd_ms[k0])
-    gd_l = np.empty_like(gd_ms)
-    gd_l[k0] = gd0
-    for k in range(k0 + 1, ff.size):
-        gd_l[k] = gd_l[k-1] + gd_grad_l[k-1] * (log2f[k] - log2f[k-1])
-    for k in range(k0 - 1, -1, -1):
-        gd_l[k] = gd_l[k+1] - gd_grad_l[k+1] * (log2f[k+1] - log2f[k])
+    # Rebuild GD from bounded gradient on log2-frequency axis.
+    gd_new = np.empty_like(gd_l)
+    gd_new[0] = float(gd_l[0])
+    for k in range(1, ff.size):
+        gd_new[k] = gd_new[k - 1] + gd_grad_l[k - 1] * (log2f[k] - log2f[k - 1])
 
-    dphi_df = -2.0 * np.pi * (gd_l / 1000.0)
-    phi_l = np.empty_like(pp_u)
-    phi_l[k0] = float(pp_u[k0])
-    for k in range(k0 + 1, ff.size):
-        phi_l[k] = phi_l[k-1] + 0.5 * (dphi_df[k-1] + dphi_df[k]) * (ff[k] - ff[k-1])
-    for k in range(k0 - 1, -1, -1):
-        phi_l[k] = phi_l[k+1] - 0.5 * (dphi_df[k+1] + dphi_df[k]) * (ff[k+1] - ff[k])
+    # Integrate back to phase: dphi/df = -2*pi*gd_s = -2*pi*(gd_ms/1000).
+    dphi_df = -2.0 * np.pi * (gd_new / 1000.0)
+    phi_new = np.empty_like(pp_u)
+    phi_new[0] = float(pp_u[0])
+    dff = np.diff(ff)
+    for k in range(1, ff.size):
+        phi_new[k] = phi_new[k - 1] + 0.5 * (dphi_df[k - 1] + dphi_df[k]) * dff[k - 1]
 
     out = ph.copy()
-    out[i0:i1+1] = phi_l
+    out[i0:i1 + 1] = np.nan_to_num(phi_new, nan=0.0, posinf=0.0, neginf=0.0)
     return out
 
 
@@ -360,7 +376,14 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
     final_gain_total = phase_ir["final_gain_total"]
 
     max_peak = np.max(np.abs(impulse))
-    if cfg.do_normalize and max_peak > 0: impulse *= (0.89 / max_peak)
+    normalize_gain_db_applied = 0.0
+    if cfg.do_normalize and max_peak > 0:
+        _norm_scale = float(0.89 / max_peak)
+        impulse *= _norm_scale
+        try:
+            normalize_gain_db_applied = float(20.0 * np.log10(max(_norm_scale, 1e-12)))
+        except Exception:
+            normalize_gain_db_applied = 0.0
 
     stats = {
 
@@ -369,8 +392,13 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'mag_c_min': float(getattr(cfg, 'mag_c_min', 0.0) or 0.0),
         'mag_c_max': float(getattr(cfg, 'mag_c_max', 0.0) or 0.0),
         'target_mags': target_mags.tolist(),
+        'measured_mags_raw': m_anal.tolist(),
         'measured_mags': (m_anal - calc_offset_db).tolist(),
+        'predicted_filter_mags': gain_db.tolist(),
+        'predicted_filter_mags_source': "mag_post_limits_pre_ir",
         'filter_mags': gain_db.tolist(),
+        'filter_mags_source': "mag_post_limits_pre_ir",
+        'mag_mask': np.asarray(mask_c, dtype=float).tolist(),
         'confidence_mask': conf_mask.tolist(),
         'afdw_active': bool(afdw_on),
         'reflections': reflections,
@@ -395,6 +423,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         'gain_margin_db': float(gain_margin_db),
         'auto_global_gain_db': float(auto_global_gain_db),
         'auto_headroom_db': float(auto_headroom_db),
+        'normalize_gain_db_applied': float(normalize_gain_db_applied),
         'peak_gain_db': float(current_peak_gain),
         'final_max_db': float(np.max(final_gain_total)),
 
@@ -517,6 +546,41 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
             stats.update(st)
     except Exception:
         pass
+    # Keep target on a shared absolute reference level for scoring/quality.
+    # Preserve measured arrays from `st` when available to keep UI view
+    # behavior stable; only fill missing measured fields.
+    try:
+        stats["target_mags"] = np.asarray(target_mags, dtype=float).tolist()
+        f_ref = np.asarray(stats.get("freq_axis", freq_axis), dtype=float).reshape(-1)
+        n_ref = int(f_ref.size)
+
+        def _arr_if_valid(v):
+            try:
+                a = np.asarray(v, dtype=float).reshape(-1)
+            except Exception:
+                return None
+            if a.size < 8:
+                return None
+            if n_ref >= 8 and a.size != n_ref:
+                return None
+            return np.asarray(a, dtype=float)
+
+        m_corr_st = _arr_if_valid(stats.get("measured_mags", None))
+        if m_corr_st is None:
+            m_corr = np.asarray(m_anal, dtype=float) - float(calc_offset_db)
+        else:
+            m_corr = np.asarray(m_corr_st, dtype=float)
+
+        m_raw_st = _arr_if_valid(stats.get("measured_mags_raw", None))
+        if m_raw_st is None:
+            m_raw = np.asarray(m_corr, dtype=float) + float(calc_offset_db)
+        else:
+            m_raw = np.asarray(m_raw_st, dtype=float)
+
+        stats["measured_mags"] = np.asarray(m_corr, dtype=float).tolist()
+        stats["measured_mags_raw"] = np.asarray(m_raw, dtype=float).tolist()
+    except Exception:
+        pass
 
     try:
         if bool(afdw_on) and (afdw_bw_oct is not None):
@@ -533,6 +597,28 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         stats["stage_probes"] = {k: dict(v) for k, v in stage_probes.items()} if isinstance(stage_probes, dict) else {}
     except Exception:
         stats["stage_probes"] = {}
+
+    try:
+        low_hz_cfg = float(stats.get('low_bass_cut_hz', getattr(cfg, 'low_bass_cut_hz', 0.0)) or 0.0)
+        exc_on_cfg = bool(stats.get('exc_prot', getattr(cfg, 'exc_prot', False)))
+        exc_f_cfg = float(stats.get('exc_freq', getattr(cfg, 'exc_freq', 0.0)) or 0.0)
+        lf_guard_hz = 0.0
+        if np.isfinite(low_hz_cfg) and low_hz_cfg > 0.0:
+            lf_guard_hz = max(lf_guard_hz, float(low_hz_cfg))
+        if exc_on_cfg and np.isfinite(exc_f_cfg) and exc_f_cfg > 0.0:
+            lf_guard_hz = max(lf_guard_hz, float(exc_f_cfg * 1.41))
+        lf_mask = (freq_axis > 0.0) & (freq_axis <= lf_guard_hz) if lf_guard_hz > 0.0 else np.zeros_like(freq_axis, dtype=bool)
+        if np.any(lf_mask):
+            lf_boost_max_db = float(np.max(np.asarray(gain_db, dtype=float)[lf_mask]))
+        else:
+            lf_boost_max_db = 0.0
+        stats['lf_guard_hz'] = float(lf_guard_hz)
+        stats['lf_guard_bins'] = int(np.count_nonzero(lf_mask))
+        stats['lf_boost_max_db'] = float(lf_boost_max_db)
+    except Exception:
+        stats['lf_guard_hz'] = 0.0
+        stats['lf_guard_bins'] = 0
+        stats['lf_boost_max_db'] = 0.0
 
     try:
         stats['softclip_boost_bins'] = int(locals().get('softclip_boost_bins', 0))
@@ -609,6 +695,148 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         stats.update(cmp)
         if stats.get('analysis_mode') != "comparison":
             stats['analysis_mode'] = "native"
+    try:
+        cmp_g_pred = np.asarray(stats.get("cmp_predicted_filter_mags", []), dtype=float).reshape(-1)
+        cmp_g_cur = np.asarray(stats.get("cmp_filter_mags", []), dtype=float).reshape(-1)
+        if cmp_g_pred.size < 8 and cmp_g_cur.size >= 8:
+            stats["cmp_predicted_filter_mags"] = cmp_g_cur.tolist()
+            stats["cmp_predicted_filter_mags_source"] = str(
+                stats.get("cmp_filter_mags_source", "mag_post_limits_pre_ir") or "mag_post_limits_pre_ir"
+            )
+    except Exception:
+        pass
+    try:
+        cmp_m_raw = np.asarray(stats.get("cmp_measured_mags_raw", []), dtype=float).reshape(-1)
+        cmp_m_cur = np.asarray(stats.get("cmp_measured_mags", []), dtype=float).reshape(-1)
+        if cmp_m_raw.size < 8 and cmp_m_cur.size >= 8:
+            cmp_off = float(stats.get("cmp_offset_db", 0.0) or 0.0)
+            stats["cmp_measured_mags_raw"] = (cmp_m_cur + cmp_off).tolist()
+    except Exception:
+        pass
+
+    # Canonical filter magnitude for reporting: always derive from final IR.
+    # This keeps DSP Quality Report aligned with the exported/used filter.
+    try:
+        ir = np.asarray(impulse, dtype=float).flatten()
+        fs_i = int(getattr(cfg, "fs", 0) or 0)
+        f_native = np.asarray(stats.get("freq_axis", freq_axis), dtype=float).reshape(-1)
+        if ir.size >= 8 and fs_i > 0 and f_native.size >= 4:
+            h = np.fft.rfft(ir)
+            f_fft = np.fft.rfftfreq(ir.size, d=1.0 / float(fs_i))
+            g_db = 20.0 * np.log10(np.maximum(np.abs(h), 1e-12))
+            f_q = np.clip(f_native, float(np.min(f_fft)), float(np.max(f_fft)))
+            g_pred_native = np.asarray(stats.get("predicted_filter_mags", []), dtype=float).reshape(-1)
+            if g_pred_native.size < 8:
+                g_cur_native = np.asarray(stats.get("filter_mags", []), dtype=float).reshape(-1)
+                if g_cur_native.size >= 8:
+                    stats["predicted_filter_mags"] = g_cur_native.tolist()
+                    stats["predicted_filter_mags_source"] = str(
+                        stats.get("filter_mags_source", "mag_post_limits_pre_ir") or "mag_post_limits_pre_ir"
+                    )
+
+            g_real_native = np.interp(f_q, f_fft, g_db)
+            stats["realized_filter_mags"] = g_real_native.tolist()
+            stats["realized_filter_mags_source"] = "ir_fft_final"
+            stats["filter_mags"] = g_real_native.tolist()
+            stats["filter_mags_source"] = "ir_fft_final"
+
+            f_cmp = np.asarray(stats.get("cmp_freq_axis", []), dtype=float).reshape(-1)
+            if f_cmp.size >= 4:
+                f_cmp_q = np.clip(f_cmp, float(np.min(f_fft)), float(np.max(f_fft)))
+                g_pred_cmp = np.asarray(stats.get("cmp_predicted_filter_mags", []), dtype=float).reshape(-1)
+                if g_pred_cmp.size < 4:
+                    g_cur_cmp = np.asarray(stats.get("cmp_filter_mags", []), dtype=float).reshape(-1)
+                    if g_cur_cmp.size >= 4:
+                        stats["cmp_predicted_filter_mags"] = g_cur_cmp.tolist()
+                        stats["cmp_predicted_filter_mags_source"] = str(
+                            stats.get("cmp_filter_mags_source", "mag_post_limits_pre_ir") or "mag_post_limits_pre_ir"
+                        )
+                g_real_cmp = np.interp(f_cmp_q, f_fft, g_db)
+                stats["cmp_realized_filter_mags"] = g_real_cmp.tolist()
+                stats["cmp_realized_filter_mags_source"] = "ir_fft_final"
+                stats["cmp_filter_mags"] = g_real_cmp.tolist()
+                stats["cmp_filter_mags_source"] = "ir_fft_final"
+
+            # Realization delta diagnostics:
+            # compare post-limits mag gain_db against final IR-derived filter_mags.
+            try:
+                g_post = np.asarray(gain_db, dtype=float).reshape(-1)
+                g_ir = np.asarray(stats.get("filter_mags", []), dtype=float).reshape(-1)
+                n = int(min(f_q.size, g_post.size, g_ir.size))
+                if n >= 8:
+                    f_eval = np.asarray(f_q[:n], dtype=float)
+                    d_eval = np.asarray(g_ir[:n], dtype=float) - np.asarray(g_post[:n], dtype=float)
+                    valid = np.isfinite(f_eval) & np.isfinite(d_eval) & (f_eval > 0.0)
+
+                    def _band_delta_on(d_arr: np.ndarray, lo_hz: float, hi_hz: float):
+                        m = valid & (f_eval >= float(lo_hz)) & (f_eval <= float(hi_hz))
+                        if int(np.count_nonzero(m)) < 8:
+                            return None, None, None
+                        dv = np.asarray(d_arr[m], dtype=float)
+                        fv = f_eval[m]
+                        idx = int(np.argmax(np.abs(dv)))
+                        return float(np.sqrt(np.mean(dv * dv))), float(np.abs(dv[idx])), float(fv[idx])
+
+                    rms_b, max_b, hz_b = _band_delta_on(d_eval, 20.0, 200.0)
+                    stats["post_to_ir_delta_rms_20_200_db"] = rms_b
+                    stats["post_to_ir_delta_max_20_200_db"] = max_b
+                    stats["post_to_ir_delta_max_hz_20_200"] = hz_b
+
+                    m20 = valid & (f_eval >= 20.0) & (f_eval <= 200.0)
+                    if int(np.count_nonzero(m20)) >= 8:
+                        off20 = float(np.median(np.asarray(d_eval[m20], dtype=float)))
+                        d_shape_20 = np.asarray(d_eval, dtype=float) - float(off20)
+                        srms20, smax20, shz20 = _band_delta_on(d_shape_20, 20.0, 200.0)
+                        stats["post_to_ir_delta_offset_20_200_db"] = float(off20)
+                        stats["post_to_ir_shape_delta_rms_20_200_db"] = srms20
+                        stats["post_to_ir_shape_delta_max_20_200_db"] = smax20
+                        stats["post_to_ir_shape_delta_max_hz_20_200"] = shz20
+
+                        # Same diagnostic, but baseline includes gain staging
+                        # (auto gain/headroom + possible final normalize scale).
+                        g_stage = (
+                            np.asarray(g_post, dtype=float)
+                            + float(auto_global_gain_db)
+                            + float(auto_headroom_db)
+                            + float(normalize_gain_db_applied)
+                        )
+                        d_stage = np.asarray(g_ir[:n], dtype=float) - np.asarray(g_stage[:n], dtype=float)
+                        srms_abs, smax_abs, shz_abs = _band_delta_on(d_stage, 20.0, 200.0)
+                        stats["post_to_ir_staged_delta_rms_20_200_db"] = srms_abs
+                        stats["post_to_ir_staged_delta_max_20_200_db"] = smax_abs
+                        stats["post_to_ir_staged_delta_max_hz_20_200"] = shz_abs
+
+                        off_stage = float(np.median(np.asarray(d_stage[m20], dtype=float)))
+                        d_stage_shape = np.asarray(d_stage, dtype=float) - float(off_stage)
+                        srms_shape, smax_shape, shz_shape = _band_delta_on(d_stage_shape, 20.0, 200.0)
+                        stats["post_to_ir_staged_delta_offset_20_200_db"] = float(off_stage)
+                        stats["post_to_ir_staged_shape_delta_rms_20_200_db"] = srms_shape
+                        stats["post_to_ir_staged_shape_delta_max_20_200_db"] = smax_shape
+                        stats["post_to_ir_staged_shape_delta_max_hz_20_200"] = shz_shape
+
+                    cmin = float(stats.get("mag_c_min", getattr(cfg, "mag_c_min", 20.0)) or 20.0)
+                    cmax = float(stats.get("mag_c_max", getattr(cfg, "mag_c_max", 20000.0)) or 20000.0)
+                    if (not np.isfinite(cmin)) or (cmin < 0.0):
+                        cmin = 20.0
+                    if (not np.isfinite(cmax)) or (cmax <= cmin):
+                        cmax = max(200.0, cmin + 1.0)
+                    rms_c, max_c, hz_c = _band_delta_on(d_eval, cmin, cmax)
+                    stats["post_to_ir_delta_rms_magc_db"] = rms_c
+                    stats["post_to_ir_delta_max_magc_db"] = max_c
+                    stats["post_to_ir_delta_max_hz_magc"] = hz_c
+                    m_c = valid & (f_eval >= float(cmin)) & (f_eval <= float(cmax))
+                    if int(np.count_nonzero(m_c)) >= 8:
+                        off_c = float(np.median(np.asarray(d_eval[m_c], dtype=float)))
+                        d_shape_c = np.asarray(d_eval, dtype=float) - float(off_c)
+                        srms_c, smax_c, shz_c = _band_delta_on(d_shape_c, cmin, cmax)
+                        stats["post_to_ir_delta_offset_magc_db"] = float(off_c)
+                        stats["post_to_ir_shape_delta_rms_magc_db"] = srms_c
+                        stats["post_to_ir_shape_delta_max_magc_db"] = smax_c
+                        stats["post_to_ir_shape_delta_max_hz_magc"] = shz_c
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     return impulse, stats
 
@@ -660,10 +888,16 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
     if (not np.isfinite(margin_db)) or (margin_db < 0.0):
         margin_db = 0.0
     try:
-        peak_l = float((l_st1 or {}).get("peak_gain_db", 0.0) or 0.0)
-        peak_r = float((r_st1 or {}).get("peak_gain_db", 0.0) or 0.0)
-        peak_shared = max(0.0, peak_l, peak_r)
-        shared_auto_gain_db = -(peak_shared + margin_db)
+        ag_l = float((l_st1 or {}).get("auto_global_gain_db", np.nan))
+        ag_r = float((r_st1 or {}).get("auto_global_gain_db", np.nan))
+        if np.isfinite(ag_l) and np.isfinite(ag_r):
+            # More negative dB value is the safer shared attenuation.
+            shared_auto_gain_db = min(ag_l, ag_r)
+        else:
+            peak_l = float((l_st1 or {}).get("peak_gain_db", 0.0) or 0.0)
+            peak_r = float((r_st1 or {}).get("peak_gain_db", 0.0) or 0.0)
+            peak_shared = max(0.0, peak_l, peak_r)
+            shared_auto_gain_db = -(peak_shared + margin_db)
     except Exception:
         shared_auto_gain_db = None
 

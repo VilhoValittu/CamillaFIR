@@ -327,7 +327,7 @@ def toast_health_gate_result(hr: HealthResult, mode: str) -> bool:
         if msg:
             show_toast(
                 msg,
-                duration=20.0,
+                duration=10.0,
                 color=_health_toast_color(hr.overall, mode_u),
                 dedupe_key=f"health_summary:{mode_u}:{hr.overall}:{msg}",
                 dedupe_window_s=1.0,

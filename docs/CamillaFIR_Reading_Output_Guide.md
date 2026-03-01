@@ -1,6 +1,6 @@
 # Reading CamillaFIR Output (Current Behavior)
 
-This guide reflects the current code path in CamillaFIR (v3.2.0 line).
+This guide reflects the current code path in CamillaFIR (v3.3.0 line).
 
 ## 1. What you get after a run
 
