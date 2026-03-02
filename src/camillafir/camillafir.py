@@ -547,7 +547,7 @@ def view_mags_for_plot(freqs, mags, *, plot_smoothing_level="Psychoacoustic"):
     Tuottaa kuvaajia varten tasoitetun amplitudikayran (vain UI-nakymaan).
 
     Tukee kahta tilaa:
-    - `Psychoacoustic`: REW-tyylinen painotettu LF/HF-yhdistelma
+    - `Psychoacoustic`: REW-tyylinen painotettu LF/HF-yhdistelma psyko=CamillaFIR Reference
     - numeerinen N: standardi 1/N-oktaavitasoitus
     """
     f = np.asarray(freqs, dtype=float)

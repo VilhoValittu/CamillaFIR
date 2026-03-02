@@ -620,7 +620,7 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
 
     lq = _collect(l_stats)
     rq = _collect(r_stats)
-    debug_report = bool(settings.get("quality_report_debug", True)) # Raportin laatu-debug
+    debug_report = bool(settings.get("quality_report_debug", False)) # Raportin laatu-debug
     def _fmt_onoff(v):
         return "ON" if bool(v) else "OFF"
     def _fmt_src(v):
