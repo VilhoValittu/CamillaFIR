@@ -77,6 +77,31 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     if mode_u == "BASIC":
         data["lvl_mode"] = "Auto"
 
+    # Confidence-pull controls are hidden from UI; keep stable internal defaults.
+    # ADVANCED keeps the tuned profile from mode defaults.
+    hidden_conf_defaults = (
+        {
+            "conf_pull_floor": 0.05,
+            "conf_pull_ceil": 0.95,
+            "conf_pull_max_hz": 180.0,
+            "conf_pull_gamma_cut": 0.554,
+            "conf_pull_gamma_boost": 0.75,
+            "low_bass_cut_strength": 0.0,
+        }
+        if mode_u == "ADVANCED"
+        else {
+            "conf_pull_floor": 0.05,
+            "conf_pull_ceil": 0.95,
+            "conf_pull_max_hz": 200.0,
+            "conf_pull_gamma_cut": 0.55,
+            "conf_pull_gamma_boost": 1.35,
+            "low_bass_cut_strength": 0.0,
+        }
+    )
+    for _k, _v in hidden_conf_defaults.items():
+        if data.get(_k, None) in (None, ""):
+            data[_k] = _v
+
     data["align_opt"] = True
 
     for i in range(1, 6):

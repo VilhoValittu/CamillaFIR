@@ -1143,69 +1143,13 @@ def put_guide_section():
 
 
 def update_confidence_pull_ui(*, pin, get_val, t):
-    """Soveltaa tai paivittaa: update confidence pull ui."""
-    def _p(name, default=None):
-        try:
-            return pin[name]
-        except Exception:
-            return default
+    """Piilottaa confidence pull -saadot kayttoliittymasta.
 
+    DSP-logiikka ja sisaiset oletusarvot jaavat edelleen kayttoon.
+    """
     try:
-        mode = str(_p("mode", "BASIC") or "BASIC").strip().upper()
-        if mode != "ADVANCED":
-            with use_scope("conf_pull_scope", clear=True):
-                return
-
         with use_scope("conf_pull_scope", clear=True):
-            put_markdown(f"#### \U0001F3AF {t('ui_confidence_pull_advanced')}")
-            put_html(
-                f"<div style='opacity:0.7; font-size:12px; margin-bottom:6px'>"
-                f"{t('tdc_confidence_pull_help')}</div>"
-                )
-
-            put_row([
-                put_input(
-                    "conf_pull_floor",
-                    label=t("conf_pull_floor"),
-                    type=FLOAT,
-                    value=float(get_val("conf_pull_floor", 0.05)), # type: ignore
-                    help_text=t("conf_pull_floor_help"),
-                ),
-                put_input(
-                    "conf_pull_max_hz",
-                    label=t("conf_pull_max_hz"),
-                    type=FLOAT,
-                    value=float(get_val("conf_pull_max_hz", 200.0)),
-                    help_text=t("conf_pull_max_hz_help"),
-                ),
-            ])
-
-            put_row([
-                put_input(
-                    "conf_pull_gamma_cut",
-                    label=t("conf_pull_gamma_cut"),
-                    type=FLOAT,
-                    value=float(get_val("conf_pull_gamma_cut", 0.55)), # type: ignore
-                    help_text=t("conf_pull_gamma_cut_help"),
-                ),
-                put_input(
-                    "conf_pull_gamma_boost",
-                    label=t("conf_pull_gamma_boost"),
-                    type=FLOAT,
-                    value=float(get_val("conf_pull_gamma_boost", 1.35)),
-                    help_text=t("conf_pull_gamma_boost_help"),
-                ),
-            ])
-
-            put_row([
-                put_input(
-                    "low_bass_cut_strength",
-                    label=t("low_bass_cut_strength"),
-                    type=FLOAT,
-                    value=float(get_val("low_bass_cut_strength", 0.0)), # type: ignore
-                    help_text=t("low_bass_cut_strength_help"),
-                ),
-            ])
+            return
     except Exception:
         pass
 
