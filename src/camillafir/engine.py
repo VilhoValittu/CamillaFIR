@@ -273,6 +273,15 @@ def build_config(
         apply_mode_to_cfg(cfg, mode_u, apply_defaults=False)
     except Exception as exc:
         logger.warning(f"Mode clamp apply failed ({mode_u}): {exc}")
+    try:
+        unsafe_raw_req = bool(data.get("unsafe_raw_dsp", False))
+    except Exception:
+        unsafe_raw_req = False
+    unsafe_raw = bool(unsafe_raw_req and mode_u == "ADVANCED")
+    try:
+        setattr(cfg, "unsafe_raw_dsp", bool(unsafe_raw))
+    except Exception:
+        pass
 
     irw_raw = data.get("ir_export_window_mode", data.get("ir_window_mode", "auto"))
     irw_mode = str(irw_raw or "auto").strip().lower()
@@ -335,7 +344,7 @@ def build_config(
         user_max_boost = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
         setattr(cfg, "max_boost_db_user", user_max_boost)
         setattr(cfg, "max_safe_boost_db", float(max_safe_boost))
-        if user_max_boost > 0.0 and float(max_safe_boost) > 0.0:
+        if (not unsafe_raw) and user_max_boost > 0.0 and float(max_safe_boost) > 0.0:
             eff = min(user_max_boost, float(max_safe_boost))
             if eff < user_max_boost - 1e-9:
                 logger.info(
@@ -344,8 +353,30 @@ def build_config(
                     f"(MAX_SAFE_BOOST={float(max_safe_boost):.2f} dB)"
                 )
             setattr(cfg, "max_boost_db", float(eff))
+        elif unsafe_raw:
+            logger.warning("UNSAFE Raw DSP: bypassing MAX_SAFE_BOOST safety cap")
     except Exception:
         pass
+    if unsafe_raw:
+        try:
+            # Disable practical guard rails in magnitude path for algorithm testing.
+            setattr(cfg, "max_boost_db", float(max(120.0, float(getattr(cfg, "max_boost_db", 0.0) or 0.0))))
+            setattr(cfg, "max_cut_db", float(max(120.0, abs(float(getattr(cfg, "max_cut_db", 0.0) or 0.0)))))
+            setattr(cfg, "max_slope_db_per_oct", 0.0)
+            setattr(cfg, "max_slope_boost_db_per_oct", 0.0)
+            setattr(cfg, "max_slope_cut_db_per_oct", 0.0)
+            setattr(cfg, "reg_strength", 0.0)
+            setattr(cfg, "low_bass_cut_enable", False)
+            setattr(cfg, "low_bass_cut_hz", 0.0)
+            setattr(cfg, "low_bass_cut_strength", 0.0)
+            setattr(cfg, "exc_prot", False)
+            setattr(cfg, "bass_boost_cap_enable", False)
+            setattr(cfg, "bass_boost_post_restore_enable", False)
+            setattr(cfg, "bass_smooth_adaptive", False)
+            setattr(cfg, "enable_ir_pre_energy_guard", False)
+            logger.warning("UNSAFE Raw DSP: guard rails disabled (FOR TEST USE ONLY)")
+        except Exception:
+            pass
 
     is_wav = False
     try:

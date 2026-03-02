@@ -15,6 +15,7 @@ def load_config() -> dict:
         "gain": 0.0,
         "hc_mode": "Harman6",
         "mag_correct": True,
+        "unsafe_raw_dsp": False,
         "plot_smoothing_level": "Psychoacoustic",
         "filter_smooth": 12,
         "bass_smooth_adaptive": True,
@@ -136,6 +137,7 @@ def load_config() -> dict:
                 "phase_safe_2058",
                 "enable_ir_pre_energy_guard",
                 "phase_tail_monotonic_enable",
+                "unsafe_raw_dsp",
             ]:
                 if k in saved and isinstance(saved[k], list):
                     saved[k] = bool(saved[k])

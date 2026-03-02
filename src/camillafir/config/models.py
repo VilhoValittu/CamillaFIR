@@ -17,6 +17,7 @@ class FilterConfig:
     phase_limit: float = 1000.0
     phase_safe_2058: bool = False
     enable_mag_correction: bool = True
+    unsafe_raw_dsp: bool = False
     
     plot_smoothing_level: Union[str, int] = "Psychoacoustic"
     filter_smooth: int = 12

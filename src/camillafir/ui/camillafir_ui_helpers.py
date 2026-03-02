@@ -2,7 +2,7 @@ import numpy as np
 import math
 from pywebio.output import put_button, put_buttons, put_collapse, put_html, put_markdown, put_row, use_scope
 from pywebio.input import FLOAT
-from pywebio.pin import pin, pin_update, put_input, put_select
+from pywebio.pin import pin, pin_update, put_checkbox, put_input, put_select
 
 from ..resources.i8n.camillafir_i18n import t
 from .camillafir_modes import MODE_DEFAULTS, MODE_CLAMPS
@@ -699,6 +699,7 @@ def apply_mode_defaults_to_ui(_=None):
     }
     map_chk = {
         "enable_mag_correction": "mag_correct",
+        "unsafe_raw_dsp": "unsafe_raw_dsp",
         "exc_prot": "exc_prot",
         "enable_tdc": "enable_tdc",
         "enable_afdw": "enable_afdw",
@@ -1150,6 +1151,39 @@ def update_confidence_pull_ui(*, pin, get_val, t):
     try:
         with use_scope("conf_pull_scope", clear=True):
             return
+    except Exception:
+        pass
+
+
+def update_unsafe_raw_dsp_ui(*, pin, get_val, t):
+    """Renderoi UNSAFE/Raw DSP -kytkimen vain ADVANCED-tilaan."""
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            return default
+
+    try:
+        mode_u = str(_p("mode", "BASIC") or "BASIC").strip().upper()
+    except Exception:
+        mode_u = "BASIC"
+
+    try:
+        with use_scope("unsafe_raw_dsp_scope", clear=True):
+            if mode_u != "ADVANCED":
+                return
+
+            put_checkbox(
+                "unsafe_raw_dsp",
+                options=[{"label": t("unsafe_raw_dsp_label"), "value": True}],
+                value=[True] if bool(get_val("unsafe_raw_dsp", False)) else [],
+                help_text=t("unsafe_raw_dsp_help"),
+            )
+            put_html(
+                "<div style='margin-top:6px; color:#d32f2f; font-weight:700; font-size:13px;'>"
+                f"{t('unsafe_raw_dsp_warning')}"
+                "</div>"
+            )
     except Exception:
         pass
 

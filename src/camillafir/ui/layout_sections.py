@@ -518,6 +518,8 @@ def build_advanced_section(*, t, get_val, slope_opts, on_afdw_preset):
             open=False,
         ),
         put_markdown("---"),
+        put_scope("unsafe_raw_dsp_scope"),
+        put_markdown("---"),
         put_markdown(f"#### 🧠 {t('bass_first_title')}"),
         put_checkbox(
             "bass_first_ai",

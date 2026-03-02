@@ -51,6 +51,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "global_gain_db": 0.0,
 
         "enable_mag_correction": True,
+        "unsafe_raw_dsp": False,
         "mag_c_min": 25.0,
         "mag_c_max": 250.0,
         "max_boost_db": 3.0,
@@ -104,6 +105,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "global_gain_db": 0.0,
 
         "enable_mag_correction": True,
+        "unsafe_raw_dsp": False,
         "mag_c_min": 18.0,
         "mag_c_max": 230.0,
         "max_boost_db": 5.0,
@@ -178,6 +180,7 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
         "low_bass_cut_hz": (20.0, 100.0),
         "low_bass_cut_enable": (True, True),
         "stereo_link": (True, True),
+        "unsafe_raw_dsp": (False, False),
     },
 
     "ADVANCED": {},

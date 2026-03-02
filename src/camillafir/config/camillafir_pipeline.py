@@ -39,7 +39,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "conf_pull_bass_boost_floor_hz", "conf_pull_bass_boost_floor_min",
         "conf_pull_bass_boost_restore",
         "low_bass_cut_strength", "hc_custom_file",
-        "file_l", "file_r",
+        "file_l", "file_r", "unsafe_raw_dsp",
     ]
 
     data: Dict[str, Any] = {}
@@ -63,6 +63,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "bass_adaptive_isolation_mode",
         "bass_boost_cap_enable",
         "bass_boost_post_restore_enable",
+        "unsafe_raw_dsp",
     ]:
         try:
             if isinstance(data.get(k, None), list):
@@ -76,6 +77,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         mode_u = "BASIC"
     if mode_u == "BASIC":
         data["lvl_mode"] = "Auto"
+        data["unsafe_raw_dsp"] = False
 
     # Confidence-pull controls are hidden from UI; keep stable internal defaults.
     # ADVANCED keeps the tuned profile from mode defaults.
@@ -554,6 +556,7 @@ def build_filter_config(
         phase_limit=data["phase_limit"],
         phase_safe_2058=False,
         enable_mag_correction=bool(data.get("mag_correct", True)),
+        unsafe_raw_dsp=bool(data.get("unsafe_raw_dsp", False)),
         lvl_mode=lvl_mode,
         reg_strength=float(data.get("reg_strength", 30.0)),
         do_normalize=bool(data["normalize_opt"]),

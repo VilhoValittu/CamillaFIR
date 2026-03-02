@@ -24,6 +24,7 @@ from .camillafir_ui_helpers import (
     update_taps_auto_info,
     update_target_preview_ui,
     update_tdc_controls_ui,
+    update_unsafe_raw_dsp_ui,
 )
 
 _PROCESS_RUN_HOOK = None
@@ -153,6 +154,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
     )
     update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t)
     update_confidence_pull_ui(pin=pin, get_val=get_val, t=t)
+    update_unsafe_raw_dsp_ui(pin=pin, get_val=get_val, t=t)
     update_target_preview_ui()
 
     def _refresh_ir_window_controls(_=None):
@@ -263,6 +265,10 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
 
         try:
             update_confidence_pull_ui(pin=pin, get_val=get_val, t=t)
+        except Exception:
+            pass
+        try:
+            update_unsafe_raw_dsp_ui(pin=pin, get_val=get_val, t=t)
         except Exception:
             pass
 
