@@ -21,7 +21,7 @@ from pywebio.output import put_processbar, put_scope, set_processbar
 from pywebio.pin import pin
 from .config.camillafir_config import save_config
 from .resources.i8n.camillafir_i18n import t
-from .ui.camillafir_housecurve import load_house_curve
+from .ui.camillafir_housecurve import load_house_curve, get_house_curve_by_name
 from camillafir.io.measurements_loader import load_measurements_lr
 from camillafir.io.measurements_txt import parse_measurements_from_path
 from .ui.system_health import (
@@ -49,7 +49,7 @@ from .ui.camillafir_utils import scale_taps_with_fs
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("CamillaFIR")
 
-VERSION = "v.3.4.0"
+VERSION = "v.3.4.1"
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
@@ -57,6 +57,41 @@ MAX_SAFE_TAPS = 131072
 TEST_MODE = 0
 TEST_MODE = os.environ.get("CAMILLAFIR_TEST", "0") == "1"
 AUTO_MODE_TRIALS = 100
+AUTO_MODE_REFINE_TRIALS = 50
+AUTO_MODE_PHASE1_PLATEAU_ROUNDS = 12
+AUTO_MODE_PHASE2_PLATEAU_ROUNDS = 12
+AUTO_MODE_TARGET_TOP_N = 3
+AUTO_MODE_TARGET_TRIALS_PER_CURVE = 10
+AUTO_MODE_TARGET_PRESELECT_SMOOTH_OCT = 0.75
+AUTO_MODE_MAG_C_MIN_MIN_HZ = 15.0
+AUTO_MODE_MAG_C_MIN_MAX_HZ = 70.0
+AUTO_MODE_MAG_C_MIN_REF_MIN_HZ = 80.0
+AUTO_MODE_MAG_C_MIN_REF_MAX_HZ = 200.0
+AUTO_MODE_MAG_C_MIN_SEARCH_MAX_HZ = 80.0
+AUTO_MODE_MAG_C_MIN_SMOOTH_OCT = 1.0
+AUTO_MODE_LOW_BASS_FROM_F6_ADD_HZ = 2.0
+AUTO_MODE_LOW_BASS_MIN_HZ = 18.0
+AUTO_MODE_LOW_BASS_MAX_HZ = 55.0
+AUTO_MODE_EXC_FROM_F6_ADD_HZ = 8.0
+AUTO_MODE_EXC_MIN_HZ = 20.0
+AUTO_MODE_EXC_MAX_HZ = 80.0
+AUTO_MODE_BUILTIN_TARGETS = (
+    "Harman6",
+    "Harman8",
+    "Harman4",
+    "Harman10",
+    "Harman12",
+    "Studio",
+    "Nearfield",
+    "HiFi",
+    "Speech",
+    "Toole",
+    "BK_Light",
+    "BK_Medium",
+    "BK_Strong",
+    "Flat",
+    "Cinema",
+)
 
 def resolve_static_dir() -> str | None:
     """
@@ -283,6 +318,30 @@ def _auto_collect_reflections(st: dict | None) -> list:
     return []
 
 
+def _auto_event_severity(refs: list | None) -> float:
+    refs = refs or []
+    if not isinstance(refs, list) or not refs:
+        return 0.0
+
+    vals = []
+    for r in refs:
+        if not isinstance(r, dict):
+            continue
+        v = _auto_safe_float(r.get("gd_error", 0.0), 0.0)
+        if np.isfinite(v):
+            vals.append(abs(float(v)))
+    if not vals:
+        return 0.0
+
+    vals = sorted(vals, reverse=True)[:5]
+    weights = (1.00, 0.75, 0.55, 0.40, 0.30)
+    sev = 0.0
+    for i, v in enumerate(vals):
+        # Ignore very small GD irregularities; focus on meaningful events.
+        sev += float(weights[i]) * max(0.0, float(v) - 2.0)
+    return float(max(0.0, sev))
+
+
 def _auto_pick_metric(st: dict | None, keys: tuple[str, ...], *, abs_value: bool = False, nonneg: bool = False):
     st = st or {}
     for k in keys:
@@ -295,6 +354,277 @@ def _auto_pick_metric(st: dict | None, keys: tuple[str, ...], *, abs_value: bool
             continue
         return float(v)
     return None
+
+
+def _auto_select_builtin_target_curve(
+    data: dict,
+    *,
+    f_l,
+    m_l,
+    f_r,
+    m_r,
+) -> dict | None:
+    try:
+        fl = np.asarray(f_l, dtype=float).reshape(-1)
+        ml = np.asarray(m_l, dtype=float).reshape(-1)
+        fr = np.asarray(f_r, dtype=float).reshape(-1)
+        mr = np.asarray(m_r, dtype=float).reshape(-1)
+    except Exception:
+        return None
+
+    if fl.size < 32 or fr.size < 32 or ml.size != fl.size or mr.size != fr.size:
+        return None
+
+    def _sorted_xy(f, y):
+        idx = np.argsort(f)
+        ff = np.asarray(f[idx], dtype=float)
+        yy = np.asarray(y[idx], dtype=float)
+        m = np.isfinite(ff) & np.isfinite(yy) & (ff > 0.0)
+        return ff[m], yy[m]
+
+    fl, ml = _sorted_xy(fl, ml)
+    fr, mr = _sorted_xy(fr, mr)
+    if fl.size < 32 or fr.size < 32:
+        return None
+
+    try:
+        lvl_min = float(data.get("lvl_min", 500.0) or 500.0)
+        lvl_max = float(data.get("lvl_max", 2000.0) or 2000.0)
+    except Exception:
+        lvl_min, lvl_max = 500.0, 2000.0
+    if not np.isfinite(lvl_min) or not np.isfinite(lvl_max) or lvl_min <= 0.0 or lvl_max <= lvl_min:
+        lvl_min, lvl_max = 500.0, 2000.0
+
+    try:
+        mag_lo = float(data.get("mag_c_min", 20.0) or 20.0)
+        mag_hi = float(data.get("mag_c_max", 250.0) or 250.0)
+    except Exception:
+        mag_lo, mag_hi = 20.0, 250.0
+    if not np.isfinite(mag_lo) or not np.isfinite(mag_hi) or mag_lo <= 0.0 or mag_hi <= mag_lo:
+        mag_lo, mag_hi = 20.0, 250.0
+
+    scored = []
+    for hc_name in AUTO_MODE_BUILTIN_TARGETS:
+        try:
+            hf, hm = get_house_curve_by_name(hc_name)
+            hf = np.asarray(hf, dtype=float).reshape(-1)
+            hm = np.asarray(hm, dtype=float).reshape(-1)
+            if hf.size < 4 or hm.size != hf.size:
+                continue
+            hs = np.argsort(hf)
+            hf = hf[hs]
+            hm = hm[hs]
+            m_h = np.isfinite(hf) & np.isfinite(hm) & (hf > 0.0)
+            hf = hf[m_h]
+            hm = hm[m_h]
+            if hf.size < 4:
+                continue
+
+            f_lo = max(20.0, float(np.min(fl)), float(np.min(fr)), float(np.min(hf)))
+            f_hi = min(20000.0, float(np.max(fl)), float(np.max(fr)), float(np.max(hf)))
+            if not np.isfinite(f_lo) or not np.isfinite(f_hi) or f_hi <= (f_lo * 1.15):
+                continue
+
+            fg = np.logspace(np.log10(f_lo), np.log10(f_hi), 320)
+            ml_g = np.interp(fg, fl, ml)
+            mr_g = np.interp(fg, fr, mr)
+            m_avg = 0.5 * (ml_g + mr_g)
+            try:
+                m_avg_sm, _ = dsp.apply_smoothing_std(
+                    fg,
+                    m_avg,
+                    np.zeros_like(m_avg),
+                    float(AUTO_MODE_TARGET_PRESELECT_SMOOTH_OCT),
+                )
+                m_avg = np.asarray(m_avg_sm, dtype=float)
+            except Exception:
+                pass
+            t_g = np.interp(fg, hf, hm)
+
+            lvl_mask = (fg >= lvl_min) & (fg <= lvl_max)
+            if int(np.count_nonzero(lvl_mask)) < 16:
+                lvl_mask = (fg >= 300.0) & (fg <= 3000.0)
+            if int(np.count_nonzero(lvl_mask)) < 16:
+                lvl_mask = np.ones_like(fg, dtype=bool)
+
+            off = float(np.median(m_avg[lvl_mask] - t_g[lvl_mask]))
+            err = m_avg - (t_g + off)
+
+            corr_mask = (fg >= mag_lo) & (fg <= mag_hi)
+            if int(np.count_nonzero(corr_mask)) < 16:
+                corr_mask = np.ones_like(fg, dtype=bool)
+
+            rms = float(np.sqrt(np.mean(np.square(err[corr_mask]))))
+            scored.append({"hc_mode": str(hc_name), "fit_rms_db": float(rms), "offset_db": float(off)})
+        except Exception:
+            continue
+
+    if not scored:
+        return None
+
+    scored = sorted(scored, key=lambda d: float(d.get("fit_rms_db", 1e9)))
+    best = scored[0]
+    return {
+        "selected_hc_mode": str(best.get("hc_mode", "Harman6")),
+        "fit_rms_db": float(best.get("fit_rms_db", 0.0)),
+        "offset_db": float(best.get("offset_db", 0.0)),
+        "candidates": list(scored[:5]),
+    }
+
+
+def _auto_select_target_curve_with_trials(
+    *,
+    base_data: dict,
+    measurements: dict,
+    fs_v: int,
+    taps_v: int,
+    xos: list,
+    hpf: dict | None,
+    pin_obj,
+    status_cb=None,
+    top_n: int = AUTO_MODE_TARGET_TOP_N,
+    trials_per_curve: int = AUTO_MODE_TARGET_TRIALS_PER_CURVE,
+) -> dict | None:
+    f6_hz = _auto_safe_float(
+        base_data.get("_auto_mag_c_min_hz", base_data.get("mag_c_min", float("nan"))),
+        float("nan"),
+    )
+    f6_txt = f" (-6 dB {f6_hz:.1f} Hz)" if np.isfinite(f6_hz) else ""
+
+    quick = _auto_select_builtin_target_curve(
+        base_data,
+        f_l=measurements.get("f_l"),
+        m_l=measurements.get("m_l"),
+        f_r=measurements.get("f_r"),
+        m_r=measurements.get("m_r"),
+    )
+    if not isinstance(quick, dict):
+        return None
+
+    quick_candidates = list(quick.get("candidates", []) or [])
+    if not quick_candidates:
+        return None
+
+    top_n_eff = max(1, int(top_n))
+    trials_eff = max(1, int(trials_per_curve))
+    shortlisted = quick_candidates[:top_n_eff]
+    if not shortlisted:
+        return None
+
+    evaluated = []
+    for t_idx, tc in enumerate(shortlisted, start=1):
+        hc_name = str(tc.get("hc_mode", "") or "").strip()
+        if not hc_name:
+            continue
+        try:
+            hc_f, hc_m = get_house_curve_by_name(hc_name)
+            hc_f = np.asarray(hc_f, dtype=float)
+            hc_m = np.asarray(hc_m, dtype=float)
+        except Exception:
+            continue
+        if hc_f.size < 4 or hc_m.size != hc_f.size:
+            continue
+
+        seed_tc = int(20260302 + int(fs_v) * 31 + int(taps_v) * 7 + sum(ord(ch) for ch in hc_name) * 13)
+        base_tc = dict(base_data or {})
+        base_tc["hc_mode"] = str(hc_name)
+        candidates = _build_auto_mode_candidates(base_tc, n_trials=trials_eff, seed=seed_tc)
+
+        best_metrics = None
+        best_preset = None
+        ok_n = 0
+        rank_sum = 0.0
+
+        for c_idx, preset in enumerate(candidates, start=1):
+            trial_data = dict(base_tc)
+            trial_data.update(dict(preset or {}))
+            trial_data["comparison_mode"] = True
+            trial_measurements = dict(measurements or {})
+            trial_measurements["ui_data"] = trial_data
+
+            try:
+                cfg = build_config(
+                    trial_data,
+                    fs_v=int(fs_v),
+                    taps_v=int(taps_v),
+                    xos=xos,
+                    hpf=hpf,
+                    hc_f=hc_f,
+                    hc_m=hc_m,
+                    pin=pin_obj,
+                    max_safe_boost=float(MAX_SAFE_BOOST),
+                )
+                try:
+                    setattr(cfg, "bass_smooth_w_gamma", float(trial_data.get("bass_smooth_w_gamma", 2.40)))
+                    setattr(cfg, "bass_smooth_w_max", float(trial_data.get("bass_smooth_w_max", 0.45)))
+                except Exception:
+                    pass
+
+                res = run_pipeline(cfg, trial_measurements)
+                res.metrics["summary"] = summarize_run(res)
+                met = _auto_score_result(
+                    res,
+                    auto_exc_freq_hz=_auto_safe_float(trial_data.get("_auto_exc_freq_hz", float("nan")), float("nan")),
+                )
+                ok_n += 1
+                rank_sum += _auto_safe_float(met.get("rank_score"), 0.0)
+                if best_metrics is None or _auto_rank_key(met) < _auto_rank_key(best_metrics):
+                    best_metrics = dict(met)
+                    best_preset = dict(preset or {})
+            except Exception as exc:
+                logger.warning(
+                    f"Automatic mode target trial failed: target={hc_name} "
+                    f"{c_idx}/{len(candidates)} ({type(exc).__name__}: {exc})"
+                )
+
+            if callable(status_cb):
+                best_txt = "n/a"
+                if isinstance(best_metrics, dict):
+                    best_txt = f"{_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}"
+                status_cb(
+                    f"CamillaFIR automatic mode: target test {t_idx}/{len(shortlisted)} "
+                    f"{hc_name} trial {c_idx}/{len(candidates)}{f6_txt} (best {best_txt}/100)"
+                )
+
+        if ok_n <= 0 or not isinstance(best_metrics, dict):
+            continue
+        evaluated.append(
+            {
+                "hc_mode": str(hc_name),
+                "fit_rms_db": _auto_safe_float(tc.get("fit_rms_db"), 0.0),
+                "offset_db": _auto_safe_float(tc.get("offset_db"), 0.0),
+                "trials_total": int(len(candidates)),
+                "trials_ok": int(ok_n),
+                "avg_rank_score": float(rank_sum / max(1, ok_n)),
+                "best_metrics": dict(best_metrics),
+                "best_preset": dict(best_preset or {}),
+            }
+        )
+
+    if not evaluated:
+        return quick
+
+    def _tc_key(item: dict) -> tuple:
+        bm = dict(item.get("best_metrics", {}) or {})
+        return (
+            -_auto_safe_float(bm.get("rank_score"), 0.0),
+            -_auto_safe_float(item.get("avg_rank_score"), 0.0),
+            _auto_safe_float(item.get("fit_rms_db"), 1e9),
+        )
+
+    evaluated = sorted(evaluated, key=_tc_key)
+    winner = evaluated[0]
+    return {
+        "selected_hc_mode": str(winner.get("hc_mode", quick.get("selected_hc_mode", "Harman6"))),
+        "fit_rms_db": float(winner.get("fit_rms_db", quick.get("fit_rms_db", 0.0))),
+        "offset_db": float(winner.get("offset_db", quick.get("offset_db", 0.0))),
+        "selection_method": "top3x10_trials",
+        "top_n": int(len(shortlisted)),
+        "trials_per_curve": int(trials_eff),
+        "candidates": list(shortlisted),
+        "evaluated": list(evaluated),
+        "best_preset": dict(winner.get("best_preset", {}) or {}),
+    }
 
 
 def _auto_dsp_quality_penalty(st: dict | None) -> tuple[float, dict]:
@@ -393,14 +723,82 @@ def _auto_dsp_quality_penalty(st: dict | None) -> tuple[float, dict]:
     return float(max(0.0, penalty)), dbg
 
 
-def _auto_score_result(result) -> dict:
+def _auto_excursion_penalty(st: dict | None) -> tuple[float, dict]:
+    st = st or {}
+    penalty = 0.0
+    dbg = {}
+
+    exc_raw = st.get("exc_prot", None)
+    exc_known = (exc_raw is not None)
+    exc_on = bool(exc_raw) if exc_known else None
+    exc_freq = _auto_safe_float(st.get("exc_freq", 0.0), 0.0)
+
+    try:
+        exc_bins = int(float(st.get("boost_candidate_bins_excprot", 0) or 0))
+    except Exception:
+        exc_bins = 0
+    lf_boost_max = _auto_safe_float(st.get("lf_boost_max_db", 0.0), 0.0)
+
+    # Prefer presets that keep excursion protection enabled.
+    if exc_known and (exc_on is False):
+        penalty += 2.0
+
+    # If protection is enabled but configured too low/invalid, add a small penalty.
+    if exc_known and (exc_on is True) and (not np.isfinite(exc_freq) or exc_freq <= 0.0):
+        penalty += 0.8
+
+    # Penalize tendency to boost in excursion-protected region.
+    if exc_bins > 0:
+        penalty += min(2.5, 0.10 * float(exc_bins))
+
+    # Penalize remaining LF boost inside guard region.
+    penalty += min(12.0, 1.25 * max(0.0, float(lf_boost_max) - 1.5))
+
+    # Prevent a single excursion metric from collapsing rank to zero.
+    penalty = min(16.0, float(penalty))
+
+    dbg["exc_known"] = bool(exc_known)
+    dbg["exc_on"] = exc_on
+    dbg["exc_freq"] = float(exc_freq)
+    dbg["exc_bins"] = int(exc_bins)
+    dbg["lf_boost_max_db"] = float(lf_boost_max)
+    return float(max(0.0, penalty)), dbg
+
+
+def _auto_score_result(result, *, auto_exc_freq_hz: float | None = None) -> dict:
     l_st = dict(getattr(result, "l_st", {}) or {})
     r_st = dict(getattr(result, "r_st", {}) or {})
     l_ai = plots.calc_ai_summary_from_stats(l_st)
     r_ai = plots.calc_ai_summary_from_stats(r_st)
 
-    l_score = _auto_safe_float(l_ai.get("score"), 0.0)
-    r_score = _auto_safe_float(r_ai.get("score"), 0.0)
+    def _ai_score_with_fallback(st: dict, ai: dict) -> float:
+        score = _auto_safe_float((ai or {}).get("score"), float("nan"))
+        if np.isfinite(score):
+            return float(score)
+        try:
+            conf = _auto_safe_float(
+                st.get("cmp_avg_confidence", st.get("avg_confidence", 0.0)),
+                0.0,
+            )
+            rms_fb, match_fb = target_match_from_stats(
+                st,
+                include_filter=False,
+                use_confidence=True,
+                use_smart_scan_range=True,
+            )
+            if match_fb is None:
+                return 0.0
+            rt60 = st.get("rt60_val", None)
+            rt_rel = st.get("rt60_reliability", None)
+            return _auto_safe_float(
+                plots.calc_acoustic_score(conf, float(match_fb), rt60_s=rt60, rt60_rel=rt_rel),
+                0.0,
+            )
+        except Exception:
+            return 0.0
+
+    l_score = _ai_score_with_fallback(l_st, l_ai)
+    r_score = _ai_score_with_fallback(r_st, r_ai)
     avg_score = (l_score + r_score) / 2.0
     lr_delta = abs(l_score - r_score)
 
@@ -408,15 +806,29 @@ def _auto_score_result(result) -> dict:
         _auto_safe_float(l_st.get("net_boost_peak_db", 0.0), 0.0),
         _auto_safe_float(r_st.get("net_boost_peak_db", 0.0), 0.0),
     )
-    events_total = int(len(_auto_collect_reflections(l_st)) + len(_auto_collect_reflections(r_st)))
+    l_refs = _auto_collect_reflections(l_st)
+    r_refs = _auto_collect_reflections(r_st)
+    events_total = int(len(l_refs) + len(r_refs))
+    events_severity_l = _auto_event_severity(l_refs)
+    events_severity_r = _auto_event_severity(r_refs)
+    events_severity_raw = float(events_severity_l + events_severity_r)
+    events_severity = float(math.log1p(max(0.0, events_severity_raw) / 6.0))
     dsp_pen_l, dsp_dbg_l = _auto_dsp_quality_penalty(l_st)
     dsp_pen_r, dsp_dbg_r = _auto_dsp_quality_penalty(r_st)
-    dsp_penalty = 0.5 * (float(dsp_pen_l) + float(dsp_pen_r))
+    dsp_penalty_raw = 0.5 * (float(dsp_pen_l) + float(dsp_pen_r))
+    exc_pen_l, exc_dbg_l = _auto_excursion_penalty(l_st)
+    exc_pen_r, exc_dbg_r = _auto_excursion_penalty(r_st)
+    exc_penalty_raw = 0.5 * (float(exc_pen_l) + float(exc_pen_r))
+    exc_penalty_waived = bool(np.isfinite(_auto_safe_float(auto_exc_freq_hz, float("nan"))))
+    exc_penalty = 0.0 if exc_penalty_waived else float(exc_penalty_raw)
 
-    boost_pen = 1.5 * max(0.0, net_boost_max - 3.0)
-    event_pen = 0.5 * float(events_total)
-    lr_pen = 0.25 * lr_delta
-    rank_score = float(np.clip(avg_score - boost_pen - event_pen - lr_pen - dsp_penalty, 0.0, 100.0))
+    boost_pen = min(18.0, 1.25 * max(0.0, net_boost_max - 5.0))
+    dsp_penalty = min(14.0, 0.05 * float(dsp_penalty_raw))
+    event_pen = min(6.0, 0.10 * float(events_severity))
+    lr_pen = min(4.0, 0.03 * lr_delta)
+    exc_penalty = min(18.0, float(exc_penalty))
+    rank_raw = float(avg_score - boost_pen - event_pen - lr_pen - dsp_penalty - exc_penalty)
+    rank_score = float(np.clip(rank_raw, 0.0, 100.0))
 
     return {
         "rank_score": float(rank_score),
@@ -424,11 +836,24 @@ def _auto_score_result(result) -> dict:
         "lr_delta_score": float(lr_delta),
         "max_net_boost_db": float(net_boost_max),
         "events_total": int(events_total),
+        "events_severity": float(events_severity),
+        "events_severity_raw": float(events_severity_raw),
+        "events_severity_l": float(events_severity_l),
+        "events_severity_r": float(events_severity_r),
+        "event_penalty": float(event_pen),
         "dsp_penalty": float(dsp_penalty),
+        "dsp_penalty_raw": float(dsp_penalty_raw),
         "dsp_penalty_l": float(dsp_pen_l),
         "dsp_penalty_r": float(dsp_pen_r),
+        "exc_penalty": float(exc_penalty),
+        "exc_penalty_raw": float(exc_penalty_raw),
+        "exc_penalty_waived": bool(exc_penalty_waived),
+        "exc_penalty_l": float(exc_pen_l),
+        "exc_penalty_r": float(exc_pen_r),
         "dsp_dbg_l": dict(dsp_dbg_l),
         "dsp_dbg_r": dict(dsp_dbg_r),
+        "exc_dbg_l": dict(exc_dbg_l),
+        "exc_dbg_r": dict(exc_dbg_r),
     }
 
 
@@ -437,9 +862,102 @@ def _auto_rank_key(metrics: dict) -> tuple:
         -_auto_safe_float(metrics.get("rank_score"), 0.0),
         -_auto_safe_float(metrics.get("avg_score"), 0.0),
         _auto_safe_float(metrics.get("max_net_boost_db"), 0.0),
+        _auto_safe_float(metrics.get("events_severity"), 0.0),
         int(metrics.get("events_total", 0) or 0),
         _auto_safe_float(metrics.get("lr_delta_score"), 0.0),
     )
+
+
+def _estimate_auto_mag_c_min_hz(
+    f_l,
+    m_l,
+    f_r,
+    m_r,
+    *,
+    default_hz: float = 25.0,
+) -> float:
+    def _sorted_xy(f, y):
+        try:
+            ff = np.asarray(f, dtype=float).reshape(-1)
+            yy = np.asarray(y, dtype=float).reshape(-1)
+        except Exception:
+            return np.asarray([], dtype=float), np.asarray([], dtype=float)
+        if ff.size != yy.size or ff.size < 16:
+            return np.asarray([], dtype=float), np.asarray([], dtype=float)
+        idx = np.argsort(ff)
+        ff = ff[idx]
+        yy = yy[idx]
+        m = np.isfinite(ff) & np.isfinite(yy) & (ff > 0.0)
+        ff = ff[m]
+        yy = yy[m]
+        if ff.size < 16:
+            return np.asarray([], dtype=float), np.asarray([], dtype=float)
+        return ff, yy
+
+    def _f6(ff: np.ndarray, mm: np.ndarray) -> float | None:
+        if ff.size < 32 or mm.size != ff.size:
+            return None
+        try:
+            mm_sm, _ = dsp.apply_smoothing_std(
+                ff,
+                mm,
+                np.zeros_like(mm),
+                float(AUTO_MODE_MAG_C_MIN_SMOOTH_OCT),
+            )
+            mm_use = np.asarray(mm_sm, dtype=float)
+        except Exception:
+            mm_use = np.asarray(mm, dtype=float)
+
+        ref_mask = (ff >= float(AUTO_MODE_MAG_C_MIN_REF_MIN_HZ)) & (ff <= float(AUTO_MODE_MAG_C_MIN_REF_MAX_HZ))
+        if int(np.count_nonzero(ref_mask)) < 8:
+            ref_mask = (ff >= 63.0) & (ff <= 250.0)
+        if int(np.count_nonzero(ref_mask)) < 8:
+            return None
+
+        ref_db = float(np.median(mm_use[ref_mask]))
+        thr_db = float(ref_db - 6.0)
+
+        lf_hi = float(min(float(AUTO_MODE_MAG_C_MIN_SEARCH_MAX_HZ), float(AUTO_MODE_MAG_C_MIN_REF_MIN_HZ)))
+        lf_mask = (ff >= float(AUTO_MODE_MAG_C_MIN_MIN_HZ)) & (ff <= lf_hi)
+        if int(np.count_nonzero(lf_mask)) < 8:
+            return None
+        f_lo = ff[lf_mask]
+        m_lo = mm_use[lf_mask]
+        # Enforce monotonic LF envelope (rising with frequency) to reject local dips.
+        m_env = np.maximum.accumulate(np.asarray(m_lo, dtype=float))
+        above = np.asarray(m_env >= thr_db, dtype=bool)
+        if not np.any(above):
+            return float(lf_hi)
+        i1 = int(np.argmax(above))
+        if i1 <= 0:
+            return float(AUTO_MODE_MAG_C_MIN_MIN_HZ)
+
+        x1, y1 = float(f_lo[i1 - 1]), float(m_env[i1 - 1])
+        x2, y2 = float(f_lo[i1]), float(m_env[i1])
+        if np.isfinite(y2 - y1) and abs(float(y2 - y1)) > 1e-9:
+            f6 = float(x1 + (thr_db - y1) * (x2 - x1) / (y2 - y1))
+        else:
+            f6 = float(x2)
+        return float(f6)
+
+    fl, ml = _sorted_xy(f_l, m_l)
+    fr, mr = _sorted_xy(f_r, m_r)
+    cands = []
+    f6_l = _f6(fl, ml)
+    f6_r = _f6(fr, mr)
+    if f6_l is not None and np.isfinite(f6_l):
+        cands.append(float(f6_l))
+    if f6_r is not None and np.isfinite(f6_r):
+        cands.append(float(f6_r))
+
+    if not cands:
+        est = _auto_safe_float(default_hz, 25.0)
+    else:
+        # Conservative side: choose the higher cutoff between channels.
+        est = float(np.max(np.asarray(cands, dtype=float)))
+
+    est = float(np.clip(est, float(AUTO_MODE_MAG_C_MIN_MIN_HZ), float(AUTO_MODE_MAG_C_MIN_MAX_HZ)))
+    return float(round(est, 1))
 
 
 def _build_auto_mode_candidates(base_data: dict, *, n_trials: int, seed: int) -> list[dict]:
@@ -455,9 +973,23 @@ def _build_auto_mode_candidates(base_data: dict, *, n_trials: int, seed: int) ->
     mixed_center = _auto_safe_float(base_data.get("mixed_freq", 180.0), 180.0)
     if not np.isfinite(mixed_center) or mixed_center <= 0.0:
         mixed_center = 180.0
-    phase_center = _auto_safe_float(base_data.get("phase_limit", 600.0), 600.0)
+    phase_center = _auto_safe_float(base_data.get("phase_limit", 400.0), 400.0)
     if not np.isfinite(phase_center) or phase_center <= 0.0:
-        phase_center = 600.0
+        phase_center = 400.0
+    mag_c_min_fixed = float(
+        np.clip(
+            _auto_safe_float(base_data.get("mag_c_min", 25.0), 25.0),
+            float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
+            float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
+        )
+    )
+    low_bass_cut_fixed = float(
+        np.clip(
+            _auto_safe_float(base_data.get("low_bass_cut_hz", 40.0), 40.0),
+            float(AUTO_MODE_LOW_BASS_MIN_HZ),
+            float(AUTO_MODE_LOW_BASS_MAX_HZ),
+        )
+    )
 
     out: list[dict] = [{}]
     for _ in range(max(0, n_eff - 1)):
@@ -469,20 +1001,104 @@ def _build_auto_mode_candidates(base_data: dict, *, n_trials: int, seed: int) ->
             "fdw_cycles": round(float(rng.uniform(8.0, 16.0)), 2),
             "tdc_strength": round(float(rng.uniform(35.0, 75.0)), 1),
             "tdc_max_reduction_db": round(float(rng.uniform(6.0, 12.0)), 1),
-            "tdc_slope_db_per_oct": float(rng.choice(np.array([3.0, 4.0, 5.0, 6.0, 8.0]))),
+            "tdc_slope_db_per_oct": float(rng.choice(np.array([3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0]))),
             "reg_strength": round(float(rng.uniform(15.0, 45.0)), 1),
             "max_slope_db_per_oct": float(rng.choice(np.array([8.0, 10.0, 12.0, 14.0, 16.0]))),
-            "max_boost": round(float(rng.uniform(3.0, 6.0)), 2),
+            "max_boost": round(float(rng.uniform(3.0, 8.0)), 2),
+            "mag_c_min": round(float(mag_c_min_fixed), 1),
             "mag_c_max": round(float(rng.uniform(170.0, 300.0)), 1),
             "trans_width": round(float(rng.uniform(70.0, 150.0)), 1),
-            "filter_smooth": int(rng.choice(np.array([6, 12, 24, 48, 96]))),
+            "filter_smooth": int(rng.choice(np.array([96]))),
             "bass_first_mode_max_hz": round(float(rng.uniform(150.0, 220.0)), 1),
-            "low_bass_cut_hz": round(float(rng.uniform(20.0, 45.0)), 1),
+            "low_bass_cut_hz": round(float(low_bass_cut_fixed), 1),
         }
         if is_mixed:
             cand["mixed_freq"] = round(float(np.clip(rng.normal(loc=mixed_center, scale=35.0), 80.0, 320.0)), 1)
         if is_linear:
             cand["phase_limit"] = round(float(np.clip(rng.normal(loc=phase_center, scale=140.0), 150.0, 1400.0)), 1)
+        out.append(cand)
+    return out
+
+
+def _build_auto_mode_refine_candidates(
+    base_data: dict,
+    *,
+    anchors: list[dict],
+    n_trials: int,
+    seed: int,
+) -> list[dict]:
+    rng = np.random.default_rng(int(seed))
+    n_eff = max(0, int(n_trials))
+    if n_eff <= 0:
+        return []
+
+    keep_tdc = bool(base_data.get("enable_tdc", True))
+    keep_afdw = bool(base_data.get("enable_afdw", True))
+    keep_bass_first = bool(base_data.get("bass_first_ai", True))
+    ft = str(base_data.get("filter_type", "") or "").strip().lower()
+    is_mixed = "mixed" in ft
+    is_linear = ("linear" in ft) and (not is_mixed)
+
+    anchor_items = list(anchors or [])
+    if not anchor_items:
+        anchor_items = [{"preset": {}}]
+
+    def _anchor_val(anchor: dict, key: str, default: float) -> float:
+        p = dict(anchor.get("preset", {}) or {})
+        if key in p:
+            return _auto_safe_float(p.get(key), default)
+        return _auto_safe_float(base_data.get(key), default)
+
+    def _near_discrete(center: float, choices: list[float], sigma: float) -> float:
+        if not choices:
+            return float(center)
+        x = float(rng.normal(loc=float(center), scale=float(max(0.01, sigma))))
+        return float(min(choices, key=lambda c: abs(float(c) - x)))
+
+    out: list[dict] = []
+    slope_choices = [3.0, 4.0, 5.0, 6.0, 8.0]
+    max_slope_choices = [8.0, 10.0, 12.0, 14.0, 16.0]
+    smooth_choices = [96]
+    mag_c_min_fixed = float(
+        np.clip(
+            _auto_safe_float(base_data.get("mag_c_min", 25.0), 25.0),
+            float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
+            float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
+        )
+    )
+    low_bass_cut_fixed = float(
+        np.clip(
+            _auto_safe_float(base_data.get("low_bass_cut_hz", 40.0), 40.0),
+            float(AUTO_MODE_LOW_BASS_MIN_HZ),
+            float(AUTO_MODE_LOW_BASS_MAX_HZ),
+        )
+    )
+
+    for _ in range(n_eff):
+        a = anchor_items[int(rng.integers(0, len(anchor_items)))]
+        cand = {
+            "comparison_mode": True,
+            "enable_tdc": bool(keep_tdc),
+            "enable_afdw": bool(keep_afdw),
+            "bass_first_ai": bool(keep_bass_first),
+            "fdw_cycles": round(float(np.clip(rng.normal(_anchor_val(a, "fdw_cycles", 10.0), 1.2), 8.0, 16.0)), 2),
+            "tdc_strength": round(float(np.clip(rng.normal(_anchor_val(a, "tdc_strength", 50.0), 5.0), 35.0, 75.0)), 1),
+            "tdc_max_reduction_db": round(float(np.clip(rng.normal(_anchor_val(a, "tdc_max_reduction_db", 9.0), 1.0), 6.0, 12.0)), 1),
+            "tdc_slope_db_per_oct": _near_discrete(_anchor_val(a, "tdc_slope_db_per_oct", 6.0), slope_choices, 0.8),
+            "reg_strength": round(float(np.clip(rng.normal(_anchor_val(a, "reg_strength", 30.0), 4.0), 15.0, 45.0)), 1),
+            "max_slope_db_per_oct": _near_discrete(_anchor_val(a, "max_slope_db_per_oct", 12.0), max_slope_choices, 1.5),
+            "max_boost": round(float(np.clip(rng.normal(_anchor_val(a, "max_boost", 4.0), 0.45), 3.0, 8.0)), 2),
+            "mag_c_min": round(float(mag_c_min_fixed), 1),
+            "mag_c_max": round(float(np.clip(rng.normal(_anchor_val(a, "mag_c_max", 220.0), 15.0), 170.0, 300.0)), 1),
+            "trans_width": round(float(np.clip(rng.normal(_anchor_val(a, "trans_width", 100.0), 10.0), 70.0, 150.0)), 1),
+            "filter_smooth": int(_near_discrete(_anchor_val(a, "filter_smooth", 96.0), [float(x) for x in smooth_choices], 96.0)),
+            "bass_first_mode_max_hz": round(float(np.clip(rng.normal(_anchor_val(a, "bass_first_mode_max_hz", 180.0), 10.0), 150.0, 220.0)), 1),
+            "low_bass_cut_hz": round(float(low_bass_cut_fixed), 1),
+        }
+        if is_mixed:
+            cand["mixed_freq"] = round(float(np.clip(rng.normal(_anchor_val(a, "mixed_freq", 180.0), 12.0), 80.0, 320.0)), 1)
+        if is_linear:
+            cand["phase_limit"] = round(float(np.clip(rng.normal(_anchor_val(a, "phase_limit", 400.0), 45.0), 150.0, 1400.0)), 1)
         out.append(cand)
     return out
 
@@ -501,55 +1117,167 @@ def _run_auto_mode_search(
     status_cb,
     n_trials: int = AUTO_MODE_TRIALS,
 ) -> dict | None:
+    search_base_data = dict(base_data or {})
+    try:
+        seed_preset = dict(search_base_data.get("_auto_target_seed_preset", {}) or {})
+    except Exception:
+        seed_preset = {}
+    if seed_preset:
+        search_base_data.update(seed_preset)
+
     seed = int(20260302 + int(fs_v) * 17 + int(taps_v))
-    candidates = _build_auto_mode_candidates(base_data, n_trials=int(n_trials), seed=seed)
+    candidates = _build_auto_mode_candidates(search_base_data, n_trials=int(n_trials), seed=seed)
+    try:
+        target_label = str(search_base_data.get("hc_mode", "") or "").strip()
+    except Exception:
+        target_label = ""
+    if not target_label:
+        target_label = "n/a"
+    f6_hz = _auto_safe_float(
+        search_base_data.get("_auto_mag_c_min_hz", search_base_data.get("mag_c_min", float("nan"))),
+        float("nan"),
+    )
+    low_bass_hz = _auto_safe_float(
+        search_base_data.get("_auto_low_bass_cut_hz", search_base_data.get("low_bass_cut_hz", float("nan"))),
+        float("nan"),
+    )
+    exc_hz = _auto_safe_float(
+        search_base_data.get("_auto_exc_freq_hz", search_base_data.get("exc_freq", float("nan"))),
+        float("nan"),
+    )
+    low_txt = f"low-cut {low_bass_hz:.1f} Hz" if np.isfinite(low_bass_hz) else "low-cut n/a"
+    exc_txt = f"exc {exc_hz:.1f} Hz" if np.isfinite(exc_hz) else "exc n/a"
+    if np.isfinite(f6_hz):
+        status_prefix = (
+            f"CamillaFIR automatic mode [{target_label}] "
+            f"(-6 dB {f6_hz:.1f} Hz, {low_txt}, {exc_txt})"
+        )
+    else:
+        status_prefix = f"CamillaFIR automatic mode [{target_label}] ({low_txt}, {exc_txt})"
 
     best_result = None
     best_metrics = None
     best_preset = None
     scored = []
+    phase1_ok = 0
+    phase2_ok = 0
+    phase1_tried = 0
+    phase2_tried = 0
+    phase1_plateau_hit = False
+    phase2_plateau_hit = False
 
-    for idx, preset in enumerate(candidates, start=1):
-        trial_data = dict(base_data or {})
-        trial_data.update(preset or {})
-        trial_data["comparison_mode"] = True
-        trial_measurements = dict(measurements or {})
-        trial_measurements["ui_data"] = trial_data
+    def _eval_candidates(
+        cands: list[dict],
+        *,
+        phase_label: str,
+        plateau_after_no_improve: int = 0,
+    ) -> dict:
+        nonlocal best_result, best_metrics, best_preset, scored
+        ok_n = 0
+        tried_n = 0
+        plateau_hit = False
+        no_improve_streak = 0
+        for idx, preset in enumerate(cands, start=1):
+            tried_n = int(idx)
+            improved = False
+            trial_data = dict(search_base_data or {})
+            trial_data.update(preset or {})
+            trial_data["comparison_mode"] = True
+            trial_measurements = dict(measurements or {})
+            trial_measurements["ui_data"] = trial_data
 
-        try:
-            cfg = build_config(
-                trial_data,
-                fs_v=int(fs_v),
-                taps_v=int(taps_v),
-                xos=xos,
-                hpf=hpf,
-                hc_f=hc_f,
-                hc_m=hc_m,
-                pin=pin_obj,
-                max_safe_boost=float(MAX_SAFE_BOOST),
-            )
             try:
-                setattr(cfg, "bass_smooth_w_gamma", float(trial_data.get("bass_smooth_w_gamma", 2.40)))
-                setattr(cfg, "bass_smooth_w_max", float(trial_data.get("bass_smooth_w_max", 0.45)))
-            except Exception:
-                pass
+                cfg = build_config(
+                    trial_data,
+                    fs_v=int(fs_v),
+                    taps_v=int(taps_v),
+                    xos=xos,
+                    hpf=hpf,
+                    hc_f=hc_f,
+                    hc_m=hc_m,
+                    pin=pin_obj,
+                    max_safe_boost=float(MAX_SAFE_BOOST),
+                )
+                try:
+                    setattr(cfg, "bass_smooth_w_gamma", float(trial_data.get("bass_smooth_w_gamma", 2.40)))
+                    setattr(cfg, "bass_smooth_w_max", float(trial_data.get("bass_smooth_w_max", 0.45)))
+                except Exception:
+                    pass
 
-            result = run_pipeline(cfg, trial_measurements)
-            result.metrics["summary"] = summarize_run(result)
-            metrics = _auto_score_result(result)
-            metrics["trial"] = int(idx)
-            scored.append({"metrics": metrics, "preset": dict(preset or {})})
+                result = run_pipeline(cfg, trial_measurements)
+                result.metrics["summary"] = summarize_run(result)
+                metrics = _auto_score_result(
+                    result,
+                    auto_exc_freq_hz=_auto_safe_float(trial_data.get("_auto_exc_freq_hz", float("nan")), float("nan")),
+                )
+                metrics["trial"] = int(len(scored) + 1)
+                metrics["phase"] = str(phase_label)
+                scored.append({"metrics": metrics, "preset": dict(preset or {})})
+                ok_n += 1
 
-            if best_metrics is None or _auto_rank_key(metrics) < _auto_rank_key(best_metrics):
-                best_result = result
-                best_metrics = metrics
-                best_preset = dict(preset or {})
-        except Exception as exc:
-            logger.warning(f"Automatic mode trial {idx}/{len(candidates)} failed: {type(exc).__name__}: {exc}")
+                if best_metrics is None or _auto_rank_key(metrics) < _auto_rank_key(best_metrics):
+                    best_result = result
+                    best_metrics = metrics
+                    best_preset = dict(preset or {})
+                    improved = True
+            except Exception as exc:
+                logger.warning(
+                    f"Automatic mode trial {idx}/{len(cands)} failed "
+                    f"({phase_label}): {type(exc).__name__}: {exc}"
+                )
 
-        if callable(status_cb):
-            best_txt = "n/a" if not best_metrics else f"{_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}"
-            status_cb(f"CamillaFIR automatic mode: {idx}/{len(candidates)} trials (best {best_txt}/100)")
+            if callable(status_cb):
+                best_txt = "n/a" if not best_metrics else f"{_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}"
+                status_cb(
+                    f"{status_prefix}: {phase_label} {idx}/{len(cands)} "
+                    f"(best {best_txt}/100)"
+                )
+            if int(plateau_after_no_improve) > 0:
+                if improved:
+                    no_improve_streak = 0
+                else:
+                    no_improve_streak += 1
+                if no_improve_streak >= int(plateau_after_no_improve):
+                    plateau_hit = True
+                    best_now = round(_auto_safe_float((best_metrics or {}).get("rank_score", 0.0), 0.0), 3)
+                    move_txt = "plateau -> phase 2" if "1/2" in str(phase_label) else "plateau -> stop"
+                    logger.info(
+                        f"Automatic mode {phase_label}: no-improve plateau detected "
+                        f"({int(plateau_after_no_improve)} rounds), {move_txt}."
+                    )
+                    if callable(status_cb):
+                        status_cb(
+                            f"{status_prefix}: {phase_label} {idx}/{len(cands)} "
+                            f"(best {best_now:.3f}/100, {move_txt})"
+                        )
+                    break
+        return {"ok": int(ok_n), "tried": int(tried_n), "plateau_hit": bool(plateau_hit)}
+
+    phase1_stats = _eval_candidates(
+        candidates,
+        phase_label="phase 1/2",
+        plateau_after_no_improve=int(AUTO_MODE_PHASE1_PLATEAU_ROUNDS),
+    )
+    phase1_ok = int(phase1_stats.get("ok", 0) or 0)
+    phase1_tried = int(phase1_stats.get("tried", 0) or 0)
+    phase1_plateau_hit = bool(phase1_stats.get("plateau_hit", False))
+
+    phase1_top = sorted(scored, key=lambda x: _auto_rank_key(x.get("metrics", {})))[:5]
+    refine_candidates = _build_auto_mode_refine_candidates(
+        search_base_data,
+        anchors=phase1_top,
+        n_trials=int(AUTO_MODE_REFINE_TRIALS),
+        seed=int(seed + 7919),
+    )
+    if refine_candidates:
+        phase2_stats = _eval_candidates(
+            refine_candidates,
+            phase_label="phase 2/2",
+            plateau_after_no_improve=int(AUTO_MODE_PHASE2_PLATEAU_ROUNDS),
+        )
+        phase2_ok = int(phase2_stats.get("ok", 0) or 0)
+        phase2_tried = int(phase2_stats.get("tried", 0) or 0)
+        phase2_plateau_hit = bool(phase2_stats.get("plateau_hit", False))
 
     if best_result is None or best_metrics is None:
         return None
@@ -560,8 +1288,14 @@ def _run_auto_mode_search(
         "best_metrics": dict(best_metrics),
         "best_preset": dict(best_preset or {}),
         "top": top,
-        "trials_total": int(len(candidates)),
+        "trials_total": int(phase1_tried + phase2_tried),
         "trials_ok": int(len(scored)),
+        "trials_phase1_total": int(phase1_tried),
+        "trials_phase1_ok": int(phase1_ok),
+        "trials_phase2_total": int(phase2_tried),
+        "trials_phase2_ok": int(phase2_ok),
+        "phase1_plateau_hit": bool(phase1_plateau_hit),
+        "phase2_plateau_hit": bool(phase2_plateau_hit),
         "search_fs": int(fs_v),
         "search_taps": int(taps_v),
     }
@@ -642,6 +1376,127 @@ def process_run():
     if f_l is None or f_r is None:
         toast_measurement_files_missing()
         return
+
+    try:
+        auto_mode_preview = bool(str(data.get("mode", "BASIC") or "BASIC").strip().upper() == "AUTO" or data.get("camillafir_automatic_mode", False))
+    except Exception:
+        auto_mode_preview = False
+    if auto_mode_preview:
+        try:
+            est_mag_c_min = _estimate_auto_mag_c_min_hz(
+                f_l,
+                m_l,
+                f_r,
+                m_r,
+                default_hz=_auto_safe_float(data.get("mag_c_min", 25.0), 25.0),
+            )
+            data["mag_c_min"] = float(est_mag_c_min)
+            data["_auto_mag_c_min_hz"] = float(est_mag_c_min)
+            est_low_bass_cut = float(
+                np.clip(
+                    float(est_mag_c_min) + float(AUTO_MODE_LOW_BASS_FROM_F6_ADD_HZ),
+                    float(AUTO_MODE_LOW_BASS_MIN_HZ),
+                    float(AUTO_MODE_LOW_BASS_MAX_HZ),
+                )
+            )
+            est_exc_freq = float(
+                np.clip(
+                    float(est_mag_c_min) + float(AUTO_MODE_EXC_FROM_F6_ADD_HZ),
+                    float(AUTO_MODE_EXC_MIN_HZ),
+                    float(AUTO_MODE_EXC_MAX_HZ),
+                )
+            )
+            data["low_bass_cut_hz"] = float(round(est_low_bass_cut, 1))
+            data["exc_freq"] = float(round(est_exc_freq, 1))
+            data["_auto_low_bass_cut_hz"] = float(round(est_low_bass_cut, 1))
+            data["_auto_exc_freq_hz"] = float(round(est_exc_freq, 1))
+            _status(
+                f"CamillaFIR automatic mode: estimated mag_c_min {float(est_mag_c_min):.1f} Hz "
+                f"from smoothed -6 dB point"
+            )
+            _status(
+                "CamillaFIR automatic mode: estimated protection "
+                f"(low-bass cut {float(data['low_bass_cut_hz']):.1f} Hz, "
+                f"excursion {float(data['exc_freq']):.1f} Hz)"
+            )
+
+            hc_mode_raw = str(data.get("hc_mode", "") or "").strip().lower()
+            has_local_target = bool(str(data.get("local_path_house", "") or "").strip())
+            use_user_target = bool(
+                ("upload" in hc_mode_raw)
+                or ("custom" in hc_mode_raw)
+                or has_local_target
+            )
+            if use_user_target:
+                data.pop("_auto_target_seed_preset", None)
+                _status("CamillaFIR automatic mode: using user target curve (skip built-in target comparison)")
+            else:
+                pre_target_rates = choose_target_rates(data)
+                pre_fs = int(pre_target_rates[0]) if pre_target_rates else int(data.get("fs", 44100) or 44100)
+                if bool(data.get("multi_rate_opt", False)):
+                    pre_taps = int(scale_taps_with_fs(pre_fs, taps_base))
+                else:
+                    pre_taps = int(taps_base)
+                pre_xos, pre_hpf = build_xos_hpf(data)
+                pre_measurements = {
+                    "f_l": np.asarray(f_l, dtype=float),
+                    "m_l": np.asarray(m_l, dtype=float),
+                    "p_l": np.asarray(p_l, dtype=float),
+                    "f_r": np.asarray(f_r, dtype=float),
+                    "m_r": np.asarray(m_r, dtype=float),
+                    "p_r": np.asarray(p_r, dtype=float),
+                    "is_wav_source": bool(detect_is_wav_source(data, pin)),
+                }
+                _status(
+                    "CamillaFIR automatic mode: selecting target curve "
+                    f"(top-{AUTO_MODE_TARGET_TOP_N}, {AUTO_MODE_TARGET_TRIALS_PER_CURVE} trials/curve, "
+                    f"-6 dB point {float(est_mag_c_min):.1f} Hz)"
+                )
+                tc_pick = _auto_select_target_curve_with_trials(
+                    base_data=data,
+                    measurements=pre_measurements,
+                    fs_v=int(pre_fs),
+                    taps_v=int(pre_taps),
+                    xos=pre_xos,
+                    hpf=pre_hpf,
+                    pin_obj=pin,
+                    status_cb=_status,
+                    top_n=int(AUTO_MODE_TARGET_TOP_N),
+                    trials_per_curve=int(AUTO_MODE_TARGET_TRIALS_PER_CURVE),
+                )
+                if not isinstance(tc_pick, dict):
+                    tc_pick = _auto_select_builtin_target_curve(
+                        data,
+                        f_l=f_l,
+                        m_l=m_l,
+                        f_r=f_r,
+                        m_r=m_r,
+                    )
+                if isinstance(tc_pick, dict):
+                    chosen_hc = str(tc_pick.get("selected_hc_mode", "Harman6") or "Harman6")
+                    prev_hc = str(data.get("hc_mode", "") or "")
+                    data["hc_mode"] = chosen_hc
+                    target_seed_preset = dict(tc_pick.get("best_preset", {}) or {})
+                    if target_seed_preset:
+                        data["_auto_target_seed_preset"] = dict(target_seed_preset)
+                    else:
+                        data.pop("_auto_target_seed_preset", None)
+                    # Auto-target selection must use built-in presets; ignore local/upload target for this run.
+                    data["local_path_house"] = ""
+                    data["_auto_target_curve_meta"] = dict(tc_pick)
+                    logger.info(
+                        f"Automatic mode target select: {chosen_hc} "
+                        f"(fit_rms={float(tc_pick.get('fit_rms_db', 0.0)):.3f} dB, "
+                        f"method={str(tc_pick.get('selection_method', 'fit_rms'))}, "
+                        f"prev={prev_hc or 'n/a'})"
+                    )
+                    if target_seed_preset:
+                        logger.info(
+                            "Automatic mode target seed preset: "
+                            + ", ".join([f"{k}={v}" for k, v in target_seed_preset.items()])
+                        )
+        except Exception as exc:
+            logger.warning(f"Automatic mode target preselect failed: {type(exc).__name__}: {exc}")
 
     hc_f, hc_m, hc_source = load_house_curve(
         data,
@@ -732,9 +1587,14 @@ def process_run():
             else:
                 auto_search_taps = int(taps_base)
             set_processbar('bar', 0.10)
+            _f6_hz = _auto_safe_float(
+                data.get("_auto_mag_c_min_hz", data.get("mag_c_min", float("nan"))),
+                float("nan"),
+            )
+            _f6_txt = f", -6 dB point {_f6_hz:.1f} Hz" if np.isfinite(_f6_hz) else ""
             _status(
                 f"CamillaFIR automatic mode: searching best preset "
-                f"({AUTO_MODE_TRIALS} trials @ {auto_search_fs} Hz)"
+                f"({AUTO_MODE_TRIALS} + {AUTO_MODE_REFINE_TRIALS} trials @ {auto_search_fs} Hz{_f6_txt})"
             )
             auto_res = _run_auto_mode_search(
                 base_data=dict(data),
@@ -759,6 +1619,12 @@ def process_run():
                     "enabled": True,
                     "trials_total": int(auto_res.get("trials_total", AUTO_MODE_TRIALS)),
                     "trials_ok": int(auto_res.get("trials_ok", 0)),
+                    "trials_phase1_total": int(auto_res.get("trials_phase1_total", AUTO_MODE_TRIALS)),
+                    "trials_phase1_ok": int(auto_res.get("trials_phase1_ok", 0)),
+                    "phase1_plateau_hit": bool(auto_res.get("phase1_plateau_hit", False)),
+                    "trials_phase2_total": int(auto_res.get("trials_phase2_total", AUTO_MODE_REFINE_TRIALS)),
+                    "trials_phase2_ok": int(auto_res.get("trials_phase2_ok", 0)),
+                    "phase2_plateau_hit": bool(auto_res.get("phase2_plateau_hit", False)),
                     "search_fs": int(auto_res.get("search_fs", auto_search_fs)),
                     "search_taps": int(auto_res.get("search_taps", auto_search_taps)),
                     "best_metrics": best_metrics,
@@ -770,8 +1636,10 @@ def process_run():
                     f"rank={_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}/100, "
                     f"avg={_auto_safe_float(best_metrics.get('avg_score'), 0.0):.3f}, "
                     f"dsp_pen={_auto_safe_float(best_metrics.get('dsp_penalty'), 0.0):.3f}, "
+                    f"exc_pen={_auto_safe_float(best_metrics.get('exc_penalty'), 0.0):.3f}, "
                     f"boost={_auto_safe_float(best_metrics.get('max_net_boost_db'), 0.0):.2f} dB, "
-                    f"events={int(best_metrics.get('events_total', 0) or 0)}"
+                    f"events={int(best_metrics.get('events_total', 0) or 0)}, "
+                    f"event_sev={_auto_safe_float(best_metrics.get('events_severity'), 0.0):.2f}"
                 )
             else:
                 logger.warning("Automatic mode could not produce a valid best preset; using current settings.")

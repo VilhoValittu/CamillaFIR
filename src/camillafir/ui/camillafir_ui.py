@@ -330,14 +330,17 @@ def _render_results(
             rank_sc = _af(bm.get("rank_score", 0.0), 0.0)
             avg_sc = _af(bm.get("avg_score", 0.0), 0.0)
             dsp_pen = _af(bm.get("dsp_penalty", 0.0), 0.0)
+            exc_pen = _af(bm.get("exc_penalty", 0.0), 0.0)
             boost_db = _af(bm.get("max_net_boost_db", 0.0), 0.0)
             events_n = _ai(bm.get("events_total", 0), 0)
+            events_sev = _af(bm.get("events_severity", 0.0), 0.0)
             lr_delta = _af(bm.get("lr_delta_score", 0.0), 0.0)
 
             put_markdown("### CamillaFIR automatic mode - why this preset won")
             put_info(
                 f"Best winner: rank {rank_sc:.3f}/100, avg {avg_sc:.3f}, "
-                f"boost {boost_db:.2f} dB, dsp_pen {dsp_pen:.2f}, events {events_n}, "
+                f"boost {boost_db:.2f} dB, dsp_pen {dsp_pen:.2f}, exc_pen {exc_pen:.2f}, "
+                f"events {events_n}, event_sev {events_sev:.2f}, "
                 f"L/R delta {lr_delta:.3f} (trials {trials_ok}/{trials_total})."
             )
 
@@ -346,8 +349,10 @@ def _render_results(
                 ["Rank score", f"{rank_sc:.3f}/100"],
                 ["Average acoustic score", f"{avg_sc:.3f}"],
                 ["DSP penalty", f"{dsp_pen:.2f}"],
+                ["Excursion penalty", f"{exc_pen:.2f}"],
                 ["Max net boost", f"{boost_db:.2f} dB"],
                 ["Events", f"{events_n}"],
+                ["Event severity", f"{events_sev:.2f}"],
                 ["L/R delta", f"{lr_delta:.3f}"],
             ]
             put_table(best_rows)
@@ -359,8 +364,10 @@ def _render_results(
                     "Rank",
                     "Avg",
                     "DSP pen",
+                    "Exc pen",
                     "Boost dB",
                     "Events",
+                    "Event sev",
                     "L/R delta",
                 ]]
                 for idx, item in enumerate(top[:5], start=1):
@@ -371,8 +378,10 @@ def _render_results(
                         f"{_af(m.get('rank_score', 0.0), 0.0):.3f}",
                         f"{_af(m.get('avg_score', 0.0), 0.0):.3f}",
                         f"{_af(m.get('dsp_penalty', 0.0), 0.0):.2f}",
+                        f"{_af(m.get('exc_penalty', 0.0), 0.0):.2f}",
                         f"{_af(m.get('max_net_boost_db', 0.0), 0.0):.2f}",
                         f"{_ai(m.get('events_total', 0), 0)}",
+                        f"{_af(m.get('events_severity', 0.0), 0.0):.2f}",
                         f"{_af(m.get('lr_delta_score', 0.0), 0.0):.3f}",
                     ])
                 put_markdown("#### Automatic mode top-5")

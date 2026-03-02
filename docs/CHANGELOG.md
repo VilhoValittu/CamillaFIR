@@ -4,6 +4,32 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.4.1] - 2026-03-02
+
+### Core
+- Upgraded `CamillaFIR automatic mode` to a two-phase search: phase 1 for broad random exploration, phase 2 for local refinement around top candidates with narrower variation.
+- Added early-stop logic for non-improving runs to reduce wasted trials and move/finish phases faster.
+- Added target preselection (`top-3`, `10 trials/curve`) before main auto optimization.
+- If the user selects a custom target curve, automatic built-in target comparison is skipped and the selected target is used directly.
+- Added carry-over seeding so the best target-selection preset can initialize main phase-1 search.
+- Added automatic LF `-6 dB` estimation from smoothed response data and used it to drive auto protection/correction defaults.
+- Added `Harman12` and separate built-in B&K target variants (`BK_Light`, `BK_Medium`, `BK_Strong`) for broader automatic target coverage.
+
+### Scoring
+- Improved automatic ranking robustness to avoid `0.000/100` edge cases (notably in Minimum Phase workflows).
+- Updated boost penalty behavior so penalty starts above `3 dB` net boost.
+- Added/expanded severity-aware DSP event handling in ranking metadata.
+- Excursion penalty is now waived when `exc_freq` is auto-derived, so automatic protection frequency selection does not self-penalize.
+
+### UI
+- Automatic mode progress text now updates on every trial and shows richer context: selected target, estimated `-6 dB` point, derived `low_bass_cut_hz`, derived `exc_freq`, phase/trial counters, best score, and elapsed time.
+- Improved auto-result transparency by exposing winner metrics (rank components and penalties) in top results view.
+
+### Export
+- Summary export now includes richer automatic-mode metadata: target selection method and candidates, chosen target and seed preset details, and ranking component breakdown (acoustic average, DSP penalty, excursion penalty, boost, events, severity).
+
+---
+
 ## [3.4.0] - 2026-03-02
 
 ### Core

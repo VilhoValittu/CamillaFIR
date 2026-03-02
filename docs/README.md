@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v3.4.0
+## v3.4.1
 Stable release - feedback welcome: camillafir.py@gmail.com
 
 CamillaFIR generates high-resolution FIR room-correction filters from REW exports

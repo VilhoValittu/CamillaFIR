@@ -291,17 +291,47 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
             if bool(data.get("camillafir_automatic_mode", False)) and isinstance(auto_meta, dict):
                 bm = dict(auto_meta.get("best_metrics", {}) or {})
                 bp = dict(auto_meta.get("best_preset", {}) or {})
+                tc = dict(data.get("_auto_target_curve_meta", {}) or {})
                 summary_content += "\n=== CAMILLAFIR AUTOMATIC MODE ===\n"
                 summary_content += (
                     f"Trials: {int(auto_meta.get('trials_ok', 0))}/{int(auto_meta.get('trials_total', 0))} "
                     f"(search grid: {int(auto_meta.get('search_fs', 0))} Hz, {int(auto_meta.get('search_taps', 0))} taps)\n"
                 )
+                if tc:
+                    tc_method = str(tc.get("selection_method", "fit_rms"))
+                    summary_content += (
+                        f"Selected target curve: {str(tc.get('selected_hc_mode', 'n/a'))} "
+                        f"(fit_rms={float(tc.get('fit_rms_db', 0.0)):.3f} dB, method={tc_method})\n"
+                    )
+                    if tc_method == "top3x10_trials":
+                        ev = list(tc.get("evaluated", []) or [])
+                        seed = dict(tc.get("best_preset", {}) or {})
+                        top_n = int(tc.get("top_n", 0) or 0)
+                        tr_n = int(tc.get("trials_per_curve", 0) or 0)
+                        if top_n > 0 and tr_n > 0:
+                            summary_content += f"Target selection grid: top-{top_n} x {tr_n} trials\n"
+                        if seed:
+                            summary_content += (
+                                "Target seed preset: "
+                                + ", ".join([f"{k}={seed[k]}" for k in sorted(seed.keys())])
+                                + "\n"
+                            )
+                        for i, row in enumerate(ev[:3], start=1):
+                            bm_t = dict(row.get("best_metrics", {}) or {})
+                            summary_content += (
+                                f"Target #{i}: {str(row.get('hc_mode', 'n/a'))} "
+                                f"(best_rank={float(bm_t.get('rank_score', 0.0)):.3f}, "
+                                f"avg_rank={float(row.get('avg_rank_score', 0.0)):.3f}, "
+                                f"ok={int(row.get('trials_ok', 0))}/{int(row.get('trials_total', 0))})\n"
+                            )
                 summary_content += (
                     f"Best rank score: {float(bm.get('rank_score', 0.0)):.3f}/100 "
                     f"(avg={float(bm.get('avg_score', 0.0)):.3f}, "
                     f"dsp_pen={float(bm.get('dsp_penalty', 0.0)):.2f}, "
+                    f"exc_pen={float(bm.get('exc_penalty', 0.0)):.2f}, "
                     f"max_net_boost={float(bm.get('max_net_boost_db', 0.0)):.2f} dB, "
-                    f"events={int(bm.get('events_total', 0))})\n"
+                    f"events={int(bm.get('events_total', 0))}, "
+                    f"event_sev={float(bm.get('events_severity', 0.0)):.2f})\n"
                 )
                 if bp:
                     keys = [
@@ -314,6 +344,7 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
                         "reg_strength",
                         "max_slope_db_per_oct",
                         "max_boost",
+                        "mag_c_min",
                         "mag_c_max",
                         "trans_width",
                         "filter_smooth",

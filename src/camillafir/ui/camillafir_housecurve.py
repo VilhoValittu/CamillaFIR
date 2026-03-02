@@ -10,9 +10,9 @@ def _normalize_hc_mode_key(v) -> str:
         s = ""
 
     known = {
-        "Harman6", "Harman8", "Harman4", "Harman10",
+        "Harman6", "Harman8", "Harman4", "Harman10", "Harman12",
         "Studio", "Nearfield", "HiFi", "Speech",
-        "Toole", "BK", "Flat", "Cinema", "Custom",
+        "Toole", "BK_Light", "BK_Medium", "BK_Strong", "Flat", "Cinema", "Custom",
     }
     if s in known:
         return s
@@ -26,6 +26,12 @@ def _normalize_hc_mode_key(v) -> str:
         return "Flat"
     if "toole" in n:
         return "Toole"
+    if "b&k" in n or "bk" in n:
+        if "light" in n:
+            return "BK_Light"
+        if "strong" in n:
+            return "BK_Strong"
+        return "BK_Medium"
     if "speech" in n or "broadcast" in n:
         return "Speech"
     if "nearfield" in n or "desk" in n:
@@ -35,6 +41,8 @@ def _normalize_hc_mode_key(v) -> str:
     if "studio" in n or "tilt" in n:
         return "Studio"
     if "harman" in n:
+        if "+12db" in n or "12db" in n:
+            return "Harman12"
         if "+10db" in n or "10db" in n or "subheavy" in n:
             return "Harman10"
         if "+8db" in n or "8db" in n:
@@ -80,6 +88,42 @@ def get_house_curve_by_name(name):
             10.0, 9.8, 9.5, 9.0, 8.2, 7.2, 6.0, 4.8, 3.5,
             2.2, 0.8, 0.0, -0.5, -1.0, -1.8, -2.8,
             -4.0, -5.5, -6.0
+        ])
+
+    elif 'Harman12' in name or '+12dB' in name:
+        freqs = full_freqs
+        mags = np.array([
+            12.0,
+            12.0, 11.8, 11.4, 10.8, 9.8, 8.6, 7.2, 5.8, 4.2,
+            2.8, 1.0, 0.0, -0.5, -1.0, -1.8, -2.8,
+            -4.0, -5.5, -6.0
+        ])
+
+    elif 'BK_Light' in name or 'B&K Light' in name:
+        freqs = full_freqs
+        mags = np.array([
+            2.5,
+            2.5, 2.4, 2.3, 2.1, 1.9, 1.6, 1.3, 1.0, 0.7,
+            0.4, 0.1, -0.2, -0.6, -1.0, -1.6, -2.3,
+            -3.1, -4.0, -4.4
+        ])
+
+    elif 'BK_Medium' in name or 'BK' in name or 'B&K' in name:
+        freqs = full_freqs
+        mags = np.array([
+            3.5,
+            3.5, 3.4, 3.2, 3.0, 2.7, 2.3, 1.9, 1.4, 1.0,
+            0.6, 0.2, -0.2, -0.7, -1.3, -2.0, -2.8,
+            -3.8, -4.8, -5.3
+        ])
+
+    elif 'BK_Strong' in name or 'B&K Strong' in name:
+        freqs = full_freqs
+        mags = np.array([
+            4.5,
+            4.5, 4.4, 4.2, 3.9, 3.5, 3.0, 2.4, 1.8, 1.2,
+            0.8, 0.3, -0.2, -0.8, -1.5, -2.3, -3.2,
+            -4.3, -5.4, -6.0
         ])
 
     elif 'Toole' in name:
