@@ -23,7 +23,7 @@ CamillaFIR generates high-resolution FIR room-correction filters from REW export
 
 1. Select filter type.
 2. Select sample rate and taps.
-3. Select target curve.
+3. Select target curve if you want use your own. CamillaFIR will automaticly select best for your room if no selection.
 4. Press `START`.
 
 CamillaFIR runs automatic preset search and exports filters using the best found settings.
