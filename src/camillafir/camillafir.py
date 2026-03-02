@@ -413,7 +413,7 @@ def _auto_score_result(result) -> dict:
     dsp_pen_r, dsp_dbg_r = _auto_dsp_quality_penalty(r_st)
     dsp_penalty = 0.5 * (float(dsp_pen_l) + float(dsp_pen_r))
 
-    boost_pen = 1.5 * max(0.0, net_boost_max - 1.0)
+    boost_pen = 1.5 * max(0.0, net_boost_max - 3.0)
     event_pen = 0.5 * float(events_total)
     lr_pen = 0.25 * lr_delta
     rank_score = float(np.clip(avg_score - boost_pen - event_pen - lr_pen - dsp_penalty, 0.0, 100.0))

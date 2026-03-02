@@ -300,6 +300,84 @@ def _render_results(
             ['Final Max (post gain)', f"{float(l_st_f.get('final_max_db', 0.0) or 0.0):.2f} dB", f"{float(r_st_f.get('final_max_db', 0.0) or 0.0):.2f} dB"],
         ])
 
+        try:
+            mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
+        except Exception:
+            mode_u = "BASIC"
+        auto_enabled = bool(mode_u == "AUTO" or data.get("camillafir_automatic_mode", False))
+        auto_meta = data.get("_auto_mode_meta", None)
+        if auto_enabled and isinstance(auto_meta, dict):
+            bm = dict(auto_meta.get("best_metrics", {}) or {})
+            top = list(auto_meta.get("top", []) or [])
+            trials_ok = int(auto_meta.get("trials_ok", 0) or 0)
+            trials_total = int(auto_meta.get("trials_total", 0) or 0)
+
+            def _af(v, default=0.0):
+                try:
+                    x = float(v)
+                    if x == x and abs(x) != float("inf"):
+                        return float(x)
+                except Exception:
+                    pass
+                return float(default)
+
+            def _ai(v, default=0):
+                try:
+                    return int(v)
+                except Exception:
+                    return int(default)
+
+            rank_sc = _af(bm.get("rank_score", 0.0), 0.0)
+            avg_sc = _af(bm.get("avg_score", 0.0), 0.0)
+            dsp_pen = _af(bm.get("dsp_penalty", 0.0), 0.0)
+            boost_db = _af(bm.get("max_net_boost_db", 0.0), 0.0)
+            events_n = _ai(bm.get("events_total", 0), 0)
+            lr_delta = _af(bm.get("lr_delta_score", 0.0), 0.0)
+
+            put_markdown("### CamillaFIR automatic mode - why this preset won")
+            put_info(
+                f"Best winner: rank {rank_sc:.3f}/100, avg {avg_sc:.3f}, "
+                f"boost {boost_db:.2f} dB, dsp_pen {dsp_pen:.2f}, events {events_n}, "
+                f"L/R delta {lr_delta:.3f} (trials {trials_ok}/{trials_total})."
+            )
+
+            best_rows = [
+                ["Metric", "Best preset"],
+                ["Rank score", f"{rank_sc:.3f}/100"],
+                ["Average acoustic score", f"{avg_sc:.3f}"],
+                ["DSP penalty", f"{dsp_pen:.2f}"],
+                ["Max net boost", f"{boost_db:.2f} dB"],
+                ["Events", f"{events_n}"],
+                ["L/R delta", f"{lr_delta:.3f}"],
+            ]
+            put_table(best_rows)
+
+            if top:
+                top_rows = [[
+                    "#",
+                    "Trial",
+                    "Rank",
+                    "Avg",
+                    "DSP pen",
+                    "Boost dB",
+                    "Events",
+                    "L/R delta",
+                ]]
+                for idx, item in enumerate(top[:5], start=1):
+                    m = dict(item.get("metrics", {}) or {})
+                    top_rows.append([
+                        f"{idx}",
+                        f"{_ai(m.get('trial', 0), 0)}",
+                        f"{_af(m.get('rank_score', 0.0), 0.0):.3f}",
+                        f"{_af(m.get('avg_score', 0.0), 0.0):.3f}",
+                        f"{_af(m.get('dsp_penalty', 0.0), 0.0):.2f}",
+                        f"{_af(m.get('max_net_boost_db', 0.0), 0.0):.2f}",
+                        f"{_ai(m.get('events_total', 0), 0)}",
+                        f"{_af(m.get('lr_delta_score', 0.0), 0.0):.3f}",
+                    ])
+                put_markdown("#### Automatic mode top-5")
+                put_table(top_rows)
+
         put_markdown(f"###  {t('rep_header')}")
         with put_collapse(" DSP info"):
             def _phase_clamp_str(st: dict) -> str:
