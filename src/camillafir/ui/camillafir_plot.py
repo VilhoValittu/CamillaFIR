@@ -711,7 +711,7 @@ def format_summary_content(settings, l_stats, r_stats):
         return float(default)
 
     def _fmt_score(v):
-        return "n/a" if v is None else f"{float(v):.1f}/100"
+        return "n/a" if v is None else f"{float(v):.3f}/100"
 
     def _fmt_match(match_pct, rms_db):
         if match_pct is None or rms_db is None:

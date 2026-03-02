@@ -39,6 +39,7 @@ from .config.camillafir_pipeline import (
     detect_is_wav_source,
 )
 from .ui.camillafir_export import build_export_zip, save_export_bundle
+from .ui import camillafir_plot as plots
 from .engine import build_config, run_pipeline, summarize_run
 from .dsp import camillafir_dsp as dsp
 from .dsp.target_match import target_match_from_stats
@@ -48,13 +49,14 @@ from .ui.camillafir_utils import scale_taps_with_fs
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("CamillaFIR")
 
-VERSION = "v.3.3.0"
+VERSION = "v.3.4.0"
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
 MAX_SAFE_TAPS = 131072
 TEST_MODE = 0
 TEST_MODE = os.environ.get("CAMILLAFIR_TEST", "0") == "1"
+AUTO_MODE_TRIALS = 100
 
 def resolve_static_dir() -> str | None:
     """
@@ -263,6 +265,308 @@ def _postpolish_wav_filter_ir(
     return y.astype(float, copy=False)
 
 
+def _auto_safe_float(value, default=0.0) -> float:
+    try:
+        x = float(value)
+        if np.isfinite(x):
+            return float(x)
+    except Exception:
+        pass
+    return float(default)
+
+
+def _auto_collect_reflections(st: dict | None) -> list:
+    st = st or {}
+    refs = st.get("cmp_reflections", st.get("reflections", []))
+    if isinstance(refs, list):
+        return refs
+    return []
+
+
+def _auto_pick_metric(st: dict | None, keys: tuple[str, ...], *, abs_value: bool = False, nonneg: bool = False):
+    st = st or {}
+    for k in keys:
+        v = _auto_safe_float(st.get(k, None), default=float("nan"))
+        if not np.isfinite(v):
+            continue
+        if abs_value:
+            v = abs(v)
+        if nonneg and v < 0.0:
+            continue
+        return float(v)
+    return None
+
+
+def _auto_dsp_quality_penalty(st: dict | None) -> tuple[float, dict]:
+    st = st or {}
+    penalty = 0.0
+    dbg = {}
+
+    real_rms = _auto_pick_metric(
+        st,
+        (
+            "real_mag_error_rms",
+            "post_to_ir_staged_shape_delta_rms_20_200_db",
+            "post_to_ir_shape_delta_rms_20_200_db",
+            "post_to_ir_delta_rms_20_200_db",
+        ),
+        abs_value=True,
+        nonneg=True,
+    )
+    if real_rms is not None:
+        penalty += 6.0 * max(0.0, float(real_rms) - 0.90)
+    dbg["real_rms"] = real_rms
+
+    ripple_rms = _auto_pick_metric(
+        st,
+        (
+            "ripple_rms",
+            "post_to_ir_staged_shape_delta_rms_20_200_db",
+            "post_to_ir_shape_delta_rms_20_200_db",
+        ),
+        abs_value=True,
+        nonneg=True,
+    )
+    if ripple_rms is not None:
+        penalty += 4.0 * max(0.0, float(ripple_rms) - 0.50)
+    dbg["ripple_rms"] = ripple_rms
+
+    gd_grad_max = _auto_pick_metric(
+        st,
+        (
+            "gd_grad_limiter_after_max_ms_per_oct",
+            "gd_grad_limiter_before_max_ms_per_oct",
+            "gd_limiter_max_grad_ms_per_oct",
+            "gd_grad_limiter_max_grad_ms_per_oct",
+            "gd_limiter_max_grad_after_ms_per_oct",
+            "gd_grad_limiter_max_grad_after_ms_per_oct",
+            "gd_limiter_max_grad_before_ms_per_oct",
+            "gd_grad_limiter_max_grad_before_ms_per_oct",
+        ),
+        abs_value=True,
+        nonneg=True,
+    )
+    if gd_grad_max is not None:
+        penalty += 0.60 * max(0.0, float(gd_grad_max) - 12.0)
+    dbg["gd_grad_max"] = gd_grad_max
+
+    pre_ringing_db = None if bool(st.get("pre_energy_metric_suspect", False)) else _auto_pick_metric(
+        st,
+        (
+            "ir_pre_ringing_db",
+            "mixed_pre_ringing_after_db",
+            "ir_pre_energy_guard_after_db",
+            "mixed_pre_ringing_before_db",
+            "ir_pre_energy_guard_before_db",
+        ),
+    )
+    if pre_ringing_db is not None:
+        penalty += 0.70 * max(0.0, float(pre_ringing_db) + 40.0)
+    dbg["pre_ringing_db"] = pre_ringing_db
+
+    pre_post_ratio = None if bool(st.get("pre_energy_metric_suspect", False)) else _auto_pick_metric(
+        st,
+        (
+            "ir_pre_post_ratio",
+            "ir_pre_energy_guard_after_ratio",
+            "ir_pre_energy_guard_before_ratio",
+        ),
+        nonneg=True,
+    )
+    if pre_post_ratio is not None:
+        penalty += 30.0 * max(0.0, float(pre_post_ratio) - 0.015)
+    dbg["ir_pre_post_ratio"] = pre_post_ratio
+
+    phase_boundary_mdb = _auto_pick_metric(
+        st,
+        (
+            "phase_boundary_peak_mdb",
+            "phase_corr_boundary_peak_mdb",
+        ),
+        abs_value=True,
+        nonneg=True,
+    )
+    if phase_boundary_mdb is not None:
+        penalty += 0.015 * max(0.0, float(phase_boundary_mdb) - 120.0)
+    dbg["phase_boundary_peak_mdb"] = phase_boundary_mdb
+
+    return float(max(0.0, penalty)), dbg
+
+
+def _auto_score_result(result) -> dict:
+    l_st = dict(getattr(result, "l_st", {}) or {})
+    r_st = dict(getattr(result, "r_st", {}) or {})
+    l_ai = plots.calc_ai_summary_from_stats(l_st)
+    r_ai = plots.calc_ai_summary_from_stats(r_st)
+
+    l_score = _auto_safe_float(l_ai.get("score"), 0.0)
+    r_score = _auto_safe_float(r_ai.get("score"), 0.0)
+    avg_score = (l_score + r_score) / 2.0
+    lr_delta = abs(l_score - r_score)
+
+    net_boost_max = max(
+        _auto_safe_float(l_st.get("net_boost_peak_db", 0.0), 0.0),
+        _auto_safe_float(r_st.get("net_boost_peak_db", 0.0), 0.0),
+    )
+    events_total = int(len(_auto_collect_reflections(l_st)) + len(_auto_collect_reflections(r_st)))
+    dsp_pen_l, dsp_dbg_l = _auto_dsp_quality_penalty(l_st)
+    dsp_pen_r, dsp_dbg_r = _auto_dsp_quality_penalty(r_st)
+    dsp_penalty = 0.5 * (float(dsp_pen_l) + float(dsp_pen_r))
+
+    boost_pen = 1.5 * max(0.0, net_boost_max - 1.0)
+    event_pen = 0.5 * float(events_total)
+    lr_pen = 0.25 * lr_delta
+    rank_score = float(np.clip(avg_score - boost_pen - event_pen - lr_pen - dsp_penalty, 0.0, 100.0))
+
+    return {
+        "rank_score": float(rank_score),
+        "avg_score": float(avg_score),
+        "lr_delta_score": float(lr_delta),
+        "max_net_boost_db": float(net_boost_max),
+        "events_total": int(events_total),
+        "dsp_penalty": float(dsp_penalty),
+        "dsp_penalty_l": float(dsp_pen_l),
+        "dsp_penalty_r": float(dsp_pen_r),
+        "dsp_dbg_l": dict(dsp_dbg_l),
+        "dsp_dbg_r": dict(dsp_dbg_r),
+    }
+
+
+def _auto_rank_key(metrics: dict) -> tuple:
+    return (
+        -_auto_safe_float(metrics.get("rank_score"), 0.0),
+        -_auto_safe_float(metrics.get("avg_score"), 0.0),
+        _auto_safe_float(metrics.get("max_net_boost_db"), 0.0),
+        int(metrics.get("events_total", 0) or 0),
+        _auto_safe_float(metrics.get("lr_delta_score"), 0.0),
+    )
+
+
+def _build_auto_mode_candidates(base_data: dict, *, n_trials: int, seed: int) -> list[dict]:
+    rng = np.random.default_rng(int(seed))
+    n_eff = max(1, int(n_trials))
+
+    keep_tdc = bool(base_data.get("enable_tdc", True))
+    keep_afdw = bool(base_data.get("enable_afdw", True))
+    keep_bass_first = bool(base_data.get("bass_first_ai", True))
+    ft = str(base_data.get("filter_type", "") or "").strip().lower()
+    is_mixed = "mixed" in ft
+    is_linear = ("linear" in ft) and (not is_mixed)
+    mixed_center = _auto_safe_float(base_data.get("mixed_freq", 180.0), 180.0)
+    if not np.isfinite(mixed_center) or mixed_center <= 0.0:
+        mixed_center = 180.0
+    phase_center = _auto_safe_float(base_data.get("phase_limit", 600.0), 600.0)
+    if not np.isfinite(phase_center) or phase_center <= 0.0:
+        phase_center = 600.0
+
+    out: list[dict] = [{}]
+    for _ in range(max(0, n_eff - 1)):
+        cand = {
+            "comparison_mode": True,
+            "enable_tdc": bool(keep_tdc),
+            "enable_afdw": bool(keep_afdw),
+            "bass_first_ai": bool(keep_bass_first),
+            "fdw_cycles": round(float(rng.uniform(8.0, 16.0)), 2),
+            "tdc_strength": round(float(rng.uniform(35.0, 75.0)), 1),
+            "tdc_max_reduction_db": round(float(rng.uniform(6.0, 12.0)), 1),
+            "tdc_slope_db_per_oct": float(rng.choice(np.array([3.0, 4.0, 5.0, 6.0, 8.0]))),
+            "reg_strength": round(float(rng.uniform(15.0, 45.0)), 1),
+            "max_slope_db_per_oct": float(rng.choice(np.array([8.0, 10.0, 12.0, 14.0, 16.0]))),
+            "max_boost": round(float(rng.uniform(3.0, 6.0)), 2),
+            "mag_c_max": round(float(rng.uniform(170.0, 300.0)), 1),
+            "trans_width": round(float(rng.uniform(70.0, 150.0)), 1),
+            "filter_smooth": int(rng.choice(np.array([6, 12, 24, 48, 96]))),
+            "bass_first_mode_max_hz": round(float(rng.uniform(150.0, 220.0)), 1),
+            "low_bass_cut_hz": round(float(rng.uniform(20.0, 45.0)), 1),
+        }
+        if is_mixed:
+            cand["mixed_freq"] = round(float(np.clip(rng.normal(loc=mixed_center, scale=35.0), 80.0, 320.0)), 1)
+        if is_linear:
+            cand["phase_limit"] = round(float(np.clip(rng.normal(loc=phase_center, scale=140.0), 150.0, 1400.0)), 1)
+        out.append(cand)
+    return out
+
+
+def _run_auto_mode_search(
+    *,
+    base_data: dict,
+    measurements: dict,
+    fs_v: int,
+    taps_v: int,
+    xos: list,
+    hpf: dict | None,
+    hc_f,
+    hc_m,
+    pin_obj,
+    status_cb,
+    n_trials: int = AUTO_MODE_TRIALS,
+) -> dict | None:
+    seed = int(20260302 + int(fs_v) * 17 + int(taps_v))
+    candidates = _build_auto_mode_candidates(base_data, n_trials=int(n_trials), seed=seed)
+
+    best_result = None
+    best_metrics = None
+    best_preset = None
+    scored = []
+
+    for idx, preset in enumerate(candidates, start=1):
+        trial_data = dict(base_data or {})
+        trial_data.update(preset or {})
+        trial_data["comparison_mode"] = True
+        trial_measurements = dict(measurements or {})
+        trial_measurements["ui_data"] = trial_data
+
+        try:
+            cfg = build_config(
+                trial_data,
+                fs_v=int(fs_v),
+                taps_v=int(taps_v),
+                xos=xos,
+                hpf=hpf,
+                hc_f=hc_f,
+                hc_m=hc_m,
+                pin=pin_obj,
+                max_safe_boost=float(MAX_SAFE_BOOST),
+            )
+            try:
+                setattr(cfg, "bass_smooth_w_gamma", float(trial_data.get("bass_smooth_w_gamma", 2.40)))
+                setattr(cfg, "bass_smooth_w_max", float(trial_data.get("bass_smooth_w_max", 0.45)))
+            except Exception:
+                pass
+
+            result = run_pipeline(cfg, trial_measurements)
+            result.metrics["summary"] = summarize_run(result)
+            metrics = _auto_score_result(result)
+            metrics["trial"] = int(idx)
+            scored.append({"metrics": metrics, "preset": dict(preset or {})})
+
+            if best_metrics is None or _auto_rank_key(metrics) < _auto_rank_key(best_metrics):
+                best_result = result
+                best_metrics = metrics
+                best_preset = dict(preset or {})
+        except Exception as exc:
+            logger.warning(f"Automatic mode trial {idx}/{len(candidates)} failed: {type(exc).__name__}: {exc}")
+
+        if callable(status_cb):
+            best_txt = "n/a" if not best_metrics else f"{_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}"
+            status_cb(f"CamillaFIR automatic mode: {idx}/{len(candidates)} trials (best {best_txt}/100)")
+
+    if best_result is None or best_metrics is None:
+        return None
+
+    top = sorted(scored, key=lambda x: _auto_rank_key(x.get("metrics", {})))[:5]
+    return {
+        "best_result": best_result,
+        "best_metrics": dict(best_metrics),
+        "best_preset": dict(best_preset or {}),
+        "top": top,
+        "trials_total": int(len(candidates)),
+        "trials_ok": int(len(scored)),
+        "search_fs": int(fs_v),
+        "search_taps": int(taps_v),
+    }
+
+
 def process_run():
     from .ui.camillafir_ui import update_status as status_cb
 
@@ -379,6 +683,8 @@ def process_run():
     target_rates = choose_target_rates(data)
     multi_rate_on = bool(data.get("multi_rate_opt"))
     dash_fs = choose_dash_fs(target_rates, multi_rate_on=multi_rate_on, forced_plot_fs_hz=int(FORCE_SINGLE_PLOT_FS_HZ))
+    mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
+    auto_mode_enabled = bool(mode_u == "AUTO" or data.get("camillafir_automatic_mode", False))
     zip_dashboards_on = False
 
     ts = datetime.now().strftime('%d%m%y_%H%M')
@@ -416,6 +722,62 @@ def process_run():
         "ui_data": data,
         "is_wav_source": bool(is_wav_source),
     }
+
+    if auto_mode_enabled:
+        try:
+            data["comparison_mode"] = True
+            auto_search_fs = int(target_rates[0]) if target_rates else int(data.get("fs", 44100) or 44100)
+            if bool(data.get("multi_rate_opt", False)):
+                auto_search_taps = int(scale_taps_with_fs(auto_search_fs, taps_base))
+            else:
+                auto_search_taps = int(taps_base)
+            set_processbar('bar', 0.10)
+            _status(
+                f"CamillaFIR automatic mode: searching best preset "
+                f"({AUTO_MODE_TRIALS} trials @ {auto_search_fs} Hz)"
+            )
+            auto_res = _run_auto_mode_search(
+                base_data=dict(data),
+                measurements=measurements,
+                fs_v=int(auto_search_fs),
+                taps_v=int(auto_search_taps),
+                xos=xos,
+                hpf=hpf,
+                hc_f=hc_f,
+                hc_m=hc_m,
+                pin_obj=pin,
+                status_cb=_status,
+                n_trials=int(AUTO_MODE_TRIALS),
+            )
+            if isinstance(auto_res, dict):
+                best_preset = dict(auto_res.get("best_preset", {}) or {})
+                best_metrics = dict(auto_res.get("best_metrics", {}) or {})
+                if best_preset:
+                    data.update(best_preset)
+                    measurements["ui_data"] = data
+                data["_auto_mode_meta"] = {
+                    "enabled": True,
+                    "trials_total": int(auto_res.get("trials_total", AUTO_MODE_TRIALS)),
+                    "trials_ok": int(auto_res.get("trials_ok", 0)),
+                    "search_fs": int(auto_res.get("search_fs", auto_search_fs)),
+                    "search_taps": int(auto_res.get("search_taps", auto_search_taps)),
+                    "best_metrics": best_metrics,
+                    "best_preset": best_preset,
+                    "top": list(auto_res.get("top", []) or []),
+                }
+                logger.info(
+                    "Automatic mode best: "
+                    f"rank={_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}/100, "
+                    f"avg={_auto_safe_float(best_metrics.get('avg_score'), 0.0):.3f}, "
+                    f"dsp_pen={_auto_safe_float(best_metrics.get('dsp_penalty'), 0.0):.3f}, "
+                    f"boost={_auto_safe_float(best_metrics.get('max_net_boost_db'), 0.0):.2f} dB, "
+                    f"events={int(best_metrics.get('events_total', 0) or 0)}"
+                )
+            else:
+                logger.warning("Automatic mode could not produce a valid best preset; using current settings.")
+            set_processbar('bar', 0.18)
+        except Exception as exc:
+            logger.warning(f"Automatic mode failed: {type(exc).__name__}: {exc}")
 
     for i, fs_v in enumerate(target_rates):
         if bool(data.get('multi_rate_opt', False)):

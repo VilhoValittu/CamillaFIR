@@ -84,7 +84,12 @@ def update_mode_desc(_=None):
         m = str(pin["mode"] or "BASIC").strip().upper()
     except Exception:
         m = "BASIC"
-    key = "mode_basic_desc" if m == "BASIC" else "mode_advanced_desc"
+    if m == "ADVANCED":
+        key = "mode_advanced_desc"
+    elif m == "AUTO":
+        key = "mode_auto_desc"
+    else:
+        key = "mode_basic_desc"
     with use_scope("mode_desc_scope", clear=True):
         put_markdown(f"**{t('mode_desc_title')}**\n\n{t(key)}")
 
@@ -94,7 +99,7 @@ def update_basic_clamp_hints_ui(*, pin, pin_update, t):
         mode_u = str(pin.get("mode", "BASIC") or "BASIC").strip().upper()
     except Exception:
         mode_u = "BASIC"
-    is_basic = (mode_u == "BASIC")
+    is_basic = mode_u in ("BASIC", "AUTO")
 
     clamps = MODE_CLAMPS.get("BASIC", {}) or {}
 
@@ -213,7 +218,7 @@ def update_ir_export_window_mode_ui(_=None):
             m = str(_p("mode", "BASIC") or "BASIC").strip().upper()
         except Exception:
             m = "BASIC"
-        is_basic = (m == "BASIC")
+        is_basic = m in ("BASIC", "AUTO")
 
         ft = str(_p("filter_type", "") or "").strip().lower()
 
@@ -419,7 +424,7 @@ def update_ir_window_shape_ui(_=None):
     try:
         mode = str(_p("ir_export_window_mode", "auto") or "auto").strip().lower()
         m = str(_p("mode", "BASIC") or "BASIC").strip().upper()
-        is_basic = (m == "BASIC")
+        is_basic = m in ("BASIC", "AUTO")
         is_auto = (mode == "auto") or is_basic
 
         with use_scope("ir_export_window_shape_scope", clear=True):
@@ -784,7 +789,7 @@ def update_lvl_ui(_=None):
             app_mode = str(_p("mode", "BASIC") or "BASIC").strip().upper()
         except Exception:
             app_mode = "BASIC"
-        is_basic = (app_mode == "BASIC")
+        is_basic = app_mode in ("BASIC", "AUTO")
 
         mode = str(_p("lvl_mode", "Auto") or "Auto")
         if is_basic:
@@ -1366,7 +1371,7 @@ def update_target_preview_ui(_=None):
             app_mode = "BASIC"
 
         lvl_mode = str(_p("lvl_mode", "Auto") or "Auto")
-        if app_mode == "BASIC":
+        if app_mode in ("BASIC", "AUTO"):
             lvl_mode = "Auto"
 
         is_manual_level = ("manual" in lvl_mode.strip().lower())

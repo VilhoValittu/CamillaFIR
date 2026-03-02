@@ -10,12 +10,13 @@ def load_config() -> dict:
         "layout": "Mono",
         "fs": 44100,
         "taps": 65536,
-        "mode": "BASIC",
+        "mode": "AUTO",
         "filter_type": "Linear Phase",
         "gain": 0.0,
         "hc_mode": "Harman6",
         "mag_correct": True,
         "unsafe_raw_dsp": False,
+        "camillafir_automatic_mode": True,
         "plot_smoothing_level": "Psychoacoustic",
         "filter_smooth": 12,
         "bass_smooth_adaptive": True,
@@ -138,6 +139,7 @@ def load_config() -> dict:
                 "enable_ir_pre_energy_guard",
                 "phase_tail_monotonic_enable",
                 "unsafe_raw_dsp",
+                "camillafir_automatic_mode",
             ]:
                 if k in saved and isinstance(saved[k], list):
                     saved[k] = bool(saved[k])
@@ -153,6 +155,24 @@ def load_config() -> dict:
             default_conf.update(saved)
         except Exception:
             pass
+
+    try:
+        mode_u = str(default_conf.get("mode", "AUTO") or "AUTO").strip().upper()
+    except Exception:
+        mode_u = "AUTO"
+
+    try:
+        legacy_auto = bool(default_conf.get("camillafir_automatic_mode", False))
+    except Exception:
+        legacy_auto = False
+
+    if legacy_auto:
+        mode_u = "AUTO"
+    if mode_u not in ("AUTO", "BASIC", "ADVANCED"):
+        mode_u = "AUTO"
+
+    default_conf["mode"] = mode_u
+    default_conf["camillafir_automatic_mode"] = bool(mode_u == "AUTO")
 
     return default_conf
 

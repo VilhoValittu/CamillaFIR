@@ -40,6 +40,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "conf_pull_bass_boost_restore",
         "low_bass_cut_strength", "hc_custom_file",
         "file_l", "file_r", "unsafe_raw_dsp",
+        "camillafir_automatic_mode",
     ]
 
     data: Dict[str, Any] = {}
@@ -64,6 +65,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "bass_boost_cap_enable",
         "bass_boost_post_restore_enable",
         "unsafe_raw_dsp",
+        "camillafir_automatic_mode",
     ]:
         try:
             if isinstance(data.get(k, None), list):
@@ -75,7 +77,22 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
     except Exception:
         mode_u = "BASIC"
-    if mode_u == "BASIC":
+    if mode_u not in ("BASIC", "ADVANCED", "AUTO"):
+        mode_u = "BASIC"
+
+    is_auto_mode = (mode_u == "AUTO")
+    if not is_auto_mode:
+        try:
+            is_auto_mode = bool(data.get("camillafir_automatic_mode", False))
+        except Exception:
+            is_auto_mode = False
+
+    if is_auto_mode:
+        mode_u = "AUTO"
+        data["mode"] = "AUTO"
+    data["camillafir_automatic_mode"] = bool(is_auto_mode)
+
+    if mode_u in ("BASIC", "AUTO"):
         data["lvl_mode"] = "Auto"
         data["unsafe_raw_dsp"] = False
 
@@ -535,7 +552,7 @@ def build_filter_config(
     except Exception:
         mode_u = "BASIC"
     lvl_mode = str(data.get("lvl_mode", "Auto") or "Auto")
-    if mode_u == "BASIC":
+    if mode_u in ("BASIC", "AUTO"):
         lvl_mode = "Auto"
     
     cfg = FilterConfig_cls(

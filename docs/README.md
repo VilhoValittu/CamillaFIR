@@ -1,10 +1,32 @@
 # CamillaFIR by Vilho Valittu
 
-## v3.3.0
+## v3.4.0
 Stable release - feedback welcome: camillafir.py@gmail.com
 
 CamillaFIR generates high-resolution FIR room-correction filters from REW exports
 (magnitude + phase) and WAV/IR measurements.
+
+## v3.4.0 Highlights - CamillaFIR automatic mode
+
+### NEW: CamillaFIR automatic mode (default)
+
+- Added a full automatic optimization mode directly into the main Mode selector:
+  - `CamillaFIR automatic mode`
+  - `Basic`
+  - `Advanced`
+- `CamillaFIR automatic mode` is now the default startup mode.
+- Automatic mode runs a multi-trial preset search (100 trials), scores each candidate, and applies the best-ranked preset before final export.
+- Ranking combines acoustic quality and DSP quality behavior (including penalty terms), not only a single metric.
+
+
+### Automatic mode workflow (quick start)
+
+1. Select filter type.
+2. Select sample rate and taps.
+3. Select target curve.
+4. Press `START`.
+
+CamillaFIR runs automatic preset search and exports filters using the best found settings.
 
 ## Inspiration
 

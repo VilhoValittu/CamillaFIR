@@ -160,7 +160,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
     def _refresh_ir_window_controls(_=None):
         try:
             m = str(_pin_get("mode", "BASIC") or "BASIC").strip().upper()
-            if m == "BASIC":
+            if m in ("BASIC", "AUTO"):
                 if str(pin.get("ir_export_window_mode", "") or "").lower() != "auto":
                     pin_update("ir_export_window_mode", value="auto")
         except Exception:
@@ -242,7 +242,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
             m = "BASIC"
 
         try:
-            if m == "BASIC":
+            if m in ("BASIC", "AUTO"):
                 pin_update(
                     "lvl_mode",
                     options=[{"label": t("lvl_mode_auto"), "value": "Auto"}],
@@ -281,7 +281,8 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
             pass
         try:
             m = str(_pin_get("mode", "BASIC") or "BASIC").strip().upper()
-            v = (MODE_DEFAULTS.get(m, {}) or {}).get("ir_export_window_mode", None)
+            mode_key = "BASIC" if m == "AUTO" else m
+            v = (MODE_DEFAULTS.get(mode_key, {}) or {}).get("ir_export_window_mode", None)
             if isinstance(v, str) and v.strip():
                 pin_update("ir_export_window_mode", value=v.strip())
                 _refresh_ir_window_controls()

@@ -4,6 +4,45 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.4.0] - 2026-03-02
+
+### Core
+- Added `CamillaFIR automatic mode` as a first-class mode (`AUTO`) in the mode system.
+- Automatic mode executes 100 trial presets, ranks results, and applies the best preset before final export.
+- Trial status text now updates on every run (`1/100`, `2/100`, ...), improving optimization visibility.
+- Automatic mode ranking combines acoustic score with DSP quality penalties and stability factors.
+
+### UI
+- Added `CamillaFIR automatic mode` into the main mode selector next to `BASIC` and `ADVANCED`.
+- Removed separate automatic-mode checkbox from Basic page (mode selector is now the single control).
+- Set automatic mode as default mode in UI/config flow.
+- Updated mode descriptions and guidance text to a three-mode model: Automatic, BASIC, ADVANCED.
+
+### Config / Compatibility
+- Added compatibility mapping between legacy `camillafir_automatic_mode` boolean and new `mode=AUTO` behavior.
+- `AUTO` now follows BASIC-style safety policy for guarded controls while running automatic search.
+
+### Export
+- Summary export includes automatic-mode metadata (trial counts, best rank score, and selected best preset values).
+
+### Docs
+- Updated `docs/README.md` to feature `CamillaFIR automatic mode` as the main v3.4.0 highlight.
+- Updated EN/FI translation guide texts for the three-mode workflow.
+
+---
+
+## [3.3.1] - 2026-03-01
+
+### Core
+- Add unsafe_raw_dsp checkbox visible only in ADVANCED mode
+  - Add bilingual warning text: FOR TEST USE ONLY / VAIN TESTI KÄYTTÖÖN
+  - Wire unsafe_raw_dsp through config/model/pipeline persistence
+  - In engine, enable true guard bypass in ADVANCED + unsafe_raw_dsp:
+  - bypass MAX_SAFE_BOOST cap and disable major correction guard rails
+  - Force unsafe_raw_dsp=false in BASIC mode
+
+---
+
 ## [3.3.0] - 2026-03-01
 
 ### Core

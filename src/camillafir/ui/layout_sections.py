@@ -327,6 +327,12 @@ def build_input_section(*, t, get_val):
 
 
 def build_filter_section(*, t, get_val, fs_opts, taps_opts, on_mode_apply_defaults):
+    mode_value = str(get_val("mode", "AUTO") or "AUTO").strip().upper()
+    if mode_value not in ("BASIC", "ADVANCED", "AUTO"):
+        mode_value = "AUTO"
+    if bool(get_val("camillafir_automatic_mode", False)):
+        mode_value = "AUTO"
+
     return [
         put_markdown(f"### ⚙️ {t('tab_basic')}"),
         put_markdown("---"),
@@ -336,10 +342,11 @@ def build_filter_section(*, t, get_val, fs_opts, taps_opts, on_mode_apply_defaul
                     "mode",
                     label=t("mode_label"),
                     options=[
+                        {"label": t("mode_auto_label"), "value": "AUTO"},
                         {"label": t("mode_basic_label"), "value": "BASIC"},
                         {"label": t("mode_advanced_label"), "value": "ADVANCED"},
                     ],
-                    value=str(get_val("mode", "BASIC") or "BASIC").strip().upper(),
+                    value=mode_value,
                     help_text=t("mode_help"),
                 ),
                 put_button(

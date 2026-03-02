@@ -164,7 +164,8 @@ def _toast_on_edge(
 
 def _health_toast_color(level: str, mode_u: str) -> Optional[str]:
     if level == "warn":
-        return "warn" if str(mode_u or "").strip().upper() == "BASIC" else "info"
+        mode_s = str(mode_u or "").strip().upper()
+        return "warn" if mode_s in ("BASIC", "AUTO") else "info"
     if level == "crit":
         return "error"
     return None
@@ -305,14 +306,14 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
     has_warn = any(i.level == "warn" for i in issues)
     overall: Level = "crit" if has_crit else ("warn" if has_warn else "ok")
 
-    blocked = (mode_u == "BASIC") and has_crit
+    blocked = (mode_u in ("BASIC", "AUTO")) and has_crit
     return HealthResult(overall=overall, blocked=blocked, issues=issues)
 
 
 def toast_health_gate_result(hr: HealthResult, mode: str) -> bool:
     mode_u = str(mode or "BASIC").strip().upper()
     if hr.blocked:
-        msg = format_health_summary(hr) or "Fix errors before running (blocked in BASIC)."
+        msg = format_health_summary(hr) or "Fix errors before running (blocked in BASIC/AUTO)."
         show_toast(
             msg,
             duration=15.0,

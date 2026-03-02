@@ -101,7 +101,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
 
     "ADVANCED": {
-        "filter_type_str": "Linear Phase",
+        "filter_type_str": "Mixed Phase",
         "global_gain_db": 0.0,
 
         "enable_mag_correction": True,
@@ -144,10 +144,10 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "mixed_split_freq": 180.0,
         "trans_width": 100.0,
         "do_normalize": False,
-        "exc_prot": False,
+        "exc_prot": True,
         "low_bass_cut_hz": 40.0,
         "low_bass_cut_enable": True,
-        "comparison_mode": False,
+        "comparison_mode": True,
         "bass_adaptive_isolation_mode": True,
         "conf_pull_floor": 0.05,
         "conf_pull_max_hz": 180.0,
@@ -185,6 +185,10 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
 
     "ADVANCED": {},
 }
+
+# AUTO uses BASIC defaults/guardrails but enables automatic preset search.
+MODE_DEFAULTS["AUTO"] = dict(MODE_DEFAULTS.get("ADVANCED", {}))
+MODE_CLAMPS["AUTO"] = dict(MODE_CLAMPS.get("ADVANCED", {}))
 
 
 def apply_mode_to_cfg(cfg: FilterConfig, mode: str | None, *, apply_defaults: bool = True) -> FilterConfig:
