@@ -4,6 +4,21 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.4.2] - 2026-03-03
+
+### Core
+- Added persistent automatic-mode cache in `~/.camillafir/camillafir_auto_mode_cache.json` for cross-run reuse of best presets.
+- Automatic mode now stores selected target curve in cache (`best_target_curve` / `best_hc_mode`) together with best preset metadata.
+- Added measurement-signature based target cache map (`target_by_measurement`) so identical measurements can reuse previous target choice and skip repeated target-curve trial optimization.
+- Extended cache entries with `measurement_sig` and bumped cache schema marker to `v=2`.
+
+### Target Selection
+- Added optional one-step milder target preference for built-in bass ladders (`Harman*`, `BK_*`) to avoid consistently biasing toward the bass-heaviest curve.
+- Milder-step switch is guarded by quality thresholds (`rank` drop and `fit_rms` increase limits), so the selected milder curve is used only when quality remains close.
+- Added data/config toggle `auto_target_prefer_milder_step` (default enabled via constant) for controlling this behavior.
+
+---
+
 ## [3.4.1] - 2026-03-02
 
 ### Core
