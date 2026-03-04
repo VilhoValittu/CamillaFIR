@@ -1,4 +1,4 @@
-# CamillaFIR – Official Manual (v3.3.0)
+# CamillaFIR – Official Manual (v3.5.0)
 
 ## 1. Overview
 CamillaFIR generates **FIR room-correction filters** from REW exports (magnitude + phase).
@@ -189,6 +189,154 @@ Tips:
 - **Minimum Phase:** no pre-ringing; magnitude correction only, phase derived via minimum-phase reconstruction.
 - **Mixed Phase:** linear phase below a split frequency, minimum phase above.
 - **Asymmetric Linear:** linear phase, but with an asymmetric time window to suppress audible pre-ringing while preserving the leading edge.
+
+#### Which filter type should I use?
+
+CamillaFIR automatic mode was tested with identical measurements and target curve using four filter types.
+
+Selection is based on **Best rank score**, which evaluates:
+
+- target match
+- DSP artifacts (ripple, GD gradient, phase limits)
+- headroom / boost safety
+- acoustic events
+- stereo consistency (L/R delta)
+
+##### Results
+
+| Filter type | Best rank score |
+|---|---|
+| **Asymmetric** | **90.46** |
+| Linear | 90.23 |
+| Mixed | 88.27 |
+| Minimum | 78.91 |
+
+##### Recommendation
+
+**Most users should choose: Asymmetric**
+
+It provides:
+
+- near-linear phase accuracy
+- excellent target matching
+- minimal DSP artifacts
+- practical latency
+
+##### Alternative choices
+
+**Linear phase**
+
+Use if maximum phase linearity is required and latency is not an issue.
+
+**Mixed phase**
+
+Good low-latency option with robust behaviour, but slightly higher DSP penalty.
+
+**Minimum phase**
+
+Generally not recommended for automatic mode results due to higher DSP penalties.
+
+#### Why Asymmetric Filters Exist
+
+Traditional FIR room-correction filters typically fall into two categories:
+
+| Type | Strength | Limitation |
+|---|---|---|
+| **Linear phase** | Perfect phase symmetry and very accurate correction | Very high latency |
+| **Minimum / Mixed phase** | Low latency and practical for real-time use | Limited phase correction |
+
+In real listening systems this creates an unavoidable trade-off:
+
+- **Linear phase filters** can achieve extremely accurate correction, but often introduce **hundreds of milliseconds of latency**.
+- **Minimum or mixed-phase filters** are practical for playback but cannot fully correct phase behaviour.
+
+##### The idea behind asymmetric filters
+
+CamillaFIR introduces **asymmetric FIR filters** to bridge this gap.
+
+Instead of forcing the impulse response to be perfectly symmetric (linear phase) or fully causal (minimum phase), the filter is designed so that **most of the energy occurs after the main impulse while allowing controlled asymmetry**.
+
+This enables:
+
+- near-linear correction accuracy
+- practical latency
+- reduced pre-ringing artifacts
+- stable stereo alignment
+
+##### Impulse response comparison
+
+```text
+Linear phase (symmetric)
+<------ pre ------|------ post ------>
+                  ^
+                main impulse
+
+
+Mixed / minimum phase
+                  ^
+                main impulse
+                  |------------>
+
+
+Asymmetric (CamillaFIR)
+               ^
+             main impulse
+               |---------------------->
+```
+
+**Linear phase** filters distribute energy symmetrically around the impulse, which increases latency.
+
+**Mixed/minimum phase** filters place all energy after the impulse, reducing latency but limiting correction accuracy.
+
+**Asymmetric filters** intentionally place **most energy after the impulse while keeping controlled asymmetry**, allowing strong correction with significantly lower latency than fully linear filters.
+
+---
+
+#### Real automatic-mode comparison
+
+Using identical measurements and the same target curve, CamillaFIR automatic mode produced the following **Best rank score** results:
+
+| Filter type | Best rank score |
+|---|---|
+| **Asymmetric** | **90.46** |
+| Linear | 90.23 |
+| Mixed | 88.27 |
+| Minimum | 78.91 |
+
+The **rank score** evaluates multiple factors simultaneously:
+
+- target matching accuracy
+- DSP artifacts (ripple, GD gradient, phase limits)
+- headroom safety and boost limits
+- acoustic event penalties
+- stereo consistency (L/R delta)
+
+In this comparison, **Asymmetric filters achieved the highest score**, combining strong correction accuracy with minimal DSP penalties.
+
+---
+
+#### When to use asymmetric filters
+
+For most systems, **asymmetric filters are the recommended default** because they provide the best balance between:
+
+- correction accuracy
+- DSP stability
+- latency
+
+Other filter types still have their place:
+
+| Filter type | Recommended when |
+|---|---|
+| **Asymmetric** | Best overall balance (recommended default) |
+| **Linear phase** | Maximum phase accuracy and latency is irrelevant |
+| **Mixed phase** | Low-latency real-time playback |
+| **Minimum phase** | Compatibility or special DSP workflows |
+
+##### In short
+
+Asymmetric filters exist because **room correction should not require choosing between accuracy and usability**.
+
+They allow CamillaFIR to deliver **high-quality correction while remaining practical for real listening systems**.
 
 #### Asymmetric Linear
 
