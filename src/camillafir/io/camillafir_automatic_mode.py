@@ -277,6 +277,18 @@ AUTO_MODE_BUILTIN_TARGETS = (
     "Flat",
     "Cinema",
 )
+AUTO_MODE_BUILTIN_TARGET_LOOKUP = {
+    str(name).strip().lower(): str(name).strip()
+    for name in AUTO_MODE_BUILTIN_TARGETS
+}
+
+
+def _auto_builtin_target_name(hc_mode: str | None) -> str | None:
+    """Return canonical built-in target name or None for non built-ins."""
+    key = str(hc_mode or "").strip().lower()
+    if not key:
+        return None
+    return AUTO_MODE_BUILTIN_TARGET_LOOKUP.get(key)
 
 
 def _auto_hash_array(a: np.ndarray, *, decimals: int = 4, max_len: int = 1200) -> str:
@@ -543,7 +555,7 @@ def _auto_cache_get_best_target(
     if not isinstance(entry, dict):
         return None
     hc = str(entry.get("best_target_curve", entry.get("best_hc_mode", "")) or "").strip()
-    return hc or None
+    return _auto_builtin_target_name(hc)
 
 
 def _auto_cache_get_target_for_measurements(
@@ -1334,6 +1346,7 @@ def _auto_select_target_curve_with_trials(
             )
             or ""
         ).strip()
+        cached_hc = _auto_builtin_target_name(cached_hc)
         if cached_hc:
             try:
                 c_f, c_m = get_house_curve_by_name(cached_hc)
@@ -1382,6 +1395,7 @@ def _auto_select_target_curve_with_trials(
                 filter_key=filter_key,
                 program_version=program_version,
             )
+            cached_hc = _auto_builtin_target_name(cached_hc)
             if cached_hc:
                 try:
                     c_f, c_m = get_house_curve_by_name(cached_hc)
@@ -4568,6 +4582,7 @@ def _run_auto_mode_search(
     if bool(AUTO_MODE_CACHE_ENABLED):
         try:
             best_hc_mode = str(search_base_data.get("hc_mode", "") or "").strip() or None
+            best_hc_mode_builtin = _auto_builtin_target_name(best_hc_mode)
             measurement_sig = _auto_measurement_signature(measurements)
             sig = _auto_signature(
                 base_data=search_base_data,
@@ -4603,7 +4618,7 @@ def _run_auto_mode_search(
                 sig_target,
                 best_preset=dict(best_preset or {}),
                 best_metrics=dict(best_metrics or {}),
-                best_hc_mode=best_hc_mode,
+                best_hc_mode=best_hc_mode_builtin,
                 measurement_sig=measurement_sig,
                 goal=goal,
                 filter_key=filter_key,
@@ -4611,7 +4626,7 @@ def _run_auto_mode_search(
             )
             _auto_cache_put_target_for_measurements(
                 measurements=measurements,
-                best_hc_mode=best_hc_mode,
+                best_hc_mode=best_hc_mode_builtin,
                 best_preset=dict(best_preset or {}),
                 best_metrics=dict(best_metrics or {}),
                 goal=goal,

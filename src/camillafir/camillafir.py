@@ -236,6 +236,40 @@ def _pick_target_curve_label(data: dict) -> str:
         return src
     return "Target"
 
+
+def _has_uploaded_target_file(data: dict) -> bool:
+    """Checks if UI data contains an uploaded custom target file."""
+    try:
+        up = data.get("hc_custom_file", None)
+    except Exception:
+        up = None
+
+    def _is_uploaded_file_obj(v: typing.Any) -> bool:
+        if not isinstance(v, dict):
+            return False
+        try:
+            content = v.get("content", None)
+            if isinstance(content, (bytes, bytearray)) and len(content) > 0:
+                return True
+        except Exception:
+            pass
+        for k in ("filename", "name", "file_name"):
+            try:
+                s = str(v.get(k, "") or "").strip()
+            except Exception:
+                s = ""
+            if s:
+                return True
+        return False
+
+    if _is_uploaded_file_obj(up):
+        return True
+    if isinstance(up, list):
+        for item in up:
+            if _is_uploaded_file_obj(item):
+                return True
+    return False
+
 def _resolve_ui_stats_fs(ui_stats_fs: typing.Any, selected_fs: typing.Any) -> int:
     """
     Valitsee UI-statistiikalle oikean sample raten.
@@ -522,15 +556,21 @@ def process_run():
 
             hc_mode_raw = str(data.get("hc_mode", "") or "").strip().lower()
             has_local_target = bool(str(data.get("local_path_house", "") or "").strip())
+            has_upload_target = _has_uploaded_target_file(data)
+            wants_custom_target = bool(("upload" in hc_mode_raw) or ("custom" in hc_mode_raw))
             use_user_target = bool(
-                ("upload" in hc_mode_raw)
-                or ("custom" in hc_mode_raw)
-                or has_local_target
+                has_local_target
+                or (wants_custom_target and has_upload_target)
             )
             if use_user_target:
                 data.pop("_auto_target_seed_preset", None)
                 _status("CamillaFIR automatic mode: using user target curve (skip built-in target comparison)")
             else:
+                if wants_custom_target and not has_local_target:
+                    _status(
+                        "CamillaFIR automatic mode: custom target selected but no file found, "
+                        "using built-in target comparison"
+                    )
                 pre_target_rates = choose_target_rates(data)
                 pre_fs = int(pre_target_rates[0]) if pre_target_rates else int(data.get("fs", 44100) or 44100)
                 if bool(data.get("multi_rate_opt", False)):
