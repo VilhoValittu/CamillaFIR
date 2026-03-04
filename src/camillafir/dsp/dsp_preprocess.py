@@ -39,7 +39,7 @@ def analysis_smoothing_lf_to_hf(
     return (1.0 - w) * m_low + w * m_high
 
 
-def run_preprocess(freqs, meas_mags, raw_phases, cfg) -> PreprocessResult:
+def run_preprocess(freqs, meas_mags, raw_phases, cfg, *, stereo_link_ctx=None) -> PreprocessResult:
     min_len = min(len(freqs), len(meas_mags), len(raw_phases))
     f_in = np.asarray(freqs[:min_len], dtype=float)
     m_in = np.asarray(meas_mags[:min_len], dtype=float)
@@ -121,7 +121,7 @@ def run_preprocess(freqs, meas_mags, raw_phases, cfg) -> PreprocessResult:
                 offset_method_cmp,
                 s_min_cmp,
                 s_max_cmp,
-            ) = compute_leveling(cfg, freq_cmp, m_cmp_raw, target_cmp)
+            ) = compute_leveling(cfg, freq_cmp, m_cmp_raw, target_cmp, stereo_link_ctx=stereo_link_ctx)
 
             filt_cmp = np.interp(freq_cmp, freq_axis, gain_db)
 

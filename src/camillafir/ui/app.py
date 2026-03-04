@@ -1,4 +1,5 @@
 import logging
+import re
 
 from pywebio import config
 from pywebio.output import put_button, put_markdown, put_text, use_scope
@@ -14,6 +15,7 @@ _PROCESS_RUN = None
 PROGRAM_NAME = "CamillaFIR"
 VERSION = ""
 MAX_SAFE_BOOST = 8.0
+_STATUS_BASE_MSG = ""
 
 
 def build_app(*, process_run, PROGRAM_NAME: str, VERSION: str, MAX_SAFE_BOOST: float):
@@ -26,7 +28,33 @@ def build_app(*, process_run, PROGRAM_NAME: str, VERSION: str, MAX_SAFE_BOOST: f
     return main
 
 
+def _status_base_from_text(msg) -> str:
+    try:
+        s = str(msg or "").strip()
+    except Exception:
+        s = ""
+    if not s:
+        return "CamillaFIR running"
+    # Remove trailing elapsed suffix like " | 123.4 s" for timer refresh.
+    try:
+        s = re.sub(r"\s*\|\s*\d+(?:\.\d+)?\s*s\s*$", "", s, flags=re.IGNORECASE)
+    except Exception:
+        pass
+    s = str(s or "").strip()
+    return s or "CamillaFIR running"
+
+
+def get_status_base_message(default: str = "CamillaFIR running") -> str:
+    try:
+        v = str(_STATUS_BASE_MSG or "").strip()
+    except Exception:
+        v = ""
+    return v or str(default)
+
+
 def update_status(msg):
+    global _STATUS_BASE_MSG
+    _STATUS_BASE_MSG = _status_base_from_text(msg)
     with use_scope("status_area", clear=True):
         put_text(msg).style("font-weight: bold; color: #4CAF50; margin-bottom: 10px;")
 

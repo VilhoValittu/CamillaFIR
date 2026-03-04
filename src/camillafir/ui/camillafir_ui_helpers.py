@@ -142,6 +142,7 @@ def update_basic_clamp_hints_ui(*, pin, pin_update, t):
         ("low_bass_cut_enable", "low_bass_cut_enable", lambda: t("low_bass_cut_hint")),
         ("low_bass_cut_hz", "low_bass_cut_hz", lambda: t("low_bass_cut_hz_help")),
         ("stereo_link", "stereo_link", lambda: t("link_help")),
+        ("stereo_link_strategy", "stereo_link_strategy", lambda: t("stereo_link_mode_help")),
     ]
 
     for cfg_key, pin_key, base_fn in fields:
@@ -179,6 +180,12 @@ def update_ir_tukey_ui(_=None):
         allow_ir = bool(is_linear or is_asym_filter)
 
         sh = str(_p("ir_export_window_shape", "hann") or "hann").strip().lower()
+        if is_asym_filter and sh != "tukey":
+            try:
+                pin_update("ir_export_window_shape", value="tukey")
+            except Exception:
+                pass
+            sh = "tukey"
         is_tukey = (sh == "tukey")
 
         try:
@@ -186,6 +193,12 @@ def update_ir_tukey_ui(_=None):
         except Exception:
             a = 0.25
         if not np.isfinite(a):
+            a = 0.25
+        if is_asym_filter and abs(float(a) - 0.25) > 1e-9:
+            try:
+                pin_update("ir_export_tukey_alpha", value=0.25)
+            except Exception:
+                pass
             a = 0.25
         a = float(np.clip(a, 0.0, 1.0))
 
@@ -200,7 +213,7 @@ def update_ir_tukey_ui(_=None):
                 value=a,
                 help_text=t("ir_export_tukey_alpha_help"),
             )
-            if not is_tukey:
+            if (not is_tukey) or is_asym_filter:
                 w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
     except Exception:
         pass
@@ -239,13 +252,14 @@ def update_ir_export_window_mode_ui(_=None):
 
         cur = str(_p("ir_export_window_mode", "auto") or "auto").strip().lower()
 
-        if is_basic and cur != "auto":
-            try:
-                pin_update("ir_export_window_mode", value="auto")
-            except Exception:
-                pass
-            cur = "auto"
-        if is_asym_filter and cur != "auto":
+        if is_asym_filter:
+            if cur != "rew_asym":
+                try:
+                    pin_update("ir_export_window_mode", value="rew_asym")
+                except Exception:
+                    pass
+                cur = "rew_asym"
+        elif is_basic and cur != "auto":
             try:
                 pin_update("ir_export_window_mode", value="auto")
             except Exception:
@@ -260,7 +274,7 @@ def update_ir_export_window_mode_ui(_=None):
             cur = "auto"
 
 
-        if (not is_linear) and (cur == "rew_asym"):
+        if (not is_linear) and (not is_asym_filter) and (cur == "rew_asym"):
             try:
                 pin_update("ir_export_window_mode", value="auto")
             except Exception:
@@ -280,7 +294,9 @@ def update_ir_export_window_mode_ui(_=None):
             )
             if lock_window_mode:
                 w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
-            js_disable = "true" if (lock_window_mode or (not is_linear)) else "false"
+            js_linear_only = bool((not is_linear) and (not is_asym_filter))
+            js_disable = "true" if (lock_window_mode or js_linear_only) else "false"
+            js_suffix = "(Linear only)" if js_linear_only else "(Locked)"
             put_html(f"""
 <script>
 (function() {{
@@ -293,12 +309,12 @@ def update_ir_export_window_mode_ui(_=None):
     opt.disabled = {js_disable};
 
     // Optional: add a hint to the label when disabled/enabled (avoid duplicating)
-    var base = opt.textContent.replace(/\\s*\\(Linear only\\)\\s*$/,'');
-    if({js_disable}) opt.textContent = base + " (Linear only)";
+    var base = opt.textContent.replace(/\\s*\\((Linear only|Locked)\\)\\s*$/,'');
+    if({js_disable}) opt.textContent = base + " {js_suffix}";
     else opt.textContent = base;
 
     // If somehow selected while disabled (older browser state), force select back to auto
-    if(opt.disabled && sel.value === "rew_asym") {{
+    if(opt.disabled && sel.value === "rew_asym" && {str(is_asym_filter).lower()} === false) {{
       sel.value = "auto";
     }}
   }} catch(e) {{}}
@@ -309,13 +325,14 @@ def update_ir_export_window_mode_ui(_=None):
                 msg_ = t("ir_asym_linear_only")
                 
             except Exception:
-                pass
+                msg_ = ""
 
-            emph = bool(is_basic or (not is_linear))
+            emph = bool((not is_asym_filter) and (is_basic or (not is_linear)))
             opacity = "1.0" if emph else "0.55"
             color = "#ffb74d" if emph else "#9aa0a6"
 
-            put_html(f"""
+            if str(msg_ or "").strip():
+                put_html(f"""
 <div style="
   margin-top:6px;
   font-size:12.5px;
@@ -424,6 +441,17 @@ def update_ir_window_shape_ui(_=None):
     try:
         mode = str(_p("ir_export_window_mode", "auto") or "auto").strip().lower()
         m = str(_p("mode", "BASIC") or "BASIC").strip().upper()
+        ft = str(_p("filter_type", "") or "").strip().lower()
+        try:
+            ft_asym_label = str(t("ft_asymmetric") or "").strip().lower()
+        except Exception:
+            ft_asym_label = "asymmetric"
+        is_asym_filter = (ft == ft_asym_label) or ("asym" in ft)
+        if is_asym_filter and str(_p("ir_export_window_shape", "hann") or "hann").strip().lower() != "tukey":
+            try:
+                pin_update("ir_export_window_shape", value="tukey")
+            except Exception:
+                pass
         is_basic = m in ("BASIC", "AUTO")
         is_auto = (mode == "auto") or is_basic
 
@@ -439,7 +467,7 @@ def update_ir_window_shape_ui(_=None):
                 help_text=t('ir_export_window_shape_help'),
             )
 
-            if is_auto:
+            if is_auto or is_asym_filter:
                 w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
     except Exception:
         pass
@@ -701,6 +729,7 @@ def apply_mode_defaults_to_ui(_=None):
         "plot_smoothing_level": "plot_smoothing_level",
         "lvl_mode": "lvl_mode",
         "lvl_algo": "lvl_algo",
+        "stereo_link_strategy": "stereo_link_strategy",
     }
     map_chk = {
         "enable_mag_correction": "mag_correct",

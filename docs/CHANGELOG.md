@@ -4,6 +4,21 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.5.0] - 2026-03-04
+
+### Automatic mode (core)
+- Added deterministic seeding based on *measurements + key settings* so auto-mode trials are reproducible across runs (same input -> same trial sequence). 
+- Upgraded auto-mode cache schema to `v=3` and made it **filter-type aware** (separate buckets for `linear`, `mixed`, `minimum`, `asym`) to prevent cross-filter contamination.
+- Added cache **version mismatch** handling: if cached program version differs, cache is ignored and a fresh search is run (with a clear log line).
+- Added filter-specific **last-used preset** fallback seeding (per `auto_goal`) when a signature match is not found.
+
+### Automatic mode (search / scoring)
+- Added **Phase2 hard-gate** (pre-Pareto) to remove obvious bad candidates by event severity / ripple before building the Pareto front; improves consistency on difficult data without adding trials.
+- Added **adaptive search-space shrinking** (derived from phase-1 stability) for phase-2 local refinement, plus an optional **phase-3 micro-refine** pass around the best anchors.
+- Added optional **dual-mode detection** (two dominant LF resonances) and mode-ripple-aware scoring/penalties so secondary room modes don’t slip through.
+
+---
+
 ## [3.4.2] - 2026-03-03
 
 ### Core
@@ -11,6 +26,8 @@ All notable changes to **CamillaFIR** are documented in this file.
 - Automatic mode now stores selected target curve in cache (`best_target_curve` / `best_hc_mode`) together with best preset metadata.
 - Added measurement-signature based target cache map (`target_by_measurement`) so identical measurements can reuse previous target choice and skip repeated target-curve trial optimization.
 - Extended cache entries with `measurement_sig` and bumped cache schema marker to `v=2`.
+- Added automatic HPF estimation from measured speaker LF response (AUTO mode), including frequency/slope fit with confidence gating.
+- Tuned automatic HPF fitting robustness for real-room responses (trimmed residual fit + conservative slope fallback near LF floor), improving auto-enable and reducing false low-confidence outcomes.
 
 ### Target Selection
 - Added optional one-step milder target preference for built-in bass ladders (`Harman*`, `BK_*`) to avoid consistently biasing toward the bass-heaviest curve.

@@ -7,6 +7,7 @@ from camillafir.config.models import FilterConfig
 from .dsp_correction import run_correction_stage
 from .dsp_phase_ir import run_phase_ir_stage
 from .dsp_preprocess import run_preprocess
+from .camillafir_leveling import StereoLinkContext
 from .dsp_utils import cfg_float_allow_zero as _cfg_float_allow_zero
 from .dsp_utils import safe_range as _safe_range
 
@@ -253,8 +254,8 @@ def interpolate_response(input_freqs, input_values, target_freqs):
     return np.interp(target_freqs, input_freqs, input_values)
 
 
-def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
-    prep = run_preprocess(freqs, meas_mags, raw_phases, cfg)
+def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig, *, stereo_link_ctx: StereoLinkContext | None = None):
+    prep = run_preprocess(freqs, meas_mags, raw_phases, cfg, stereo_link_ctx=stereo_link_ctx)
     f_in = prep.f_in
     m_in = prep.m_in
     n_fft = prep.ctx.n_fft
@@ -295,6 +296,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig):
         apply_confidence_weighted_target_pull_fn=apply_confidence_weighted_target_pull,
         stage_probe_fn=_stage_probe,
         cfg_float_allow_zero_fn=_cfg_float_allow_zero,
+        stereo_link_ctx=stereo_link_ctx,
     )
 
     current_rt60 = corr["current_rt60"]
@@ -848,7 +850,10 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
     Jos `stereo_link` on paalla, toteutus tekee kaksivaiheisen ajon:
     1) alustava ajo molemmille kanaville (ikkuna + offset-arviot)
     2) yhteisen offsetin ja mahdollisen auto-gain-overriden laskenta
-    3) uusi ajo molemmille kanaville samoilla pakotetuilla arvoilla
+    3) uusi ajo strategian mukaan:
+       - shared: sama ikkuna + sama offset molemmille
+       - hybrid: kanavakohtainen ikkuna + sama offset molemmille
+       - auto: guard-valinta shared/hybrid
 
     Palauttaa `(l_imp, l_stats, r_imp, r_stats)`.
     """
@@ -857,32 +862,72 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
         r_imp, r_st = generate_filter(f_r, m_r, p_r, cfg)
         return l_imp, l_st, r_imp, r_st
 
-    cfg1 = copy.deepcopy(cfg)
-    try:
-        cfg1.stereo_link = False
-        cfg1.lvl_force_window = None
-        cfg1.lvl_force_offset_db = None
-    except Exception:
-        pass
+    l_imp1, l_st1 = generate_filter(f_l, m_l, p_l, cfg)
+    r_imp1, r_st1 = generate_filter(f_r, m_r, p_r, cfg)
 
-    l_imp1, l_st1 = generate_filter(f_l, m_l, p_l, cfg1)
-    r_imp1, r_st1 = generate_filter(f_r, m_r, p_r, cfg1)
+    def _as_stat_float(st: dict | None, key: str, default=np.nan) -> float:
+        try:
+            if isinstance(st, dict):
+                v = float(st.get(key, default))
+                return v if np.isfinite(v) else float(default)
+        except Exception:
+            pass
+        return float(default)
 
-    mode = str(getattr(cfg1, "lvl_mode", "Auto") or "Auto")
+    lvl_min = float(getattr(cfg, "lvl_min", 200.0) or 200.0)
+    lvl_max = float(getattr(cfg, "lvl_max", 3000.0) or 3000.0)
+
+    mode = str(getattr(cfg, "lvl_mode", "Auto") or "Auto")
     if "Manual" in mode:
-        win = [float(getattr(cfg1, "lvl_min", 200.0) or 200.0), float(getattr(cfg1, "lvl_max", 3000.0) or 3000.0)]
+        win_l = [lvl_min, lvl_max]
+        win_r = [lvl_min, lvl_max]
     else:
-        win = _safe_range((l_st1 or {}).get("smart_scan_range"), getattr(cfg1, "lvl_min", 200.0), getattr(cfg1, "lvl_max", 3000.0))
-        if not (win[1] > win[0]):
-            win = _safe_range((r_st1 or {}).get("smart_scan_range"), getattr(cfg1, "lvl_min", 200.0), getattr(cfg1, "lvl_max", 3000.0))
+        win_l = _safe_range((l_st1 or {}).get("smart_scan_range"), lvl_min, lvl_max)
+        win_r = _safe_range((r_st1 or {}).get("smart_scan_range"), lvl_min, lvl_max)
+
+    win_shared = list(win_l)
+    if not (win_shared[1] > win_shared[0]):
+        win_shared = list(win_r)
+    if not (win_shared[1] > win_shared[0]):
+        win_shared = [lvl_min, lvl_max]
 
     off_l = float((l_st1 or {}).get("offset_db", 0.0) or 0.0)
     off_r = float((r_st1 or {}).get("offset_db", 0.0) or 0.0)
     off_shared = 0.5 * (off_l + off_r)
+    tgt_l = _as_stat_float(l_st1, "eff_target_db", np.nan)
+    tgt_r = _as_stat_float(r_st1, "eff_target_db", np.nan)
+    if np.isfinite(tgt_l) and np.isfinite(tgt_r):
+        target_shared = 0.5 * (float(tgt_l) + float(tgt_r))
+    elif np.isfinite(tgt_l):
+        target_shared = float(tgt_l)
+    elif np.isfinite(tgt_r):
+        target_shared = float(tgt_r)
+    else:
+        target_shared = None
+
+    try:
+        strategy_req = str(getattr(cfg, "stereo_link_strategy", "shared") or "shared").strip().lower()
+    except Exception:
+        strategy_req = "shared"
+    if strategy_req not in ("shared", "hybrid", "auto"):
+        strategy_req = "shared"
+
+    tilt_l = _as_stat_float(l_st1, "tilt_slope_db_per_oct", np.nan)
+    tilt_r = _as_stat_float(r_st1, "tilt_slope_db_per_oct", np.nan)
+    off_diff = abs(float(off_l) - float(off_r))
+    tilt_diff = abs(float(tilt_l) - float(tilt_r)) if (np.isfinite(tilt_l) and np.isfinite(tilt_r)) else 0.0
+    tilt_abs_max = max(abs(float(tilt_l)) if np.isfinite(tilt_l) else 0.0, abs(float(tilt_r)) if np.isfinite(tilt_r) else 0.0)
+
+    guard_triggered = bool(
+        (off_diff > 1.5)
+        or (tilt_diff > 0.7)
+        or (tilt_abs_max > 1.2)
+    )
+    strategy_resolved = "hybrid" if (strategy_req == "auto" and guard_triggered) else ("shared" if strategy_req == "auto" else strategy_req)
 
     shared_auto_gain_db = None
     try:
-        margin_db = float(getattr(cfg1, "auto_gain_margin_db", getattr(cfg1, "global_gain_db", 0.0)) or 0.0)
+        margin_db = float(getattr(cfg, "auto_gain_margin_db", getattr(cfg, "global_gain_db", 0.0)) or 0.0)
     except Exception:
         margin_db = 0.0
     if (not np.isfinite(margin_db)) or (margin_db < 0.0):
@@ -904,27 +949,67 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
     cfg2 = copy.deepcopy(cfg)
     try:
         cfg2.stereo_link = False
-        cfg2.lvl_force_window = (float(win[0]), float(win[1]))
-        cfg2.lvl_force_offset_db = float(off_shared)
         if shared_auto_gain_db is not None and np.isfinite(shared_auto_gain_db):
             cfg2.auto_gain_db_override = float(shared_auto_gain_db)
     except Exception:
         pass
 
-    l_imp2, l_st2 = generate_filter(f_l, m_l, p_l, cfg2)
-    r_imp2, r_st2 = generate_filter(f_r, m_r, p_r, cfg2)
+    if strategy_resolved == "hybrid":
+        stereo_ctx_l = StereoLinkContext(
+            forced_window_hz=(float(win_l[0]), float(win_l[1])),
+            forced_offset_db=float(off_shared),
+            shared_target_level_db=(float(target_shared) if target_shared is not None else None),
+        )
+        stereo_ctx_r = StereoLinkContext(
+            forced_window_hz=(float(win_r[0]), float(win_r[1])),
+            forced_offset_db=float(off_shared),
+            shared_target_level_db=(float(target_shared) if target_shared is not None else None),
+        )
+    else:
+        stereo_ctx = StereoLinkContext(
+            forced_window_hz=(float(win_shared[0]), float(win_shared[1])),
+            forced_offset_db=float(off_shared),
+            shared_target_level_db=(float(target_shared) if target_shared is not None else None),
+        )
+        stereo_ctx_l = stereo_ctx
+        stereo_ctx_r = stereo_ctx
+
+    l_imp2, l_st2 = generate_filter(f_l, m_l, p_l, cfg2, stereo_link_ctx=stereo_ctx_l)
+    r_imp2, r_st2 = generate_filter(f_r, m_r, p_r, cfg2, stereo_link_ctx=stereo_ctx_r)
 
     try:
         if isinstance(l_st2, dict):
-            l_st2["offset_method"] = str(l_st2.get("offset_method", "")) + " (StereoLinkShared)"
+            mode_tag = "StereoLinkHybrid" if strategy_resolved == "hybrid" else "StereoLinkShared"
+            l_st2["offset_method"] = str(l_st2.get("offset_method", "")) + f" ({mode_tag})"
+            l_st2["stereo_link_mode"] = str(strategy_resolved)
+            l_st2["stereo_link_requested_mode"] = str(strategy_req)
+            l_st2["stereo_link_guard_triggered"] = bool(strategy_req == "auto" and guard_triggered)
+            l_st2["stereo_link_guard_off_diff_db"] = float(off_diff)
+            l_st2["stereo_link_guard_tilt_diff_db_per_oct"] = float(tilt_diff)
+            l_st2["stereo_link_guard_tilt_abs_max_db_per_oct"] = float(tilt_abs_max)
             l_st2["stereo_link_shared_offset_db"] = float(off_shared)
-            l_st2["stereo_link_shared_window"] = [float(win[0]), float(win[1])]
+            if target_shared is not None and np.isfinite(float(target_shared)):
+                l_st2["stereo_link_shared_target_level_db"] = float(target_shared)
+            l_st2["stereo_link_window_used"] = [float(win_l[0]), float(win_l[1])] if strategy_resolved == "hybrid" else [float(win_shared[0]), float(win_shared[1])]
+            if strategy_resolved != "hybrid":
+                l_st2["stereo_link_shared_window"] = [float(win_shared[0]), float(win_shared[1])]
             if shared_auto_gain_db is not None and np.isfinite(shared_auto_gain_db):
                 l_st2["stereo_link_shared_auto_gain_db"] = float(shared_auto_gain_db)
         if isinstance(r_st2, dict):
-            r_st2["offset_method"] = str(r_st2.get("offset_method", "")) + " (StereoLinkShared)"
+            mode_tag = "StereoLinkHybrid" if strategy_resolved == "hybrid" else "StereoLinkShared"
+            r_st2["offset_method"] = str(r_st2.get("offset_method", "")) + f" ({mode_tag})"
+            r_st2["stereo_link_mode"] = str(strategy_resolved)
+            r_st2["stereo_link_requested_mode"] = str(strategy_req)
+            r_st2["stereo_link_guard_triggered"] = bool(strategy_req == "auto" and guard_triggered)
+            r_st2["stereo_link_guard_off_diff_db"] = float(off_diff)
+            r_st2["stereo_link_guard_tilt_diff_db_per_oct"] = float(tilt_diff)
+            r_st2["stereo_link_guard_tilt_abs_max_db_per_oct"] = float(tilt_abs_max)
             r_st2["stereo_link_shared_offset_db"] = float(off_shared)
-            r_st2["stereo_link_shared_window"] = [float(win[0]), float(win[1])]
+            if target_shared is not None and np.isfinite(float(target_shared)):
+                r_st2["stereo_link_shared_target_level_db"] = float(target_shared)
+            r_st2["stereo_link_window_used"] = [float(win_r[0]), float(win_r[1])] if strategy_resolved == "hybrid" else [float(win_shared[0]), float(win_shared[1])]
+            if strategy_resolved != "hybrid":
+                r_st2["stereo_link_shared_window"] = [float(win_shared[0]), float(win_shared[1])]
             if shared_auto_gain_db is not None and np.isfinite(shared_auto_gain_db):
                 r_st2["stereo_link_shared_auto_gain_db"] = float(shared_auto_gain_db)
     except Exception:

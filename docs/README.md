@@ -1,10 +1,91 @@
 # CamillaFIR by Vilho Valittu
 
-## v3.4.2
+## v3.5.0
+
 Stable release - feedback welcome: camillafir.py@gmail.com
 
 CamillaFIR generates high-resolution FIR room-correction filters from REW exports
 (magnitude + phase) and WAV/IR measurements.
+
+## v3.5.0 Highlights - Automatic mode consistency & reproducibility
+
+- **Deterministic auto-mode trials:** same measurements + same key settings now produce the same trial sequence and typically the same winner.
+- **Smarter auto-mode cache:** filter-type aware cache buckets + version mismatch handling for safer reuse across updates.
+- **Better results on hard rooms:** phase-2 hard gate (severity/ripple) before Pareto + adaptive search-space shrinking + a final micro-refine pass.
+- **Improved mode handling:** optional dual-mode (two LF resonances) detection and mode-ripple-aware scoring.
+
+---
+
+## Automatic mode notes
+
+### Deterministic optimisation
+
+From **v3.5.0**, automatic mode uses deterministic seeding derived from the
+input measurements and key optimisation settings.  
+
+This means:
+
+- Running the optimisation again with the **same data and settings** will typically produce the **same result**.
+- Changing key parameters (goal, filter type, boost limit, etc.) produces a different optimisation sequence.
+
+This makes results easier to reproduce and compare.
+
+## Automatic mode goals explained
+
+Automatic mode can optimise the filter using different **goals** depending
+on the listening preference and room characteristics.
+
+| Goal | Description | Typical use |
+|-----|-----|-----|
+| **flat** | Prioritises the flattest possible frequency response. | Measurements, neutral monitoring, analysis. |
+| **room-safe** | Conservative variant that prioritises stability and avoids aggressive boosts in difficult room regions. | Difficult rooms where safety/stability is the priority. |
+| **low-ripple** | Minimises ripple around dominant room modes and keeps the LF region smoother. | Rooms with strong bass resonances. |
+| **balanced** | Compromise between flat response, ripple control and boost limits. | Recommended default for most rooms. |
+
+Automatic mode internally evaluates multiple candidate filters and selects
+the one that best matches the chosen goal while respecting stability and
+boost constraints.
+
+In difficult rooms the optimiser may slightly sacrifice perfect flatness in
+order to achieve a **more stable and natural sounding result**, especially in
+the low-frequency region.
+
+---
+
+### Auto-mode cache
+
+Automatic mode stores its best results in a small cache file:
+
+```
+~/.camillafir/camillafir_auto_mode_cache.json
+```
+
+The cache helps the optimiser start closer to a good solution on future runs.
+
+Starting from **v3.5.0**:
+
+- Cache entries are **filter-type specific** (`linear`, `mixed`, `minimum`, `asym`)
+- Cache entries are tied to the **program version**
+- If the version does not match, the cache entry is automatically ignored
+
+### When to clear the auto-mode cache
+
+In most cases the cache improves optimisation speed and consistency and
+does **not** need to be touched.
+
+However, clearing the cache can be useful if:
+
+- You changed the **measurement method** significantly (different mic positions, averaging method, etc.)
+- The **speaker or room setup** changed
+- You want to force the optimiser to explore the **full search space again**
+
+To reset the cache, simply delete the file:
+
+```
+~/.camillafir/camillafir_auto_mode_cache.json
+```
+
+The next automatic-mode run will recreate it automatically.
 
 ## v3.4.0 Highlights - CamillaFIR automatic mode
 

@@ -38,6 +38,7 @@ def run_correction_stage(
     apply_confidence_weighted_target_pull_fn,
     stage_probe_fn,
     cfg_float_allow_zero_fn,
+    stereo_link_ctx=None,
 ):
     # Vaihe 1.1: julkinen rajapinta pidetaan ennallaan, mutta data paketoidaan.
     inputs = CorrectionInputs(
@@ -55,6 +56,7 @@ def run_correction_stage(
         gain_db=gain_db,
         conf_mask=conf_mask,
         complex_meas=complex_meas,
+        stereo_link_ctx=stereo_link_ctx,
         logger=logger,
         interpolate_response_fn=interpolate_response_fn,
         apply_confidence_weighted_target_pull_fn=apply_confidence_weighted_target_pull_fn,
@@ -80,6 +82,7 @@ def _run_correction_stage(inputs: CorrectionInputs) -> CorrectionOutputs:
     gain_db = inputs.gain_db
     conf_mask = inputs.conf_mask
     complex_meas = inputs.complex_meas
+    stereo_link_ctx = inputs.stereo_link_ctx
     logger = inputs.logger
     interpolate_response_fn = inputs.interpolate_response_fn
     apply_confidence_weighted_target_pull_fn = inputs.apply_confidence_weighted_target_pull_fn
@@ -110,6 +113,7 @@ def _run_correction_stage(inputs: CorrectionInputs) -> CorrectionOutputs:
         logger=logger,
         interpolate_response=interpolate_response,
         _cfg_float_allow_zero=_cfg_float_allow_zero,
+        stereo_link_ctx=stereo_link_ctx,
     )
     current_rt60 = baseline.current_rt60
     rt60_bands = baseline.rt60_bands

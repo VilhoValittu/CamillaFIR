@@ -37,7 +37,51 @@ def configure_engine_hooks(*, process_run=None):
 
 def on_start_click():
     if callable(_PROCESS_RUN_HOOK):
-        return _PROCESS_RUN_HOOK()
+        import threading
+        import time
+
+        stop_evt = threading.Event()
+        run_started_at = time.perf_counter()
+
+        def _timer_tick():
+            try:
+                from . import app as _app
+            except Exception:
+                return
+            while not stop_evt.wait(1.0):
+                try:
+                    base = _app.get_status_base_message(default="CamillaFIR running")
+                    elapsed = max(0.0, float(time.perf_counter() - run_started_at))
+                    _app.update_status(f"{base} | {elapsed:.1f} s")
+                except Exception:
+                    pass
+
+        try:
+            from pywebio.session import register_thread
+        except Exception:
+            register_thread = None
+
+        timer_thread = threading.Thread(
+            target=_timer_tick,
+            name="camillafir_status_timer",
+            daemon=True,
+        )
+        try:
+            if callable(register_thread):
+                register_thread(timer_thread)
+        except Exception:
+            pass
+        timer_thread.start()
+
+        try:
+            try:
+                from . import app as _app
+                _app.update_status("CamillaFIR running | 0.0 s")
+            except Exception:
+                pass
+            return _PROCESS_RUN_HOOK()
+        finally:
+            stop_evt.set()
     return None
 
 
@@ -160,7 +204,9 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
     def _refresh_ir_window_controls(_=None):
         try:
             m = str(_pin_get("mode", "BASIC") or "BASIC").strip().upper()
-            if m in ("BASIC", "AUTO"):
+            ft = str(_pin_get("filter_type", "") or "").strip().lower()
+            is_asym_filter = ("asym" in ft)
+            if m in ("BASIC", "AUTO") and (not is_asym_filter):
                 if str(pin.get("ir_export_window_mode", "") or "").lower() != "auto":
                     pin_update("ir_export_window_mode", value="auto")
         except Exception:

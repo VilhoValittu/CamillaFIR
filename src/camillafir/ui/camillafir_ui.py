@@ -335,6 +335,9 @@ def _render_results(
             events_n = _ai(bm.get("events_total", 0), 0)
             events_sev = _af(bm.get("events_severity", 0.0), 0.0)
             lr_delta = _af(bm.get("lr_delta_score", 0.0), 0.0)
+            prepost = _af(bm.get("ir_pre_post_energy_ratio_max", float("nan")), float("nan"))
+            mode_ripple = _af(bm.get("mode_ripple_db", float("nan")), float("nan"))
+            lf_rms_20_200 = _af(bm.get("realized_rms_20_200_db", float("nan")), float("nan"))
 
             put_markdown("### CamillaFIR automatic mode - why this preset won")
             put_info(
@@ -343,48 +346,65 @@ def _render_results(
                 f"events {events_n}, event_sev {events_sev:.2f}, "
                 f"L/R delta {lr_delta:.3f} (trials {trials_ok}/{trials_total})."
             )
+            put_markdown(
+                "Selection order: **Rank score** -> **avg score** -> **pre/post ratio** -> "
+                "**mode ripple** -> **LF RMS (20-200 Hz)** -> **net boost**."
+            )
 
             best_rows = [
                 ["Metric", "Best preset"],
-                ["Rank score", f"{rank_sc:.3f}/100"],
+                ["Rank score (primary)", f"{rank_sc:.3f}/100"],
                 ["Average acoustic score", f"{avg_sc:.3f}"],
+                ["Pre/post energy ratio (max)", f"{prepost:.4f}" if prepost == prepost else "n/a"],
+                ["Mode ripple", f"{mode_ripple:.3f} dB" if mode_ripple == mode_ripple else "n/a"],
+                ["LF RMS 20-200 Hz", f"{lf_rms_20_200:.3f} dB" if lf_rms_20_200 == lf_rms_20_200 else "n/a"],
+                ["Max net boost", f"{boost_db:.2f} dB"],
+                ["L/R delta", f"{lr_delta:.3f}"],
                 ["DSP penalty", f"{dsp_pen:.2f}"],
                 ["Excursion penalty", f"{exc_pen:.2f}"],
-                ["Max net boost", f"{boost_db:.2f} dB"],
-                ["Events", f"{events_n}"],
-                ["Event severity", f"{events_sev:.2f}"],
-                ["L/R delta", f"{lr_delta:.3f}"],
+                ["Events / severity", f"{events_n} / {events_sev:.2f}"],
             ]
             put_table(best_rows)
 
             if top:
+                rank_best = max((_af(dict(it.get("metrics", {}) or {}).get("rank_score", 0.0), 0.0) for it in top), default=rank_sc)
+                if rank_best > (rank_sc + 1e-6):
+                    put_info(
+                        "Note: Top-5 below is rank-ordered. Final winner may differ when Pareto tie-break "
+                        "prefers cleaner pre/post, lower ripple or lower LF RMS."
+                    )
                 top_rows = [[
                     "#",
                     "Trial",
                     "Rank",
                     "Avg",
+                    "Pre/post",
+                    "Mode ripple",
+                    "LF RMS 20-200",
+                    "Boost dB",
+                    "L/R delta",
                     "DSP pen",
                     "Exc pen",
-                    "Boost dB",
-                    "Events",
-                    "Event sev",
-                    "L/R delta",
                 ]]
                 for idx, item in enumerate(top[:5], start=1):
                     m = dict(item.get("metrics", {}) or {})
+                    prepost_t = _af(m.get("ir_pre_post_energy_ratio_max", float("nan")), float("nan"))
+                    mode_t = _af(m.get("mode_ripple_db", float("nan")), float("nan"))
+                    rms_t = _af(m.get("realized_rms_20_200_db", float("nan")), float("nan"))
                     top_rows.append([
                         f"{idx}",
                         f"{_ai(m.get('trial', 0), 0)}",
                         f"{_af(m.get('rank_score', 0.0), 0.0):.3f}",
                         f"{_af(m.get('avg_score', 0.0), 0.0):.3f}",
+                        f"{prepost_t:.4f}" if prepost_t == prepost_t else "n/a",
+                        f"{mode_t:.3f}" if mode_t == mode_t else "n/a",
+                        f"{rms_t:.3f}" if rms_t == rms_t else "n/a",
+                        f"{_af(m.get('max_net_boost_db', 0.0), 0.0):.2f}",
+                        f"{_af(m.get('lr_delta_score', 0.0), 0.0):.3f}",
                         f"{_af(m.get('dsp_penalty', 0.0), 0.0):.2f}",
                         f"{_af(m.get('exc_penalty', 0.0), 0.0):.2f}",
-                        f"{_af(m.get('max_net_boost_db', 0.0), 0.0):.2f}",
-                        f"{_ai(m.get('events_total', 0), 0)}",
-                        f"{_af(m.get('events_severity', 0.0), 0.0):.2f}",
-                        f"{_af(m.get('lr_delta_score', 0.0), 0.0):.3f}",
                     ])
-                put_markdown("#### Automatic mode top-5")
+                put_markdown("#### Automatic mode top-5 (by rank)")
                 put_table(top_rows)
 
         put_markdown(f"###  {t('rep_header')}")

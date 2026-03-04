@@ -1,11 +1,21 @@
 from __future__ import annotations
+from dataclasses import dataclass
 from typing import Tuple
 import numpy as np
 
 __all__ = [
+    "StereoLinkContext",
     "find_stable_level_window",
     "compute_leveling",
 ]
+
+@dataclass(frozen=True)
+class StereoLinkContext:
+    """Eksplisiittinen stereo-linkin levelointikonteksti."""
+
+    forced_window_hz: tuple[float, float] | None = None
+    forced_offset_db: float | None = None
+    shared_target_level_db: float | None = None
 
 
 def _to_float(x, default: float) -> float:
@@ -151,8 +161,6 @@ def find_stable_level_window(
 ) -> Tuple[float, float]:
     """Hakee tai ratkaisee: find stable level window."""
     try:
-        _ = target_mags
-
         f_min = _to_float(f_min, 0.0)
         f_max = _to_float(f_max, 0.0)
         hpf_freq = _to_float(hpf_freq, 0.0)
@@ -168,12 +176,19 @@ def find_stable_level_window(
         mask = (freq_axis >= safe_f_min) & (freq_axis <= float(f_max))
         f_search = freq_axis[mask]
         m_search = np.asarray(magnitudes, dtype=float)[mask]
+        try:
+            t_arr = np.asarray(target_mags, dtype=float)
+            t_search = t_arr[mask] if t_arr.shape == np.asarray(freq_axis).shape else None
+        except Exception:
+            t_search = None
 
         if f_search.size < 50:
             return float(f_min), float(f_max)
 
         best_score = float("inf")
+        best_target_rms = float("inf")
         res_min, res_max = float(safe_f_min), float(f_max)
+        tie_eps_rel = 0.05
 
         current_f = float(safe_f_min)
         step = 2 ** (1 / 24.0)
@@ -204,8 +219,25 @@ def find_stable_level_window(
                 weight = 1.0 + 0.05 * abs(np.log10(max(w_start, 1.0) / 1000.0))
                 score = std * weight
 
-                if score < best_score:
+                target_rms = float("inf")
+                try:
+                    if t_search is not None:
+                        t_w = np.asarray(t_search[w_mask], dtype=float)
+                        if t_w.size == y.size:
+                            d = np.asarray(y, dtype=float) - t_w
+                            # Compare shape-match, not absolute level.
+                            d_center = d - float(np.median(d))
+                            target_rms = float(np.sqrt(np.mean(d_center * d_center)))
+                except Exception:
+                    target_rms = float("inf")
+
+                better_stability = score < (best_score * (1.0 - tie_eps_rel))
+                near_tie = (score <= (best_score * (1.0 + tie_eps_rel)))
+                better_tie_break = near_tie and (target_rms < best_target_rms)
+
+                if better_stability or better_tie_break:
                     best_score = score
+                    best_target_rms = target_rms
                     res_min, res_max = float(w_start), float(w_end)
 
             current_f *= step
@@ -219,7 +251,14 @@ def find_stable_level_window(
         return float(f_min), float(f_max)
 
 
-def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags: np.ndarray):
+def compute_leveling(
+    cfg,
+    freq_axis: np.ndarray,
+    m_anal: np.ndarray,
+    target_mags: np.ndarray,
+    *,
+    stereo_link_ctx: StereoLinkContext | None = None,
+):
     """Laskee: compute leveling."""
     target_level_db = 0.0
     calc_offset_db = 0.0
@@ -250,19 +289,21 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
     except Exception:
         pass
 
-    stereo_link = bool(getattr(cfg, "stereo_link", False))
-    sl_win = getattr(cfg, "_stereo_link_window", None) if stereo_link else None
-    sl_off = getattr(cfg, "_stereo_link_offset_db", None) if stereo_link else None
-    sl_tgt = getattr(cfg, "_stereo_link_target_level_db", None) if stereo_link else None
-
     forced_window = getattr(cfg, "lvl_force_window", None)
     forced_offset = getattr(cfg, "lvl_force_offset_db", None)
-
-    if stereo_link and (forced_window is None) and (forced_offset is None):
-        if sl_win is not None:
-            forced_window = sl_win
-        if sl_off is not None:
-            forced_offset = sl_off
+    shared_target_level_db = None
+    if stereo_link_ctx is not None:
+        try:
+            if stereo_link_ctx.forced_window_hz is not None:
+                forced_window = stereo_link_ctx.forced_window_hz
+            if stereo_link_ctx.forced_offset_db is not None:
+                forced_offset = stereo_link_ctx.forced_offset_db
+            if stereo_link_ctx.shared_target_level_db is not None:
+                shared_target_level_db = float(stereo_link_ctx.shared_target_level_db)
+        except Exception:
+            pass
+    if shared_target_level_db is not None and (not np.isfinite(float(shared_target_level_db))):
+        shared_target_level_db = None
 
     if forced_window is not None or forced_offset is not None:
         try:
@@ -323,21 +364,13 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
             if is_manual:
                 target_level_db = float(manual_target_db)
             else:
-                if stereo_link and (sl_tgt is not None):
-                    target_level_db = _to_float(sl_tgt, float(meas_level_db_window))
+                if shared_target_level_db is not None:
+                    target_level_db = _to_float(shared_target_level_db, float(meas_level_db_window))
                 else:
                     target_level_db = float(meas_level_db_window)
 
             if not np.isfinite(calc_offset_db):
                 calc_offset_db = 0.0
-
-            if stereo_link and (sl_win is None) and (sl_off is None) and (sl_tgt is None):
-                try:
-                    setattr(cfg, "_stereo_link_window", (float(ss_min), float(ss_max)))
-                    setattr(cfg, "_stereo_link_offset_db", float(calc_offset_db))
-                    setattr(cfg, "_stereo_link_target_level_db", float(target_level_db))
-                except Exception:
-                    pass
 
             return (
                 float(target_level_db),
@@ -368,13 +401,6 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
 
         if not np.isfinite(calc_offset_db):
             calc_offset_db = 0.0
-        if stereo_link and (sl_win is None) and (sl_off is None) and (sl_tgt is None):
-            try:
-                setattr(cfg, "_stereo_link_window", (float(s_min), float(s_max)))
-                setattr(cfg, "_stereo_link_offset_db", float(calc_offset_db))
-                setattr(cfg, "_stereo_link_target_level_db", float(target_level_db))
-            except Exception:
-                pass
 
         return (
             float(target_level_db),
@@ -453,20 +479,13 @@ def compute_leveling(cfg, freq_axis: np.ndarray, m_anal: np.ndarray, target_mags
     if is_manual:
         target_level_db = float(manual_target_db)
     else:
-        if stereo_link and (sl_tgt is not None):
-            target_level_db = _to_float(sl_tgt, float(meas_level_db_window))
+        if shared_target_level_db is not None:
+            target_level_db = _to_float(shared_target_level_db, float(meas_level_db_window))
         else:
             target_level_db = float(meas_level_db_window)
 
     if not np.isfinite(calc_offset_db):
         calc_offset_db = 0.0
-    if stereo_link and (sl_win is None) and (sl_off is None) and (sl_tgt is None):
-        try:
-            setattr(cfg, "_stereo_link_window", (float(ss_min), float(ss_max)))
-            setattr(cfg, "_stereo_link_offset_db", float(calc_offset_db))
-            setattr(cfg, "_stereo_link_target_level_db", float(target_level_db))
-        except Exception:
-            pass
 
 
     return (

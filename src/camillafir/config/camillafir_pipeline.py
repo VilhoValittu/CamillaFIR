@@ -10,7 +10,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     """Funktio: collect ui data."""
     logger = logging.getLogger("CamillaFIR")
     p_keys = [
-        "mode", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
+        "mode", "auto_goal", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
         "mag_c_min", "mag_c_max", "max_boost", "max_cut_db", "max_slope_db_per_oct",
         "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "mag_correct",
         "excess_phase_strength", "low_freq_full_correction_hz", "high_freq_no_correction_hz",
@@ -18,7 +18,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "max_pre_ringing_db", "max_excess_delay_ms", "gd_grad_limit_ms_per_oct",
         "ir_anchor_mode", "min_causal_ms", "auto_asym_left_ratio", "auto_asym_left_max_ms",
         "lvl_mode", "reg_strength", "normalize_opt", "align_opt",
-        "stereo_link", "exc_prot", "exc_freq", "low_bass_cut_hz", "low_bass_cut_enable", "hpf_enable", "hpf_freq",
+        "stereo_link", "stereo_link_strategy", "exc_prot", "exc_freq", "low_bass_cut_hz", "low_bass_cut_enable", "hpf_enable", "hpf_freq",
         "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_window_right", "ir_export_window_mode", "ir_window_mode",
         "ir_export_window_shape", "ir_export_tukey_alpha",
         "local_path_l", "local_path_r", "fmt", "lvl_manual_db",
@@ -95,6 +95,18 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     if mode_u in ("BASIC", "AUTO"):
         data["lvl_mode"] = "Auto"
         data["unsafe_raw_dsp"] = False
+
+    try:
+        sls = str(data.get("stereo_link_strategy", "") or "").strip().lower()
+    except Exception:
+        sls = ""
+    if sls not in ("shared", "hybrid", "auto"):
+        sls = "auto"
+    # Default behavior across modes: auto strategy
+    # (shared/hybrid remain selectable via explicit config value).
+    if sls == "":
+        sls = "auto"
+    data["stereo_link_strategy"] = sls
 
     # Confidence-pull controls are hidden from UI; keep stable internal defaults.
     # ADVANCED keeps the tuned profile from mode defaults.
@@ -187,6 +199,16 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     if not math.isfinite(a):
         a = 0.25
     data["ir_export_tukey_alpha"] = max(0.0, min(1.0, float(a)))
+
+    # Force asymmetric filter to use asymmetric export windowing with fixed Tukey alpha.
+    try:
+        if filter_type_short(str(data.get("filter_type", "") or "")) == "Asymmetric":
+            data["ir_export_window_mode"] = "rew_asym"
+            data["ir_window_mode"] = "rew_asym"
+            data["ir_export_window_shape"] = "tukey"
+            data["ir_export_tukey_alpha"] = 0.25
+    except Exception:
+        pass
 
     try:
         logger.info(
@@ -554,6 +576,9 @@ def build_filter_config(
     lvl_mode = str(data.get("lvl_mode", "Auto") or "Auto")
     if mode_u in ("BASIC", "AUTO"):
         lvl_mode = "Auto"
+    sls = str(data.get("stereo_link_strategy", "auto") or "").strip().lower()
+    if sls not in ("shared", "hybrid", "auto"):
+        sls = "auto"
     
     cfg = FilterConfig_cls(
         fs=int(fs_v),
@@ -596,6 +621,7 @@ def build_filter_config(
         lvl_max=data["lvl_max"],
         lvl_algo=data["lvl_algo"],
         stereo_link=bool(data.get("stereo_link", False)),
+        stereo_link_strategy=str(sls),
         crossovers=xos,
         hpf_settings=hpf,
         house_freqs=hc_f,
@@ -631,12 +657,6 @@ def build_filter_config(
     except Exception:
         pass
 
-    try:
-        setattr(cfg, "_stereo_link_window", None)
-        setattr(cfg, "_stereo_link_offset_db", None)
-        setattr(cfg, "_stereo_link_target_level_db", None)
-    except Exception:
-        pass
     try:
         setattr(cfg, "lvl_force_window", None)
         setattr(cfg, "lvl_force_offset_db", None)

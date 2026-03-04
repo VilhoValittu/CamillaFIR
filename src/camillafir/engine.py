@@ -287,16 +287,27 @@ def build_config(
     irw_mode = str(irw_raw or "auto").strip().lower()
     if irw_mode not in ("auto", "off", "rew_sym", "rew_asym"):
         irw_mode = "auto"
-    setattr(cfg, "ir_export_window_mode", irw_mode)
-
     try:
         sh = str(data.get("ir_export_window_shape", "hann") or "hann").strip().lower()
     except Exception:
         sh = "hann"
     if sh not in ("hann", "tukey"):
         sh = "hann"
+    tukey_alpha = float(np.clip(_as_float(data.get("ir_export_tukey_alpha", 0.25), 0.25), 0.0, 1.0))
+
+    # Hard-force asymmetric filter windowing profile.
+    try:
+        filter_type_s = str(getattr(cfg, "filter_type_str", data.get("filter_type", "")) or "").strip().lower()
+    except Exception:
+        filter_type_s = ""
+    if "asym" in filter_type_s:
+        irw_mode = "rew_asym"
+        sh = "tukey"
+        tukey_alpha = 0.25
+
+    setattr(cfg, "ir_export_window_mode", irw_mode)
     setattr(cfg, "ir_export_window_shape", sh)
-    setattr(cfg, "ir_export_tukey_alpha", float(np.clip(_as_float(data.get("ir_export_tukey_alpha", 0.25), 0.25), 0.0, 1.0)))
+    setattr(cfg, "ir_export_tukey_alpha", float(tukey_alpha))
 
     try:
         setattr(cfg, "ir_window", float(data.get("ir_window", getattr(cfg, "ir_window", 500.0)) or 500.0))

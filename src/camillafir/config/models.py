@@ -110,6 +110,7 @@ class FilterConfig:
     lvl_min: float = 200.0
     lvl_max: float = 3000.0
     stereo_link: bool = False
+    stereo_link_strategy: str = "auto"
     lvl_force_window: Optional[Tuple[float, float]] = None
     lvl_force_offset_db: Optional[float] = None
 

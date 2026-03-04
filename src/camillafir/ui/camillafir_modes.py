@@ -93,6 +93,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "lvl_min": 500.0,
         "lvl_max": 2000.0,
         "stereo_link": True,
+        "stereo_link_strategy": "auto",
 
         "do_normalize": False,
         "exc_prot": True,
@@ -141,6 +142,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "lvl_min": 200.0,
         "lvl_max": 3000.0,
         "stereo_link": True,
+        "stereo_link_strategy": "auto",
         "mixed_split_freq": 180.0,
         "trans_width": 100.0,
         "do_normalize": False,
@@ -189,6 +191,7 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
 # AUTO uses BASIC defaults/guardrails but enables automatic preset search.
 MODE_DEFAULTS["AUTO"] = dict(MODE_DEFAULTS.get("ADVANCED", {}))
 MODE_CLAMPS["AUTO"] = dict(MODE_CLAMPS.get("ADVANCED", {}))
+MODE_DEFAULTS["AUTO"]["stereo_link_strategy"] = "auto"
 
 
 def apply_mode_to_cfg(cfg: FilterConfig, mode: str | None, *, apply_defaults: bool = True) -> FilterConfig:

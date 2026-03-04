@@ -332,6 +332,9 @@ def build_filter_section(*, t, get_val, fs_opts, taps_opts, on_mode_apply_defaul
         mode_value = "AUTO"
     if bool(get_val("camillafir_automatic_mode", False)):
         mode_value = "AUTO"
+    auto_goal_value = str(get_val("auto_goal", "balanced") or "balanced").strip().lower()
+    if auto_goal_value not in ("room-safe", "balanced", "low-ripple", "flat"):
+        auto_goal_value = "balanced"
 
     return [
         put_markdown(f"### ⚙️ {t('tab_basic')}"),
@@ -358,6 +361,18 @@ def build_filter_section(*, t, get_val, fs_opts, taps_opts, on_mode_apply_defaul
         ),
         put_markdown(f"_{t('mode_apply_defaults_help')}_"),
         put_scope("mode_desc_scope"),
+        put_select(
+            "auto_goal",
+            label=t("auto_goal_label"),
+            options=[
+                {"label": t("auto_goal_balanced"), "value": "balanced"},
+                {"label": t("auto_goal_room_safe"), "value": "room-safe"},
+                {"label": t("auto_goal_low_ripple"), "value": "low-ripple"},
+                {"label": t("auto_goal_flat"), "value": "flat"},
+            ],
+            value=auto_goal_value,
+            help_text=t("auto_goal_help"),
+        ),
         put_markdown("---"),
         put_markdown(f"#### 🧱 {t('ui_fir_engine')}"),
         put_row(
@@ -378,7 +393,7 @@ def build_filter_section(*, t, get_val, fs_opts, taps_opts, on_mode_apply_defaul
                     label=t("filter_type"),
                     options=[t("ft_linear"), t("ft_min"), t("ft_mixed"), t("ft_asymmetric")],
                     value=get_val("filter_type", t("ft_linear")),
-                    help_text=(t("ft_help") + t("ft_asym_note")),
+                    help_text=(t("ft_help")),
                 ),
                 put_scope("update_mixed_freq_scope"),
             ]
@@ -612,7 +627,7 @@ def build_advanced_section(*, t, get_val, slope_opts, on_afdw_preset):
             "phase_limit",
             label=t("phase_limit"),
             type=FLOAT,
-            value=get_val("phase_limit", 1000.0),
+            value=get_val("phase_limit", 400.0),
             help_text=t("phase_limit_help"),
         ),
         put_markdown("---"),
@@ -630,6 +645,17 @@ def build_advanced_section(*, t, get_val, slope_opts, on_afdw_preset):
             options=[{"label": t("enable_link"), "value": True}],
             value=[True] if get_val("stereo_link", False) else [],
             help_text=t("link_help"),
+        ),
+        put_select(
+            "stereo_link_strategy",
+            label=t("stereo_link_mode"),
+            options=[
+                {"label": t("stereo_link_mode_auto"), "value": "auto"},
+                {"label": t("stereo_link_mode_hybrid"), "value": "hybrid"},
+                {"label": t("stereo_link_mode_shared_legacy"), "value": "shared"},
+            ],
+            value=str(get_val("stereo_link_strategy", "auto") or "auto"),
+            help_text=t("stereo_link_mode_help"),
         ),
         put_markdown("### 🛡️ Bass Safety"),
         put_markdown("---"),

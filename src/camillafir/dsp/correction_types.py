@@ -24,6 +24,7 @@ class CorrectionInputs:
     gain_db: np.ndarray
     conf_mask: np.ndarray
     complex_meas: np.ndarray
+    stereo_link_ctx: Any | None
     logger: Any
     interpolate_response_fn: Callable[..., np.ndarray]
     apply_confidence_weighted_target_pull_fn: Callable[..., Any]

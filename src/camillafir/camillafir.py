@@ -8,28 +8,72 @@ if __package__ in (None, ""):
         sys.path.insert(0, _src_root)
     __package__ = "camillafir"
 
-import logging
-import typing
-import re
-import unicodedata
-import math
-import time
-from datetime import datetime
-import numpy as np
-from pywebio import start_server
-from pywebio.output import put_processbar, put_scope, set_processbar
-from pywebio.pin import pin
-from .config.camillafir_config import save_config
-from .resources.i8n.camillafir_i18n import t
-from .ui.camillafir_housecurve import load_house_curve
-from camillafir.io.measurements_loader import load_measurements_lr
-from camillafir.io.measurements_txt import parse_measurements_from_path
-from .ui.system_health import (
+
+def _auto_thread_budget() -> tuple[int, int]:
+    """
+    Valitsee automaattisen thread-budjetin: noin 90 % CPU-ytimista.
+
+    Esim. 4 -> 3, 8 -> 6.
+    """
+    try:
+        cores = int(os.cpu_count() or 1)
+    except Exception:
+        cores = 1
+    cores = max(1, int(cores))
+    use = max(1, int((cores * 9) // 10))
+    return int(use), int(cores)
+
+
+def _apply_auto_thread_env() -> tuple[int, int, list[str]]:
+    """
+    Asettaa numeeristen kirjastojen thread-rajoitukset, jos niita ei ole
+    eksplisiittisesti asetettu ymparistomuuttujilla.
+    """
+    use, cores = _auto_thread_budget()
+    keys = (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    )
+    applied: list[str] = []
+    for k in keys:
+        cur = str(os.environ.get(k, "") or "").strip()
+        if cur:
+            try:
+                if int(float(cur)) > 0:
+                    continue
+            except Exception:
+                pass
+        os.environ[k] = str(use)
+        applied.append(str(k))
+    return int(use), int(cores), list(applied)
+
+
+_AUTO_THREADS_USE, _AUTO_THREADS_CORES, _AUTO_THREADS_ENV_APPLIED = _apply_auto_thread_env()
+
+import logging  # noqa: E402
+import typing   # noqa: E402
+import re   # noqa: E402
+import unicodedata  # noqa: E402
+import math # noqa: E402
+import time # noqa: E402
+from datetime import datetime   # noqa: E402
+import numpy as np  # noqa: E402
+from pywebio import start_server    # noqa: E402
+from pywebio.output import put_processbar, set_processbar    # noqa: E402
+from pywebio.pin import pin # noqa: E402
+from .config.camillafir_config import save_config   # noqa: E402
+from .resources.i8n.camillafir_i18n import t    # noqa: E402
+from .ui.camillafir_housecurve import load_house_curve  # noqa: E402
+from camillafir.io.measurements_loader import load_measurements_lr  # noqa: E402
+from camillafir.io.measurements_txt import parse_measurements_from_path # noqa: E402
+from .ui.system_health import (# noqa: E402
     compute_health,
     toast_health_gate_result,
     toast_measurement_files_missing,
 )
-from .config.camillafir_pipeline import (
+from .config.camillafir_pipeline import (   # noqa: E402
     collect_ui_data,
     log_df_smoothing_toggle,
     build_xos_hpf,
@@ -38,16 +82,19 @@ from .config.camillafir_pipeline import (
     choose_dash_fs,
     detect_is_wav_source,
 )
-from .ui.camillafir_export import build_export_zip, save_export_bundle
-from .engine import build_config, run_pipeline, summarize_run
-from .dsp import camillafir_dsp as dsp
-from .dsp.target_match import target_match_from_stats
-from .ui.camillafir_ui import _render_results
-from .ui.camillafir_utils import scale_taps_with_fs
-from .io.camillafir_automatic_mode import (
+from .ui.camillafir_export import build_export_zip, save_export_bundle  # noqa: E402
+from .engine import build_config, run_pipeline, summarize_run   # noqa: E402
+from .dsp import camillafir_dsp as dsp  # noqa: E402
+from .dsp.target_match import target_match_from_stats  # noqa: E402
+from .ui.camillafir_ui import _render_results # noqa: E402
+from .ui.camillafir_utils import scale_taps_with_fs  # noqa: E402
+from .io.camillafir_automatic_mode import (  # noqa: E402
     AUTO_MODE_EXC_FROM_F6_ADD_HZ,
     AUTO_MODE_EXC_MAX_HZ,
     AUTO_MODE_EXC_MIN_HZ,
+    AUTO_MODE_LOCAL_REFINE_ENABLED,
+    AUTO_MODE_LOCAL_REFINE_TOP_K,
+    AUTO_MODE_LOCAL_REFINE_TRIALS_PER_TOP,
     AUTO_MODE_LOW_BASS_FROM_F6_ADD_HZ,
     AUTO_MODE_LOW_BASS_MAX_HZ,
     AUTO_MODE_LOW_BASS_MIN_HZ,
@@ -55,9 +102,11 @@ from .io.camillafir_automatic_mode import (
     AUTO_MODE_TARGET_TOP_N,
     AUTO_MODE_TARGET_TRIALS_PER_CURVE,
     AUTO_MODE_TRIALS,
+    _auto_goal_norm,
     _auto_safe_float,
     _auto_select_builtin_target_curve,
     _auto_select_target_curve_with_trials,
+    _estimate_auto_hpf_from_response,
     _estimate_auto_mag_c_min_hz,
     _run_auto_mode_search,
 )
@@ -65,7 +114,21 @@ from .io.camillafir_automatic_mode import (
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
 logger = logging.getLogger("CamillaFIR")
 
-VERSION = "v.3.4.2"
+try:
+    logger.info(
+        "CPU thread budget: "
+        f"{int(_AUTO_THREADS_USE)}/{int(_AUTO_THREADS_CORES)} cores "
+        "(auto 90% for DSP/NumPy backends)"
+    )
+    if _AUTO_THREADS_ENV_APPLIED:
+        logger.info(
+            "Applied thread env vars: "
+            + ", ".join([f"{k}={os.environ.get(k, '')}" for k in _AUTO_THREADS_ENV_APPLIED])
+        )
+except Exception:
+    pass
+
+VERSION = "v.3.5.0"
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
@@ -342,12 +405,22 @@ def process_run():
     if not math.isfinite(a):
         a = 0.25
     data['ir_export_tukey_alpha'] = float(np.clip(a, 0.0, 1.0))
+    try:
+        if filter_type_short(str(data.get("filter_type", "") or "")) == "Asymmetric":
+            data["ir_export_window_mode"] = "rew_asym"
+            data["ir_window_mode"] = "rew_asym"
+            data["ir_export_window_shape"] = "tukey"
+            data["ir_export_tukey_alpha"] = 0.25
+    except Exception:
+        pass
 
     taps_base = int(float(data.get("taps", 65536) or 65536))
     save_config(data)
-    put_processbar('bar')
-    put_scope('status_area')
-    set_processbar('bar', 0.0)
+    try:
+        set_processbar('bar', 0.0)
+    except Exception:
+        put_processbar('bar')
+        set_processbar('bar', 0.0)
     _t_read = time.perf_counter()
     _status(t('stat_reading'))
     f_l, m_l, p_l, f_r, m_r, p_r = load_measurements_lr(data, logger=logger)
@@ -360,6 +433,10 @@ def process_run():
         auto_mode_preview = bool(str(data.get("mode", "BASIC") or "BASIC").strip().upper() == "AUTO" or data.get("camillafir_automatic_mode", False))
     except Exception:
         auto_mode_preview = False
+    auto_goal = _auto_goal_norm(str(data.get("auto_goal", "balanced") or "balanced"))
+    data["auto_goal"] = str(auto_goal)
+    auto_basis = "rank_score"
+    logger.info(f"Automatic mode goal: {auto_goal} (basis: {auto_basis})")
     if auto_mode_preview:
         try:
             est_mag_c_min = _estimate_auto_mag_c_min_hz(
@@ -398,6 +475,50 @@ def process_run():
                 f"(low-bass cut {float(data['low_bass_cut_hz']):.1f} Hz, "
                 f"excursion {float(data['exc_freq']):.1f} Hz)"
             )
+            user_hpf_enabled = bool(data.get("hpf_enable", False))
+            auto_hpf = _estimate_auto_hpf_from_response(
+                f_l,
+                m_l,
+                f_r,
+                m_r,
+                default_freq_hz=_auto_safe_float(data.get("hpf_freq", 20.0), 20.0),
+                default_slope_db_oct=int(_auto_safe_float(data.get("hpf_slope", 24), 24.0)),
+            )
+            if isinstance(auto_hpf, dict):
+                auto_hpf_conf = _auto_safe_float(auto_hpf.get("confidence", 0.0), 0.0)
+                auto_hpf_method = str(auto_hpf.get("method", "") or "").strip().lower()
+                auto_hpf_apply = bool(auto_hpf.get("enabled", False))
+                # If user has HPF enabled in AUTO mode, always follow response-based estimate.
+                if bool(user_hpf_enabled) and auto_hpf_method == "response_fit":
+                    auto_hpf_apply = True
+                auto_hpf["applied"] = bool(auto_hpf_apply)
+                data["_auto_hpf_meta"] = dict(auto_hpf)
+                if auto_hpf_apply:
+                    auto_hpf_freq = _auto_safe_float(
+                        auto_hpf.get("freq", data.get("hpf_freq", 20.0)),
+                        _auto_safe_float(data.get("hpf_freq", 20.0), 20.0),
+                    )
+                    auto_hpf_slope = int(
+                        round(
+                            _auto_safe_float(
+                                auto_hpf.get("slope_db_oct", data.get("hpf_slope", 24)),
+                                _auto_safe_float(data.get("hpf_slope", 24), 24.0),
+                            )
+                        )
+                    )
+                    data["hpf_enable"] = True
+                    data["hpf_freq"] = float(round(auto_hpf_freq, 1))
+                    data["hpf_slope"] = int(max(6, auto_hpf_slope))
+                    _status(
+                        "CamillaFIR automatic mode: estimated HPF "
+                        f"{float(data['hpf_freq']):.1f} Hz/{int(data['hpf_slope'])} dB/oct "
+                        f"(confidence {auto_hpf_conf:.2f})"
+                    )
+                elif user_hpf_enabled:
+                    _status(
+                        "CamillaFIR automatic mode: HPF auto-fit confidence low, "
+                        "keeping user HPF settings"
+                    )
 
             hc_mode_raw = str(data.get("hc_mode", "") or "").strip().lower()
             has_local_target = bool(str(data.get("local_path_house", "") or "").strip())
@@ -429,7 +550,7 @@ def process_run():
                 _status(
                     "CamillaFIR automatic mode: selecting target curve "
                     f"(top-{AUTO_MODE_TARGET_TOP_N}, {AUTO_MODE_TARGET_TRIALS_PER_CURVE} trials/curve, "
-                    f"-6 dB point {float(est_mag_c_min):.1f} Hz)"
+                    f"-6 dB point {float(est_mag_c_min):.1f} Hz, goal {auto_goal})"
                 )
                 tc_pick = _auto_select_target_curve_with_trials(
                     base_data=data,
@@ -571,9 +692,13 @@ def process_run():
                 float("nan"),
             )
             _f6_txt = f", -6 dB point {_f6_hz:.1f} Hz" if np.isfinite(_f6_hz) else ""
+            _phase2_hint = int(AUTO_MODE_REFINE_TRIALS)
+            if bool(AUTO_MODE_LOCAL_REFINE_ENABLED) and str(auto_goal) in ("balanced", "room-safe", "low-ripple"):
+                _phase2_hint = int(AUTO_MODE_LOCAL_REFINE_TOP_K * AUTO_MODE_LOCAL_REFINE_TRIALS_PER_TOP)
             _status(
                 f"CamillaFIR automatic mode: searching best preset "
-                f"({AUTO_MODE_TRIALS} + {AUTO_MODE_REFINE_TRIALS} trials @ {auto_search_fs} Hz{_f6_txt})"
+                f"({AUTO_MODE_TRIALS} + {_phase2_hint} trials @ {auto_search_fs} Hz{_f6_txt}, "
+                f"goal {auto_goal}, basis {auto_basis})"
             )
             auto_res = _run_auto_mode_search(
                 base_data=dict(data),
@@ -594,8 +719,18 @@ def process_run():
                 if best_preset:
                     data.update(best_preset)
                     measurements["ui_data"] = data
+                sel_goal = str(auto_res.get("auto_goal", data.get("auto_goal", "balanced")) or "balanced")
+                sel_basis = str(
+                    auto_res.get(
+                        "selection_basis",
+                        "rank_score",
+                    )
+                    or "rank_score"
+                )
                 data["_auto_mode_meta"] = {
                     "enabled": True,
+                    "auto_goal": str(sel_goal),
+                    "selection_basis": str(sel_basis),
                     "trials_total": int(auto_res.get("trials_total", AUTO_MODE_TRIALS)),
                     "trials_ok": int(auto_res.get("trials_ok", 0)),
                     "trials_phase1_total": int(auto_res.get("trials_phase1_total", AUTO_MODE_TRIALS)),
@@ -612,6 +747,7 @@ def process_run():
                 }
                 logger.info(
                     "Automatic mode best: "
+                    f"goal={sel_goal}, basis={sel_basis}, "
                     f"rank={_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}/100, "
                     f"avg={_auto_safe_float(best_metrics.get('avg_score'), 0.0):.3f}, "
                     f"dsp_pen={_auto_safe_float(best_metrics.get('dsp_penalty'), 0.0):.3f}, "

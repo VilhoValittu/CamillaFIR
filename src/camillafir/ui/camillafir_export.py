@@ -362,6 +362,39 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
 
     return summary_content
 
+def _append_realized_phase_limit(summary_content: str, data, l_st, r_st) -> str:
+    try:
+        summary_content += "\n=== PHASE CORRECTION LIMIT (REALIZED) ===\n"
+        cfg_lim = _safe_float((data or {}).get("phase_limit", float("nan")), float("nan"))
+        if cfg_lim == cfg_lim and abs(cfg_lim) != float("inf") and cfg_lim > 0.0:
+            summary_content += f"Configured phase_limit: {float(cfg_lim):.1f} Hz\n"
+
+        for side, st in [("LEFT", l_st), ("RIGHT", r_st)]:
+            st = st if isinstance(st, dict) else {}
+            realized_hz = _pick_metric(
+                st,
+                (
+                    "mixed_phase_no_correction_hz",
+                    "linear_phase_blend_end_hz",
+                    "phase_limit_hz",
+                ),
+                nonneg=True,
+            )
+            source = "n/a"
+            for key in ("mixed_phase_no_correction_hz", "linear_phase_blend_end_hz", "phase_limit_hz"):
+                v = _pick_metric(st, (key,), nonneg=True)
+                if v is not None:
+                    source = key
+                    break
+
+            if realized_hz is not None and float(realized_hz) > 0.0:
+                summary_content += f"[{side}] Realized upper limit: {float(realized_hz):.1f} Hz ({source})\n"
+            else:
+                summary_content += f"[{side}] Realized upper limit: n/a\n"
+    except Exception:
+        pass
+    return summary_content
+
 def _append_acoustic_events(summary_content, l_st, r_st):
     for side, st in [("LEFT", l_st), ("RIGHT", r_st)]:
         reflections = st.get('reflections') or []
@@ -552,7 +585,7 @@ def _write_fs_outputs(
             r_st,
         ) = _extract_result_payload(result)
 
-    sum_name = f"Summary_{ft_short}_{fs_v}Hz.txt"
+    sum_name = f"Summary_{ft_short}_{fs_v}Hz_{file_ts}.txt"
     l_dash_name = f"L_Dashboard_{ft_short}_{fs_v}Hz.png"
     r_dash_name = f"R_Dashboard_{ft_short}_{fs_v}Hz.png"
 
@@ -565,6 +598,7 @@ def _write_fs_outputs(
     except Exception:
         pass
     summary_content = _append_dsp_effective_params(summary_content, data, fs_v)
+    summary_content = _append_realized_phase_limit(summary_content, data, l_st, r_st)
     try:
         summary_content += "\n=== LEVELING ===\n"
         for side, st in [("LEFT", l_st), ("RIGHT", r_st)]:

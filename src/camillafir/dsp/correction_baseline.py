@@ -164,6 +164,7 @@ def _prepare_correction_baseline(
     logger,
     interpolate_response,
     _cfg_float_allow_zero,
+    stereo_link_ctx=None,
 ) -> _BaselineContext:
     m_interp_for_rt = _resample_or_interpolate_to_axis(f_in, m_in, freq_axis)
     m_rt_lin = _resample_or_interpolate_to_axis(freq_axis, m_interp_for_rt, np.linspace(0, cfg.fs / 2, 65537))
@@ -260,7 +261,13 @@ def _prepare_correction_baseline(
             offset_method,
             s_min,
             s_max,
-        ) = compute_leveling(cfg, np.asarray(freq_axis, dtype=float), np.asarray(m_anal, dtype=float), np.asarray(target_mags, dtype=float))
+        ) = compute_leveling(
+            cfg,
+            np.asarray(freq_axis, dtype=float),
+            np.asarray(m_anal, dtype=float),
+            np.asarray(target_mags, dtype=float),
+            stereo_link_ctx=stereo_link_ctx,
+        )
     except Exception:
         pass
     target_shift_db = 0.0
@@ -282,7 +289,7 @@ def _prepare_correction_baseline(
                         offset_method,
                         s_min,
                         s_max,
-                    ) = compute_leveling(cfg, f, m_anal, target_mags)
+                    ) = compute_leveling(cfg, f, m_anal, target_mags, stereo_link_ctx=stereo_link_ctx)
     except Exception:
         target_shift_db = 0.0
     try:
@@ -344,7 +351,7 @@ def _prepare_correction_baseline(
                     offset_method_cmp,
                     s_min_cmp,
                     s_max_cmp,
-                ) = compute_leveling(cfg, freq_cmp, m_cmp_raw, target_cmp)
+                ) = compute_leveling(cfg, freq_cmp, m_cmp_raw, target_cmp, stereo_link_ctx=stereo_link_ctx)
                 meas_cmp_final = m_cmp_raw - calc_offset_db_cmp
                 filt_cmp = np.interp(freq_cmp, freq_axis, gain_db)
                 cmp["analysis_mode"] = "comparison"
