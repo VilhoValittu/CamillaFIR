@@ -71,6 +71,8 @@ Selection is based on **Best rank score**, which evaluates:
 | Mixed | 88.27 |
 | Minimum | 78.91 |
 
+- Based on real life measurements and version 3.5.0 results
+
 ### Recommendation
 
 **Most users should choose: Asymmetric**
