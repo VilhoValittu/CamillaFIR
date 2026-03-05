@@ -11,6 +11,7 @@ from .camillafir_ui_helpers import (
     apply_mode_defaults_to_ui,
     apply_tdc_preset,
     update_afdw_cycles_ui,
+    update_auto_mode_controls_ui,
     update_basic_clamp_hints_ui,
     update_confidence_pull_ui,
     update_ir_export_window_mode_ui,
@@ -199,6 +200,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
     update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t)
     update_confidence_pull_ui(pin=pin, get_val=get_val, t=t)
     update_unsafe_raw_dsp_ui(pin=pin, get_val=get_val, t=t)
+    update_auto_mode_controls_ui()
     update_target_preview_ui()
 
     def _refresh_ir_window_controls(_=None):
@@ -225,6 +227,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
         _refresh_ir_window_controls()
 
     pin_on_change("hc_mode", onchange=lambda _: update_target_preview_ui())
+    pin_on_change("auto_target_mode", onchange=lambda _: update_target_preview_ui())
     pin_on_change("hc_custom_file", onchange=lambda _: update_target_preview_ui())
     pin_on_change("mag_c_min", onchange=lambda _: update_target_preview_ui())
     pin_on_change("mag_c_max", onchange=lambda _: update_target_preview_ui())
@@ -319,6 +322,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
             pass
 
         update_mode_desc()
+        update_auto_mode_controls_ui()
         try:
             update_lvl_ui()
             update_target_preview_ui()

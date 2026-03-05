@@ -182,6 +182,22 @@ def _irwin_tag(mode: typing.Any) -> str:
     return "auto"
 
 
+def _auto_target_mode_norm(mode: typing.Any) -> str:
+    """
+    Normalisoi AUTO-tilan target-kayran valintatavan.
+
+    Palauttaa joko `auto` (etsi paras target-kayra) tai
+    `selected` (kayta kayttajan valitsemaa target-kayraa).
+    """
+    try:
+        m = str(mode or "auto").strip().lower()
+    except Exception:
+        m = "auto"
+    if m in ("selected", "manual", "fixed", "user"):
+        return "selected"
+    return "auto"
+
+
 def _slugify_filename_token(value: typing.Any, *, default: str = "target", max_len: int = 48) -> str:
     """Muuntaa tekstin turvalliseksi tiedostonimiosaksi."""
     try:
@@ -555,17 +571,30 @@ def process_run():
                         "keeping user HPF settings"
                     )
 
+            auto_target_mode = _auto_target_mode_norm(data.get("auto_target_mode", "auto"))
+            data["auto_target_mode"] = str(auto_target_mode)
             hc_mode_raw = str(data.get("hc_mode", "") or "").strip().lower()
             has_local_target = bool(str(data.get("local_path_house", "") or "").strip())
             has_upload_target = _has_uploaded_target_file(data)
             wants_custom_target = bool(("upload" in hc_mode_raw) or ("custom" in hc_mode_raw))
-            use_user_target = bool(
-                has_local_target
-                or (wants_custom_target and has_upload_target)
-            )
+            use_user_target = bool(auto_target_mode == "selected")
+            if not use_user_target:
+                use_user_target = bool(
+                    has_local_target
+                    or (wants_custom_target and has_upload_target)
+                )
             if use_user_target:
                 data.pop("_auto_target_seed_preset", None)
-                _status("CamillaFIR automatic mode: using user target curve (skip built-in target comparison)")
+                if auto_target_mode == "selected":
+                    _status(
+                        "CamillaFIR automatic mode: using selected target curve "
+                        "(auto target comparison disabled)"
+                    )
+                else:
+                    _status(
+                        "CamillaFIR automatic mode: using user target curve "
+                        "(skip built-in target comparison)"
+                    )
             else:
                 if wants_custom_target and not has_local_target:
                     _status(

@@ -335,6 +335,9 @@ def build_filter_section(*, t, get_val, fs_opts, taps_opts, on_mode_apply_defaul
     auto_goal_value = str(get_val("auto_goal", "balanced") or "balanced").strip().lower()
     if auto_goal_value not in ("room-safe", "balanced", "low-ripple", "flat"):
         auto_goal_value = "balanced"
+    auto_target_mode_value = str(get_val("auto_target_mode", "auto") or "auto").strip().lower()
+    if auto_target_mode_value not in ("auto", "selected"):
+        auto_target_mode_value = "auto"
 
     return [
         put_markdown(f"### ⚙️ {t('tab_basic')}"),
@@ -373,6 +376,17 @@ def build_filter_section(*, t, get_val, fs_opts, taps_opts, on_mode_apply_defaul
             value=auto_goal_value,
             help_text=t("auto_goal_help"),
         ),
+        put_select(
+            "auto_target_mode",
+            label=t("auto_target_mode_label"),
+            options=[
+                {"label": t("auto_target_mode_auto"), "value": "auto"},
+                {"label": t("auto_target_mode_selected"), "value": "selected"},
+            ],
+            value=auto_target_mode_value,
+            help_text=t("auto_target_mode_help"),
+        ),
+        put_scope("auto_mode_controls_state_scope"),
         put_markdown("---"),
         put_markdown(f"#### 🧱 {t('ui_fir_engine')}"),
         put_row(

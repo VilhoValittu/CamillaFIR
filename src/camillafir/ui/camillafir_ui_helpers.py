@@ -93,6 +93,56 @@ def update_mode_desc(_=None):
     with use_scope("mode_desc_scope", clear=True):
         put_markdown(f"**{t('mode_desc_title')}**\n\n{t(key)}")
 
+
+def update_auto_mode_controls_ui(_=None):
+    """Soveltaa tai paivittaa: auto-mode-only controls state."""
+    def _p(name, default=None):
+        try:
+            return pin[name]
+        except Exception:
+            try:
+                v = pin.get(name, None)
+                return default if v is None else v
+            except Exception:
+                return default
+
+    try:
+        m = str(_p("mode", "BASIC") or "BASIC").strip().upper()
+    except Exception:
+        m = "BASIC"
+    is_auto = (m == "AUTO")
+    js_disable = "false" if is_auto else "true"
+
+    with use_scope("auto_mode_controls_state_scope", clear=True):
+        put_html(
+            f"""
+<script>
+(function() {{
+  try {{
+    var disable = {js_disable};
+    function setState(name) {{
+      var el = document.querySelector('select[name="' + name + '"]');
+      if (!el) return;
+      el.disabled = disable;
+      var wrap = el.closest('.form-group') || el.closest('div');
+      if (wrap) {{
+        wrap.style.opacity = disable ? '0.55' : '';
+        wrap.style.pointerEvents = disable ? 'none' : '';
+        wrap.style.filter = disable ? 'grayscale(1)' : '';
+      }} else {{
+        el.style.opacity = disable ? '0.55' : '';
+        el.style.pointerEvents = disable ? 'none' : '';
+        el.style.filter = disable ? 'grayscale(1)' : '';
+      }}
+    }}
+    setState('auto_goal');
+    setState('auto_target_mode');
+  }} catch(e) {{}}
+}})();
+</script>
+"""
+        )
+
 def update_basic_clamp_hints_ui(*, pin, pin_update, t):
     """Soveltaa tai paivittaa: update basic clamp hints ui."""
     try:
@@ -776,6 +826,11 @@ def apply_mode_defaults_to_ui(_=None):
         pass
     try:
         update_taps_auto_info()
+    except Exception:
+        pass
+    try:
+        if mode == "AUTO":
+            pin_update("auto_target_mode", value="auto")
     except Exception:
         pass
     update_mode_desc()

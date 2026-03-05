@@ -12,6 +12,7 @@ def load_config() -> dict:
         "taps": 65536,
         "mode": "AUTO",
         "auto_goal": "balanced",
+        "auto_target_mode": "auto",
         "filter_type": "Linear Phase",
         "gain": 0.0,
         "hc_mode": "Harman6",

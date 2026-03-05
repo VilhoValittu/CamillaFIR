@@ -10,7 +10,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     """Funktio: collect ui data."""
     logger = logging.getLogger("CamillaFIR")
     p_keys = [
-        "mode", "auto_goal", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
+        "mode", "auto_goal", "auto_target_mode", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
         "mag_c_min", "mag_c_max", "max_boost", "max_cut_db", "max_slope_db_per_oct",
         "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "mag_correct",
         "excess_phase_strength", "low_freq_full_correction_hz", "high_freq_no_correction_hz",
@@ -91,6 +91,16 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         mode_u = "AUTO"
         data["mode"] = "AUTO"
     data["camillafir_automatic_mode"] = bool(is_auto_mode)
+
+    try:
+        atm = str(data.get("auto_target_mode", "auto") or "auto").strip().lower()
+    except Exception:
+        atm = "auto"
+    if atm in ("selected", "manual", "fixed", "user"):
+        atm = "selected"
+    else:
+        atm = "auto"
+    data["auto_target_mode"] = str(atm)
 
     if mode_u in ("BASIC", "AUTO"):
         data["lvl_mode"] = "Auto"
