@@ -4,7 +4,6 @@ import io, scipy.signal, scipy.fft, scipy.ndimage
 import numpy as np
 import matplotlib
 matplotlib.use('Agg') 
-import copy
 from copy import deepcopy
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
@@ -1045,7 +1044,8 @@ _format_summary_content_legacy = format_summary_content
 def _make_comparison_stats(stats: dict, ref_fs: int = 44100, ref_taps: int = 65536) -> dict:
     """Sisainen apufunktio: make comparison stats."""
     stats = stats or {}
-    out = copy.deepcopy(stats)
+    # Keep this lightweight: comparison stats are recomputed frequently in auto mode.
+    out = dict(stats)
 
     if str(out.get("analysis_mode", "native")).lower() == "comparison" and ("cmp_freq_axis" in out):
         return out

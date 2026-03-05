@@ -20,7 +20,7 @@ def _auto_thread_budget() -> tuple[int, int]:
     except Exception:
         cores = 1
     cores = max(1, int(cores))
-    use = max(1, int((cores * 9) // 10))
+    use = max(1, int((cores * 10) // 10))
     return int(use), int(cores)
 
 
@@ -129,7 +129,7 @@ try:
 except Exception:
     pass
 
-VERSION = "v.3.5.1"
+VERSION = "v.3.5.2"
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
@@ -395,7 +395,10 @@ def _postpolish_wav_filter_ir(
 
 
 def process_run():
-    from .ui.camillafir_ui import update_status as status_cb
+    from .ui.camillafir_ui import (
+        update_auto_selected_bar as auto_selected_bar_cb,
+        update_status as status_cb,
+    )
 
     run_started_at = time.perf_counter()
     perf_stats = {
@@ -418,7 +421,54 @@ def process_run():
             except Exception:
                 pass
 
+    def _set_auto_selected_bar(msg: typing.Any = ""):
+        if callable(auto_selected_bar_cb):
+            try:
+                auto_selected_bar_cb(msg)
+            except Exception:
+                pass
+
+    def _build_auto_selected_text(run_data: dict) -> str:
+        try:
+            target_name = str(
+                run_data.get(
+                    "target_curve_name",
+                    run_data.get("hc_mode", "n/a"),
+                )
+                or "n/a"
+            ).strip()
+        except Exception:
+            target_name = "n/a"
+        if not target_name:
+            target_name = "n/a"
+
+        f6_hz = _auto_safe_float(
+            run_data.get("_auto_mag_c_min_hz", run_data.get("mag_c_min", float("nan"))),
+            float("nan"),
+        )
+        f6_txt = f"{f6_hz:.1f} Hz" if np.isfinite(f6_hz) else "n/a"
+
+        hpf_enabled = bool(run_data.get("hpf_enable", False))
+        hpf_freq = _auto_safe_float(run_data.get("hpf_freq", float("nan")), float("nan"))
+        hpf_slope = _auto_safe_float(run_data.get("hpf_slope", float("nan")), float("nan"))
+        if hpf_enabled and np.isfinite(hpf_freq):
+            if np.isfinite(hpf_slope):
+                hpf_txt = f"{hpf_freq:.1f} Hz/{int(round(hpf_slope))} dB/oct"
+            else:
+                hpf_txt = f"{hpf_freq:.1f} Hz"
+        else:
+            hpf_txt = "off"
+
+        phase_hz = _auto_safe_float(run_data.get("phase_limit", float("nan")), float("nan"))
+        phase_txt = f"{phase_hz:.1f} Hz" if np.isfinite(phase_hz) else "n/a"
+
+        return (
+            "Chosen (Automatic mode): "
+            f"target {target_name}, HPF {hpf_txt}, -6 dB {f6_txt}, phase limit {phase_txt}"
+        )
+
     data = collect_ui_data(pin)
+    _set_auto_selected_bar("")
     data["bass_adaptive_isolation_mode"] = True
     # Target-lean trial tuning for bass adaptive smoothing.
     data["bass_smooth_sigma_scale"] = 1.20
@@ -815,6 +865,7 @@ def process_run():
                     "best_preset": best_preset,
                     "top": list(auto_res.get("top", []) or []),
                 }
+                _set_auto_selected_bar(_build_auto_selected_text(data))
                 logger.info(
                     "Automatic mode best: "
                     f"goal={sel_goal}, basis={sel_basis}, "

@@ -4,6 +4,13 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.5.2] - 2026-03-05
+
+### Automatic mode
+- Improved automatic mode performance to complete optimization faster.
+
+---
+
 ## [3.5.1] - 2026-03-05
 
 ### Automatic mode

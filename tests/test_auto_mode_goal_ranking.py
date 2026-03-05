@@ -6,6 +6,7 @@ from camillafir.io.camillafir_automatic_mode import (
     _auto_rank_key,
     _auto_rank_key_goal,
     _auto_reject,
+    _auto_trial_workers,
 )
 
 
@@ -176,3 +177,18 @@ def test_build_auto_mode_candidates_local_center_first_and_clamped():
         assert 150.0 <= float(c.get("bass_first_mode_max_hz", 0.0)) <= 220.0
         assert float(c.get("mag_c_min", 0.0)) == 26.0
         assert float(c.get("low_bass_cut_hz", 0.0)) == 34.0
+
+
+def test_auto_trial_workers_respects_auto_and_caps(monkeypatch):
+    monkeypatch.setenv("CAMILLAFIR_AUTO_MODE_WORKERS", "")
+    monkeypatch.setattr("camillafir.io.camillafir_automatic_mode.os.cpu_count", lambda: 8)
+    assert _auto_trial_workers({"auto_mode_workers": 0}, 32) == 8
+    assert _auto_trial_workers({"auto_mode_workers": 3}, 32) == 3
+    assert _auto_trial_workers({"auto_mode_workers": 99}, 32) == 8
+
+
+def test_auto_trial_workers_env_override_and_min_trials(monkeypatch):
+    monkeypatch.setenv("CAMILLAFIR_AUTO_MODE_WORKERS", "2")
+    monkeypatch.setattr("camillafir.io.camillafir_automatic_mode.os.cpu_count", lambda: 16)
+    assert _auto_trial_workers({"auto_mode_workers": 8}, 32) == 2
+    assert _auto_trial_workers({"auto_mode_workers": 8}, 4) == 1

@@ -13,6 +13,7 @@ def load_config() -> dict:
         "mode": "AUTO",
         "auto_goal": "balanced",
         "auto_target_mode": "auto",
+        "auto_mode_workers": 0,
         "filter_type": "Linear Phase",
         "gain": 0.0,
         "hc_mode": "Harman6",

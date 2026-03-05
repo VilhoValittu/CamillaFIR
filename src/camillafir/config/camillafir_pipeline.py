@@ -10,7 +10,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     """Funktio: collect ui data."""
     logger = logging.getLogger("CamillaFIR")
     p_keys = [
-        "mode", "auto_goal", "auto_target_mode", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
+        "mode", "auto_goal", "auto_target_mode", "auto_mode_workers", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
         "mag_c_min", "mag_c_max", "max_boost", "max_cut_db", "max_slope_db_per_oct",
         "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "mag_correct",
         "excess_phase_strength", "low_freq_full_correction_hz", "high_freq_no_correction_hz",
@@ -179,6 +179,10 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         data["gain"] = max(0.0, float(data.get("gain", 0.0) or 0.0))
     except Exception:
         data["gain"] = 0.0
+    try:
+        data["auto_mode_workers"] = int(float(data.get("auto_mode_workers", 0) or 0))
+    except Exception:
+        data["auto_mode_workers"] = 0
 
     v_raw = data.get("ir_export_window_mode", None)
     if v_raw is None or (isinstance(v_raw, str) and v_raw.strip() == ""):

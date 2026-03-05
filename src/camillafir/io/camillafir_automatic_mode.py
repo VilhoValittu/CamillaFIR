@@ -5,6 +5,7 @@ import os
 import hashlib
 import time
 import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 
@@ -199,6 +200,13 @@ AUTO_MODE_REFINE_TIEBREAK_RANK_EPS = 0.20
 AUTO_MODE_REFINE_TIEBREAK_RIPPLE_EPS = 0.02
 AUTO_MODE_REFINE_MODE_SOFT_K = 0.25
 AUTO_MODE_REFINE_MODE_BOOST_GUARD_MIN_RIPPLE_GAIN_DB = 0.06
+
+# --- Trial parallelism ---
+# 0 workers in UI/config => auto (cpu_count), 1 => sequential.
+AUTO_MODE_PARALLEL_ENABLED = True
+AUTO_MODE_PARALLEL_MIN_TRIALS = 6
+AUTO_MODE_PARALLEL_MAX_WORKERS = 0
+AUTO_MODE_PARALLEL_BATCH_MULTIPLIER = 2
 
 # --- Dual-mode detection + mode-aware scoring ---
 # Some rooms have two dominant LF resonances (e.g. 40-60 Hz + 90-130 Hz).
@@ -851,6 +859,36 @@ def _auto_safe_bool(value, default=False) -> bool:
     if s in ("0", "false", "no", "n", "off"):
         return False
     return bool(default)
+
+
+def _auto_safe_int(value, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except Exception:
+        return int(default)
+
+
+def _auto_trial_workers(base_data: dict | None, n_trials: int) -> int:
+    if (not bool(AUTO_MODE_PARALLEL_ENABLED)) or int(n_trials) < int(AUTO_MODE_PARALLEL_MIN_TRIALS):
+        return 1
+    cpu_n = int(max(1, _auto_safe_int(os.cpu_count(), 1)))
+    env_raw = os.environ.get("CAMILLAFIR_AUTO_MODE_WORKERS", "").strip()
+    req = _auto_safe_int((base_data or {}).get("auto_mode_workers", 0), 0)
+    if env_raw:
+        req = _auto_safe_int(env_raw, req)
+    if req <= 0:
+        req = int(cpu_n)
+    hard_max = int(max(0, _auto_safe_int(AUTO_MODE_PARALLEL_MAX_WORKERS, 0)))
+    if hard_max > 0:
+        req = min(req, hard_max)
+    req = int(max(1, min(int(req), int(cpu_n), int(max(1, n_trials)))))
+    return int(req)
+
+
+def _auto_trial_chunk_size(workers: int) -> int:
+    w = int(max(1, _auto_safe_int(workers, 1)))
+    mul = int(max(1, _auto_safe_int(AUTO_MODE_PARALLEL_BATCH_MULTIPLIER, 2)))
+    return int(max(w, w * mul))
 
 
 def _clip(v, lo, hi):
@@ -1507,21 +1545,165 @@ def _auto_select_target_curve_with_trials(
     if not shortlisted:
         return None
 
-    evaluated = []
-    for t_idx, tc in enumerate(shortlisted, start=1):
+    def _target_eval_one(
+        preset: dict,
+        *,
+        base_tc: dict,
+        hc_f_arr,
+        hc_m_arr,
+    ) -> dict:
+        trial_data = dict(base_tc)
+        trial_data.update(dict(preset or {}))
+        if str(filter_key) in ("linear", "asym"):
+            trial_data["phase_limit"] = round(
+                float(_auto_phase_limit_clip(trial_data.get("phase_limit", base_tc.get("phase_limit", 400.0)), default=400.0)),
+                1,
+            )
+        trial_data["comparison_mode"] = True
+        trial_measurements = dict(measurements or {})
+        trial_measurements["ui_data"] = trial_data
+
+        cfg = build_config(
+            trial_data,
+            fs_v=int(fs_v),
+            taps_v=int(taps_v),
+            xos=xos,
+            hpf=hpf,
+            hc_f=hc_f_arr,
+            hc_m=hc_m_arr,
+            pin=pin_obj,
+            max_safe_boost=float(MAX_SAFE_BOOST),
+        )
+        try:
+            setattr(cfg, "bass_smooth_w_gamma", float(trial_data.get("bass_smooth_w_gamma", 2.40)))
+            setattr(cfg, "bass_smooth_w_max", float(trial_data.get("bass_smooth_w_max", 0.45)))
+        except Exception:
+            pass
+
+        res = run_pipeline(cfg, trial_measurements, include_response_arrays=False)
+        met = _auto_score_result(
+            res,
+            auto_exc_freq_hz=_auto_safe_float(trial_data.get("_auto_exc_freq_hz", float("nan")), float("nan")),
+            base_data=trial_data,
+        )
+        trial_preset = dict(preset or {})
+        if str(filter_key) == "mixed":
+            trial_preset["mixed_freq"] = round(
+                _clip(
+                    trial_data.get("mixed_freq", base_tc.get("mixed_freq", 180.0)),
+                    80.0,
+                    320.0,
+                ),
+                1,
+            )
+        elif str(filter_key) in ("linear", "asym"):
+            trial_preset["phase_limit"] = round(
+                float(
+                    _auto_phase_limit_clip(
+                        trial_data.get("phase_limit", base_tc.get("phase_limit", 400.0)),
+                        default=400.0,
+                    )
+                ),
+                1,
+            )
+        return {
+            "ok": True,
+            "metrics": dict(met or {}),
+            "preset": dict(trial_preset),
+        }
+
+    def _run_target_trials(
+        cands: list[dict],
+        *,
+        base_tc: dict,
+        hc_f_arr,
+        hc_m_arr,
+        phase_tag: str,
+        target_name: str,
+    ) -> list[dict]:
+        n_total = int(len(cands))
+        if n_total <= 0:
+            return []
+        workers = int(_auto_trial_workers(base_tc, n_total))
+        if workers > 1:
+            logger.info(
+                "Automatic mode target trials: target=%s, phase=%s, parallel workers=%d",
+                str(target_name),
+                str(phase_tag),
+                int(workers),
+            )
+
+        idx_presets = list(enumerate(list(cands or []), start=1))
+        out_by_idx: dict[int, dict] = {}
+        if workers <= 1 or n_total <= 1:
+            for idx, preset in idx_presets:
+                try:
+                    out = _target_eval_one(
+                        dict(preset or {}),
+                        base_tc=base_tc,
+                        hc_f_arr=hc_f_arr,
+                        hc_m_arr=hc_m_arr,
+                    )
+                except Exception as exc:
+                    out = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                out_by_idx[int(idx)] = dict(out or {})
+        else:
+            chunk_size = int(_auto_trial_chunk_size(workers))
+            with ThreadPoolExecutor(max_workers=int(workers)) as ex:
+                for c0 in range(0, int(len(idx_presets)), int(chunk_size)):
+                    chunk = idx_presets[c0 : c0 + int(chunk_size)]
+                    fut_map = {
+                        ex.submit(
+                            _target_eval_one,
+                            dict(preset or {}),
+                            base_tc=base_tc,
+                            hc_f_arr=hc_f_arr,
+                            hc_m_arr=hc_m_arr,
+                        ): int(idx)
+                        for idx, preset in chunk
+                    }
+                    for fut in as_completed(list(fut_map.keys())):
+                        idx = int(fut_map.get(fut, 0))
+                        try:
+                            out = fut.result()
+                            if not isinstance(out, dict):
+                                out = {"ok": False, "error": "invalid worker result"}
+                        except Exception as exc:
+                            out = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                        out_by_idx[int(idx)] = dict(out or {})
+
+        out = []
+        for idx, _preset in idx_presets:
+            out.append(
+                dict(
+                    out_by_idx.get(
+                        int(idx),
+                        {"ok": False, "error": "missing worker result"},
+                    )
+                    or {}
+                )
+            )
+        return out
+
+    def _evaluate_target_curve(
+        tc: dict,
+        *,
+        t_idx: int,
+        emit_status: bool,
+        curve_inner_workers: int | None,
+    ) -> dict | None:
         hc_name = str(tc.get("hc_mode", "") or "").strip()
         if not hc_name:
-            continue
+            return None
         try:
             hc_f, hc_m = get_house_curve_by_name(hc_name)
             hc_f = np.asarray(hc_f, dtype=float)
             hc_m = np.asarray(hc_m, dtype=float)
         except Exception:
-            continue
+            return None
         if hc_f.size < 4 or hc_m.size != hc_f.size:
-            continue
+            return None
 
-        # Deterministic per-target seed (stable across runs for same dataset/settings).
         seed_tc = int(
             (
                 _auto_seed_from_signature(
@@ -1538,9 +1720,12 @@ def _auto_select_target_curve_with_trials(
             )
             & 0xFFFFFFFF
         )
-        _auto_apply_seed(seed_tc)
+        if bool(emit_status):
+            _auto_apply_seed(seed_tc)
         base_tc = dict(base_data or {})
         base_tc["hc_mode"] = str(hc_name)
+        if isinstance(curve_inner_workers, int) and int(curve_inner_workers) > 0:
+            base_tc["auto_mode_workers"] = int(curve_inner_workers)
         if str(filter_key) in ("linear", "asym"):
             base_tc["phase_limit"] = round(
                 float(_auto_phase_limit_center(base_tc.get("phase_limit", None))),
@@ -1555,64 +1740,20 @@ def _auto_select_target_curve_with_trials(
         avg_score_sum = 0.0
         phase1_scored = []
         trials_total_count = int(len(candidates))
+        cb = status_cb if bool(emit_status) else None
 
-        for c_idx, preset in enumerate(candidates, start=1):
-            trial_data = dict(base_tc)
-            trial_data.update(dict(preset or {}))
-            if str(filter_key) in ("linear", "asym"):
-                trial_data["phase_limit"] = round(
-                    float(_auto_phase_limit_clip(trial_data.get("phase_limit", base_tc.get("phase_limit", 400.0)), default=400.0)),
-                    1,
-                )
-            trial_data["comparison_mode"] = True
-            trial_measurements = dict(measurements or {})
-            trial_measurements["ui_data"] = trial_data
-
-            try:
-                cfg = build_config(
-                    trial_data,
-                    fs_v=int(fs_v),
-                    taps_v=int(taps_v),
-                    xos=xos,
-                    hpf=hpf,
-                    hc_f=hc_f,
-                    hc_m=hc_m,
-                    pin=pin_obj,
-                    max_safe_boost=float(MAX_SAFE_BOOST),
-                )
-                try:
-                    setattr(cfg, "bass_smooth_w_gamma", float(trial_data.get("bass_smooth_w_gamma", 2.40)))
-                    setattr(cfg, "bass_smooth_w_max", float(trial_data.get("bass_smooth_w_max", 0.45)))
-                except Exception:
-                    pass
-
-                res = run_pipeline(cfg, trial_measurements)
-                res.metrics["summary"] = summarize_run(res)
-                met = _auto_score_result(
-                    res,
-                    auto_exc_freq_hz=_auto_safe_float(trial_data.get("_auto_exc_freq_hz", float("nan")), float("nan")),
-                    base_data=trial_data,
-                )
-                trial_preset = dict(preset or {})
-                if str(filter_key) == "mixed":
-                    trial_preset["mixed_freq"] = round(
-                        _clip(
-                            trial_data.get("mixed_freq", base_tc.get("mixed_freq", 180.0)),
-                            80.0,
-                            320.0,
-                        ),
-                        1,
-                    )
-                elif str(filter_key) in ("linear", "asym"):
-                    trial_preset["phase_limit"] = round(
-                        float(
-                            _auto_phase_limit_clip(
-                                trial_data.get("phase_limit", base_tc.get("phase_limit", 400.0)),
-                                default=400.0,
-                            )
-                        ),
-                        1,
-                    )
+        phase1_out = _run_target_trials(
+            candidates,
+            base_tc=base_tc,
+            hc_f_arr=hc_f,
+            hc_m_arr=hc_m,
+            phase_tag="phase1",
+            target_name=hc_name,
+        )
+        for c_idx, out in enumerate(phase1_out, start=1):
+            if bool(out.get("ok", False)):
+                met = dict(out.get("metrics", {}) or {})
+                trial_preset = dict(out.get("preset", {}) or {})
                 ok_n += 1
                 rank_sum += _auto_safe_float(met.get("rank_score"), 0.0)
                 avg_score_sum += _auto_safe_float(met.get("avg_score"), 0.0)
@@ -1620,17 +1761,17 @@ def _auto_select_target_curve_with_trials(
                 if best_metrics is None or _auto_rank_key(met) < _auto_rank_key(best_metrics):
                     best_metrics = dict(met)
                     best_preset = dict(trial_preset)
-            except Exception as exc:
+            else:
                 logger.warning(
                     f"Automatic mode target trial failed: target={hc_name} "
-                    f"{c_idx}/{len(candidates)} ({type(exc).__name__}: {exc})"
+                    f"{c_idx}/{len(candidates)} ({str(out.get('error', 'unknown error') or 'unknown error')})"
                 )
 
-            if callable(status_cb):
+            if callable(cb):
                 best_txt = "n/a"
                 if isinstance(best_metrics, dict):
                     best_txt = _auto_metric_text(best_metrics, goal)
-                status_cb(
+                cb(
                     f"CamillaFIR automatic mode: target test {t_idx}/{len(shortlisted)} "
                     f"{hc_name} trial {c_idx}/{len(candidates)}{f6_txt} "
                     f"(goal {goal}, best {best_txt})"
@@ -1666,8 +1807,8 @@ def _auto_select_target_curve_with_trials(
                 f"target={hc_name}, avg_score={_auto_safe_float(p1m.get('avg_score'), 0.0):.3f}, "
                 f"{p1_detail}"
             )
-            if callable(status_cb):
-                status_cb(
+            if callable(cb):
+                cb(
                     "CamillaFIR automatic mode: Phase1 done "
                     f"target={hc_name}, avg_score={_auto_safe_float(p1m.get('avg_score'), 0.0):.3f}, "
                     f"{p1_detail}"
@@ -1691,8 +1832,8 @@ def _auto_select_target_curve_with_trials(
                         "Automatic mode target Local refine: "
                         f"target={hc_name}, center #{li}, {local_detail}"
                     )
-                    if callable(status_cb):
-                        status_cb(
+                    if callable(cb):
+                        cb(
                             f"CamillaFIR automatic mode: Local refine target={hc_name} "
                             f"center #{li} {local_detail}"
                         )
@@ -1711,7 +1852,6 @@ def _auto_select_target_curve_with_trials(
                     ),
                 )
                 for cand in local_candidates:
-                    # tighten mixed search to profile band
                     mf = _auto_safe_float(cand.get("mixed_freq"), float("nan"))
                     if np.isfinite(mf):
                         cand["mixed_freq"] = _clip(
@@ -1733,62 +1873,18 @@ def _auto_select_target_curve_with_trials(
                             1,
                         )
                 trials_total_count += int(len(local_candidates))
-                for lc_idx, preset in enumerate(local_candidates, start=1):
-                    trial_data = dict(base_tc)
-                    trial_data.update(dict(preset or {}))
-                    if str(filter_key) in ("linear", "asym"):
-                        trial_data["phase_limit"] = round(
-                            float(_auto_phase_limit_clip(trial_data.get("phase_limit", base_tc.get("phase_limit", 400.0)), default=400.0)),
-                            1,
-                        )
-                    trial_data["comparison_mode"] = True
-                    trial_measurements = dict(measurements or {})
-                    trial_measurements["ui_data"] = trial_data
-                    try:
-                        cfg = build_config(
-                            trial_data,
-                            fs_v=int(fs_v),
-                            taps_v=int(taps_v),
-                            xos=xos,
-                            hpf=hpf,
-                            hc_f=hc_f,
-                            hc_m=hc_m,
-                            pin=pin_obj,
-                            max_safe_boost=float(MAX_SAFE_BOOST),
-                        )
-                        try:
-                            setattr(cfg, "bass_smooth_w_gamma", float(trial_data.get("bass_smooth_w_gamma", 2.40)))
-                            setattr(cfg, "bass_smooth_w_max", float(trial_data.get("bass_smooth_w_max", 0.45)))
-                        except Exception:
-                            pass
-
-                        res = run_pipeline(cfg, trial_measurements)
-                        res.metrics["summary"] = summarize_run(res)
-                        met = _auto_score_result(
-                            res,
-                            auto_exc_freq_hz=_auto_safe_float(trial_data.get("_auto_exc_freq_hz", float("nan")), float("nan")),
-                            base_data=trial_data,
-                        )
-                        trial_preset = dict(preset or {})
-                        if str(filter_key) == "mixed":
-                            trial_preset["mixed_freq"] = round(
-                                _clip(
-                                    trial_data.get("mixed_freq", base_tc.get("mixed_freq", 180.0)),
-                                    80.0,
-                                    320.0,
-                                ),
-                                1,
-                            )
-                        elif str(filter_key) in ("linear", "asym"):
-                            trial_preset["phase_limit"] = round(
-                                float(
-                                    _auto_phase_limit_clip(
-                                        trial_data.get("phase_limit", base_tc.get("phase_limit", 400.0)),
-                                        default=400.0,
-                                    )
-                                ),
-                                1,
-                            )
+                local_out = _run_target_trials(
+                    local_candidates,
+                    base_tc=base_tc,
+                    hc_f_arr=hc_f,
+                    hc_m_arr=hc_m,
+                    phase_tag=f"local_center_{li}",
+                    target_name=hc_name,
+                )
+                for lc_idx, out in enumerate(local_out, start=1):
+                    if bool(out.get("ok", False)):
+                        met = dict(out.get("metrics", {}) or {})
+                        trial_preset = dict(out.get("preset", {}) or {})
                         ok_n += 1
                         rank_sum += _auto_safe_float(met.get("rank_score"), 0.0)
                         avg_score_sum += _auto_safe_float(met.get("avg_score"), 0.0)
@@ -1803,27 +1899,81 @@ def _auto_select_target_curve_with_trials(
                                 f"rank_score={_auto_safe_float(prev.get('rank_score'), 0.0):.3f}"
                                 f" -> {_auto_safe_float(met.get('rank_score'), 0.0):.3f}"
                             )
-                    except Exception as exc:
+                    else:
                         logger.warning(
                             f"Automatic mode target local trial failed: target={hc_name} "
-                            f"center={li} {lc_idx}/{len(local_candidates)} ({type(exc).__name__}: {exc})"
+                            f"center={li} {lc_idx}/{len(local_candidates)} "
+                            f"({str(out.get('error', 'unknown error') or 'unknown error')})"
                         )
 
         if ok_n <= 0 or not isinstance(best_metrics, dict):
-            continue
-        evaluated.append(
-            {
-                "hc_mode": str(hc_name),
-                "fit_rms_db": _auto_safe_float(tc.get("fit_rms_db"), 0.0),
-                "offset_db": _auto_safe_float(tc.get("offset_db"), 0.0),
-                "trials_total": int(trials_total_count),
-                "trials_ok": int(ok_n),
-                "avg_rank_score": float(rank_sum / max(1, ok_n)),
-                "avg_avg_score": float(avg_score_sum / max(1, ok_n)),
-                "best_metrics": dict(best_metrics),
-                "best_preset": dict(best_preset or {}),
-            }
+            return None
+
+        return {
+            "hc_mode": str(hc_name),
+            "fit_rms_db": _auto_safe_float(tc.get("fit_rms_db"), 0.0),
+            "offset_db": _auto_safe_float(tc.get("offset_db"), 0.0),
+            "trials_total": int(trials_total_count),
+            "trials_ok": int(ok_n),
+            "avg_rank_score": float(rank_sum / max(1, ok_n)),
+            "avg_avg_score": float(avg_score_sum / max(1, ok_n)),
+            "best_metrics": dict(best_metrics),
+            "best_preset": dict(best_preset or {}),
+        }
+
+    evaluated = []
+    total_target_trial_load = int(max(1, len(shortlisted) * max(1, trials_eff)))
+    curve_budget = int(_auto_trial_workers(base_data, total_target_trial_load))
+    curve_workers = int(max(1, min(len(shortlisted), curve_budget)))
+    curve_inner_workers = int(max(1, curve_budget // max(1, curve_workers)))
+
+    if curve_workers > 1:
+        logger.info(
+            "Automatic mode target select: curve-parallel enabled "
+            "(curves=%d, workers=%d, inner_workers=%d)",
+            int(len(shortlisted)),
+            int(curve_workers),
+            int(curve_inner_workers),
         )
+        with ThreadPoolExecutor(max_workers=int(curve_workers)) as ex:
+            fut_map = {}
+            for t_idx, tc in enumerate(shortlisted, start=1):
+                fut = ex.submit(
+                    _evaluate_target_curve,
+                    dict(tc or {}),
+                    t_idx=int(t_idx),
+                    emit_status=False,
+                    curve_inner_workers=int(curve_inner_workers),
+                )
+                fut_map[fut] = (int(t_idx), str((tc or {}).get("hc_mode", "") or "").strip())
+            for fut in as_completed(list(fut_map.keys())):
+                t_idx, hc_name = fut_map.get(fut, (0, "n/a"))
+                try:
+                    item = fut.result()
+                except Exception as exc:
+                    logger.warning(
+                        "Automatic mode target curve failed: target=%s (%s)",
+                        str(hc_name),
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                    item = None
+                if isinstance(item, dict):
+                    evaluated.append(dict(item))
+                if callable(status_cb):
+                    status_cb(
+                        f"CamillaFIR automatic mode: target curve {t_idx}/{len(shortlisted)} "
+                        f"{hc_name} done{f6_txt} (goal {goal})"
+                    )
+    else:
+        for t_idx, tc in enumerate(shortlisted, start=1):
+            item = _evaluate_target_curve(
+                dict(tc or {}),
+                t_idx=int(t_idx),
+                emit_status=True,
+                curve_inner_workers=None,
+            )
+            if isinstance(item, dict):
+                evaluated.append(dict(item))
 
     if not evaluated:
         quick_out = dict(quick or {})
@@ -4159,86 +4309,108 @@ def _run_auto_mode_search(
         plateau_hit = False
         no_improve_streak = 0
         improved_any = False
-        for idx, preset in enumerate(cands, start=1):
-            tried_n = int(idx)
-            improved = False
+        n_total = int(len(cands))
+        workers = int(_auto_trial_workers(search_base_data, n_total))
+        if workers > 1:
+            logger.info(
+                "Automatic mode %s: parallel trial run enabled (%d workers)",
+                str(phase_label),
+                int(workers),
+            )
+
+        def _eval_one(idx: int, preset: dict) -> dict:
             trial_data = dict(search_base_data or {})
-            trial_data.update(preset or {})
+            trial_data.update(dict(preset or {}))
             if str(filter_key) in ("linear", "asym"):
                 trial_data["phase_limit"] = round(
-                    float(_auto_phase_limit_clip(trial_data.get("phase_limit", search_base_data.get("phase_limit", 400.0)), default=400.0)),
+                    float(
+                        _auto_phase_limit_clip(
+                            trial_data.get("phase_limit", search_base_data.get("phase_limit", 400.0)),
+                            default=400.0,
+                        )
+                    ),
                     1,
                 )
             trial_data["comparison_mode"] = True
             trial_measurements = dict(measurements or {})
             trial_measurements["ui_data"] = trial_data
-
+            cfg = build_config(
+                trial_data,
+                fs_v=int(fs_v),
+                taps_v=int(taps_v),
+                xos=xos,
+                hpf=hpf,
+                hc_f=hc_f,
+                hc_m=hc_m,
+                pin=pin_obj,
+                max_safe_boost=float(MAX_SAFE_BOOST),
+            )
             try:
-                cfg = build_config(
-                    trial_data,
-                    fs_v=int(fs_v),
-                    taps_v=int(taps_v),
-                    xos=xos,
-                    hpf=hpf,
-                    hc_f=hc_f,
-                    hc_m=hc_m,
-                    pin=pin_obj,
-                    max_safe_boost=float(MAX_SAFE_BOOST),
-                )
-                try:
-                    setattr(cfg, "bass_smooth_w_gamma", float(trial_data.get("bass_smooth_w_gamma", 2.40)))
-                    setattr(cfg, "bass_smooth_w_max", float(trial_data.get("bass_smooth_w_max", 0.45)))
-                except Exception:
-                    pass
+                setattr(cfg, "bass_smooth_w_gamma", float(trial_data.get("bass_smooth_w_gamma", 2.40)))
+                setattr(cfg, "bass_smooth_w_max", float(trial_data.get("bass_smooth_w_max", 0.45)))
+            except Exception:
+                pass
+            result = run_pipeline(cfg, trial_measurements, include_response_arrays=False)
+            metrics = _auto_score_result(
+                result,
+                auto_exc_freq_hz=_auto_safe_float(trial_data.get("_auto_exc_freq_hz", float("nan")), float("nan")),
+                focus_lo_hz=focus_lo_hz if bool(use_refine_tiebreak) else None,
+                focus_hi_hz=focus_hi_hz if bool(use_refine_tiebreak) else None,
+                base_data=trial_data,
+            )
+            if bool(use_refine_tiebreak):
+                soft_k = float(max(0.0, _auto_safe_float(AUTO_MODE_REFINE_MODE_SOFT_K, 0.25)))
+                mode_ripple = _auto_safe_float(metrics.get("mode_ripple_db"), float("nan"))
+                rank_base = _auto_safe_float(metrics.get("rank_score"), 0.0)
+                soft_pen = float(soft_k) * max(0.0, float(mode_ripple)) if np.isfinite(mode_ripple) else 0.0
+                metrics["mode_ripple_soft_penalty"] = float(soft_pen)
+                metrics["rank_score_refine"] = float(rank_base - float(soft_pen))
 
-                result = run_pipeline(cfg, trial_measurements)
-                result.metrics["summary"] = summarize_run(result)
-                metrics = _auto_score_result(
-                    result,
-                    auto_exc_freq_hz=_auto_safe_float(trial_data.get("_auto_exc_freq_hz", float("nan")), float("nan")),
-                    focus_lo_hz=focus_lo_hz if bool(use_refine_tiebreak) else None,
-                    focus_hi_hz=focus_hi_hz if bool(use_refine_tiebreak) else None,
-                    base_data=trial_data,
+            trial_preset = dict(preset or {})
+            if str(filter_key) == "mixed":
+                trial_preset["mixed_freq"] = round(
+                    _clip(
+                        trial_data.get("mixed_freq", search_base_data.get("mixed_freq", 180.0)),
+                        80.0,
+                        320.0,
+                    ),
+                    1,
                 )
-                if bool(use_refine_tiebreak):
-                    soft_k = float(max(0.0, _auto_safe_float(AUTO_MODE_REFINE_MODE_SOFT_K, 0.25)))
-                    mode_ripple = _auto_safe_float(metrics.get("mode_ripple_db"), float("nan"))
-                    rank_base = _auto_safe_float(metrics.get("rank_score"), 0.0)
-                    if np.isfinite(mode_ripple):
-                        soft_pen = float(soft_k) * max(0.0, float(mode_ripple))
-                    else:
-                        soft_pen = 0.0
-                    metrics["mode_ripple_soft_penalty"] = float(soft_pen)
-                    metrics["rank_score_refine"] = float(rank_base - float(soft_pen))
+            elif str(filter_key) in ("linear", "asym"):
+                trial_preset["phase_limit"] = round(
+                    float(
+                        _auto_phase_limit_clip(
+                            trial_data.get("phase_limit", search_base_data.get("phase_limit", 400.0)),
+                            default=400.0,
+                        )
+                    ),
+                    1,
+                )
+
+            return {
+                "idx": int(idx),
+                "ok": True,
+                "metrics": dict(metrics or {}),
+                "trial_preset": dict(trial_preset),
+            }
+
+        def _consume_one(idx: int, out: dict) -> bool:
+            nonlocal ok_n, tried_n, plateau_hit, no_improve_streak, improved_any
+            nonlocal best_metrics, best_preset, scored, phase2_pool
+            tried_n = int(idx)
+            improved = False
+
+            if bool(out.get("ok", False)):
+                metrics = dict(out.get("metrics", {}) or {})
                 metrics["trial"] = int(len(scored) + 1)
                 metrics["phase"] = str(phase_label)
-                trial_preset = dict(preset or {})
-                if str(filter_key) == "mixed":
-                    trial_preset["mixed_freq"] = round(
-                        _clip(
-                            trial_data.get("mixed_freq", search_base_data.get("mixed_freq", 180.0)),
-                            80.0,
-                            320.0,
-                        ),
-                        1,
-                    )
-                elif str(filter_key) in ("linear", "asym"):
-                    trial_preset["phase_limit"] = round(
-                        float(
-                            _auto_phase_limit_clip(
-                                trial_data.get("phase_limit", search_base_data.get("phase_limit", 400.0)),
-                                default=400.0,
-                            )
-                        ),
-                        1,
-                    )
-                scored.append({"metrics": metrics, "preset": dict(trial_preset)})
+                trial_preset = dict(out.get("trial_preset", {}) or {})
+                scored.append({"metrics": dict(metrics), "preset": dict(trial_preset)})
                 if bool(use_refine_tiebreak):
                     phase2_pool.append(
                         {
                             "preset": dict(trial_preset),
                             "metrics": dict(metrics or {}),
-                            "_result": result,
                         }
                     )
                 ok_n += 1
@@ -4259,8 +4431,7 @@ def _run_auto_mode_search(
 
                 if better:
                     prev_best = dict(best_metrics or {})
-                    best_result = result
-                    best_metrics = metrics
+                    best_metrics = dict(metrics)
                     best_preset = dict(trial_preset)
                     improved = True
                     improved_any = True
@@ -4284,18 +4455,20 @@ def _run_auto_mode_search(
                                 float(ripple_prev if np.isfinite(ripple_prev) else 0.0),
                                 float(ripple_new if np.isfinite(ripple_new) else 0.0),
                             )
-            except Exception as exc:
+            else:
+                err_txt = str(out.get("error", "unknown error") or "unknown error")
                 logger.warning(
-                    f"Automatic mode trial {idx}/{len(cands)} failed "
-                    f"({phase_label}): {type(exc).__name__}: {exc}"
+                    f"Automatic mode trial {idx}/{n_total} failed "
+                    f"({phase_label}): {err_txt}"
                 )
 
             if callable(status_cb):
                 best_txt = "n/a" if not best_metrics else _auto_metric_text(best_metrics, goal)
                 status_cb(
-                    f"{status_prefix}: {phase_label} {idx}/{len(cands)} "
+                    f"{status_prefix}: {phase_label} {idx}/{n_total} "
                     f"(goal {goal}, best {best_txt})"
                 )
+
             if int(plateau_after_no_improve) > 0:
                 if improved:
                     no_improve_streak = 0
@@ -4311,10 +4484,60 @@ def _run_auto_mode_search(
                     )
                     if callable(status_cb):
                         status_cb(
-                            f"{status_prefix}: {phase_label} {idx}/{len(cands)} "
+                            f"{status_prefix}: {phase_label} {idx}/{n_total} "
                             f"(best {best_now}, {move_txt})"
                         )
+                    return True
+            return False
+
+        idx_presets = list(enumerate(list(cands or []), start=1))
+        stop_now = False
+        if workers <= 1 or n_total <= 1:
+            for idx, preset in idx_presets:
+                try:
+                    out = _eval_one(int(idx), dict(preset or {}))
+                except Exception as exc:
+                    out = {
+                        "idx": int(idx),
+                        "ok": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                if _consume_one(int(idx), out):
+                    stop_now = True
                     break
+        else:
+            chunk_size = int(_auto_trial_chunk_size(workers))
+            with ThreadPoolExecutor(max_workers=int(workers)) as ex:
+                for c0 in range(0, int(len(idx_presets)), int(chunk_size)):
+                    chunk = idx_presets[c0 : c0 + int(chunk_size)]
+                    fut_map = {
+                        ex.submit(_eval_one, int(idx), dict(preset or {})): int(idx)
+                        for idx, preset in chunk
+                    }
+                    chunk_out: dict[int, dict] = {}
+                    for fut in as_completed(list(fut_map.keys())):
+                        idx = int(fut_map.get(fut, 0))
+                        try:
+                            out = fut.result()
+                            if not isinstance(out, dict):
+                                out = {"idx": int(idx), "ok": False, "error": "invalid worker result"}
+                        except Exception as exc:
+                            out = {"idx": int(idx), "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                        chunk_out[int(idx)] = dict(out)
+                    for idx, _preset in chunk:
+                        out = dict(
+                            chunk_out.get(
+                                int(idx),
+                                {"idx": int(idx), "ok": False, "error": "missing worker result"},
+                            )
+                            or {}
+                        )
+                        if _consume_one(int(idx), out):
+                            stop_now = True
+                            break
+                    if stop_now:
+                        break
+
         return {
             "ok": int(ok_n),
             "tried": int(tried_n),
@@ -4584,17 +4807,58 @@ def _run_auto_mode_search(
                 )
                 best_metrics = dict(w_metrics)
                 best_preset = dict(w_preset)
-                w_result = pareto_winner.get("_result", None)
-                if w_result is not None:
-                    best_result = w_result
         else:
             logger.info(
                 "Pareto front skipped: "
                 f"phase2 kept pool too small ({int(len(phase2_kept))} < {int(pareto_min_n)})"
             )
 
-    if best_result is None or best_metrics is None:
+    if best_metrics is None or not isinstance(best_preset, dict):
         return None
+
+    # Materialize full output only once for the final winner.
+    try:
+        final_data = dict(search_base_data or {})
+        final_data.update(dict(best_preset or {}))
+        if str(filter_key) in ("linear", "asym"):
+            final_data["phase_limit"] = round(
+                float(
+                    _auto_phase_limit_clip(
+                        final_data.get("phase_limit", search_base_data.get("phase_limit", 400.0)),
+                        default=400.0,
+                    )
+                ),
+                1,
+            )
+        final_data["comparison_mode"] = True
+        final_measurements = dict(measurements or {})
+        final_measurements["ui_data"] = final_data
+
+        cfg_final = build_config(
+            final_data,
+            fs_v=int(fs_v),
+            taps_v=int(taps_v),
+            xos=xos,
+            hpf=hpf,
+            hc_f=hc_f,
+            hc_m=hc_m,
+            pin=pin_obj,
+            max_safe_boost=float(MAX_SAFE_BOOST),
+        )
+        try:
+            setattr(cfg_final, "bass_smooth_w_gamma", float(final_data.get("bass_smooth_w_gamma", 2.40)))
+            setattr(cfg_final, "bass_smooth_w_max", float(final_data.get("bass_smooth_w_max", 0.45)))
+        except Exception:
+            pass
+        best_result = run_pipeline(cfg_final, final_measurements, include_response_arrays=True)
+        best_result.metrics["summary"] = summarize_run(best_result)
+    except Exception as exc:
+        logger.warning(
+            "Automatic mode final materialization failed: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        if best_result is None:
+            return None
 
     top = sorted(
         scored,

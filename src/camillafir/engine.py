@@ -405,7 +405,13 @@ def build_config(
     return cfg
 
 
-def run_pipeline(cfg: FilterConfig, measurements: dict, *, debug: bool = False) -> FilterResult:
+def run_pipeline(
+    cfg: FilterConfig,
+    measurements: dict,
+    *,
+    debug: bool = False,
+    include_response_arrays: bool = True,
+) -> FilterResult:
     """
     Execute one DSP pipeline run and return normalized results.
 
@@ -545,26 +551,33 @@ def run_pipeline(cfg: FilterConfig, measurements: dict, *, debug: bool = False) 
         except Exception:
             pass
 
-    _inject_filter_mags_for_ui(l_st, l_imp, int(cfg.fs))
-    _inject_filter_mags_for_ui(r_st, r_imp, int(cfg.fs))
+    if bool(include_response_arrays):
+        _inject_filter_mags_for_ui(l_st, l_imp, int(cfg.fs))
+        _inject_filter_mags_for_ui(r_st, r_imp, int(cfg.fs))
 
-    l_mode = str((l_st or {}).get("analysis_mode", "native")).lower()
-    r_mode = str((r_st or {}).get("analysis_mode", "native")).lower()
-    l_fk = "cmp_freq_axis" if l_mode == "comparison" else "freq_axis"
-    r_fk = "cmp_freq_axis" if r_mode == "comparison" else "freq_axis"
-    l_gk = "cmp_filter_mags" if l_mode == "comparison" else "filter_mags"
-    r_gk = "cmp_filter_mags" if r_mode == "comparison" else "filter_mags"
+        l_mode = str((l_st or {}).get("analysis_mode", "native")).lower()
+        r_mode = str((r_st or {}).get("analysis_mode", "native")).lower()
+        l_fk = "cmp_freq_axis" if l_mode == "comparison" else "freq_axis"
+        r_fk = "cmp_freq_axis" if r_mode == "comparison" else "freq_axis"
+        l_gk = "cmp_filter_mags" if l_mode == "comparison" else "filter_mags"
+        r_gk = "cmp_filter_mags" if r_mode == "comparison" else "filter_mags"
 
-    l_freq = _to_axis((l_st or {}).get(l_fk), f_l)
-    r_freq = _to_axis((r_st or {}).get(r_fk), f_r)
-    freq_axis = l_freq if l_freq.size >= r_freq.size else r_freq
-    if freq_axis.size == 0:
-        freq_axis = f_l if f_l.size else f_r
+        l_freq = _to_axis((l_st or {}).get(l_fk), f_l)
+        r_freq = _to_axis((r_st or {}).get(r_fk), f_r)
+        freq_axis = l_freq if l_freq.size >= r_freq.size else r_freq
+        if freq_axis.size == 0:
+            freq_axis = f_l if f_l.size else f_r
 
-    l_mag = _resample_to_axis((l_st or {}).get(l_gk), l_freq, freq_axis)
-    r_mag = _resample_to_axis((r_st or {}).get(r_gk), r_freq, freq_axis)
-    l_phase = _phase_from_ir(np.asarray(l_imp, dtype=float), int(cfg.fs), freq_axis)
-    r_phase = _phase_from_ir(np.asarray(r_imp, dtype=float), int(cfg.fs), freq_axis)
+        l_mag = _resample_to_axis((l_st or {}).get(l_gk), l_freq, freq_axis)
+        r_mag = _resample_to_axis((r_st or {}).get(r_gk), r_freq, freq_axis)
+        l_phase = _phase_from_ir(np.asarray(l_imp, dtype=float), int(cfg.fs), freq_axis)
+        r_phase = _phase_from_ir(np.asarray(r_imp, dtype=float), int(cfg.fs), freq_axis)
+    else:
+        freq_axis = np.asarray([], dtype=float)
+        l_mag = np.asarray([], dtype=float)
+        r_mag = np.asarray([], dtype=float)
+        l_phase = np.asarray([], dtype=float)
+        r_phase = np.asarray([], dtype=float)
 
     metrics = {
         "alignment_samples": int(d_s),

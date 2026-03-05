@@ -41,6 +41,7 @@ def build_app(*, process_run, PROGRAM_NAME: str, VERSION: str, MAX_SAFE_BOOST: f
 
 main = _app.main
 update_status = _app.update_status
+update_auto_selected_bar = _app.update_auto_selected_bar
 
 
 def _log_df_smoothing_for_fs(cfg, fs_v, df_on):
