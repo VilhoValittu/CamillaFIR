@@ -1,8 +1,10 @@
+import html
 import logging
+import json
 import re
 
 from pywebio import config
-from pywebio.output import put_button, put_markdown, put_text, use_scope
+from pywebio.output import put_button, put_html, put_markdown, use_scope
 from pywebio.session import set_env
 
 from ..config.camillafir_config import load_config
@@ -16,6 +18,7 @@ PROGRAM_NAME = "CamillaFIR"
 VERSION = ""
 MAX_SAFE_BOOST = 8.0
 _STATUS_BASE_MSG = ""
+_STATUS_DOM_READY = False
 
 
 def build_app(*, process_run, PROGRAM_NAME: str, VERSION: str, MAX_SAFE_BOOST: float):
@@ -53,10 +56,44 @@ def get_status_base_message(default: str = "CamillaFIR running") -> str:
 
 
 def update_status(msg):
-    global _STATUS_BASE_MSG
+    global _STATUS_BASE_MSG, _STATUS_DOM_READY
     _STATUS_BASE_MSG = _status_base_from_text(msg)
+    text = str(msg or "")
+
+    if not _STATUS_DOM_READY:
+        with use_scope("status_area", clear=True):
+            safe_text = html.escape(text)
+            put_html(
+                f'<div id="cf_status_text" '
+                f'style="font-weight:bold; color:#4CAF50; margin-bottom:10px;">'
+                f"{safe_text}</div>"
+            )
+        _STATUS_DOM_READY = True
+        return
+
+    try:
+        from pywebio.session import run_js
+    except Exception:
+        run_js = None
+
+    if callable(run_js):
+        try:
+            run_js(
+                "const el=document.getElementById('cf_status_text');"
+                "if(el){el.textContent=%s;}" % json.dumps(text)
+            )
+            return
+        except Exception:
+            pass
+
     with use_scope("status_area", clear=True):
-        put_text(msg).style("font-weight: bold; color: #4CAF50; margin-bottom: 10px;")
+        safe_text = html.escape(text)
+        put_html(
+            f'<div id="cf_status_text" '
+            f'style="font-weight:bold; color:#4CAF50; margin-bottom:10px;">'
+            f"{safe_text}</div>"
+        )
+    _STATUS_DOM_READY = True
 
 
 @config(theme="dark")
