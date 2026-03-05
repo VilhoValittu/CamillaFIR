@@ -183,6 +183,7 @@ def _render_results(
     perf_stats=None,
     per_fs_stats=None,
     saved_filters_dir=None,
+    auto_cache_path=None,
 ):
     import time
     _render_started_at = time.perf_counter()
@@ -707,6 +708,18 @@ def _render_results(
             {'title': 'Right Channel', 'content': put_html(dash_html_r)}
         ])
         put_file(fname, zip_buffer.getvalue(), label=" DOWNLOAD FILTER ZIP")
+        try:
+            path_rows = [["Item", "Path"]]
+            if saved_filters_dir:
+                path_rows.append([t("paths_export_folder"), str(saved_filters_dir)])
+            if auto_cache_path:
+                path_rows.append([t("paths_auto_mode_cache"), str(auto_cache_path)])
+            if len(path_rows) > 1:
+                path_rows[0] = [t("paths_item"), t("paths_path")]
+                put_markdown(f"### {t('paths_title')}")
+                put_table(path_rows)
+        except Exception:
+            pass
 
         try:
             rows = [['Stage', 'Time (s)']]

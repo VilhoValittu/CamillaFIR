@@ -11,6 +11,7 @@ import numpy as np
 from ..dsp import camillafir_dsp as dsp
 from ..dsp.target_match import target_match_from_stats
 from ..engine import build_config, run_pipeline, summarize_run
+from ..app_paths import camillafir_data_dir
 from ..ui import camillafir_plot as plots
 from ..ui.camillafir_housecurve import get_house_curve_by_name
 
@@ -36,13 +37,40 @@ _AUTO_CACHE_VERSION_MISMATCH_LOGGED = False
 
 
 def _auto_cache_path() -> str:
-    # Cross-platform: ~/.camillafir/cache.json
-    base = os.path.join(os.path.expanduser("~"), ".camillafir")
+    # Preferred: platform-correct app data dir.
+    preferred_base = os.fspath(camillafir_data_dir())
+    preferred_path = os.path.join(preferred_base, AUTO_MODE_CACHE_FILENAME)
+    legacy_base = os.path.join(os.path.expanduser("~"), ".camillafir")
+    legacy_path = os.path.join(legacy_base, AUTO_MODE_CACHE_FILENAME)
+
     try:
-        os.makedirs(base, exist_ok=True)
+        os.makedirs(preferred_base, exist_ok=True)
     except Exception:
-        pass
-    return os.path.join(base, AUTO_MODE_CACHE_FILENAME)
+        # Keep legacy fallback writable if preferred base is not available.
+        try:
+            os.makedirs(legacy_base, exist_ok=True)
+        except Exception:
+            pass
+        return legacy_path
+
+    # One-time migration from legacy location to new platform path.
+    try:
+        if (not os.path.isfile(preferred_path)) and os.path.isfile(legacy_path):
+            with open(legacy_path, "rb") as src_f:
+                payload = src_f.read()
+            with open(preferred_path, "wb") as dst_f:
+                dst_f.write(payload)
+            logger.info(f"Automatic mode cache migrated to: {preferred_path}")
+    except Exception:
+        # If migration fails, continue using legacy path to preserve behavior.
+        return legacy_path
+
+    return preferred_path
+
+
+def get_auto_mode_cache_path() -> str:
+    """Return active auto-mode cache file path."""
+    return _auto_cache_path()
 
 
 def _auto_program_version(base_data: dict | None) -> str:

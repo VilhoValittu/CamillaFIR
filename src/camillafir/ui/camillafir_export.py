@@ -9,6 +9,7 @@ from typing import Any
 import scipy.io.wavfile
 
 from . import camillafir_plot as plots
+from ..app_paths import program_version_token, safe_filters_dir
 from ..config.camillafir_convolver_configs import generate_hlc_config, generate_raspberry_yaml
 from ..config.results import FilterResult
 from ..dsp.smoothing import AFDW_BW_MAX_OCT, AFDW_BW_MIN_OCT
@@ -824,10 +825,12 @@ def save_export_bundle(
     target_curve_tag: str,
     ts: str,
     output_dir: str | None = None,
+    program_version: str | None = None,
 ) -> tuple[str, str, str]:
-    filters_dir = output_dir or os.path.join(os.getcwd(), "filters")
-    os.makedirs(filters_dir, exist_ok=True)
-    fname = f"CamillaFIR_{ft_short}_{irw_tag}_{target_curve_tag}_{ts}.zip"
+    ver_tag = program_version_token(program_version, default="v0")
+    filters_dir = safe_filters_dir(output_dir, program_version=program_version)
+    logger.info(f"Export filters directory: {filters_dir}")
+    fname = f"CamillaFIR_{ft_short}_{irw_tag}_{target_curve_tag}_{ver_tag}_{ts}.zip"
     out_path = os.path.join(filters_dir, fname)
 
     try:
