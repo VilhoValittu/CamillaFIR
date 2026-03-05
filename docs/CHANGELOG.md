@@ -4,6 +4,29 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.5.1] - 2026-03-05
+
+### Automatic mode
+- Added target-curve selection mode.
+- Fixed AUTO-only control state handling.
+
+### UI
+- Fixed status timer flicker by updating status text in place.
+- Replaced per-second full scope re-render in `update_status()` with a persistent status DOM node and JS `textContent` updates.
+- Kept clear/re-render as fallback if `run_js` is unavailable or fails.
+
+### Paths & Export
+- Added shared path helpers in `app_paths.py`.
+- Unified default export folder to `Documents/CamillaFIR/filters/<version>` on all platforms.
+- Kept writable/safe fallback guards for export directory resolution.
+- Included program version in export ZIP filename.
+- Passed program version into `save_export_bundle()` for versioned output paths.
+- Exposed and showed active automatic-mode cache path in results UI.
+- Migrated automatic-mode cache path handling to platform app-data with legacy fallback/migration.
+- Localized UI labels (`Paths`, `Item`, `Path`, `Export folder`, `Automatic mode cache`) in EN/FI.
+
+---
+
 ## [3.5.0] - 2026-03-04
 
 ### Automatic mode (core)

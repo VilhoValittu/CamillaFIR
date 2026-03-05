@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v3.5.0
+## v3.5.1
 
 Stable release - feedback welcome: camillafir.py@gmail.com
 
@@ -181,11 +181,15 @@ They allow CamillaFIR to deliver **high-quality correction while remaining pract
 
 ### Auto-mode cache
 
-Automatic mode stores its best results in a small cache file:
+Automatic mode stores its best results in a small cache file under platform app-data.
 
-```
-~/.camillafir/camillafir_auto_mode_cache.json
-```
+Default locations:
+
+- Windows: `%APPDATA%\CamillaFIR\camillafir_auto_mode_cache.json`
+- macOS: `~/Library/Application Support/CamillaFIR/camillafir_auto_mode_cache.json`
+- Linux: `$XDG_DATA_HOME/CamillaFIR/camillafir_auto_mode_cache.json` (fallback: `~/.local/share/CamillaFIR/camillafir_auto_mode_cache.json`)
+
+Legacy `~/.camillafir/camillafir_auto_mode_cache.json` is still supported as a fallback and migrated automatically when possible.
 
 The cache helps the optimiser start closer to a good solution on future runs.
 
@@ -206,11 +210,7 @@ However, clearing the cache can be useful if:
 - The **speaker or room setup** changed
 - You want to force the optimiser to explore the **full search space again**
 
-To reset the cache, simply delete the file:
-
-```
-~/.camillafir/camillafir_auto_mode_cache.json
-```
+To reset the cache, delete the active cache file shown in Results (`Paths -> Automatic mode cache`), or remove it from the platform location listed above.
 
 The next automatic-mode run will recreate it automatically.
 
@@ -412,7 +412,8 @@ pip install -r requirements-linux.txt
 - Summary report (`Summary.txt`)
 - Multi-rate export (44.1/48/88.2/96/176.4/192 kHz)
 
-Output ZIP files are saved to `filters/` in the project root.
+Output ZIP files are saved by default to `Documents/CamillaFIR/filters/<version>/`.
+If that path is not writable, CamillaFIR falls back to a safe writable directory and reports the final path in Results.
 
 ## Browser And PNG Notes
 

@@ -433,9 +433,10 @@ The Summary report typically includes:
 - match score and (optionally) comparison-mode grid info
 
 ### Output directory
-All generated filter packages (`.zip`) are written to the **`filters/`** directory
-in the CamillaFIR project root.  
-The directory is created automatically during export.
+All generated filter packages (`.zip`) are written by default to
+`Documents/CamillaFIR/filters/<version>/` on all platforms.
+If that location is not writable, CamillaFIR automatically falls back to a safe writable directory.
+The active export path is shown in the Results view.
 
 ### IR export windowing vs DSP correction
 

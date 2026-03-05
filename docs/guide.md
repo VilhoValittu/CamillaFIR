@@ -95,9 +95,11 @@ Do not try to fix deep nulls with heavy boost. Placement, crossover work, or roo
 
 ## 5. Generate and export filters
 
-Export creates a ZIP package in:
+Export creates a ZIP package in the default export folder:
 
-`filters/` (project root)
+`Documents/CamillaFIR/filters/<version>/`
+
+If that location is not writable, CamillaFIR uses a safe fallback path and shows the final path in the Results view.
 
 Typical package contents:
 - L/R FIR WAV files (`32-bit float`)

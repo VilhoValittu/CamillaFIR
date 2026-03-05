@@ -1,13 +1,13 @@
 # Reading CamillaFIR Output (Current Behavior)
 
-This guide reflects the current code path in CamillaFIR (v3.3.0 line).
+This guide reflects the current code path in CamillaFIR (v3.5.1 line).
 
 ## 1. What you get after a run
 
 CamillaFIR produces:
 
 1. Interactive dashboards in the UI (Left/Right analysis view).
-2. A ZIP package saved to `filters/`:
+2. A ZIP package saved to `Documents/CamillaFIR/filters/<version>/` (safe fallback used if needed):
    - FIR WAV files (`L_...wav`, `R_...wav`)
    - Summary report (`Summary_<type>_<fs>Hz.txt`)
    - Convolver configs (`Config_...cfg`, `camilladsp_...yml`)
