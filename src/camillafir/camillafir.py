@@ -459,12 +459,23 @@ def process_run():
         else:
             hpf_txt = "off"
 
+        ft_short = filter_type_short(str(run_data.get("filter_type", "") or ""))
+
         phase_hz = _auto_safe_float(run_data.get("phase_limit", float("nan")), float("nan"))
         phase_txt = f"{phase_hz:.1f} Hz" if np.isfinite(phase_hz) else "n/a"
 
+        mixed_hz = _auto_safe_float(run_data.get("mixed_freq", float("nan")), float("nan"))
+        mixed_txt = f"{mixed_hz:.1f} Hz" if np.isfinite(mixed_hz) else "n/a"
+
+        detail_txt = ""
+        if ft_short in ("Linear", "Asymmetric"):
+            detail_txt = f", phase limit {phase_txt}"
+        elif ft_short == "Mixed":
+            detail_txt = f", mixed freq {mixed_txt}"
+
         return (
             "Chosen (Automatic mode): "
-            f"target {target_name}, HPF {hpf_txt}, -6 dB {f6_txt}, phase limit {phase_txt}"
+            f"target {target_name}, HPF {hpf_txt}, -6 dB {f6_txt}{detail_txt}"
         )
 
     data = collect_ui_data(pin)
