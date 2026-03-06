@@ -1,19 +1,58 @@
 from camillafir.io.camillafir_automatic_mode import (
+    AutoModeConfig,
     _build_auto_mode_candidates,
+    _build_auto_mode_candidates_optuna,
     _build_auto_mode_candidates_local,
+    _auto_exc_penalty_bins_from_dbg,
+    _auto_exc_zero_penalty_freq_hz_from_stats,
     _auto_goal,
     _auto_hybrid_mixed_freq_penalty,
+    _auto_optimizer_backend,
     _auto_rank_key,
     _auto_rank_key_goal,
     _auto_reject,
     _auto_trial_workers,
 )
+from types import SimpleNamespace
 
 
 def test_auto_goal_defaults_to_balanced():
     assert _auto_goal({}) == "balanced"
     assert _auto_goal({"auto_goal": "unknown"}) == "balanced"
     assert _auto_goal({"auto_goal": "hybrid"}) == "low-ripple"
+
+
+def test_auto_mode_config_from_base_data_reads_overrides():
+    cfg = AutoModeConfig.from_base_data(
+        {
+            "auto_mode_trials": 77,
+            "auto_mode_phase1_plateau_rounds": 4,
+            "auto_mode_local_refine_enabled": False,
+            "auto_mode_local_refine_top_k": 3,
+            "auto_mode_local_refine_trials_per_top": 9,
+            "auto_mode_optuna": True,
+            "auto_mode_optuna_min_trials": 40,
+            "auto_mode_optuna_startup_trials": 11,
+        }
+    )
+    assert cfg.trials == 77
+    assert cfg.phase1_plateau_rounds == 4
+    assert cfg.local_refine_enabled is False
+    assert cfg.local_refine_top_k == 3
+    assert cfg.local_refine_trials_per_top == 9
+    assert cfg.optuna_pilot_enabled is True
+    assert cfg.optuna_pilot_min_trials == 40
+    assert cfg.optuna_pilot_startup_trials == 11
+
+
+def test_auto_optimizer_backend_selection(monkeypatch):
+    monkeypatch.delenv("CAMILLAFIR_AUTO_MODE_OPTIMIZER", raising=False)
+    assert _auto_optimizer_backend({"auto_mode_optimizer": "optuna"}) == "optuna"
+    assert _auto_optimizer_backend({"auto_mode_optuna": True}) == "optuna"
+    assert _auto_optimizer_backend({"auto_mode_optimizer": "builtin", "auto_mode_optuna": True}) == "builtin"
+
+    monkeypatch.setenv("CAMILLAFIR_AUTO_MODE_OPTIMIZER", "builtin")
+    assert _auto_optimizer_backend({"auto_mode_optimizer": "optuna", "auto_mode_optuna": True}) == "builtin"
 
 
 def test_auto_rank_key_goal_balanced_matches_legacy():
@@ -137,6 +176,51 @@ def test_build_auto_mode_candidates_hybrid_has_tdc_floor():
     assert min(vals) >= 55.0
 
 
+def test_build_auto_mode_candidates_varies_mag_and_low_cut():
+    cands = _build_auto_mode_candidates(
+        {
+            "auto_goal": "balanced",
+            "filter_type": "Asymmetric",
+            "mag_c_min": 24.0,
+            "low_bass_cut_hz": 32.0,
+        },
+        n_trials=24,
+        seed=4321,
+    )
+    mags = {
+        round(float(c.get("mag_c_min")), 1)
+        for c in cands
+        if isinstance(c, dict) and ("mag_c_min" in c)
+    }
+    lows = {
+        round(float(c.get("low_bass_cut_hz")), 1)
+        for c in cands
+        if isinstance(c, dict) and ("low_bass_cut_hz" in c)
+    }
+    assert len(mags) > 1
+    assert len(lows) > 1
+    assert all(15.0 <= v <= 70.0 for v in mags)
+    assert all(18.0 <= v <= 55.0 for v in lows)
+
+
+def test_build_auto_mode_candidates_optuna_optional_backend():
+    cands = _build_auto_mode_candidates_optuna(
+        {
+            "auto_goal": "balanced",
+            "filter_type": "Mixed",
+            "mag_c_min": 24.0,
+            "low_bass_cut_hz": 32.0,
+        },
+        n_trials=8,
+        seed=1234,
+    )
+    if cands is None:
+        assert cands is None
+        return
+    assert isinstance(cands, list)
+    assert len(cands) == 8
+
+
 def test_build_auto_mode_candidates_local_center_first_and_clamped():
     base = {
         "filter_type": "Mixed",
@@ -172,11 +256,39 @@ def test_build_auto_mode_candidates_local_center_first_and_clamped():
         assert 6.0 <= float(c.get("tdc_max_reduction_db", 0.0)) <= 36.0
         assert 15.0 <= float(c.get("reg_strength", 0.0)) <= 45.0
         assert 3.0 <= float(c.get("max_boost", 0.0)) <= 8.0
+        assert 15.0 <= float(c.get("mag_c_min", 0.0)) <= 70.0
         assert 170.0 <= float(c.get("mag_c_max", 0.0)) <= 300.0
         assert 70.0 <= float(c.get("trans_width", 0.0)) <= 150.0
         assert 150.0 <= float(c.get("bass_first_mode_max_hz", 0.0)) <= 220.0
-        assert float(c.get("mag_c_min", 0.0)) == 26.0
-        assert float(c.get("low_bass_cut_hz", 0.0)) == 34.0
+        assert 18.0 <= float(c.get("low_bass_cut_hz", 0.0)) <= 55.0
+
+
+def test_build_auto_mode_candidates_local_varies_mag_and_low_cut():
+    base = {
+        "filter_type": "Mixed",
+        "enable_tdc": True,
+        "enable_afdw": True,
+        "bass_first_ai": True,
+        "mag_c_min": 26.0,
+        "low_bass_cut_hz": 34.0,
+    }
+    center = {
+        "mixed_freq": 92.0,
+        "fdw_cycles": 10.0,
+        "tdc_strength": 58.0,
+        "tdc_max_reduction_db": 12.0,
+        "tdc_slope_db_per_oct": 6.0,
+        "reg_strength": 28.0,
+        "max_boost": 4.0,
+        "mag_c_max": 230.0,
+        "trans_width": 105.0,
+        "bass_first_mode_max_hz": 185.0,
+    }
+    cands = _build_auto_mode_candidates_local(base, center, n_trials=16, seed=12345, shrink=0.60)
+    mags = {round(float(c.get("mag_c_min", 0.0)), 1) for c in cands}
+    lows = {round(float(c.get("low_bass_cut_hz", 0.0)), 1) for c in cands}
+    assert len(mags) > 1
+    assert len(lows) > 1
 
 
 def test_auto_trial_workers_respects_auto_and_caps(monkeypatch):
@@ -192,3 +304,42 @@ def test_auto_trial_workers_env_override_and_min_trials(monkeypatch):
     monkeypatch.setattr("camillafir.io.camillafir_automatic_mode.os.cpu_count", lambda: 16)
     assert _auto_trial_workers({"auto_mode_workers": 8}, 32) == 2
     assert _auto_trial_workers({"auto_mode_workers": 8}, 4) == 1
+
+
+def test_auto_exc_penalty_bins_from_dbg_prefers_pen_bins_field():
+    assert _auto_exc_penalty_bins_from_dbg({"pen_bins": 1.25, "exc_bins": 99}) == 1.25
+    assert abs(_auto_exc_penalty_bins_from_dbg({"exc_bins": 12}) - 1.2) < 1e-9
+
+
+def test_auto_exc_zero_penalty_freq_from_stats_clips_to_limits():
+    assert _auto_exc_zero_penalty_freq_hz_from_stats({"boost_candidate_min_hz": 10.0}) == 20.0
+    assert _auto_exc_zero_penalty_freq_hz_from_stats({"boost_candidate_min_hz": 120.0}) == 80.0
+    assert _auto_exc_zero_penalty_freq_hz_from_stats({"boost_candidate_min_hz": 42.5}) == 42.5
+
+
+def test_auto_score_result_waives_exc_bins_using_zero_penalty_floor():
+    st = {
+        "exc_prot": True,
+        "exc_freq": 24.0,
+        "boost_candidate_bins_excprot": 6,
+        "boost_candidate_min_hz": 18.2,
+        "lf_boost_max_db": 0.0,
+        "net_boost_peak_db": 0.0,
+        "avg_confidence": 90.0,
+        "freq_axis": [20.0, 30.0, 40.0],
+        "measured_mags": [0.0, 0.0, 0.0],
+        "target_mags": [0.0, 0.0, 0.0],
+        "filter_mags": [0.0, 0.0, 0.0],
+    }
+    from camillafir.io.camillafir_automatic_mode import _auto_score_result
+
+    out = _auto_score_result(
+        SimpleNamespace(l_st=dict(st), r_st=dict(st)),
+        auto_exc_freq_hz=24.0,
+        base_data={},
+    )
+    assert out["auto_exc_zero_penalty_hz"] == 20.0
+    assert out["exc_penalty_raw_total"] > 0.0
+    assert out["exc_penalty_bins_raw"] > 0.0
+    assert out["exc_penalty_bins_waived"] is True
+    assert out["exc_penalty_raw"] == 0.0

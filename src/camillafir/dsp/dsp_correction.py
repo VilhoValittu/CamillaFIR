@@ -171,6 +171,7 @@ def _run_correction_stage(inputs: CorrectionInputs) -> CorrectionOutputs:
     cut_peak_db = mag.cut_peak_db
     n_boost = mag.n_boost
     boost_cand_peak = mag.boost_cand_peak
+    boost_cand_min_hz = mag.boost_cand_min_hz
     n_boost_cand = mag.n_boost_cand
     n_boost_cand_low = mag.n_boost_cand_low
     n_boost_cand_exc = mag.n_boost_cand_exc
@@ -218,6 +219,7 @@ def _run_correction_stage(inputs: CorrectionInputs) -> CorrectionOutputs:
         cut_peak_db=float(cut_peak_db),
         n_boost=int(n_boost),
         boost_cand_peak=float(boost_cand_peak),
+        boost_cand_min_hz=float(boost_cand_min_hz),
         n_boost_cand=int(n_boost_cand),
         n_boost_cand_low=int(n_boost_cand_low),
         n_boost_cand_exc=int(n_boost_cand_exc),

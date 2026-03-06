@@ -129,7 +129,7 @@ try:
 except Exception:
     pass
 
-VERSION = "v.3.5.2"
+VERSION = "v.3.5.3"
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
@@ -551,6 +551,15 @@ def process_run():
     logger.info(f"Automatic mode goal: {auto_goal} (basis: {auto_basis})")
     if auto_mode_preview:
         try:
+            ft = str(data.get("filter_type", "mixed") or "mixed")
+        except Exception:
+            ft = "mixed"
+        _status(
+            "CamillaFIR automatic mode: init "
+            f"(goal {auto_goal}, basis {auto_basis}, filter {ft}, taps {int(taps_base)})"
+        )
+    if auto_mode_preview:
+        try:
             est_mag_c_min = _estimate_auto_mag_c_min_hz(
                 f_l,
                 m_l,
@@ -578,14 +587,14 @@ def process_run():
             data["exc_freq"] = float(round(est_exc_freq, 1))
             data["_auto_low_bass_cut_hz"] = float(round(est_low_bass_cut, 1))
             data["_auto_exc_freq_hz"] = float(round(est_exc_freq, 1))
+            data["_auto_exc_seed_freq_hz"] = float(round(est_exc_freq, 1))
             _status(
-                f"CamillaFIR automatic mode: estimated mag_c_min {float(est_mag_c_min):.1f} Hz "
-                f"from smoothed -6 dB point"
-            )
-            _status(
-                "CamillaFIR automatic mode: estimated protection "
-                f"(low-bass cut {float(data['low_bass_cut_hz']):.1f} Hz, "
-                f"excursion {float(data['exc_freq']):.1f} Hz)"
+                "CamillaFIR automatic mode: protection seed "
+                f"(smoothed -6 dB {float(est_mag_c_min):.1f} Hz -> "
+                f"mag_c_min {float(data['mag_c_min']):.1f} Hz, "
+                f"low-cut {float(data['low_bass_cut_hz']):.1f} Hz, "
+                f"exc seed {float(data['exc_freq']):.1f} Hz, "
+                "final exc auto-tuned in preset search)"
             )
             user_hpf_enabled = bool(data.get("hpf_enable", False))
             auto_hpf = _estimate_auto_hpf_from_response(
@@ -622,14 +631,21 @@ def process_run():
                     data["hpf_freq"] = float(round(auto_hpf_freq, 1))
                     data["hpf_slope"] = int(max(6, auto_hpf_slope))
                     _status(
-                        "CamillaFIR automatic mode: estimated HPF "
+                        "CamillaFIR automatic mode: HPF auto-fit applied "
                         f"{float(data['hpf_freq']):.1f} Hz/{int(data['hpf_slope'])} dB/oct "
-                        f"(confidence {auto_hpf_conf:.2f})"
+                        f"(method {auto_hpf_method or 'n/a'}, confidence {auto_hpf_conf:.2f}, "
+                        f"user_hpf={'on' if bool(user_hpf_enabled) else 'off'})"
                     )
                 elif user_hpf_enabled:
                     _status(
-                        "CamillaFIR automatic mode: HPF auto-fit confidence low, "
+                        "CamillaFIR automatic mode: HPF auto-fit skipped "
+                        f"(method {auto_hpf_method or 'n/a'}, confidence {auto_hpf_conf:.2f}) -> "
                         "keeping user HPF settings"
+                    )
+                else:
+                    _status(
+                        "CamillaFIR automatic mode: HPF auto-fit skipped "
+                        f"(method {auto_hpf_method or 'n/a'}, confidence {auto_hpf_conf:.2f})"
                     )
 
             auto_target_mode = _auto_target_mode_norm(data.get("auto_target_mode", "auto"))
@@ -647,14 +663,16 @@ def process_run():
             if use_user_target:
                 data.pop("_auto_target_seed_preset", None)
                 if auto_target_mode == "selected":
+                    selected_hc = str(data.get("hc_mode", "n/a") or "n/a")
                     _status(
-                        "CamillaFIR automatic mode: using selected target curve "
-                        "(auto target comparison disabled)"
+                        "CamillaFIR automatic mode: target curve mode=selected "
+                        f"(using {selected_hc}, auto target comparison disabled)"
                     )
                 else:
+                    selected_hc = str(data.get("hc_mode", "n/a") or "n/a")
                     _status(
-                        "CamillaFIR automatic mode: using user target curve "
-                        "(skip built-in target comparison)"
+                        "CamillaFIR automatic mode: target curve mode=user "
+                        f"(using {selected_hc}, skip built-in target comparison)"
                     )
             else:
                 if wants_custom_target and not has_local_target:
@@ -679,8 +697,9 @@ def process_run():
                     "is_wav_source": bool(detect_is_wav_source(data, pin)),
                 }
                 _status(
-                    "CamillaFIR automatic mode: selecting target curve "
+                    "CamillaFIR automatic mode: target preselect init "
                     f"(top-{AUTO_MODE_TARGET_TOP_N}, {AUTO_MODE_TARGET_TRIALS_PER_CURVE} trials/curve, "
+                    f"fs {int(pre_fs)} Hz, taps {int(pre_taps)}, "
                     f"-6 dB point {float(est_mag_c_min):.1f} Hz, goal {auto_goal})"
                 )
                 tc_pick = _auto_select_target_curve_with_trials(
@@ -715,6 +734,13 @@ def process_run():
                     # Auto-target selection must use built-in presets; ignore local/upload target for this run.
                     data["local_path_house"] = ""
                     data["_auto_target_curve_meta"] = dict(tc_pick)
+                    _status(
+                        "CamillaFIR automatic mode: target preselect winner "
+                        f"{chosen_hc} (method {str(tc_pick.get('selection_method', 'fit_rms'))}, "
+                        f"fit_rms {float(tc_pick.get('fit_rms_db', 0.0)):.3f} dB, "
+                        f"tested {int(tc_pick.get('top_n', 0) or 0)} curves x "
+                        f"{int(tc_pick.get('trials_per_curve', 0) or 0)} trials)"
+                    )
                     logger.info(
                         f"Automatic mode target select: {chosen_hc} "
                         f"(fit_rms={float(tc_pick.get('fit_rms_db', 0.0)):.3f} dB, "
@@ -827,9 +853,9 @@ def process_run():
             if bool(AUTO_MODE_LOCAL_REFINE_ENABLED) and str(auto_goal) in ("balanced", "room-safe", "low-ripple"):
                 _phase2_hint = int(AUTO_MODE_LOCAL_REFINE_TOP_K * AUTO_MODE_LOCAL_REFINE_TRIALS_PER_TOP)
             _status(
-                f"CamillaFIR automatic mode: searching best preset "
-                f"({AUTO_MODE_TRIALS} + {_phase2_hint} trials @ {auto_search_fs} Hz{_f6_txt}, "
-                f"goal {auto_goal}, basis {auto_basis})"
+                f"CamillaFIR automatic mode: preset search init "
+                f"(phase1 {AUTO_MODE_TRIALS} + refine {_phase2_hint} trials @ {auto_search_fs} Hz{_f6_txt}, "
+                f"goal {auto_goal}, basis {auto_basis}, target {str(data.get('hc_mode', 'n/a') or 'n/a')})"
             )
             auto_res = _run_auto_mode_search(
                 base_data=dict(data),
@@ -850,6 +876,27 @@ def process_run():
                 if best_preset:
                     data.update(best_preset)
                     measurements["ui_data"] = data
+                best_auto_exc_hz = _auto_safe_float(
+                    auto_res.get(
+                        "best_auto_exc_freq_hz",
+                        best_metrics.get("auto_exc_zero_penalty_hz", float("nan")),
+                    ),
+                    float("nan"),
+                )
+                if np.isfinite(best_auto_exc_hz):
+                    best_auto_exc_hz = float(
+                        np.clip(
+                            float(best_auto_exc_hz),
+                            float(AUTO_MODE_EXC_MIN_HZ),
+                            float(AUTO_MODE_EXC_MAX_HZ),
+                        )
+                    )
+                    data["exc_freq"] = float(round(best_auto_exc_hz, 1))
+                    data["_auto_exc_freq_hz"] = float(round(best_auto_exc_hz, 1))
+                    logger.info(
+                        "CamillaFIR automatic mode: excursion protection auto-tuned "
+                        f"to zero-penalty floor {float(data['_auto_exc_freq_hz']):.1f} Hz"
+                    )
                 sel_goal = str(auto_res.get("auto_goal", data.get("auto_goal", "balanced")) or "balanced")
                 sel_basis = str(
                     auto_res.get(
@@ -872,10 +919,27 @@ def process_run():
                     "phase2_plateau_hit": bool(auto_res.get("phase2_plateau_hit", False)),
                     "search_fs": int(auto_res.get("search_fs", auto_search_fs)),
                     "search_taps": int(auto_res.get("search_taps", auto_search_taps)),
+                    "auto_exc_seed_freq_hz": (
+                        float(data.get("_auto_exc_seed_freq_hz"))
+                        if np.isfinite(_auto_safe_float(data.get("_auto_exc_seed_freq_hz", float("nan")), float("nan")))
+                        else float("nan")
+                    ),
+                    "best_auto_exc_freq_hz": (
+                        float(data.get("_auto_exc_freq_hz"))
+                        if np.isfinite(_auto_safe_float(data.get("_auto_exc_freq_hz", float("nan")), float("nan")))
+                        else float("nan")
+                    ),
                     "best_metrics": best_metrics,
                     "best_preset": best_preset,
                     "top": list(auto_res.get("top", []) or []),
                 }
+                _status(
+                    "CamillaFIR automatic mode: finalize "
+                    f"(winner rank {_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}/100, "
+                    f"avg {_auto_safe_float(best_metrics.get('avg_score'), 0.0):.3f}, "
+                    f"boost {_auto_safe_float(best_metrics.get('max_net_boost_db'), 0.0):.2f} dB, "
+                    f"events {int(best_metrics.get('events_total', 0) or 0)})"
+                )
                 _set_auto_selected_bar(_build_auto_selected_text(data))
                 logger.info(
                     "Automatic mode best: "

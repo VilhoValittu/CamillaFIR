@@ -332,6 +332,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig, *, stereo_l
     cut_peak_db = corr["cut_peak_db"]
     n_boost = corr["n_boost"]
     boost_cand_peak = corr["boost_cand_peak"]
+    boost_cand_min_hz = corr.get("boost_cand_min_hz", float("nan"))
     n_boost_cand = corr["n_boost_cand"]
     n_boost_cand_low = corr["n_boost_cand_low"]
     n_boost_cand_exc = corr["n_boost_cand_exc"]
@@ -446,6 +447,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig, *, stereo_l
         'cut_peak_db': float(locals().get('cut_peak_db', 0.0)),
         'boost_bins': int(locals().get('n_boost', 0)),
         'boost_candidate_peak_db': float(locals().get('boost_cand_peak', 0.0)),
+        'boost_candidate_min_hz': float(locals().get('boost_cand_min_hz', float("nan"))),
         'boost_candidate_bins': int(locals().get('n_boost_cand', 0)),
         'boost_candidate_bins_lowbass': int(locals().get('n_boost_cand_low', 0)),
         'boost_candidate_bins_excprot': int(locals().get('n_boost_cand_exc', 0)),

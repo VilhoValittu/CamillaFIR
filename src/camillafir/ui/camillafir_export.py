@@ -334,6 +334,31 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
                     f"events={int(bm.get('events_total', 0))}, "
                     f"event_sev={float(bm.get('events_severity', 0.0)):.2f})\n"
                 )
+                exc_seed_hz = _safe_float(
+                    auto_meta.get(
+                        "auto_exc_seed_freq_hz",
+                        data.get("_auto_exc_seed_freq_hz", data.get("_auto_exc_freq_hz", float("nan"))),
+                    ),
+                    float("nan"),
+                )
+                exc_final_hz = _safe_float(
+                    auto_meta.get(
+                        "best_auto_exc_freq_hz",
+                        data.get("_auto_exc_freq_hz", data.get("exc_freq", float("nan"))),
+                    ),
+                    float("nan"),
+                )
+                seed_ok = (exc_seed_hz == exc_seed_hz) and (abs(exc_seed_hz) != float("inf"))
+                final_ok = (exc_final_hz == exc_final_hz) and (abs(exc_final_hz) != float("inf"))
+                if seed_ok and final_ok:
+                    summary_content += (
+                        f"Excursion protection (AUTO): seed {float(exc_seed_hz):.1f} Hz -> "
+                        f"final {float(exc_final_hz):.1f} Hz\n"
+                    )
+                elif final_ok:
+                    summary_content += f"Excursion protection (AUTO): final {float(exc_final_hz):.1f} Hz\n"
+                elif seed_ok:
+                    summary_content += f"Excursion protection (AUTO): seed {float(exc_seed_hz):.1f} Hz\n"
                 if bp:
                     keys = [
                         "mixed_freq",

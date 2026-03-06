@@ -69,6 +69,7 @@ class CorrectionOutputs:
     cut_peak_db: float
     n_boost: int
     boost_cand_peak: float
+    boost_cand_min_hz: float
     n_boost_cand: int
     n_boost_cand_low: int
     n_boost_cand_exc: int
@@ -118,6 +119,7 @@ class CorrectionOutputs:
             "cut_peak_db": self.cut_peak_db,
             "n_boost": self.n_boost,
             "boost_cand_peak": self.boost_cand_peak,
+            "boost_cand_min_hz": self.boost_cand_min_hz,
             "n_boost_cand": self.n_boost_cand,
             "n_boost_cand_low": self.n_boost_cand_low,
             "n_boost_cand_exc": self.n_boost_cand_exc,
@@ -178,6 +180,7 @@ class _MagCorrectionContext:
     cut_peak_db: float
     n_boost: int
     boost_cand_peak: float
+    boost_cand_min_hz: float
     n_boost_cand: int
     n_boost_cand_low: int
     n_boost_cand_exc: int
@@ -251,6 +254,7 @@ class _MagPostProcessOutputs:
     cut_peak_db: float
     n_boost: int
     boost_cand_peak: float
+    boost_cand_min_hz: float
     n_boost_cand: int
     n_boost_cand_low: int
     n_boost_cand_exc: int

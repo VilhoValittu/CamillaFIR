@@ -6,3 +6,4 @@ matplotlib
 pywebio
 plotly
 kaleido
+optuna

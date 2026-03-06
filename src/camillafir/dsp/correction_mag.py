@@ -1280,6 +1280,7 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
     cut_peak_db = 0.0
     n_boost = 0
     boost_cand_peak = 0.0
+    boost_cand_min_hz = float("nan")
     n_boost_cand = 0
     n_boost_cand_low = 0
     n_boost_cand_exc = 0
@@ -1443,9 +1444,15 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
     try:
         _cand = np.zeros_like(gain_db, dtype=float)
         _cand[mask_c] = gain_apply[mask_c]
+        cand_boost_mask = ((_cand > 1e-6) & mask_c)
         boost_cand_peak = float(np.max(_cand[mask_c])) if np.any(mask_c) else 0.0
+        cand_boost_pos_mask = cand_boost_mask & (freq_axis > 0.0)
+        if np.any(cand_boost_pos_mask):
+            boost_cand_min_hz = float(np.min(freq_axis[cand_boost_pos_mask]))
+        else:
+            boost_cand_min_hz = float("nan")
         cut_cand_peak = float(np.min(_cand[mask_c])) if np.any(mask_c) else 0.0
-        n_boost_cand = int(np.sum((_cand > 1e-6) & mask_c))
+        n_boost_cand = int(np.sum(cand_boost_mask))
         n_boost_cand_low = int(np.sum((_cand > 1e-6) & mask_c & (freq_axis <= low_hz)))
         if bool(getattr(cfg, "exc_prot", False)):
             exc_f = float(getattr(cfg, "exc_freq", 0.0) or 0.0)
@@ -1454,6 +1461,7 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
             n_boost_cand_exc = 0
     except Exception:
         boost_cand_peak, cut_cand_peak = 0.0, 0.0
+        boost_cand_min_hz = float("nan")
         n_boost_cand, n_boost_cand_low, n_boost_cand_exc = 0, 0, 0
 
     tmp = np.zeros_like(gain_db, dtype=float)
@@ -1917,6 +1925,7 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
         cut_peak_db=float(cut_peak_db),
         n_boost=int(n_boost),
         boost_cand_peak=float(boost_cand_peak),
+        boost_cand_min_hz=float(boost_cand_min_hz),
         n_boost_cand=int(n_boost_cand),
         n_boost_cand_low=int(n_boost_cand_low),
         n_boost_cand_exc=int(n_boost_cand_exc),
@@ -2404,6 +2413,7 @@ def _run_mag_correction_pipeline(inputs: _MagPipelineInputs) -> _MagCorrectionCo
     cut_peak_db = 0.0
     n_boost = 0
     boost_cand_peak = 0.0
+    boost_cand_min_hz = float("nan")
     n_boost_cand = 0
     n_boost_cand_low = 0
     n_boost_cand_exc = 0
@@ -2448,6 +2458,7 @@ def _run_mag_correction_pipeline(inputs: _MagPipelineInputs) -> _MagCorrectionCo
         cut_peak_db = post.cut_peak_db
         n_boost = post.n_boost
         boost_cand_peak = post.boost_cand_peak
+        boost_cand_min_hz = post.boost_cand_min_hz
         n_boost_cand = post.n_boost_cand
         n_boost_cand_low = post.n_boost_cand_low
         n_boost_cand_exc = post.n_boost_cand_exc
@@ -2560,6 +2571,7 @@ def _run_mag_correction_pipeline(inputs: _MagPipelineInputs) -> _MagCorrectionCo
         cut_peak_db=float(cut_peak_db),
         n_boost=int(n_boost),
         boost_cand_peak=float(boost_cand_peak),
+        boost_cand_min_hz=float(boost_cand_min_hz),
         n_boost_cand=int(n_boost_cand),
         n_boost_cand_low=int(n_boost_cand_low),
         n_boost_cand_exc=int(n_boost_cand_exc),

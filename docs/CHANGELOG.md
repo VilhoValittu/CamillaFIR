@@ -4,6 +4,37 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.5.3] - 2026-03-06
+
+### Automatic mode
+- Added adaptive target-curve preselection scoring (fit, boost demand, slope match, asymmetry, mode-band fit).
+- Expanded target shortlist logic with spread-based sizing, optional cache wildcard insertion, and milder-step inclusion guards.
+- Added optional Optuna pilot sampler for phase-1 candidate generation with automatic fallback to built-in sampler.
+- Added `AutoModeConfig` overrides for auto-mode search tuning (trials, refine, hard-gate, micro phase, optuna settings).
+- Improved phase-1/phase-2 candidate generation so `mag_c_min` and `low_bass_cut_hz` are actively optimized (also in local refine).
+- Added auto-tuned excursion protection finalization from measured zero-penalty floor and propagated seed/final excursion metadata.
+
+### DSP / Scoring
+- Added `boost_candidate_min_hz` metric to correction outputs and run stats for auto-mode protection heuristics.
+- Updated auto-mode scoring to derive `auto_exc_zero_penalty_hz` and waive excursion-bin penalty component when applicable.
+
+### UI
+- Improved automatic-mode status UX with compact phase text and a collapsible `Automatic mode details` history panel.
+- Reset automatic-mode status details at run start to avoid stale detail carry-over.
+- Added `Target curve top-3` results table (best rank, avg rank, fit RMS, preselect and penalty metrics, trials).
+
+### Export
+- Added automatic-mode excursion protection summary line (`seed -> final` frequency) to export summary metadata.
+
+### Dependencies & Docs
+- Added `optuna` to `requirements.txt` and `requirements-linux.txt`.
+- Updated docs version references to `v3.5.3` in README and official manual.
+
+### Tests
+- Expanded automatic-mode tests for config overrides, optimizer backend selection, candidate variability, optional Optuna backend, and excursion-penalty waiving behavior.
+
+---
+
 ## [3.5.2] - 2026-03-05
 
 ### Automatic mode

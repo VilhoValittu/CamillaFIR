@@ -77,6 +77,7 @@ def on_start_click():
         try:
             try:
                 from . import app as _app
+                _app.reset_auto_status_details()
                 _app.update_status("CamillaFIR running | 0.0 s")
             except Exception:
                 pass

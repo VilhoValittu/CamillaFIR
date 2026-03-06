@@ -311,6 +311,7 @@ def _render_results(
         if auto_enabled and isinstance(auto_meta, dict):
             bm = dict(auto_meta.get("best_metrics", {}) or {})
             top = list(auto_meta.get("top", []) or [])
+            tc_meta = dict(data.get("_auto_target_curve_meta", {}) or {})
             trials_ok = int(auto_meta.get("trials_ok", 0) or 0)
             trials_total = int(auto_meta.get("trials_total", 0) or 0)
 
@@ -328,6 +329,10 @@ def _render_results(
                     return int(v)
                 except Exception:
                     return int(default)
+
+            def _f3(v) -> str:
+                x = _af(v, float("nan"))
+                return f"{x:.3f}" if x == x else "n/a"
 
             rank_sc = _af(bm.get("rank_score", 0.0), 0.0)
             avg_sc = _af(bm.get("avg_score", 0.0), 0.0)
@@ -367,6 +372,66 @@ def _render_results(
                 ["Events / severity", f"{events_n} / {events_sev:.2f}"],
             ]
             put_table(best_rows)
+
+            # Top-3 target curves (auto target selection phase).
+            tc_eval = list(tc_meta.get("evaluated", []) or [])
+            tc_rows = [[
+                "#",
+                "Target curve",
+                "Best rank",
+                "Avg rank",
+                "Fit RMS",
+                "Preselect",
+                "Boost pen",
+                "Asym",
+                "Trials",
+            ]]
+            if tc_eval:
+                tc_eval_sorted = sorted(
+                    list(tc_eval),
+                    key=lambda it: (
+                        -_af(dict((it or {}).get("best_metrics", {}) or {}).get("rank_score", 0.0), 0.0),
+                        -_af((it or {}).get("avg_rank_score", 0.0), 0.0),
+                        _af((it or {}).get("fit_rms_db", 1e9), 1e9),
+                    ),
+                )
+                for idx, it in enumerate(tc_eval_sorted[:3], start=1):
+                    bm_tc = dict((it or {}).get("best_metrics", {}) or {})
+                    tc_rows.append([
+                        f"{idx}",
+                        str((it or {}).get("hc_mode", "n/a") or "n/a"),
+                        f"{_af(bm_tc.get('rank_score', 0.0), 0.0):.3f}",
+                        f"{_af((it or {}).get('avg_rank_score', 0.0), 0.0):.3f}",
+                        _f3((it or {}).get('fit_rms_db', float('nan'))),
+                        _f3((it or {}).get('preselect_score', float('nan'))),
+                        _f3((it or {}).get('boost_penalty', float('nan'))),
+                        _f3((it or {}).get('asym_penalty_db', float('nan'))),
+                        f"{_ai((it or {}).get('trials_ok', 0), 0)}/{_ai((it or {}).get('trials_total', 0), 0)}",
+                    ])
+            else:
+                tc_cands = list(tc_meta.get("candidates", []) or [])
+                tc_cands_sorted = sorted(
+                    list(tc_cands),
+                    key=lambda it: (
+                        _af((it or {}).get("preselect_score", (it or {}).get("fit_rms_db", 1e9)), 1e9),
+                        _af((it or {}).get("fit_rms_db", 1e9), 1e9),
+                    ),
+                )
+                for idx, it in enumerate(tc_cands_sorted[:3], start=1):
+                    tc_rows.append([
+                        f"{idx}",
+                        str((it or {}).get("hc_mode", "n/a") or "n/a"),
+                        "n/a",
+                        "n/a",
+                        _f3((it or {}).get('fit_rms_db', float('nan'))),
+                        _f3((it or {}).get('preselect_score', float('nan'))),
+                        _f3((it or {}).get('boost_penalty', float('nan'))),
+                        _f3((it or {}).get('asym_penalty_db', float('nan'))),
+                        "n/a",
+                    ])
+            if len(tc_rows) > 1:
+                put_markdown("#### Target curve top-3")
+                put_table(tc_rows)
 
             if top:
                 rank_best = max((_af(dict(it.get("metrics", {}) or {}).get("rank_score", 0.0), 0.0) for it in top), default=rank_sc)
