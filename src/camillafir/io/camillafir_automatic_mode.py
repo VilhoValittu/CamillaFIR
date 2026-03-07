@@ -5,7 +5,6 @@ import os
 import hashlib
 import time
 import random
-from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
@@ -16,6 +15,106 @@ from ..engine import build_config, run_pipeline, summarize_run
 from ..app_paths import camillafir_data_dir
 from ..ui import camillafir_plot as plots
 from ..ui.camillafir_housecurve import get_house_curve_by_name
+from .auto_mode.cache_signature import (
+    _auto_apply_seed,
+    _auto_cache_bucket,
+    _auto_cache_bucket_template,
+    _auto_cache_empty,
+    _auto_cache_get_best,
+    _auto_cache_get_best_target,
+    _auto_cache_get_entry,
+    _auto_cache_get_last_used_best,
+    _auto_cache_get_target_for_measurements,
+    _auto_cache_load,
+    _auto_cache_path,
+    _auto_cache_put_best,
+    _auto_cache_put_last_used_best,
+    _auto_cache_put_target_for_measurements,
+    _auto_cache_save,
+    _auto_measurement_signature,
+    _auto_program_version,
+    _auto_seed_from_signature,
+    _auto_signature,
+    get_auto_mode_cache_path,
+)
+from .auto_mode.candidate_generation import (
+    _build_auto_mode_candidates,
+    _build_auto_mode_candidates_local,
+    _build_auto_mode_candidates_micro,
+    _build_auto_mode_candidates_optuna,
+    _build_auto_mode_refine_candidates,
+)
+from .auto_mode.scoring_ranking import (
+    _auto_adaptive_shrink_factor,
+    _auto_apply_goal_tiebreak_metrics,
+    _auto_build_refine_profile,
+    _auto_build_winner_explanation,
+    _auto_gate_threshold,
+    _auto_goal_uses_local_refine,
+    _auto_hybrid_mixed_freq_penalty,
+    _auto_is_better_refine,
+    _auto_mode_ripple_for_pareto,
+    _auto_phase2_hard_gate_pool,
+    _auto_phase2_pareto_front,
+    _auto_phase2_pareto_vector,
+    _auto_phase2_pick_pareto_winner,
+    _auto_prepost_for_pareto,
+    _auto_prepost_lr_for_pareto,
+    _auto_rank_key,
+    _auto_rank_key_acoustic,
+    _auto_rank_key_flat,
+    _auto_rank_key_goal,
+    _auto_rank_key_hybrid,
+    _auto_rank_key_low_ripple,
+    _auto_rank_key_room_safe,
+    _auto_realized_rms_20_200_for_pareto,
+    _auto_reject,
+    _auto_ripple_metric_for_gate,
+    _auto_select_best_scored,
+    _auto_target_mildness_index,
+    _auto_target_result_mode_ripple,
+    _auto_target_result_rank_key,
+    _auto_target_result_tie_key,
+    _pareto_dominates,
+    _tc_score,
+)
+from .auto_mode.search_state import (
+    _AutoModePhaseState,
+    _AutoModeSearchState,
+    _auto_set_search_winner,
+)
+from .auto_mode.target_preselection import (
+    _auto_select_builtin_target_curve,
+    _auto_target_adaptive_shortlist,
+    _auto_target_insert_cached_wildcard,
+    _auto_target_one_step_milder,
+    _auto_target_preselect_score,
+    _auto_target_slope_estimate,
+)
+from .auto_mode.shared import (
+    AutoModeConfig,
+    _auto_builtin_target_name,
+    _auto_filter_cache_key,
+    _auto_goal,
+    _auto_goal_basis_text,
+    _auto_goal_norm,
+    _auto_hash_array,
+    _auto_is_phase_search_filter,
+    _auto_metric_text,
+    _auto_optimizer_backend,
+    _auto_phase_limit_center,
+    _auto_phase_limit_clip,
+    _auto_phase_limit_prior_penalty,
+    _auto_safe_bool,
+    _auto_safe_float,
+    _auto_safe_int,
+    _auto_sample_mag_low_pair,
+    _auto_trial_chunk_size,
+    _auto_trial_workers,
+    _clip,
+    _jitter,
+    _m,
+)
 
 logger = logging.getLogger("CamillaFIR")
 MAX_SAFE_BOOST = 8.0
@@ -29,153 +128,16 @@ AUTO_MODE_GOAL_FLAT = "flat"
 AUTO_MODE_GOAL_ACOUSTIC = "acoustic"
 AUTO_MODE_GOAL_HYBRID = "hybrid"
 
-# --- Auto-mode preset cache ---
+# --------------------------------------------------------------------
+# Auto-mode cache + signature
+# --------------------------------------------------------------------
+
 # Stores best preset per (measurement + key settings) signature, so next run can start from it.
 AUTO_MODE_CACHE_ENABLED = True
 AUTO_MODE_CACHE_MAX_ITEMS = 64
 AUTO_MODE_CACHE_FILENAME = "camillafir_auto_mode_cache.json"
 AUTO_MODE_CACHE_FILTER_KEYS = ("linear", "mixed", "minimum", "asym")
 _AUTO_CACHE_VERSION_MISMATCH_LOGGED = False
-
-
-def _auto_cache_path() -> str:
-    # Preferred: platform-correct app data dir.
-    preferred_base = os.fspath(camillafir_data_dir())
-    preferred_path = os.path.join(preferred_base, AUTO_MODE_CACHE_FILENAME)
-    legacy_base = os.path.join(os.path.expanduser("~"), ".camillafir")
-    legacy_path = os.path.join(legacy_base, AUTO_MODE_CACHE_FILENAME)
-
-    try:
-        os.makedirs(preferred_base, exist_ok=True)
-    except Exception:
-        # Keep legacy fallback writable if preferred base is not available.
-        try:
-            os.makedirs(legacy_base, exist_ok=True)
-        except Exception:
-            pass
-        return legacy_path
-
-    # One-time migration from legacy location to new platform path.
-    try:
-        if (not os.path.isfile(preferred_path)) and os.path.isfile(legacy_path):
-            with open(legacy_path, "rb") as src_f:
-                payload = src_f.read()
-            with open(preferred_path, "wb") as dst_f:
-                dst_f.write(payload)
-            logger.info(f"Automatic mode cache migrated to: {preferred_path}")
-    except Exception:
-        # If migration fails, continue using legacy path to preserve behavior.
-        return legacy_path
-
-    return preferred_path
-
-
-def get_auto_mode_cache_path() -> str:
-    """Return active auto-mode cache file path."""
-    return _auto_cache_path()
-
-
-def _auto_program_version(base_data: dict | None) -> str:
-    try:
-        return str((base_data or {}).get("program_version", "") or "").strip()
-    except Exception:
-        return ""
-
-
-def _auto_filter_cache_key(base_data: dict | None = None, *, filter_type: str | None = None) -> str:
-    ft = str(
-        filter_type
-        if filter_type is not None
-        else (base_data or {}).get("filter_type", "")
-        or ""
-    ).strip().lower()
-    if ft in AUTO_MODE_CACHE_FILTER_KEYS:
-        return str(ft)
-    if "asym" in ft:
-        return "asym"
-    if "mixed" in ft:
-        return "mixed"
-    if "minimum" in ft or "minphase" in ft or ("min" in ft and "phase" in ft):
-        return "minimum"
-    if "linear" in ft:
-        return "linear"
-    return "mixed"
-
-
-def _auto_cache_bucket_template() -> dict:
-    return {
-        "items": {},
-        "target_by_measurement": {},
-        "last_used_best": {},
-    }
-
-
-def _auto_cache_empty(*, program_version: str | None = None) -> dict:
-    out = {
-        "v": 3,
-        "items": {},
-        "target_by_measurement": {},
-        "by_filter": {},
-    }
-    ver = str(program_version or "").strip()
-    if ver:
-        out["program_version"] = str(ver)
-    for k in AUTO_MODE_CACHE_FILTER_KEYS:
-        out["by_filter"][str(k)] = _auto_cache_bucket_template()
-    return out
-
-
-def _auto_cache_bucket(
-    cache: dict,
-    *,
-    filter_key: str | None,
-    create: bool = False,
-) -> dict | None:
-    if not isinstance(cache, dict):
-        return None
-    by_filter = cache.get("by_filter", {})
-    if not isinstance(by_filter, dict):
-        if not bool(create):
-            return None
-        by_filter = {}
-        cache["by_filter"] = by_filter
-    fk = _auto_filter_cache_key(filter_type=str(filter_key or ""))
-    bucket = by_filter.get(fk)
-    if not isinstance(bucket, dict):
-        if not bool(create):
-            return None
-        bucket = _auto_cache_bucket_template()
-        by_filter[fk] = bucket
-    if bool(create):
-        if not isinstance(bucket.get("items", {}), dict):
-            bucket["items"] = {}
-        if not isinstance(bucket.get("target_by_measurement", {}), dict):
-            bucket["target_by_measurement"] = {}
-        if not isinstance(bucket.get("last_used_best", {}), dict):
-            bucket["last_used_best"] = {}
-    return bucket
-
-
-def _auto_goal_norm(goal: str | None) -> str:
-    goal_norm = str(goal or AUTO_MODE_GOAL_DEFAULT).strip().lower()
-    goal_aliases = {
-        "c": AUTO_MODE_GOAL_FLAT,
-        "acoustic": AUTO_MODE_GOAL_FLAT,
-        "hybrid": AUTO_MODE_GOAL_LOW_RIPPLE,
-        "room_safe": AUTO_MODE_GOAL_ROOM_SAFE,
-        "roomsafe": AUTO_MODE_GOAL_ROOM_SAFE,
-        "low_ripple": AUTO_MODE_GOAL_LOW_RIPPLE,
-        "lowripple": AUTO_MODE_GOAL_LOW_RIPPLE,
-    }
-    goal_norm = str(goal_aliases.get(goal_norm, goal_norm))
-    if goal_norm not in (
-        AUTO_MODE_GOAL_DEFAULT,
-        AUTO_MODE_GOAL_ROOM_SAFE,
-        AUTO_MODE_GOAL_LOW_RIPPLE,
-        AUTO_MODE_GOAL_FLAT,
-    ):
-        goal_norm = AUTO_MODE_GOAL_DEFAULT
-    return str(goal_norm)
 
 
 AUTO_MODE_PHASE1_PLATEAU_ROUNDS = 5
@@ -334,943 +296,6 @@ AUTO_MODE_BUILTIN_TARGET_LOOKUP = {
     str(name).strip().lower(): str(name).strip()
     for name in AUTO_MODE_BUILTIN_TARGETS
 }
-
-
-def _auto_builtin_target_name(hc_mode: str | None) -> str | None:
-    """Return canonical built-in target name or None for non built-ins."""
-    key = str(hc_mode or "").strip().lower()
-    if not key:
-        return None
-    return AUTO_MODE_BUILTIN_TARGET_LOOKUP.get(key)
-
-
-def _auto_hash_array(a: np.ndarray, *, decimals: int = 4, max_len: int = 1200) -> str:
-    """
-    Stable-ish hash for numeric arrays:
-      - flatten
-      - drop non-finite
-      - downsample to max_len points
-      - round
-      - sha256
-    """
-    try:
-        x = np.asarray(a, dtype=float).reshape(-1)
-    except Exception:
-        return ""
-    if x.size <= 0:
-        return ""
-    m = np.isfinite(x)
-    x = x[m]
-    if x.size <= 0:
-        return ""
-    if x.size > int(max_len):
-        idx = np.linspace(0, x.size - 1, int(max_len)).astype(int)
-        x = x[idx]
-    x = np.round(x, int(decimals))
-    b = x.astype(np.float32).tobytes()
-    return hashlib.sha256(b).hexdigest()
-
-
-def _auto_measurement_signature(measurements: dict) -> str:
-    fL = measurements.get("f_l")
-    mL = measurements.get("m_l")
-    fR = measurements.get("f_r")
-    mR = measurements.get("m_r")
-    h = hashlib.sha256()
-    h.update(_auto_hash_array(np.asarray(fL) if fL is not None else np.asarray([])).encode("ascii", "ignore"))
-    h.update(_auto_hash_array(np.asarray(mL) if mL is not None else np.asarray([])).encode("ascii", "ignore"))
-    h.update(_auto_hash_array(np.asarray(fR) if fR is not None else np.asarray([])).encode("ascii", "ignore"))
-    h.update(_auto_hash_array(np.asarray(mR) if mR is not None else np.asarray([])).encode("ascii", "ignore"))
-    return h.hexdigest()
-
-
-def _auto_signature(
-    *,
-    base_data: dict,
-    measurements: dict,
-    fs_v: int,
-    taps_v: int,
-    xos: list,
-    hpf: dict | None,
-    hc_mode: str | None = None,
-    include_hc_mode: bool = True,
-) -> str:
-    """
-    Signature for caching:
-      - measurement response (f/m arrays L+R)
-      - key settings that affect search space and result
-    """
-    ft = str(base_data.get("filter_type", "") or "").strip().lower()
-    h = hashlib.sha256()
-    h.update(_auto_measurement_signature(measurements).encode("ascii", "ignore"))
-    keys = {
-        "fs": int(fs_v),
-        "taps": int(taps_v),
-        "filter_type": ft,
-        "auto_goal": str(_auto_goal(base_data)),
-        "enable_tdc": bool(base_data.get("enable_tdc", True)),
-        "enable_afdw": bool(base_data.get("enable_afdw", True)),
-        "bass_first_ai": bool(base_data.get("bass_first_ai", True)),
-        "mag_c_max": float(_auto_safe_float(base_data.get("mag_c_max", 250.0), 250.0)),
-        "_auto_mag_c_min_hz": float(_auto_safe_float(base_data.get("_auto_mag_c_min_hz", float("nan")), float("nan"))),
-        "_auto_low_bass_cut_hz": float(_auto_safe_float(base_data.get("_auto_low_bass_cut_hz", float("nan")), float("nan"))),
-        "_auto_exc_freq_hz": float(_auto_safe_float(base_data.get("_auto_exc_freq_hz", float("nan")), float("nan"))),
-        "xos": xos if isinstance(xos, list) else [],
-        "hpf": hpf if isinstance(hpf, dict) or hpf is None else str(hpf),
-    }
-    if bool(include_hc_mode):
-        keys["hc_mode"] = str(hc_mode or base_data.get("hc_mode", "") or "").strip()
-    try:
-        h.update(json.dumps(keys, sort_keys=True, default=str).encode("utf-8"))
-    except Exception:
-        h.update(str(keys).encode("utf-8", "ignore"))
-    return h.hexdigest()
-
-
-def _auto_seed_from_signature(
-    *,
-    base_data: dict,
-    measurements: dict,
-    fs_v: int,
-    taps_v: int,
-    xos: list,
-    hpf: dict | None,
-    hc_mode: str | None = None,
-    include_hc_mode: bool = True,
-) -> int:
-    """
-    Deterministic RNG seed for auto-mode trials.
-    Same measurements + same key settings => same seed => reproducible trials/results.
-    """
-    try:
-        sig = _auto_signature(
-            base_data=base_data,
-            measurements=measurements,
-            fs_v=int(fs_v),
-            taps_v=int(taps_v),
-            xos=xos,
-            hpf=hpf,
-            hc_mode=hc_mode,
-            include_hc_mode=bool(include_hc_mode),
-        )
-        if not sig:
-            raise ValueError("empty signature")
-        # Use first 8 hex chars => 32-bit seed.
-        return int(str(sig)[:8], 16) & 0xFFFFFFFF
-    except Exception:
-        # Fallback: measurement signature only.
-        try:
-            msig = _auto_measurement_signature(measurements or {})
-            return int(str(msig)[:8], 16) & 0xFFFFFFFF if msig else 0
-        except Exception:
-            return 0
-
-
-def _auto_apply_seed(seed: int) -> None:
-    """
-    Apply deterministic seeding for both numpy Generator usage and any legacy
-    random/np.random usage elsewhere.
-    """
-    try:
-        s = int(seed) & 0xFFFFFFFF
-    except Exception:
-        s = 0
-    try:
-        random.seed(s)
-    except Exception:
-        pass
-    try:
-        np.random.seed(s)
-    except Exception:
-        pass
-
-
-def _auto_cache_load(*, program_version: str | None = None) -> dict:
-    global _AUTO_CACHE_VERSION_MISMATCH_LOGGED
-    path = _auto_cache_path()
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            obj = json.load(f)
-        if not isinstance(obj, dict):
-            obj = {}
-        expected_ver = str(program_version or "").strip()
-        if not expected_ver:
-            return obj
-        cached_ver = str(obj.get("program_version", "") or "").strip()
-        if cached_ver == expected_ver:
-            return obj
-        if not bool(_AUTO_CACHE_VERSION_MISMATCH_LOGGED):
-            logger.info(
-                "Automatic mode cache version mismatch: "
-                f"cached='{cached_ver or 'n/a'}', current='{expected_ver}'. "
-                "Ignoring cache and running fresh trials."
-            )
-            _AUTO_CACHE_VERSION_MISMATCH_LOGGED = True
-        return _auto_cache_empty(program_version=expected_ver)
-    except Exception:
-        expected_ver = str(program_version or "").strip()
-        if expected_ver:
-            return _auto_cache_empty(program_version=expected_ver)
-        return {}
-
-
-def _auto_cache_save(cache: dict, *, program_version: str | None = None) -> None:
-    path = _auto_cache_path()
-    try:
-        cache_obj = dict(cache or {})
-        try:
-            cache_obj["v"] = int(max(3, int(cache_obj.get("v", 0) or 0)))
-        except Exception:
-            cache_obj["v"] = 3
-        by_filter = cache_obj.get("by_filter", {})
-        if not isinstance(by_filter, dict):
-            by_filter = {}
-        for k in AUTO_MODE_CACHE_FILTER_KEYS:
-            if not isinstance(by_filter.get(k), dict):
-                by_filter[k] = _auto_cache_bucket_template()
-            else:
-                if not isinstance(by_filter[k].get("items", {}), dict):
-                    by_filter[k]["items"] = {}
-                if not isinstance(by_filter[k].get("target_by_measurement", {}), dict):
-                    by_filter[k]["target_by_measurement"] = {}
-                if not isinstance(by_filter[k].get("last_used_best", {}), dict):
-                    by_filter[k]["last_used_best"] = {}
-        cache_obj["by_filter"] = by_filter
-        ver = str(program_version or cache_obj.get("program_version", "") or "").strip()
-        if ver:
-            cache_obj["program_version"] = str(ver)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(cache_obj, f, indent=2, sort_keys=True)
-        os.replace(tmp, path)
-    except Exception:
-        # best-effort only
-        return
-
-
-def _auto_cache_get_entry(
-    sig: str,
-    *,
-    filter_key: str | None = None,
-    program_version: str | None = None,
-) -> dict | None:
-    if not sig:
-        return None
-    cache = _auto_cache_load(program_version=program_version)
-    bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=False)
-    bucket_items = {}
-    if isinstance(bucket, dict):
-        raw_bucket_items = bucket.get("items", {})
-        if isinstance(raw_bucket_items, dict):
-            bucket_items = raw_bucket_items
-    if isinstance(bucket_items, dict):
-        entry = bucket_items.get(sig)
-        if isinstance(entry, dict):
-            return dict(entry)
-        if len(bucket_items) > 0:
-            return None
-    # Legacy fallback: old cache file without filter buckets.
-    items = cache.get("items", {})
-    if isinstance(items, dict):
-        entry = items.get(sig)
-        return dict(entry) if isinstance(entry, dict) else None
-    return None
-
-
-def _auto_cache_get_best(
-    sig: str,
-    *,
-    filter_key: str | None = None,
-    program_version: str | None = None,
-) -> dict | None:
-    entry = _auto_cache_get_entry(
-        sig,
-        filter_key=filter_key,
-        program_version=program_version,
-    )
-    if not isinstance(entry, dict):
-        return None
-    preset = entry.get("best_preset")
-    return dict(preset) if isinstance(preset, dict) else None
-
-
-def _auto_cache_get_best_target(
-    sig: str,
-    *,
-    filter_key: str | None = None,
-    program_version: str | None = None,
-) -> str | None:
-    entry = _auto_cache_get_entry(
-        sig,
-        filter_key=filter_key,
-        program_version=program_version,
-    )
-    if not isinstance(entry, dict):
-        return None
-    hc = str(entry.get("best_target_curve", entry.get("best_hc_mode", "")) or "").strip()
-    return _auto_builtin_target_name(hc)
-
-
-def _auto_cache_get_target_for_measurements(
-    measurements: dict,
-    *,
-    goal: str = AUTO_MODE_GOAL_DEFAULT,
-    filter_key: str | None = None,
-    program_version: str | None = None,
-) -> dict | None:
-    goal_norm = _auto_goal_norm(goal)
-    msig = _auto_measurement_signature(measurements or {})
-    if not msig:
-        return None
-    cache = _auto_cache_load(program_version=program_version)
-
-    # Preferred map: target selected by measurement signature.
-    bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=False)
-    target_map = {}
-    if isinstance(bucket, dict):
-        raw_target_map = bucket.get("target_by_measurement", {})
-        if isinstance(raw_target_map, dict):
-            target_map = raw_target_map
-    if isinstance(target_map, dict):
-        direct = target_map.get(f"{msig}|{goal_norm}")
-        if isinstance(direct, dict):
-            return dict(direct)
-        direct_legacy = target_map.get(msig)
-        if isinstance(direct_legacy, dict):
-            entry_goal = _auto_goal_norm(str(direct_legacy.get("auto_goal", AUTO_MODE_GOAL_DEFAULT) or AUTO_MODE_GOAL_DEFAULT))
-            if entry_goal == goal_norm:
-                return dict(direct_legacy)
-        if len(target_map) > 0:
-            return None
-    # Legacy fallback: old cache file without filter buckets.
-    target_map_legacy = cache.get("target_by_measurement", {})
-    if isinstance(target_map_legacy, dict):
-        direct = target_map_legacy.get(f"{msig}|{goal_norm}")
-        if isinstance(direct, dict):
-            return dict(direct)
-        direct_legacy = target_map_legacy.get(msig)
-        if isinstance(direct_legacy, dict):
-            entry_goal = _auto_goal_norm(str(direct_legacy.get("auto_goal", AUTO_MODE_GOAL_DEFAULT) or AUTO_MODE_GOAL_DEFAULT))
-            if entry_goal == goal_norm:
-                return dict(direct_legacy)
-
-    # Backward compatibility: check legacy item entries if they carry measurement_sig.
-    items = {}
-    if isinstance(bucket, dict):
-        raw_items = bucket.get("items", {})
-        if isinstance(raw_items, dict):
-            items = raw_items
-    if not items:
-        items = cache.get("items", {})
-    if not isinstance(items, dict):
-        return None
-    best = None
-    best_t = -1
-    for entry in items.values():
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("measurement_sig", "") or "") != str(msig):
-            continue
-        entry_goal = _auto_goal_norm(str(entry.get("auto_goal", AUTO_MODE_GOAL_DEFAULT) or AUTO_MODE_GOAL_DEFAULT))
-        if entry_goal != goal_norm:
-            continue
-        try:
-            t = int(entry.get("t", 0) or 0)
-        except Exception:
-            t = 0
-        if t >= best_t:
-            best_t = int(t)
-            best = dict(entry)
-    return dict(best) if isinstance(best, dict) else None
-
-
-def _auto_cache_put_target_for_measurements(
-    *,
-    measurements: dict,
-    best_hc_mode: str | None,
-    best_preset: dict,
-    best_metrics: dict | None = None,
-    goal: str = AUTO_MODE_GOAL_DEFAULT,
-    filter_key: str | None = None,
-    program_version: str | None = None,
-) -> None:
-    hc_val = str(best_hc_mode or "").strip()
-    if not hc_val:
-        return
-    msig = _auto_measurement_signature(measurements or {})
-    if not msig:
-        return
-    cache = _auto_cache_load(program_version=program_version)
-    bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=True)
-    if not isinstance(bucket, dict):
-        return
-    target_map = bucket.get("target_by_measurement", {})
-    if not isinstance(target_map, dict):
-        target_map = {}
-    goal_norm = _auto_goal_norm(goal)
-    scoped_key = f"{msig}|{goal_norm}"
-    target_map[str(scoped_key)] = {
-        "t": int(time.time()),
-        "measurement_sig": str(msig),
-        "auto_goal": str(goal_norm),
-        "filter_key": str(_auto_filter_cache_key(filter_type=filter_key)),
-        "best_target_curve": hc_val,
-        "best_hc_mode": hc_val,
-        "best_preset": dict(best_preset or {}),
-        "best_rank": float(_auto_safe_float((best_metrics or {}).get("rank_score", float("nan")), float("nan"))),
-    }
-    try:
-        if len(target_map) > int(AUTO_MODE_CACHE_MAX_ITEMS):
-            sorted_items = sorted(
-                target_map.items(),
-                key=lambda kv: int((kv[1] or {}).get("t", 0) or 0),
-                reverse=True,
-            )
-            target_map = dict(sorted_items[: int(AUTO_MODE_CACHE_MAX_ITEMS)])
-    except Exception:
-        pass
-    bucket["target_by_measurement"] = target_map
-    cache["v"] = 3
-    _auto_cache_save(cache, program_version=program_version)
-
-
-def _auto_cache_put_best(
-    sig: str,
-    *,
-    best_preset: dict,
-    best_metrics: dict | None = None,
-    best_hc_mode: str | None = None,
-    measurement_sig: str | None = None,
-    goal: str = AUTO_MODE_GOAL_DEFAULT,
-    filter_key: str | None = None,
-    program_version: str | None = None,
-) -> None:
-    if not sig or not isinstance(best_preset, dict):
-        return
-    cache = _auto_cache_load(program_version=program_version)
-    bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=True)
-    if not isinstance(bucket, dict):
-        return
-    items = bucket.get("items", {})
-    if not isinstance(items, dict):
-        items = {}
-    entry = {
-        "t": int(time.time()),
-        "auto_goal": str(_auto_goal_norm(goal)),
-        "filter_key": str(_auto_filter_cache_key(filter_type=filter_key)),
-        "best_preset": dict(best_preset),
-        "best_rank": float(_auto_safe_float((best_metrics or {}).get("rank_score", float("nan")), float("nan"))),
-    }
-    hc_val = str(best_hc_mode or "").strip()
-    if hc_val:
-        entry["best_target_curve"] = hc_val
-        entry["best_hc_mode"] = hc_val
-    msig = str(measurement_sig or "").strip()
-    if msig:
-        entry["measurement_sig"] = msig
-    items[str(sig)] = entry
-    try:
-        if len(items) > int(AUTO_MODE_CACHE_MAX_ITEMS):
-            sorted_items = sorted(
-                items.items(),
-                key=lambda kv: int((kv[1] or {}).get("t", 0) or 0),
-                reverse=True,
-            )
-            items = dict(sorted_items[: int(AUTO_MODE_CACHE_MAX_ITEMS)])
-    except Exception:
-        pass
-    bucket["items"] = items
-    cache["v"] = 3
-    _auto_cache_save(cache, program_version=program_version)
-
-
-def _auto_cache_get_last_used_best(
-    *,
-    goal: str = AUTO_MODE_GOAL_DEFAULT,
-    filter_key: str | None = None,
-    program_version: str | None = None,
-) -> dict | None:
-    goal_norm = _auto_goal_norm(goal)
-    cache = _auto_cache_load(program_version=program_version)
-    bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=False)
-    last_map = {}
-    if isinstance(bucket, dict):
-        raw_last_map = bucket.get("last_used_best", {})
-        if isinstance(raw_last_map, dict):
-            last_map = raw_last_map
-    if isinstance(last_map, dict):
-        direct = last_map.get(str(goal_norm))
-        if isinstance(direct, dict):
-            return dict(direct)
-        if len(last_map) > 0:
-            return None
-    # Legacy fallback: global map if older code used it.
-    legacy_map = cache.get("last_used_best", {})
-    if not isinstance(legacy_map, dict):
-        return None
-    direct = legacy_map.get(str(goal_norm))
-    return dict(direct) if isinstance(direct, dict) else None
-
-
-def _auto_cache_put_last_used_best(
-    *,
-    best_preset: dict,
-    best_metrics: dict | None = None,
-    best_hc_mode: str | None = None,
-    measurement_sig: str | None = None,
-    goal: str = AUTO_MODE_GOAL_DEFAULT,
-    filter_key: str | None = None,
-    program_version: str | None = None,
-) -> None:
-    if not isinstance(best_preset, dict) or not best_preset:
-        return
-    goal_norm = _auto_goal_norm(goal)
-    cache = _auto_cache_load(program_version=program_version)
-    bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=True)
-    if not isinstance(bucket, dict):
-        return
-    last_map = bucket.get("last_used_best", {})
-    if not isinstance(last_map, dict):
-        last_map = {}
-    entry = {
-        "t": int(time.time()),
-        "auto_goal": str(goal_norm),
-        "filter_key": str(_auto_filter_cache_key(filter_type=filter_key)),
-        "best_preset": dict(best_preset or {}),
-        "best_rank": float(_auto_safe_float((best_metrics or {}).get("rank_score", float("nan")), float("nan"))),
-    }
-    hc_val = str(best_hc_mode or "").strip()
-    if hc_val:
-        entry["best_target_curve"] = hc_val
-        entry["best_hc_mode"] = hc_val
-    msig = str(measurement_sig or "").strip()
-    if msig:
-        entry["measurement_sig"] = msig
-    last_map[str(goal_norm)] = entry
-    bucket["last_used_best"] = last_map
-    cache["v"] = 3
-    _auto_cache_save(cache, program_version=program_version)
-
-
-def _auto_safe_float(value, default=0.0) -> float:
-    try:
-        x = float(value)
-        if np.isfinite(x):
-            return float(x)
-    except Exception:
-        pass
-    return float(default)
-
-
-def _auto_safe_bool(value, default=False) -> bool:
-    if isinstance(value, bool):
-        return bool(value)
-    if isinstance(value, (int, float)):
-        return bool(value)
-    try:
-        s = str(value or "").strip().lower()
-    except Exception:
-        return bool(default)
-    if s in ("1", "true", "yes", "y", "on"):
-        return True
-    if s in ("0", "false", "no", "n", "off"):
-        return False
-    return bool(default)
-
-
-def _auto_safe_int(value, default: int = 0) -> int:
-    try:
-        return int(float(value))
-    except Exception:
-        return int(default)
-
-
-def _auto_optimizer_backend(base_data: dict | None, *, default_optuna_enabled: bool = False) -> str:
-    env_raw = str(os.environ.get("CAMILLAFIR_AUTO_MODE_OPTIMIZER", "") or "").strip().lower()
-    if env_raw in ("builtin", "optuna"):
-        return str(env_raw)
-
-    data = dict(base_data or {})
-    raw = str(data.get("auto_mode_optimizer", "") or "").strip().lower()
-    if raw in ("builtin", "optuna"):
-        return str(raw)
-
-    if _auto_safe_bool(data.get("auto_mode_optuna", default_optuna_enabled), default_optuna_enabled):
-        return "optuna"
-    return "builtin"
-
-
-@dataclass(frozen=True)
-class AutoModeConfig:
-    trials: int = AUTO_MODE_TRIALS
-    refine_trials: int = AUTO_MODE_REFINE_TRIALS
-    phase1_plateau_rounds: int = AUTO_MODE_PHASE1_PLATEAU_ROUNDS
-    local_refine_enabled: bool = AUTO_MODE_LOCAL_REFINE_ENABLED
-    local_refine_top_k: int = AUTO_MODE_LOCAL_REFINE_TOP_K
-    local_refine_trials_per_top: int = AUTO_MODE_LOCAL_REFINE_TRIALS_PER_TOP
-    local_refine_shrink: float = AUTO_MODE_LOCAL_REFINE_SHRINK
-    local_refine_keep_best_phase1: bool = AUTO_MODE_LOCAL_REFINE_KEEP_BEST_PHASE1
-    phase3_micro_enabled: bool = AUTO_MODE_PHASE3_MICRO_ENABLED
-    phase3_micro_trials: int = AUTO_MODE_PHASE3_MICRO_TRIALS
-    adaptive_shrink_max: float = AUTO_MODE_ADAPTIVE_SHRINK_MAX
-    phase2_pareto_pool_min: int = AUTO_MODE_PHASE2_PARETO_POOL_MIN
-    phase2_pareto_pool_max: int = AUTO_MODE_PHASE2_PARETO_POOL_MAX
-    phase2_pareto_rank_window: float = AUTO_MODE_PHASE2_PARETO_RANK_WINDOW
-    phase2_pareto_acoustic_drop: float = AUTO_MODE_PHASE2_PARETO_ACOUSTIC_DROP
-    phase2_hard_gate_enabled: bool = AUTO_MODE_PHASE2_HARD_GATE_ENABLED
-    phase2_hard_gate_min_keep: int = AUTO_MODE_PHASE2_HARD_GATE_MIN_KEEP
-    phase2_hard_gate_keep_event_fraction: float = AUTO_MODE_PHASE2_HARD_GATE_KEEP_EVENT_FRACTION
-    phase2_hard_gate_keep_ripple_fraction: float = AUTO_MODE_PHASE2_HARD_GATE_KEEP_RIPPLE_FRACTION
-    phase2_hard_gate_fallback_to_rank: bool = AUTO_MODE_PHASE2_HARD_GATE_FALLBACK_TO_RANK
-    refine_mode_soft_k: float = AUTO_MODE_REFINE_MODE_SOFT_K
-    refine_tiebreak_rank_eps: float = AUTO_MODE_REFINE_TIEBREAK_RANK_EPS
-    exc_min_hz: float = AUTO_MODE_EXC_MIN_HZ
-    exc_max_hz: float = AUTO_MODE_EXC_MAX_HZ
-    cache_enabled: bool = AUTO_MODE_CACHE_ENABLED
-    optuna_pilot_enabled: bool = AUTO_MODE_OPTUNA_PILOT_ENABLED
-    optuna_pilot_min_trials: int = AUTO_MODE_OPTUNA_PILOT_MIN_TRIALS
-    optuna_pilot_startup_trials: int = AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS
-
-    @classmethod
-    def from_base_data(cls, base_data: dict | None) -> "AutoModeConfig":
-        data = dict(base_data or {})
-        return cls(
-            trials=max(1, _auto_safe_int(data.get("auto_mode_trials", AUTO_MODE_TRIALS), AUTO_MODE_TRIALS)),
-            refine_trials=max(1, _auto_safe_int(data.get("auto_mode_refine_trials", AUTO_MODE_REFINE_TRIALS), AUTO_MODE_REFINE_TRIALS)),
-            phase1_plateau_rounds=max(
-                1,
-                _auto_safe_int(
-                    data.get("auto_mode_phase1_plateau_rounds", AUTO_MODE_PHASE1_PLATEAU_ROUNDS),
-                    AUTO_MODE_PHASE1_PLATEAU_ROUNDS,
-                ),
-            ),
-            local_refine_enabled=_auto_safe_bool(
-                data.get("auto_mode_local_refine_enabled", AUTO_MODE_LOCAL_REFINE_ENABLED),
-                AUTO_MODE_LOCAL_REFINE_ENABLED,
-            ),
-            local_refine_top_k=max(
-                1,
-                _auto_safe_int(data.get("auto_mode_local_refine_top_k", AUTO_MODE_LOCAL_REFINE_TOP_K), AUTO_MODE_LOCAL_REFINE_TOP_K),
-            ),
-            local_refine_trials_per_top=max(
-                1,
-                _auto_safe_int(
-                    data.get("auto_mode_local_refine_trials_per_top", AUTO_MODE_LOCAL_REFINE_TRIALS_PER_TOP),
-                    AUTO_MODE_LOCAL_REFINE_TRIALS_PER_TOP,
-                ),
-            ),
-            local_refine_shrink=float(
-                np.clip(
-                    _auto_safe_float(data.get("auto_mode_local_refine_shrink", AUTO_MODE_LOCAL_REFINE_SHRINK), AUTO_MODE_LOCAL_REFINE_SHRINK),
-                    0.05,
-                    1.50,
-                )
-            ),
-            local_refine_keep_best_phase1=_auto_safe_bool(
-                data.get("auto_mode_local_refine_keep_phase1", AUTO_MODE_LOCAL_REFINE_KEEP_BEST_PHASE1),
-                AUTO_MODE_LOCAL_REFINE_KEEP_BEST_PHASE1,
-            ),
-            phase3_micro_enabled=_auto_safe_bool(
-                data.get("auto_mode_phase3_micro_enabled", AUTO_MODE_PHASE3_MICRO_ENABLED),
-                AUTO_MODE_PHASE3_MICRO_ENABLED,
-            ),
-            phase3_micro_trials=max(
-                1,
-                _auto_safe_int(data.get("auto_mode_phase3_micro_trials", AUTO_MODE_PHASE3_MICRO_TRIALS), AUTO_MODE_PHASE3_MICRO_TRIALS),
-            ),
-            adaptive_shrink_max=float(
-                np.clip(
-                    _auto_safe_float(data.get("auto_mode_adaptive_shrink_max", AUTO_MODE_ADAPTIVE_SHRINK_MAX), AUTO_MODE_ADAPTIVE_SHRINK_MAX),
-                    0.05,
-                    1.0,
-                )
-            ),
-            phase2_pareto_pool_min=max(
-                1,
-                _auto_safe_int(data.get("auto_mode_phase2_pareto_pool_min", AUTO_MODE_PHASE2_PARETO_POOL_MIN), AUTO_MODE_PHASE2_PARETO_POOL_MIN),
-            ),
-            phase2_pareto_pool_max=max(
-                1,
-                _auto_safe_int(data.get("auto_mode_phase2_pareto_pool_max", AUTO_MODE_PHASE2_PARETO_POOL_MAX), AUTO_MODE_PHASE2_PARETO_POOL_MAX),
-            ),
-            phase2_pareto_rank_window=max(
-                0.0,
-                _auto_safe_float(
-                    data.get("auto_mode_phase2_pareto_rank_window", AUTO_MODE_PHASE2_PARETO_RANK_WINDOW),
-                    AUTO_MODE_PHASE2_PARETO_RANK_WINDOW,
-                ),
-            ),
-            phase2_pareto_acoustic_drop=max(
-                0.0,
-                _auto_safe_float(
-                    data.get("auto_mode_phase2_pareto_acoustic_drop", AUTO_MODE_PHASE2_PARETO_ACOUSTIC_DROP),
-                    AUTO_MODE_PHASE2_PARETO_ACOUSTIC_DROP,
-                ),
-            ),
-            phase2_hard_gate_enabled=_auto_safe_bool(
-                data.get("auto_mode_phase2_hard_gate_enabled", AUTO_MODE_PHASE2_HARD_GATE_ENABLED),
-                AUTO_MODE_PHASE2_HARD_GATE_ENABLED,
-            ),
-            phase2_hard_gate_min_keep=max(
-                1,
-                _auto_safe_int(data.get("auto_mode_phase2_hard_gate_min_keep", AUTO_MODE_PHASE2_HARD_GATE_MIN_KEEP), AUTO_MODE_PHASE2_HARD_GATE_MIN_KEEP),
-            ),
-            phase2_hard_gate_keep_event_fraction=float(
-                np.clip(
-                    _auto_safe_float(
-                        data.get("auto_mode_phase2_hard_gate_keep_event_fraction", AUTO_MODE_PHASE2_HARD_GATE_KEEP_EVENT_FRACTION),
-                        AUTO_MODE_PHASE2_HARD_GATE_KEEP_EVENT_FRACTION,
-                    ),
-                    0.05,
-                    1.0,
-                )
-            ),
-            phase2_hard_gate_keep_ripple_fraction=float(
-                np.clip(
-                    _auto_safe_float(
-                        data.get("auto_mode_phase2_hard_gate_keep_ripple_fraction", AUTO_MODE_PHASE2_HARD_GATE_KEEP_RIPPLE_FRACTION),
-                        AUTO_MODE_PHASE2_HARD_GATE_KEEP_RIPPLE_FRACTION,
-                    ),
-                    0.05,
-                    1.0,
-                )
-            ),
-            phase2_hard_gate_fallback_to_rank=_auto_safe_bool(
-                data.get("auto_mode_phase2_hard_gate_fallback_to_rank", AUTO_MODE_PHASE2_HARD_GATE_FALLBACK_TO_RANK),
-                AUTO_MODE_PHASE2_HARD_GATE_FALLBACK_TO_RANK,
-            ),
-            refine_mode_soft_k=max(
-                0.0,
-                _auto_safe_float(data.get("auto_mode_refine_mode_soft_k", AUTO_MODE_REFINE_MODE_SOFT_K), AUTO_MODE_REFINE_MODE_SOFT_K),
-            ),
-            refine_tiebreak_rank_eps=max(
-                0.0,
-                _auto_safe_float(
-                    data.get("auto_mode_refine_tiebreak_rank_eps", AUTO_MODE_REFINE_TIEBREAK_RANK_EPS),
-                    AUTO_MODE_REFINE_TIEBREAK_RANK_EPS,
-                ),
-            ),
-            exc_min_hz=max(
-                1.0,
-                _auto_safe_float(data.get("auto_mode_exc_min_hz", AUTO_MODE_EXC_MIN_HZ), AUTO_MODE_EXC_MIN_HZ),
-            ),
-            exc_max_hz=max(
-                1.0,
-                _auto_safe_float(data.get("auto_mode_exc_max_hz", AUTO_MODE_EXC_MAX_HZ), AUTO_MODE_EXC_MAX_HZ),
-            ),
-            cache_enabled=_auto_safe_bool(
-                data.get("auto_mode_cache_enabled", AUTO_MODE_CACHE_ENABLED),
-                AUTO_MODE_CACHE_ENABLED,
-            ),
-            optuna_pilot_enabled=_auto_safe_bool(
-                data.get("auto_mode_optuna", AUTO_MODE_OPTUNA_PILOT_ENABLED),
-                AUTO_MODE_OPTUNA_PILOT_ENABLED,
-            ),
-            optuna_pilot_min_trials=max(
-                1,
-                _auto_safe_int(
-                    data.get("auto_mode_optuna_min_trials", AUTO_MODE_OPTUNA_PILOT_MIN_TRIALS),
-                    AUTO_MODE_OPTUNA_PILOT_MIN_TRIALS,
-                ),
-            ),
-            optuna_pilot_startup_trials=max(
-                1,
-                _auto_safe_int(
-                    data.get("auto_mode_optuna_startup_trials", AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS),
-                    AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS,
-                ),
-            ),
-        )
-
-    def refine_trial_hint(self, goal: str | None) -> int:
-        goal_norm = _auto_goal_norm(goal)
-        hint = int(max(1, self.refine_trials))
-        if bool(self.local_refine_enabled) and goal_norm in (
-            AUTO_MODE_GOAL_DEFAULT,
-            AUTO_MODE_GOAL_ROOM_SAFE,
-            AUTO_MODE_GOAL_LOW_RIPPLE,
-            AUTO_MODE_GOAL_ACOUSTIC,
-            AUTO_MODE_GOAL_HYBRID,
-        ):
-            hint = int(max(1, self.local_refine_top_k) * max(1, self.local_refine_trials_per_top))
-        return int(max(1, hint))
-
-def _auto_trial_workers(base_data: dict | None, n_trials: int) -> int:
-    if (not bool(AUTO_MODE_PARALLEL_ENABLED)) or int(n_trials) < int(AUTO_MODE_PARALLEL_MIN_TRIALS):
-        return 1
-    cpu_n = int(max(1, _auto_safe_int(os.cpu_count(), 1)))
-    env_raw = os.environ.get("CAMILLAFIR_AUTO_MODE_WORKERS", "").strip()
-    req = _auto_safe_int((base_data or {}).get("auto_mode_workers", 0), 0)
-    if env_raw:
-        req = _auto_safe_int(env_raw, req)
-    if req <= 0:
-        req = int(cpu_n)
-    hard_max = int(max(0, _auto_safe_int(AUTO_MODE_PARALLEL_MAX_WORKERS, 0)))
-    if hard_max > 0:
-        req = min(req, hard_max)
-    req = int(max(1, min(int(req), int(cpu_n), int(max(1, n_trials)))))
-    return int(req)
-
-
-def _auto_trial_chunk_size(workers: int) -> int:
-    w = int(max(1, _auto_safe_int(workers, 1)))
-    mul = int(max(1, _auto_safe_int(AUTO_MODE_PARALLEL_BATCH_MULTIPLIER, 2)))
-    return int(max(w, w * mul))
-
-
-def _clip(v, lo, hi):
-    vlo = _auto_safe_float(lo, 0.0)
-    vhi = _auto_safe_float(hi, vlo)
-    if vhi < vlo:
-        vlo, vhi = vhi, vlo
-    return float(np.clip(_auto_safe_float(v, vlo), vlo, vhi))
-
-
-def _auto_is_phase_search_filter(filter_type: str | None) -> bool:
-    fk = str(_auto_filter_cache_key(filter_type=filter_type))
-    return fk in ("linear", "asym")
-
-
-def _auto_phase_limit_clip(value, *, default: float = 400.0) -> float:
-    v = _auto_safe_float(value, float("nan"))
-    if not np.isfinite(v):
-        v = _auto_safe_float(default, 400.0)
-    return _clip(v, float(AUTO_MODE_PHASE_LIMIT_MIN_HZ), float(AUTO_MODE_PHASE_LIMIT_MAX_HZ))
-
-
-def _auto_phase_limit_center(value, *, default: float | None = None) -> float:
-    v = _auto_safe_float(value, float("nan"))
-    lo = float(AUTO_MODE_PHASE_LIMIT_MIN_HZ)
-    hi = float(AUTO_MODE_PHASE_LIMIT_MAX_HZ)
-    if np.isfinite(v) and (lo <= float(v) <= hi):
-        return float(v)
-    d = _auto_safe_float(
-        AUTO_MODE_PHASE_LIMIT_DEFAULT_HZ if default is None else default,
-        AUTO_MODE_PHASE_LIMIT_DEFAULT_HZ,
-    )
-    return float(_clip(d, lo, hi))
-
-
-def _auto_phase_limit_prior_penalty(phase_limit_hz: float, *, filter_key: str | None) -> float:
-    if not _auto_is_phase_search_filter(filter_key):
-        return 0.0
-    pl = _auto_safe_float(phase_limit_hz, float("nan"))
-    if not np.isfinite(pl):
-        return 0.0
-    center = float(
-        _clip(
-            AUTO_MODE_PHASE_LIMIT_PRIOR_CENTER_HZ,
-            AUTO_MODE_PHASE_LIMIT_MIN_HZ,
-            AUTO_MODE_PHASE_LIMIT_MAX_HZ,
-        )
-    )
-    tol = float(max(1.0, _auto_safe_float(AUTO_MODE_PHASE_LIMIT_PRIOR_TOL_HZ, 90.0)))
-    span = float(max(1.0, _auto_safe_float(AUTO_MODE_PHASE_LIMIT_PRIOR_SPAN_HZ, 70.0)))
-    w = float(max(0.0, _auto_safe_float(AUTO_MODE_PHASE_LIMIT_PRIOR_WEIGHT, 1.2)))
-    max_pen = float(max(0.0, _auto_safe_float(AUTO_MODE_PHASE_LIMIT_PRIOR_MAX_PEN, 4.0)))
-    excess = max(0.0, abs(float(pl) - center) - tol)
-    pen = float(w) * ((float(excess) / float(span)) ** 2.0)
-    return float(min(max_pen, max(0.0, pen)))
-
-
-def _jitter(rng, v, sigma, lo, hi, *, base_data: dict | None = None, key: str | None = None, default=None):
-    center = _auto_safe_float(v, float("nan"))
-    if not np.isfinite(center):
-        if key and isinstance(base_data, dict):
-            center = _auto_safe_float(base_data.get(key, default), float("nan"))
-        if not np.isfinite(center):
-            if default is not None:
-                center = _auto_safe_float(default, float("nan"))
-            if not np.isfinite(center):
-                center = 0.5 * (_auto_safe_float(lo, 0.0) + _auto_safe_float(hi, 0.0))
-    sig = max(0.0, _auto_safe_float(sigma, 0.0))
-    if sig <= 0.0:
-        return _clip(center, lo, hi)
-    try:
-        x = float(rng.normal(loc=float(center), scale=float(sig)))
-    except Exception:
-        x = float(center)
-    return _clip(x, lo, hi)
-
-
-def _auto_sample_mag_low_pair(
-    rng,
-    *,
-    mag_center: float,
-    low_center: float,
-    mag_sigma: float,
-    low_sigma: float,
-) -> tuple[float, float]:
-    mag = float(
-        _jitter(
-            rng,
-            mag_center,
-            mag_sigma,
-            float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
-            float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
-            default=mag_center,
-        )
-    )
-    low = float(
-        _jitter(
-            rng,
-            low_center,
-            low_sigma,
-            float(AUTO_MODE_LOW_BASS_MIN_HZ),
-            float(AUTO_MODE_LOW_BASS_MAX_HZ),
-            default=low_center,
-        )
-    )
-    # Keep low-bass policy meaningful: when possible, don't place it below mag_c_min.
-    if np.isfinite(mag) and np.isfinite(low) and float(mag) <= float(AUTO_MODE_LOW_BASS_MAX_HZ):
-        low = float(max(float(low), float(mag)))
-    mag = float(
-        _clip(
-            mag,
-            float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
-            float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
-        )
-    )
-    low = float(
-        _clip(
-            low,
-            float(AUTO_MODE_LOW_BASS_MIN_HZ),
-            float(AUTO_MODE_LOW_BASS_MAX_HZ),
-        )
-    )
-    return float(round(mag, 1)), float(round(low, 1))
-
-
-def _auto_goal(base_data: dict | None, default: str = AUTO_MODE_GOAL_DEFAULT) -> str:
-    g = str((base_data or {}).get("auto_goal", default) or default).strip().lower()
-    return str(_auto_goal_norm(g))
-
-
-def _auto_goal_basis_text(goal: str) -> str:
-    return "rank_score"
-
-
-def _auto_metric_text(metrics: dict | None, goal: str) -> str:
-    m = dict(metrics or {})
-    return f"rank={_auto_safe_float(m.get('rank_score'), 0.0):.3f}"
-
-
-def _auto_target_one_step_milder(hc_name: str) -> str | None:
-    name = str(hc_name or "").strip()
-    if not name:
-        return None
-    ladders = (
-        ("Harman4", "Harman6", "Harman8", "Harman10", "Harman12"),
-        ("BK_Light", "BK_Medium", "BK_Strong"),
-    )
-    for ladder in ladders:
-        if name not in ladder:
-            continue
-        idx = int(ladder.index(name))
-        if idx <= 0:
-            return None
-        return str(ladder[idx - 1])
-    return None
 
 
 def _auto_collect_reflections(st: dict | None) -> list:
@@ -1494,422 +519,9 @@ def _auto_pick_metric(st: dict | None, keys: tuple[str, ...], *, abs_value: bool
     return None
 
 
-def _auto_target_slope_estimate(f_hz, mag_db, *, mask=None) -> float:
-    try:
-        ff = np.asarray(f_hz, dtype=float).reshape(-1)
-        mm = np.asarray(mag_db, dtype=float).reshape(-1)
-    except Exception:
-        return float("nan")
-    if ff.size <= 6 or mm.size != ff.size:
-        return float("nan")
-    m = np.isfinite(ff) & np.isfinite(mm) & (ff > 0.0)
-    try:
-        if mask is not None:
-            mk = np.asarray(mask, dtype=bool).reshape(-1)
-            if mk.size == ff.size:
-                m &= mk
-    except Exception:
-        pass
-    if int(np.count_nonzero(m)) < 6:
-        return float("nan")
-    x = np.log10(ff[m])
-    y = mm[m]
-    if x.size < 6:
-        return float("nan")
-    x_span = float(np.max(x) - np.min(x))
-    if (not np.isfinite(x_span)) or x_span <= 1e-6:
-        return float("nan")
-    try:
-        p = np.polyfit(x, y, 1)
-        slope_db_per_dec = float(p[0])
-    except Exception:
-        return float("nan")
-    return float(slope_db_per_dec * np.log10(2.0))
-
-
-def _auto_target_preselect_score(
-    *,
-    fg,
-    ml_g,
-    mr_g,
-    t_g,
-    lvl_mask,
-    corr_mask,
-    mode_mask,
-) -> dict:
-    ff = np.asarray(fg, dtype=float).reshape(-1)
-    ml_arr = np.asarray(ml_g, dtype=float).reshape(-1)
-    mr_arr = np.asarray(mr_g, dtype=float).reshape(-1)
-    tg_arr = np.asarray(t_g, dtype=float).reshape(-1)
-    n = int(ff.size)
-    if n <= 0 or ml_arr.size != n or mr_arr.size != n or tg_arr.size != n:
-        return {}
-
-    def _safe_mask(raw_mask, *, fallback=None, min_pts: int = 8):
-        try:
-            mk = np.asarray(raw_mask, dtype=bool).reshape(-1)
-        except Exception:
-            mk = np.asarray([], dtype=bool)
-        if mk.size != n:
-            if fallback is not None:
-                mk = np.asarray(fallback, dtype=bool).reshape(-1)
-            else:
-                mk = np.ones(n, dtype=bool)
-        if int(np.count_nonzero(mk)) < int(max(1, min_pts)):
-            if fallback is not None:
-                mk = np.asarray(fallback, dtype=bool).reshape(-1)
-            if mk.size != n or int(np.count_nonzero(mk)) < int(max(1, min_pts)):
-                mk = np.ones(n, dtype=bool)
-        return np.asarray(mk, dtype=bool)
-
-    def _safe_median(v, default=0.0) -> float:
-        vv = np.asarray(v, dtype=float).reshape(-1)
-        vv = vv[np.isfinite(vv)]
-        if vv.size <= 0:
-            return float(default)
-        return float(np.median(vv))
-
-    def _safe_rms(v, default=float("nan")) -> float:
-        vv = np.asarray(v, dtype=float).reshape(-1)
-        vv = vv[np.isfinite(vv)]
-        if vv.size <= 0:
-            return float(default)
-        return float(np.sqrt(np.mean(np.square(vv))))
-
-    def _safe_pos_mean(v, default=0.0) -> float:
-        vv = np.asarray(v, dtype=float).reshape(-1)
-        vv = vv[np.isfinite(vv)]
-        if vv.size <= 0:
-            return float(default)
-        return float(np.mean(np.maximum(vv, 0.0)))
-
-    lvl_m = _safe_mask(lvl_mask, fallback=np.ones(n, dtype=bool), min_pts=8)
-    corr_m = _safe_mask(corr_mask, fallback=np.ones(n, dtype=bool), min_pts=8)
-    mode_m = _safe_mask(mode_mask, fallback=corr_m, min_pts=6)
-
-    off_l = _safe_median(ml_arr[lvl_m] - tg_arr[lvl_m], 0.0)
-    off_r = _safe_median(mr_arr[lvl_m] - tg_arr[lvl_m], 0.0)
-    off = 0.5 * (float(off_l) + float(off_r))
-
-    err_l = ml_arr - (tg_arr + float(off_l))
-    err_r = mr_arr - (tg_arr + float(off_r))
-    err_avg = 0.5 * (err_l + err_r)
-
-    fit_l = _safe_rms(err_l[corr_m], float("nan"))
-    fit_r = _safe_rms(err_r[corr_m], float("nan"))
-    if not np.isfinite(fit_l):
-        fit_l = _safe_rms(err_l, 0.0)
-    if not np.isfinite(fit_r):
-        fit_r = _safe_rms(err_r, 0.0)
-    fit_rms_db = 0.5 * (float(fit_l) + float(fit_r))
-    asym_penalty_db = abs(float(fit_l) - float(fit_r))
-
-    needed_l = (tg_arr + float(off_l)) - ml_arr
-    needed_r = (tg_arr + float(off_r)) - mr_arr
-    total_boost = 0.5 * (
-        _safe_pos_mean(needed_l[corr_m], 0.0)
-        + _safe_pos_mean(needed_r[corr_m], 0.0)
-    )
-    mode_boost = 0.5 * (
-        _safe_pos_mean(needed_l[mode_m], 0.0)
-        + _safe_pos_mean(needed_r[mode_m], 0.0)
-    )
-    boost_raw = 0.65 * float(total_boost) + 0.35 * float(mode_boost)
-    boost_ref = float(max(0.1, _auto_safe_float(AUTO_MODE_TARGET_PRESELECT_MAX_BASS_BOOST_REF_DB, 8.0)))
-    boost_penalty = float(boost_ref * np.tanh(float(boost_raw) / float(boost_ref)))
-
-    slope_meas = _auto_target_slope_estimate(ff, 0.5 * (ml_arr + mr_arr), mask=corr_m)
-    slope_target = _auto_target_slope_estimate(ff, tg_arr, mask=corr_m)
-    slope_penalty = 0.0
-    if np.isfinite(slope_meas) and np.isfinite(slope_target):
-        slope_penalty = abs(float(slope_meas) - float(slope_target))
-
-    mode_fit_rms_db = _safe_rms(err_avg[mode_m], float("nan"))
-    if not np.isfinite(mode_fit_rms_db):
-        mode_fit_rms_db = _safe_rms(err_avg[corr_m], 0.0)
-
-    preselect_score = (
-        float(fit_rms_db)
-        + float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_BOOST_W, 0.22)) * float(boost_penalty)
-        + float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_SLOPE_W, 0.18)) * float(slope_penalty)
-        + float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_ASYM_W, 0.30)) * float(asym_penalty_db)
-        + float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_MODE_W, 0.16)) * float(mode_fit_rms_db)
-    )
-    if not np.isfinite(preselect_score):
-        preselect_score = float(1e9)
-
-    return {
-        "fit_rms_db": float(fit_rms_db),
-        "fit_rms_l_db": float(fit_l),
-        "fit_rms_r_db": float(fit_r),
-        "offset_db": float(off),
-        "offset_l_db": float(off_l),
-        "offset_r_db": float(off_r),
-        "asym_penalty_db": float(asym_penalty_db),
-        "boost_penalty": float(boost_penalty),
-        "slope_penalty": float(slope_penalty),
-        "mode_fit_rms_db": float(mode_fit_rms_db),
-        "preselect_score": float(preselect_score),
-    }
-
-
-def _auto_target_adaptive_shortlist(quick_candidates: list[dict], *, top_n: int) -> tuple[list[dict], dict]:
-    cands = [dict(tc or {}) for tc in list(quick_candidates or []) if isinstance(tc, dict)]
-    if not cands:
-        return [], {}
-
-    def _score(tc: dict) -> float:
-        return float(
-            _auto_safe_float(
-                tc.get("preselect_score", tc.get("fit_rms_db", float("inf"))),
-                float("inf"),
-            )
-        )
-
-    cands = sorted(
-        cands,
-        key=lambda tc: (
-            _score(tc),
-            _auto_safe_float(tc.get("fit_rms_db", float("inf")), float("inf")),
-            str(tc.get("hc_mode", "") or "").strip(),
-        ),
-    )
-    top_n_eff = int(max(1, _auto_safe_int(top_n, AUTO_MODE_TARGET_TOP_N)))
-    n_min = int(max(1, _auto_safe_int(AUTO_MODE_TARGET_TOP_N_MIN, 3)))
-    n_max = int(max(n_min, _auto_safe_int(AUTO_MODE_TARGET_TOP_N_MAX, 6)))
-    spread_db = float(max(0.0, _auto_safe_float(AUTO_MODE_TARGET_TOP_N_SPREAD_DB, 0.35)))
-    best_score = _score(cands[0])
-    spread_based_n = int(
-        sum(1 for tc in cands if _score(tc) <= (float(best_score) + float(spread_db)))
-    )
-    shortlist_n = int(max(top_n_eff, spread_based_n))
-    shortlist_n = int(min(shortlist_n, n_max))
-    shortlist_n = int(max(shortlist_n, n_min))
-    shortlist_n = int(min(shortlist_n, len(cands)))
-    return list(cands[:shortlist_n]), {
-        "best_score": float(best_score),
-        "spread_db": float(spread_db),
-        "spread_based_n": int(spread_based_n),
-        "top_n_eff": int(top_n_eff),
-        "shortlist_n": int(shortlist_n),
-        "candidate_total": int(len(cands)),
-    }
-
-
-def _auto_target_insert_cached_wildcard(
-    shortlisted: list[dict],
-    quick_candidates: list[dict],
-    *,
-    cached_hc_mode: str | None,
-) -> tuple[list[dict], dict]:
-    out = [dict(tc or {}) for tc in list(shortlisted or []) if isinstance(tc, dict)]
-    cached_name = _auto_builtin_target_name(cached_hc_mode)
-    if not cached_name:
-        return out, {"inserted": False, "reason": "no_valid_cache_target"}
-
-    for tc in out:
-        hc = str(tc.get("hc_mode", "") or "").strip()
-        if hc == str(cached_name):
-            tc["from_cache_wildcard"] = True
-            return out, {
-                "inserted": False,
-                "already_present": True,
-                "hc_mode": str(cached_name),
-                "reason": "already_shortlisted",
-            }
-
-    matched = None
-    for tc in list(quick_candidates or []):
-        if not isinstance(tc, dict):
-            continue
-        hc = str(tc.get("hc_mode", "") or "").strip()
-        if hc == str(cached_name):
-            matched = dict(tc)
-            break
-    if not isinstance(matched, dict):
-        return out, {
-            "inserted": False,
-            "already_present": False,
-            "hc_mode": str(cached_name),
-            "reason": "not_in_quick_candidates",
-        }
-
-    matched["from_cache_wildcard"] = True
-    out.append(dict(matched))
-    return out, {
-        "inserted": True,
-        "already_present": False,
-        "hc_mode": str(cached_name),
-        "reason": "inserted",
-    }
-
-
-def _auto_select_builtin_target_curve(
-    data: dict,
-    *,
-    f_l,
-    m_l,
-    f_r,
-    m_r,
-) -> dict | None:
-    try:
-        fl = np.asarray(f_l, dtype=float).reshape(-1)
-        ml = np.asarray(m_l, dtype=float).reshape(-1)
-        fr = np.asarray(f_r, dtype=float).reshape(-1)
-        mr = np.asarray(m_r, dtype=float).reshape(-1)
-    except Exception:
-        return None
-
-    l_ok = bool(fl.size >= 32 and ml.size == fl.size)
-    r_ok = bool(fr.size >= 32 and mr.size == fr.size)
-    if (not l_ok) and (not r_ok):
-        return None
-    if (not l_ok) and r_ok:
-        fl = np.asarray(fr, dtype=float).copy()
-        ml = np.asarray(mr, dtype=float).copy()
-    if (not r_ok) and l_ok:
-        fr = np.asarray(fl, dtype=float).copy()
-        mr = np.asarray(ml, dtype=float).copy()
-
-    def _sorted_xy(f, y):
-        idx = np.argsort(f)
-        ff = np.asarray(f[idx], dtype=float)
-        yy = np.asarray(y[idx], dtype=float)
-        m = np.isfinite(ff) & np.isfinite(yy) & (ff > 0.0)
-        return ff[m], yy[m]
-
-    fl, ml = _sorted_xy(fl, ml)
-    fr, mr = _sorted_xy(fr, mr)
-    if fl.size < 32 and fr.size >= 32:
-        fl = np.asarray(fr, dtype=float).copy()
-        ml = np.asarray(mr, dtype=float).copy()
-    if fr.size < 32 and fl.size >= 32:
-        fr = np.asarray(fl, dtype=float).copy()
-        mr = np.asarray(ml, dtype=float).copy()
-    if fl.size < 32 or fr.size < 32:
-        return None
-
-    try:
-        lvl_min = float(data.get("lvl_min", 500.0) or 500.0)
-        lvl_max = float(data.get("lvl_max", 2000.0) or 2000.0)
-    except Exception:
-        lvl_min, lvl_max = 500.0, 2000.0
-    if not np.isfinite(lvl_min) or not np.isfinite(lvl_max) or lvl_min <= 0.0 or lvl_max <= lvl_min:
-        lvl_min, lvl_max = 500.0, 2000.0
-
-    try:
-        mag_lo = float(data.get("mag_c_min", 20.0) or 20.0)
-        mag_hi = float(data.get("mag_c_max", 250.0) or 250.0)
-    except Exception:
-        mag_lo, mag_hi = 20.0, 250.0
-    if not np.isfinite(mag_lo) or not np.isfinite(mag_hi) or mag_lo <= 0.0 or mag_hi <= mag_lo:
-        mag_lo, mag_hi = 20.0, 250.0
-
-    mode_lo = float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_MODE_BAND_MIN_HZ, 25.0))
-    mode_hi = float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_MODE_BAND_MAX_HZ, 160.0))
-    if (not np.isfinite(mode_lo)) or (not np.isfinite(mode_hi)) or mode_hi <= mode_lo:
-        mode_lo, mode_hi = 25.0, 160.0
-
-    scored = []
-    for hc_name in AUTO_MODE_BUILTIN_TARGETS:
-        try:
-            hf, hm = get_house_curve_by_name(hc_name)
-            hf = np.asarray(hf, dtype=float).reshape(-1)
-            hm = np.asarray(hm, dtype=float).reshape(-1)
-            if hf.size < 4 or hm.size != hf.size:
-                continue
-            hs = np.argsort(hf)
-            hf = hf[hs]
-            hm = hm[hs]
-            m_h = np.isfinite(hf) & np.isfinite(hm) & (hf > 0.0)
-            hf = hf[m_h]
-            hm = hm[m_h]
-            if hf.size < 4:
-                continue
-
-            f_lo = max(20.0, float(np.min(fl)), float(np.min(fr)), float(np.min(hf)))
-            f_hi = min(20000.0, float(np.max(fl)), float(np.max(fr)), float(np.max(hf)))
-            if not np.isfinite(f_lo) or not np.isfinite(f_hi) or f_hi <= (f_lo * 1.15):
-                continue
-
-            fg = np.logspace(np.log10(f_lo), np.log10(f_hi), 320)
-            ml_g = np.interp(fg, fl, ml)
-            mr_g = np.interp(fg, fr, mr)
-            try:
-                ml_sm, _ = dsp.apply_smoothing_std(
-                    fg,
-                    ml_g,
-                    np.zeros_like(ml_g),
-                    float(AUTO_MODE_TARGET_PRESELECT_SMOOTH_OCT),
-                )
-                ml_g = np.asarray(ml_sm, dtype=float)
-            except Exception:
-                pass
-            try:
-                mr_sm, _ = dsp.apply_smoothing_std(
-                    fg,
-                    mr_g,
-                    np.zeros_like(mr_g),
-                    float(AUTO_MODE_TARGET_PRESELECT_SMOOTH_OCT),
-                )
-                mr_g = np.asarray(mr_sm, dtype=float)
-            except Exception:
-                pass
-            t_g = np.interp(fg, hf, hm)
-
-            lvl_mask = (fg >= lvl_min) & (fg <= lvl_max)
-            if int(np.count_nonzero(lvl_mask)) < 16:
-                lvl_mask = (fg >= 300.0) & (fg <= 3000.0)
-            if int(np.count_nonzero(lvl_mask)) < 16:
-                lvl_mask = np.ones_like(fg, dtype=bool)
-
-            corr_mask = (fg >= mag_lo) & (fg <= mag_hi)
-            if int(np.count_nonzero(corr_mask)) < 16:
-                corr_mask = np.ones_like(fg, dtype=bool)
-
-            mode_mask = (fg >= mode_lo) & (fg <= mode_hi) & corr_mask
-            if int(np.count_nonzero(mode_mask)) < 8:
-                mode_mask = (fg >= mode_lo) & (fg <= mode_hi)
-
-            tc = _auto_target_preselect_score(
-                fg=fg,
-                ml_g=ml_g,
-                mr_g=mr_g,
-                t_g=t_g,
-                lvl_mask=lvl_mask,
-                corr_mask=corr_mask,
-                mode_mask=mode_mask,
-            )
-            if not isinstance(tc, dict) or not tc:
-                continue
-            tc["hc_mode"] = str(hc_name)
-            scored.append(dict(tc))
-        except Exception:
-            continue
-
-    if not scored:
-        return None
-
-    scored = sorted(
-        scored,
-        key=lambda d: (
-            _auto_safe_float(
-                d.get("preselect_score", d.get("fit_rms_db", float("inf"))),
-                float("inf"),
-            ),
-            _auto_safe_float(d.get("fit_rms_db", float("inf")), float("inf")),
-            str(d.get("hc_mode", "") or "").strip(),
-        ),
-    )
-    best = scored[0]
-    return {
-        "selected_hc_mode": str(best.get("hc_mode", "Harman6")),
-        "fit_rms_db": float(best.get("fit_rms_db", 0.0)),
-        "offset_db": float(best.get("offset_db", 0.0)),
-        "candidates": list(scored[:5]),
-        "candidates_all": list(scored),
-    }
-
+# --------------------------------------------------------------------
+# Auto-mode target preselection
+# --------------------------------------------------------------------
 
 def _auto_select_target_curve_with_trials(
     *,
@@ -2011,17 +623,6 @@ def _auto_select_target_curve_with_trials(
             "evaluated": [],
             "best_preset": dict(cached_preset or {}),
         }
-
-    def _tc_score(tc: dict | None) -> float:
-        return float(
-            _auto_safe_float(
-                (tc or {}).get(
-                    "preselect_score",
-                    (tc or {}).get("fit_rms_db", float("inf")),
-                ),
-                float("inf"),
-            )
-        )
 
     cached_target_hc = None
     cached_target_preset = {}
@@ -2562,6 +1163,7 @@ def _auto_select_target_curve_with_trials(
         rank_sum = 0.0
         avg_score_sum = 0.0
         phase1_scored = []
+        curve_scored = []
         trials_total_count = int(len(candidates))
         cb = status_cb if bool(emit_status) else None
 
@@ -2582,6 +1184,7 @@ def _auto_select_target_curve_with_trials(
                 rank_sum += _auto_safe_float(met.get("rank_score"), 0.0)
                 avg_score_sum += _auto_safe_float(met.get("avg_score"), 0.0)
                 phase1_scored.append({"metrics": dict(met), "preset": dict(trial_preset)})
+                curve_scored.append({"metrics": dict(met), "preset": dict(trial_preset)})
                 if best_metrics is None or _auto_rank_key(met) < _auto_rank_key(best_metrics):
                     best_metrics = dict(met)
                     best_preset = dict(trial_preset)
@@ -2613,7 +1216,7 @@ def _auto_select_target_curve_with_trials(
                 base_data=base_tc,
                 phase1_top=top_list,
             )
-            phase1_best = dict(top_list[0])
+            phase1_best = dict(_auto_select_best_scored(top_list) or top_list[0])
             p1m = dict(phase1_best.get("metrics", {}) or {})
             p1p = dict(phase1_best.get("preset", {}) or {})
             p1_mixed = _auto_safe_float(p1p.get("mixed_freq", base_tc.get("mixed_freq", float("nan"))), float("nan"))
@@ -2723,6 +1326,7 @@ def _auto_select_target_curve_with_trials(
                         ok_n += 1
                         rank_sum += _auto_safe_float(met.get("rank_score"), 0.0)
                         avg_score_sum += _auto_safe_float(met.get("avg_score"), 0.0)
+                        curve_scored.append({"metrics": dict(met), "preset": dict(trial_preset)})
                         if best_metrics is None or _auto_rank_key(met) < _auto_rank_key(best_metrics):
                             prev = dict(best_metrics or {})
                             best_metrics = dict(met)
@@ -2743,6 +1347,11 @@ def _auto_select_target_curve_with_trials(
 
         if ok_n <= 0 or not isinstance(best_metrics, dict):
             return None
+
+        final_best = _auto_select_best_scored(curve_scored)
+        if isinstance(final_best, dict):
+            best_metrics = dict(final_best.get("metrics", {}) or {})
+            best_preset = dict(final_best.get("preset", {}) or {})
 
         return {
             "hc_mode": str(hc_name),
@@ -2772,12 +1381,7 @@ def _auto_select_target_curve_with_trials(
     select_f6_txt = f", -6 dB point {f6_hz:.1f} Hz" if np.isfinite(f6_hz) else ""
 
     def _curve_item_progress_key(item: dict) -> tuple:
-        bm = dict((item or {}).get("best_metrics", {}) or {})
-        return (
-            -_auto_safe_float(bm.get("rank_score"), 0.0),
-            -_auto_safe_float((item or {}).get("avg_rank_score"), 0.0),
-            _auto_safe_float((item or {}).get("fit_rms_db"), 1e9),
-        )
+        return _auto_target_result_rank_key(item)
 
     if curve_workers > 1:
         logger.info(
@@ -2857,79 +1461,36 @@ def _auto_select_target_curve_with_trials(
         quick_out["selection_basis"] = str(rank_basis)
         quick_out["auto_goal"] = str(goal)
         return quick_out
-
-    def _tc_key(item: dict) -> tuple:
-        bm = dict(item.get("best_metrics", {}) or {})
-        return (
-            -_auto_safe_float(bm.get("rank_score"), 0.0),
-            -_auto_safe_float(item.get("avg_rank_score"), 0.0),
-            _auto_safe_float(item.get("fit_rms_db"), 1e9),
-        )
-
-    def _mode_ripple_from_item(item: dict) -> float:
-        bm = dict(item.get("best_metrics", {}) or {})
-        v = _auto_safe_float(bm.get("mode_ripple_db", float("nan")), float("nan"))
-        if np.isfinite(v):
-            return float(v)
-        return float("inf")
-
-    def _target_mildness_index(hc_name: str) -> int:
-        name = str(hc_name or "").strip()
-        if not name:
-            return 10_000
-        ladders = (
-            ("Harman4", "Harman6", "Harman8", "Harman10", "Harman12"),
-            ("BK_Light", "BK_Medium", "BK_Strong"),
-        )
-        for ladder in ladders:
-            if name in ladder:
-                return int(ladder.index(name))
-        return 10_000
-
-    evaluated = sorted(evaluated, key=_tc_key)
-    winner = evaluated[0]
-    selection_method = "top3x10_trials"
+    evaluated = sorted(evaluated, key=_auto_target_result_rank_key)
     rank_tie_eps = float(max(0.0, _auto_safe_float(AUTO_MODE_TARGET_BEST_RANK_TIE_EPS, 0.05)))
-    winner_rank = _auto_safe_float(dict(winner.get("best_metrics", {}) or {}).get("rank_score"), 0.0)
-    near_top = []
-    for it in evaluated:
-        it_rank = _auto_safe_float(dict(it.get("best_metrics", {}) or {}).get("rank_score"), 0.0)
-        if abs(float(winner_rank) - float(it_rank)) < rank_tie_eps:
-            near_top.append(dict(it))
-    if len(near_top) >= 2:
-        near_top = sorted(
-            near_top,
-            key=lambda it: (
-                -_auto_safe_float(it.get("avg_rank_score"), 0.0),
-                _mode_ripple_from_item(it),
-                _auto_safe_float(it.get("boost_penalty", 0.0), 0.0),
-                _auto_safe_float(it.get("fit_rms_db"), 1e9),
-                _auto_safe_float(
-                    it.get("preselect_score", it.get("fit_rms_db", 1e9)),
-                    1e9,
-                ),
-                _target_mildness_index(str(it.get("hc_mode", "") or "").strip()),
-                str(it.get("hc_mode", "") or "").strip(),
-            ),
-        )
-        old_winner = dict(winner)
-        winner = dict(near_top[0])
-        selection_method = "top3x10_trials_rank_tie_composite"
+    target_scored = [
+        {
+            **dict(it or {}),
+            "_auto_select_kind": "target_curve",
+            "_target_rank_tie_eps": float(rank_tie_eps),
+        }
+        for it in evaluated
+    ]
+    rank_winner = _auto_select_best_scored(target_scored)
+    winner = dict(rank_winner or evaluated[0])
+    selection_method = str(winner.pop("_auto_selection_method", "top3x10_trials") or "top3x10_trials")
+    if selection_method == "top3x10_trials_rank_tie_composite":
+        old_winner = dict(evaluated[0])
         logger.info(
             "Automatic mode target select: rank tie-break by avg/mode/boost "
             f"(eps={rank_tie_eps:.3f}) "
             f"{str(old_winner.get('hc_mode', 'n/a'))} -> {str(winner.get('hc_mode', 'n/a'))}, "
             f"avg_rank={_auto_safe_float(old_winner.get('avg_rank_score'), 0.0):.3f}"
             f" -> {_auto_safe_float(winner.get('avg_rank_score'), 0.0):.3f}, "
-            f"mode_ripple={_mode_ripple_from_item(old_winner):.4f}"
-            f" -> {_mode_ripple_from_item(winner):.4f}, "
+            f"mode_ripple={_auto_target_result_mode_ripple(old_winner):.4f}"
+            f" -> {_auto_target_result_mode_ripple(winner):.4f}, "
             f"boost_penalty={_auto_safe_float(old_winner.get('boost_penalty', 0.0), 0.0):.3f}"
             f" -> {_auto_safe_float(winner.get('boost_penalty', 0.0), 0.0):.3f}"
         )
     if bool(cache_wildcard_participated) and bool(winner.get("from_cache_wildcard", False)):
         selection_method = "trial_with_cache_wildcard"
 
-    winner_mode_ripple = _mode_ripple_from_item(winner)
+    winner_mode_ripple = _auto_target_result_mode_ripple(winner)
     logger.info(
         "Automatic mode target select: "
         f"goal={goal}, basis={rank_basis}, winner={str(winner.get('hc_mode', 'n/a'))}, "
@@ -2965,6 +1526,9 @@ def _auto_select_target_curve_with_trials(
         "best_preset": dict(winner.get("best_preset", {}) or {}),
     }
 
+# --------------------------------------------------------------------
+# Auto-mode scoring + ranking helpers
+# --------------------------------------------------------------------
 
 def _auto_dsp_quality_penalty(st: dict | None) -> tuple[float, dict]:
     st = st or {}
@@ -3578,702 +2142,6 @@ def _auto_score_result(
     }
 
 
-def _auto_rank_key(metrics: dict) -> tuple:
-    return (
-        -_auto_safe_float(metrics.get("rank_score"), 0.0),
-        -_auto_safe_float(metrics.get("avg_score"), 0.0),
-        _auto_safe_float(metrics.get("max_net_boost_db"), 0.0),
-        _auto_safe_float(metrics.get("events_severity"), 0.0),
-        int(metrics.get("events_total", 0) or 0),
-        _auto_safe_float(metrics.get("lr_delta_score"), 0.0),
-    )
-
-
-def _auto_rank_key_room_safe(metrics: dict) -> tuple:
-    return (
-        -_auto_safe_float(metrics.get("rank_score"), 0.0),
-        _auto_safe_float(metrics.get("max_net_boost_db"), 0.0),
-        _auto_safe_float(metrics.get("events_severity"), 0.0),
-        int(metrics.get("events_total", 0) or 0),
-        _auto_safe_float(metrics.get("dsp_penalty_raw"), 0.0),
-        _auto_safe_float(metrics.get("exc_penalty_raw"), 0.0),
-        _auto_safe_float(metrics.get("lr_delta_score"), 0.0),
-        -_auto_safe_float(metrics.get("avg_score"), 0.0),
-    )
-
-
-def _auto_rank_key_low_ripple(metrics: dict) -> tuple:
-    mode_ripple = _auto_mode_ripple_for_pareto(metrics)
-    ripple_fallback = _auto_safe_float(metrics.get("focus_ripple_db"), float("inf"))
-    realized_lf = _auto_realized_rms_20_200_for_pareto(metrics)
-    return (
-        -_auto_safe_float(metrics.get("rank_score"), 0.0),
-        mode_ripple if np.isfinite(mode_ripple) else ripple_fallback,
-        realized_lf,
-        _auto_safe_float(metrics.get("events_severity"), 0.0),
-        _auto_safe_float(metrics.get("max_net_boost_db"), 0.0),
-        _auto_safe_float(metrics.get("mixed_freq_penalty"), 0.0),
-        -_auto_safe_float(metrics.get("avg_score"), 0.0),
-        _auto_safe_float(metrics.get("lr_delta_score"), 0.0),
-    )
-
-
-def _auto_rank_key_flat(metrics: dict) -> tuple:
-    return (
-        -_auto_safe_float(metrics.get("avg_score"), 0.0),
-        _auto_realized_rms_20_200_for_pareto(metrics),
-        _auto_safe_float(metrics.get("lr_delta_score"), 0.0),
-        _auto_safe_float(metrics.get("dsp_penalty_raw"), 0.0),
-        _auto_safe_float(metrics.get("events_severity"), 0.0),
-        _auto_safe_float(metrics.get("max_net_boost_db"), 0.0),
-        _auto_safe_float(metrics.get("exc_penalty_raw"), 0.0),
-        -_auto_safe_float(metrics.get("rank_score"), 0.0),
-    )
-
-
-def _auto_rank_key_acoustic(metrics: dict) -> tuple:
-    # Legacy alias for older goal name.
-    return _auto_rank_key_flat(metrics)
-
-
-def _auto_rank_key_hybrid(metrics: dict) -> tuple:
-    # Legacy alias for older goal name.
-    return _auto_rank_key_low_ripple(metrics)
-
-
-def _auto_hybrid_mixed_freq_penalty(
-    preset: dict | None,
-    *,
-    base_data: dict | None = None,
-    goal: str = AUTO_MODE_GOAL_DEFAULT,
-) -> float:
-    if _auto_goal_norm(goal) != AUTO_MODE_GOAL_LOW_RIPPLE:
-        return 0.0
-
-    p = dict(base_data or {})
-    p.update(dict(preset or {}))
-    ft = str(p.get("filter_type", "") or "").strip().lower()
-    if "mixed" not in ft:
-        return 0.0
-    if not bool(p.get("bass_first_ai", True)):
-        return 0.0
-
-    mixed_freq = _auto_safe_float(p.get("mixed_freq", float("nan")), float("nan"))
-    if not np.isfinite(mixed_freq):
-        return 0.0
-    pen = max(
-        0.0,
-        (float(mixed_freq) - float(AUTO_MODE_HYBRID_MIXED_FREQ_SOFT_MAX_HZ))
-        / float(max(1e-6, AUTO_MODE_HYBRID_MIXED_FREQ_SOFT_DEN_HZ)),
-    )
-    return float(np.clip(pen, 0.0, 2.5))
-
-
-def _auto_apply_goal_tiebreak_metrics(
-    metrics: dict,
-    *,
-    preset: dict | None,
-    base_data: dict | None,
-    goal: str,
-) -> dict:
-    out = dict(metrics or {})
-    out["mixed_freq_penalty"] = float(
-        _auto_hybrid_mixed_freq_penalty(preset, base_data=base_data, goal=goal)
-    )
-    return out
-
-
-def _auto_build_refine_profile(
-    *,
-    base_data: dict,
-    phase1_top: list,
-) -> dict:
-    """
-    Build data-driven refine search profile.
-    Works for subs, mains, nearfield etc.
-    """
-
-    # --- Collect mixed_freq from phase1 winners ---
-    mixed_vals = []
-    tdc_vals = []
-
-    for it in (phase1_top or []):
-        p = dict(it.get("preset", {}) or {})
-        mf = _auto_safe_float(p.get("mixed_freq", float("nan")), float("nan"))
-        td = _auto_safe_float(p.get("tdc_strength", float("nan")), float("nan"))
-        if np.isfinite(mf):
-            mixed_vals.append(float(mf))
-        if np.isfinite(td):
-            tdc_vals.append(float(td))
-
-    if not mixed_vals:
-        # fallback: generic
-        mixed_center = 120.0
-        focus_lo = float(max(20.0, float(mixed_center) - 70.0))
-        focus_hi = float(min(220.0, float(mixed_center) + 50.0))
-        bf_hi = float("nan")
-        if bool(base_data.get("bass_first_ai", True)):
-            bf_hi = _auto_safe_float(base_data.get("bass_first_mode_max_hz", 200.0), 200.0)
-            if np.isfinite(bf_hi):
-                focus_hi = min(float(focus_hi), float(bf_hi))
-        focus_lo = float(np.clip(focus_lo, 20.0, 200.0))
-        focus_hi = float(np.clip(focus_hi, 60.0, 220.0))
-        if np.isfinite(bf_hi):
-            focus_hi = min(float(focus_hi), float(bf_hi))
-        if focus_hi <= focus_lo:
-            focus_lo = float(np.clip(min(float(focus_lo), float(focus_hi) - 5.0), 20.0, 200.0))
-        if focus_hi <= focus_lo:
-            focus_hi = float(np.clip(float(focus_lo) + 5.0, 60.0, 220.0))
-        return {
-            "mixed_center": float(mixed_center),
-            "mixed_span": 60.0,
-            "focus_lo": float(focus_lo),
-            "focus_hi": float(focus_hi),
-            "tdc_lo": 45.0,
-            "tdc_hi": 70.0,
-        }
-
-    mixed_center = float(np.median(mixed_vals))
-    mixed_spread = float(np.std(mixed_vals)) if len(mixed_vals) > 1 else 20.0
-
-    # clamp spread to reasonable bounds
-    mixed_span = float(np.clip(mixed_spread * 1.5, 25.0, 80.0))
-    focus_lo = float(max(20.0, float(mixed_center) - 70.0))
-    focus_hi = float(min(220.0, float(mixed_center) + 50.0))
-    bf_hi = float("nan")
-    if bool(base_data.get("bass_first_ai", True)):
-        bf_hi = _auto_safe_float(base_data.get("bass_first_mode_max_hz", 200.0), 200.0)
-        if np.isfinite(bf_hi):
-            focus_hi = min(float(focus_hi), float(bf_hi))
-    focus_hi = float(np.clip(focus_hi, 60.0, 220.0))
-    if np.isfinite(bf_hi):
-        focus_hi = min(float(focus_hi), float(bf_hi))
-    if focus_hi <= focus_lo:
-        focus_lo = float(np.clip(min(float(focus_lo), float(focus_hi) - 5.0), 20.0, 200.0))
-    if focus_hi <= focus_lo:
-        focus_hi = float(np.clip(float(focus_lo) + 5.0, 60.0, 220.0))
-
-    if tdc_vals:
-        tdc_center = float(np.median(tdc_vals))
-    else:
-        tdc_center = 60.0
-
-    return {
-        "mixed_center": mixed_center,
-        "mixed_span": mixed_span,
-        "focus_lo": float(focus_lo),
-        "focus_hi": float(focus_hi),
-        "tdc_lo": float(np.clip(tdc_center - 12.0, 35.0, 80.0)),
-        "tdc_hi": float(np.clip(tdc_center + 12.0, 40.0, 85.0)),
-    }
-
-
-def _auto_goal_uses_local_refine(goal: str | None) -> bool:
-    g = _auto_goal_norm(goal)
-    return bool(
-        g in (
-            AUTO_MODE_GOAL_DEFAULT,
-            AUTO_MODE_GOAL_ROOM_SAFE,
-            AUTO_MODE_GOAL_LOW_RIPPLE,
-        )
-    )
-
-
-def _auto_rank_key_goal(metrics: dict, goal: str = AUTO_MODE_GOAL_DEFAULT) -> tuple:
-    g = _auto_goal_norm(goal)
-    if g == AUTO_MODE_GOAL_FLAT:
-        return _auto_rank_key_flat(metrics)
-    if g == AUTO_MODE_GOAL_ROOM_SAFE:
-        return _auto_rank_key_room_safe(metrics)
-    if g == AUTO_MODE_GOAL_LOW_RIPPLE:
-        return _auto_rank_key_low_ripple(metrics)
-    return _auto_rank_key(metrics)
-
-
-def _auto_is_better_refine(
-    new_metrics: dict,
-    best_metrics: dict,
-    goal: str = AUTO_MODE_GOAL_DEFAULT,
-    *,
-    return_reason: bool = False,
-) -> bool | tuple[bool, str]:
-    new_m = dict(new_metrics or {})
-    best_m = dict(best_metrics or {})
-
-    rank_eps = float(max(0.0, _auto_safe_float(AUTO_MODE_REFINE_TIEBREAK_RANK_EPS, 0.20)))
-    ripple_eps = float(max(0.0, _auto_safe_float(AUTO_MODE_REFINE_TIEBREAK_RIPPLE_EPS, 0.02)))
-    mode_guard_gain = float(
-        max(0.0, _auto_safe_float(AUTO_MODE_REFINE_MODE_BOOST_GUARD_MIN_RIPPLE_GAIN_DB, 0.06))
-    )
-
-    new_rank_raw = _auto_safe_float(new_m.get("rank_score"), 0.0)
-    best_rank_raw = _auto_safe_float(best_m.get("rank_score"), 0.0)
-    raw_rank_diff = float(new_rank_raw - best_rank_raw)
-    new_rank_ref = _auto_safe_float(new_m.get("rank_score_refine", new_rank_raw), new_rank_raw)
-    best_rank_ref = _auto_safe_float(best_m.get("rank_score_refine", best_rank_raw), best_rank_raw)
-    ref_rank_diff = float(new_rank_ref - best_rank_ref)
-
-    new_mode_ripple = _auto_safe_float(new_m.get("mode_ripple_db"), float("nan"))
-    best_mode_ripple = _auto_safe_float(best_m.get("mode_ripple_db"), float("nan"))
-    mode_pair_ok = bool(np.isfinite(new_mode_ripple) and np.isfinite(best_mode_ripple))
-
-    if ref_rank_diff > 1e-9:
-        if abs(raw_rank_diff) <= rank_eps and mode_pair_ok:
-            mode_improve = float(best_mode_ripple - new_mode_ripple)
-            if mode_improve > ripple_eps:
-                new_boost = _auto_safe_float(new_m.get("max_net_boost_db"), 0.0)
-                best_boost = _auto_safe_float(best_m.get("max_net_boost_db"), 0.0)
-                boost_rise = float(new_boost - best_boost)
-                if boost_rise > 1e-6 and mode_improve <= mode_guard_gain:
-                    out = (False, "mode_guard")
-                else:
-                    out = (True, "mode_ripple")
-            else:
-                out = (True, "rank_refine")
-        else:
-            out = (True, "rank_refine")
-    elif ref_rank_diff < -1e-9:
-        if abs(raw_rank_diff) <= rank_eps and mode_pair_ok and (float(new_mode_ripple - best_mode_ripple) > ripple_eps):
-            out = (False, "mode_ripple")
-        else:
-            out = (False, "rank_refine")
-    else:
-        out = (False, "rank_tie")
-        if bool(AUTO_MODE_REFINE_TIEBREAK_ENABLE):
-            if mode_pair_ok:
-                mode_improve = float(best_mode_ripple - new_mode_ripple)
-                if mode_improve > ripple_eps:
-                    new_boost = _auto_safe_float(new_m.get("max_net_boost_db"), 0.0)
-                    best_boost = _auto_safe_float(best_m.get("max_net_boost_db"), 0.0)
-                    boost_rise = float(new_boost - best_boost)
-                    if boost_rise > 1e-6 and mode_improve <= mode_guard_gain:
-                        out = (False, "mode_guard")
-                    else:
-                        out = (True, "mode_ripple")
-                elif float(new_mode_ripple - best_mode_ripple) > ripple_eps:
-                    out = (False, "mode_ripple")
-
-            if out[1] == "rank_tie":
-                new_ripple = _auto_safe_float(new_m.get("focus_ripple_db"), float("nan"))
-                best_ripple = _auto_safe_float(best_m.get("focus_ripple_db"), float("nan"))
-                if np.isfinite(new_ripple) and np.isfinite(best_ripple):
-                    if float(best_ripple - new_ripple) > ripple_eps:
-                        out = (True, "focus_ripple")
-                    elif float(new_ripple - best_ripple) > ripple_eps:
-                        out = (False, "focus_ripple")
-
-        if out[1] == "rank_tie":
-            out = (
-                bool(_auto_rank_key_goal(new_m, goal) < _auto_rank_key_goal(best_m, goal)),
-                "goal_key",
-            )
-
-    return out if bool(return_reason) else bool(out[0])
-
-
-def _m(metrics: dict | None, key: str, default=float("nan")) -> float:
-    try:
-        v = float((metrics or {}).get(key, default))
-    except Exception:
-        v = float(default)
-    return float(v)
-
-
-def _auto_mode_ripple_for_pareto(metrics: dict | None) -> float:
-    for k in ("mode_ripple_db", "focus_ripple_db", "ripple_rms"):
-        v = _m(metrics, k, float("nan"))
-        if np.isfinite(v):
-            return float(max(0.0, v))
-    return float("inf")
-
-
-def _auto_realized_rms_20_200_for_pareto(metrics: dict | None) -> float:
-    v = _m(metrics, "realized_rms_20_200_db", float("nan"))
-    if np.isfinite(v):
-        return float(max(0.0, v))
-    return float("inf")
-
-
-def _auto_prepost_lr_for_pareto(metrics: dict | None) -> tuple[float, float, float]:
-    m = dict(metrics or {})
-    l = _m(m, "ir_pre_post_energy_ratio_l", float("nan"))
-    r = _m(m, "ir_pre_post_energy_ratio_r", float("nan"))
-    if not np.isfinite(l):
-        l = _m(m, "ir_pre_post_ratio_l", float("nan"))
-    if not np.isfinite(r):
-        r = _m(m, "ir_pre_post_ratio_r", float("nan"))
-    if not np.isfinite(l):
-        l = _m(dict(m.get("dsp_dbg_l", {}) or {}), "ir_pre_post_ratio", float("nan"))
-    if not np.isfinite(r):
-        r = _m(dict(m.get("dsp_dbg_r", {}) or {}), "ir_pre_post_ratio", float("nan"))
-    if not np.isfinite(l):
-        global_v = _m(m, "ir_pre_post_energy_ratio_max", float("nan"))
-        if np.isfinite(global_v):
-            l = float(global_v)
-    if not np.isfinite(r):
-        global_v = _m(m, "ir_pre_post_energy_ratio_max", float("nan"))
-        if np.isfinite(global_v):
-            r = float(global_v)
-
-    vals = [float(v) for v in (l, r) if np.isfinite(v)]
-    mx = float(max(vals)) if vals else float("inf")
-    return (
-        float(l) if np.isfinite(l) else float("nan"),
-        float(r) if np.isfinite(r) else float("nan"),
-        float(mx),
-    )
-
-
-def _auto_prepost_for_pareto(metrics: dict | None) -> float:
-    _, _, mx = _auto_prepost_lr_for_pareto(metrics)
-    if np.isfinite(mx):
-        return float(max(0.0, mx))
-    return float("inf")
-
-
-def _auto_ripple_metric_for_gate(metrics: dict | None) -> float:
-    # Prefer dedicated focus-band ripple; fallback to mode-band / global ripple.
-    for k in ("focus_ripple_db", "mode_ripple_db", "ripple_rms"):
-        v = _m(metrics, k, float("nan"))
-        if np.isfinite(v):
-            return float(max(0.0, v))
-    return float("inf")
-
-
-def _auto_gate_threshold(values: list[float], keep_fraction: float) -> float:
-    vals = [float(v) for v in (values or []) if np.isfinite(v)]
-    if not vals:
-        return float("inf")
-    kf = float(np.clip(_auto_safe_float(keep_fraction, 1.0), 0.05, 1.0))
-    vals = sorted(vals)
-    idx = int(np.floor((len(vals) - 1) * kf))
-    idx = int(np.clip(idx, 0, len(vals) - 1))
-    return float(vals[idx])
-
-
-def _auto_phase2_hard_gate_pool(
-    pool: list[dict],
-    *,
-    min_keep: int = AUTO_MODE_PHASE2_HARD_GATE_MIN_KEEP,
-    keep_event_fraction: float = AUTO_MODE_PHASE2_HARD_GATE_KEEP_EVENT_FRACTION,
-    keep_ripple_fraction: float = AUTO_MODE_PHASE2_HARD_GATE_KEEP_RIPPLE_FRACTION,
-    fallback_to_rank: bool = AUTO_MODE_PHASE2_HARD_GATE_FALLBACK_TO_RANK,
-) -> tuple[list[dict], float, float]:
-    """
-    Hard-gate phase2 pool before Pareto:
-    - compute thresholds for event severity and ripple
-    - keep candidates that are <= both thresholds
-    - if too few, relax conservatively (first OR, then rank fallback)
-    Returns (kept_pool, event_threshold, ripple_threshold).
-    """
-    if not isinstance(pool, list) or not pool:
-        return [], float("inf"), float("inf")
-    n_in = int(len(pool))
-    min_keep = int(max(1, min_keep))
-
-    # Only meaningful if we have headroom.
-    if n_in <= (min_keep + 2):
-        return [dict(x or {}) for x in pool], float("inf"), float("inf")
-
-    ev = []
-    rp = []
-    for it in pool:
-        m = dict((it or {}).get("metrics", {}) or {})
-        ev.append(_m(m, "events_severity", float("nan")))
-        rp.append(_auto_ripple_metric_for_gate(m))
-
-    ev_thr = _auto_gate_threshold(ev, float(keep_event_fraction))
-    rp_thr = _auto_gate_threshold(rp, float(keep_ripple_fraction))
-
-    gated = []
-    gated_or = []
-    for it in pool:
-        m = dict((it or {}).get("metrics", {}) or {})
-        ev_i = _m(m, "events_severity", float("inf"))
-        rp_i = _auto_ripple_metric_for_gate(m)
-        ok_ev = bool(np.isfinite(ev_i) and float(ev_i) <= float(ev_thr))
-        ok_rp = bool(np.isfinite(rp_i) and float(rp_i) <= float(rp_thr))
-        if ok_ev and ok_rp:
-            gated.append(dict(it or {}))
-        if ok_ev or ok_rp:
-            gated_or.append(dict(it or {}))
-
-    if len(gated) >= min_keep:
-        return gated, float(ev_thr), float(rp_thr)
-    if len(gated_or) >= min_keep:
-        return gated_or, float(ev_thr), float(rp_thr)
-
-    if bool(fallback_to_rank):
-        kept = sorted(
-            [dict(x or {}) for x in pool],
-            key=lambda it: (
-                -_m(dict(it.get("metrics", {}) or {}), "rank_score", float("-inf")),
-                _auto_rank_key(dict(it.get("metrics", {}) or {})),
-            ),
-        )[:min_keep]
-        return kept, float(ev_thr), float(rp_thr)
-
-    kept = gated_or or gated or [dict(x or {}) for x in pool]
-    return kept, float(ev_thr), float(rp_thr)
-
-
-def _auto_adaptive_shrink_factor(
-    phase1_top: list[dict],
-    *,
-    base_shrink: float,
-    plateau_hit: bool,
-) -> float:
-    """
-    Derive tighter/looser shrink factor from phase1 stability.
-    Lower = tighter search around anchors.
-    """
-    if not bool(AUTO_MODE_ADAPTIVE_SHRINK_ENABLED):
-        return float(base_shrink)
-
-    base = float(np.clip(_auto_safe_float(base_shrink, 0.35), 0.05, 1.0))
-    if not isinstance(phase1_top, list) or len(phase1_top) < 2:
-        if bool(plateau_hit):
-            return float(np.clip(base * 0.85, AUTO_MODE_ADAPTIVE_SHRINK_MIN, AUTO_MODE_ADAPTIVE_SHRINK_MAX))
-        return float(np.clip(base, AUTO_MODE_ADAPTIVE_SHRINK_MIN, AUTO_MODE_ADAPTIVE_SHRINK_MAX))
-
-    mixed = []
-    tdc = []
-    fdw = []
-    reg = []
-    for it in phase1_top[:4]:
-        p = dict((it or {}).get("preset", {}) or {})
-        mixed.append(_auto_safe_float(p.get("mixed_freq", float("nan")), float("nan")))
-        tdc.append(_auto_safe_float(p.get("tdc_strength", float("nan")), float("nan")))
-        fdw.append(_auto_safe_float(p.get("fdw_cycles", float("nan")), float("nan")))
-        reg.append(_auto_safe_float(p.get("reg_strength", float("nan")), float("nan")))
-
-    def _spread(vals: list[float]) -> float:
-        vv = [float(v) for v in vals if np.isfinite(v)]
-        if len(vv) < 2:
-            return 0.0
-        vv = sorted(vv)
-        return float(vv[-1] - vv[0])
-
-    spread_score = 0.0
-    spread_score += _spread(mixed) / 80.0
-    spread_score += _spread(tdc) / 15.0
-    spread_score += _spread(fdw) / 3.0
-    spread_score += _spread(reg) / 20.0
-
-    if spread_score <= 0.35:
-        mul = 0.75
-    elif spread_score <= 0.70:
-        mul = 0.85
-    elif spread_score <= 1.10:
-        mul = 0.95
-    else:
-        mul = 1.05
-
-    if bool(plateau_hit):
-        mul *= 0.90
-
-    out = float(base * mul)
-    return float(np.clip(out, AUTO_MODE_ADAPTIVE_SHRINK_MIN, AUTO_MODE_ADAPTIVE_SHRINK_MAX))
-
-
-def _pareto_dominates(a: tuple[float, ...], b: tuple[float, ...]) -> bool:
-    if len(a) != len(b):
-        return False
-    le_all = True
-    lt_any = False
-    for ai, bi in zip(a, b):
-        if ai > bi:
-            le_all = False
-            break
-        if ai < bi:
-            lt_any = True
-    return bool(le_all and lt_any)
-
-
-def _auto_phase2_pareto_vector(metrics: dict | None) -> tuple[float, float, float, float, float]:
-    avg = _m(metrics, "avg_score", float("nan"))
-    neg_avg = -float(avg) if np.isfinite(avg) else float("inf")
-    mode_ripple = _auto_mode_ripple_for_pareto(metrics)
-    rms_20_200 = _auto_realized_rms_20_200_for_pareto(metrics)
-    net_boost = _m(metrics, "max_net_boost_db", float("nan"))
-    net_boost = float(net_boost) if np.isfinite(net_boost) else float("inf")
-    prepost = _auto_prepost_for_pareto(metrics)
-    return (float(neg_avg), float(mode_ripple), float(rms_20_200), float(net_boost), float(prepost))
-
-
-def _auto_phase2_pareto_front(pool: list[dict]) -> list[dict]:
-    front = []
-    if not isinstance(pool, list) or not pool:
-        return front
-    vectors = [_auto_phase2_pareto_vector(dict(it.get("metrics", {}) or {})) for it in pool]
-    for i, cand in enumerate(pool):
-        dominated = False
-        for j, other in enumerate(pool):
-            if i == j:
-                continue
-            if _pareto_dominates(vectors[j], vectors[i]):
-                dominated = True
-                break
-        if not dominated:
-            front.append(dict(cand or {}))
-    return front
-
-
-def _auto_phase2_pick_pareto_winner(
-    front: list[dict],
-    pool: list[dict],
-    *,
-    acoustic_drop: float = AUTO_MODE_PHASE2_PARETO_ACOUSTIC_DROP,
-) -> dict | None:
-    def _lex_better(a: dict, b: dict) -> bool:
-        ma = dict(a.get("metrics", {}) or {})
-        mb = dict(b.get("metrics", {}) or {})
-
-        # 1) maximize avg_score
-        avg_a = _m(ma, "avg_score", float("-inf"))
-        avg_b = _m(mb, "avg_score", float("-inf"))
-        if float(avg_a) > float(avg_b):
-            return True
-        if float(avg_a) < float(avg_b):
-            return False
-
-        # 2) minimize pre/post energy ratio (temporal cleanliness), with tolerance
-        prepost_eps = float(max(0.0, _auto_safe_float(AUTO_MODE_PHASE2_PARETO_PREPOST_EPS, 0.002)))
-        prepost_a = _auto_prepost_for_pareto(ma)
-        prepost_b = _auto_prepost_for_pareto(mb)
-        if float(prepost_a) < float(prepost_b) - float(prepost_eps):
-            return True
-        if float(prepost_b) < float(prepost_a) - float(prepost_eps):
-            return False
-
-        # 3) minimize mode_ripple_db, but ignore micro deltas
-        mode_eps = float(max(0.0, _auto_safe_float(AUTO_MODE_PHASE2_PARETO_MODE_RIPPLE_EPS, 0.005)))
-        mode_a = _auto_mode_ripple_for_pareto(ma)
-        mode_b = _auto_mode_ripple_for_pareto(mb)
-        if float(mode_a) < float(mode_b) - float(mode_eps):
-            return True
-        if float(mode_b) < float(mode_a) - float(mode_eps):
-            return False
-
-        # 4) minimize realized_rms_20_200, also with tolerance
-        rms_eps = float(max(0.0, _auto_safe_float(AUTO_MODE_PHASE2_PARETO_RMS20_200_EPS, 0.003)))
-        rms_a = _auto_realized_rms_20_200_for_pareto(ma)
-        rms_b = _auto_realized_rms_20_200_for_pareto(mb)
-        if float(rms_a) < float(rms_b) - float(rms_eps):
-            return True
-        if float(rms_b) < float(rms_a) - float(rms_eps):
-            return False
-
-        # 5) minimize net boost
-        boost_eps = float(max(0.0, _auto_safe_float(AUTO_MODE_PHASE2_PARETO_BOOST_EPS, 0.02)))
-        boost_a = _m(ma, "max_net_boost_db", float("inf"))
-        boost_b = _m(mb, "max_net_boost_db", float("inf"))
-        if float(boost_a) < float(boost_b) - float(boost_eps):
-            return True
-        if float(boost_b) < float(boost_a) - float(boost_eps):
-            return False
-
-        # 6) deterministic final fallback
-        return bool(_auto_rank_key(ma) < _auto_rank_key(mb))
-
-    front_list = [dict(x or {}) for x in (front or []) if isinstance(x, dict)]
-    pool_list = [dict(x or {}) for x in (pool or []) if isinstance(x, dict)]
-    if not front_list:
-        return None
-
-    avg_vals = [
-        _m(dict(it.get("metrics", {}) or {}), "avg_score", float("nan"))
-        for it in pool_list
-    ]
-    avg_vals = [float(v) for v in avg_vals if np.isfinite(v)]
-    best_avg = max(avg_vals) if avg_vals else float("nan")
-    drop = float(max(0.0, _auto_safe_float(acoustic_drop, AUTO_MODE_PHASE2_PARETO_ACOUSTIC_DROP)))
-
-    # S = {c in front | c.avg_score >= best_avg - AVG_TOL}
-    acceptable: list[dict] = []
-    if np.isfinite(best_avg):
-        for it in front_list:
-            avg = _m(dict(it.get("metrics", {}) or {}), "avg_score", float("nan"))
-            if np.isfinite(avg) and float(avg) >= float(best_avg) - float(drop):
-                acceptable.append(dict(it))
-    choose_from = acceptable
-
-    # If S is empty -> S = {argmax avg_score in front}
-    if not choose_from:
-        front_with_avg = []
-        for it in front_list:
-            avg = _m(dict(it.get("metrics", {}) or {}), "avg_score", float("nan"))
-            if np.isfinite(avg):
-                front_with_avg.append((float(avg), dict(it)))
-        if front_with_avg:
-            front_with_avg = sorted(
-                front_with_avg,
-                key=lambda t: (
-                    -float(t[0]),
-                    _auto_rank_key(dict((t[1] or {}).get("metrics", {}) or {})),
-                ),
-            )
-            choose_from = [dict(front_with_avg[0][1])]
-        else:
-            choose_from = list(front_list)
-
-    if choose_from:
-        winner = dict(choose_from[0])
-        for cand in choose_from[1:]:
-            cand_d = dict(cand or {})
-            if _lex_better(cand_d, winner):
-                winner = cand_d
-        return dict(winner)
-
-    # Fallback: highest avg_score from pool, then normal rank key.
-    if pool_list:
-        pool_sorted = sorted(
-            pool_list,
-            key=lambda it: (
-                -_m(dict(it.get("metrics", {}) or {}), "avg_score", float("-inf")),
-                _auto_rank_key(dict(it.get("metrics", {}) or {})),
-            ),
-        )
-        return dict(pool_sorted[0])
-    return None
-
-
-def _auto_reject(metrics: dict, st_l: dict | None, st_r: dict | None, goal: str) -> bool:
-    g = _auto_goal_norm(goal)
-    if g != AUTO_MODE_GOAL_FLAT:
-        return False
-
-    if _auto_safe_float(metrics.get("max_net_boost_db"), 0.0) > float(MAX_SAFE_BOOST):
-        return True
-
-    ratio_keys = (
-        "ir_pre_post_ratio",
-        "ir_pre_energy_guard_after_ratio",
-        "ir_pre_energy_guard_before_ratio",
-    )
-    gd_keys = (
-        "gd_grad_limiter_after_max_ms_per_oct",
-        "gd_grad_limiter_before_max_ms_per_oct",
-        "gd_limiter_max_grad_ms_per_oct",
-        "gd_grad_limiter_max_grad_ms_per_oct",
-        "gd_limiter_max_grad_after_ms_per_oct",
-        "gd_grad_limiter_max_grad_after_ms_per_oct",
-        "gd_limiter_max_grad_before_ms_per_oct",
-        "gd_grad_limiter_max_grad_before_ms_per_oct",
-    )
-    for st in (dict(st_l or {}), dict(st_r or {})):
-        pre_suspect = bool(st.get("pre_energy_metric_suspect", False))
-        if not pre_suspect:
-            ratio = _auto_pick_metric(st, ratio_keys, nonneg=True)
-            if ratio is not None and float(ratio) > 0.05:
-                return True
-        gd_grad = _auto_pick_metric(st, gd_keys, abs_value=True, nonneg=True)
-        if gd_grad is not None and float(gd_grad) > 45.0:
-            return True
-
-    return False
-
-
 def _estimate_auto_mag_c_min_hz(
     f_l,
     m_l,
@@ -4723,581 +2591,9 @@ def _estimate_auto_hpf_from_response(
         "channels": valid,
     }
 
-
-def _build_auto_mode_candidates(
-    base_data: dict,
-    *,
-    n_trials: int,
-    seed: int,
-    optimize_mag_low: bool = True,
-) -> list[dict]:
-    rng = np.random.default_rng(int(seed))
-    n_eff = max(1, int(n_trials))
-    goal = _auto_goal(base_data)
-    tune_mag_low = bool(optimize_mag_low)
-
-    keep_tdc = bool(base_data.get("enable_tdc", True))
-    keep_afdw = bool(base_data.get("enable_afdw", True))
-    keep_bass_first = bool(base_data.get("bass_first_ai", True))
-    ft = str(base_data.get("filter_type", "") or "").strip().lower()
-    is_mixed = "mixed" in ft
-    is_phase_search = _auto_is_phase_search_filter(ft)
-    mixed_center = _auto_safe_float(base_data.get("mixed_freq", 180.0), 180.0)
-    if not np.isfinite(mixed_center) or mixed_center <= 0.0:
-        mixed_center = 180.0
-    phase_center = _auto_phase_limit_center(base_data.get("phase_limit", None))
-    mag_c_min_seed = float(
-        np.clip(
-            _auto_safe_float(base_data.get("mag_c_min", 25.0), 25.0),
-            float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
-            float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
-        )
-    )
-    low_bass_cut_seed = float(
-        np.clip(
-            _auto_safe_float(base_data.get("low_bass_cut_hz", 40.0), 40.0),
-            float(AUTO_MODE_LOW_BASS_MIN_HZ),
-            float(AUTO_MODE_LOW_BASS_MAX_HZ),
-        )
-    )
-
-    out_seed = {}
-    if _auto_goal_norm(goal) == AUTO_MODE_GOAL_LOW_RIPPLE and bool(keep_tdc):
-        out_seed["tdc_strength"] = round(
-            float(max(_auto_safe_float(base_data.get("tdc_strength", 55.0), 55.0), 55.0)),
-            1,
-        )
-    if bool(is_phase_search):
-        out_seed["phase_limit"] = round(float(phase_center), 1)
-    out: list[dict] = [out_seed]
-    tdc_min = 55.0 if (_auto_goal_norm(goal) == AUTO_MODE_GOAL_LOW_RIPPLE and bool(keep_tdc)) else 15.0
-    for _ in range(max(0, n_eff - 1)):
-        if bool(tune_mag_low):
-            mag_c_min_cand, low_bass_cut_cand = _auto_sample_mag_low_pair(
-                rng,
-                mag_center=float(mag_c_min_seed),
-                low_center=float(low_bass_cut_seed),
-                mag_sigma=2.6,
-                low_sigma=3.2,
-            )
-        else:
-            mag_c_min_cand = float(round(mag_c_min_seed, 1))
-            low_bass_cut_cand = float(round(low_bass_cut_seed, 1))
-        cand = {
-            "comparison_mode": True,
-            "enable_tdc": bool(keep_tdc),
-            "enable_afdw": bool(keep_afdw),
-            "bass_first_ai": bool(keep_bass_first),
-            "fdw_cycles": round(float(rng.uniform(5.0, 16.0)), 2),
-            "tdc_strength": round(float(rng.uniform(float(tdc_min), 75.0)), 1),
-            "tdc_max_reduction_db": round(float(rng.uniform(6.0, 36.0)), 1),
-            "tdc_slope_db_per_oct": float(rng.choice(np.array([3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 24.0, 36.0]))),
-            "reg_strength": round(float(rng.uniform(15.0, 45.0)), 1),
-            "max_slope_db_per_oct": float(rng.choice(np.array([8.0, 10.0, 12.0, 14.0, 16.0]))),
-            "max_boost": round(float(rng.uniform(3.0, 8.0)), 2),
-            "mag_c_min": float(mag_c_min_cand),
-            "mag_c_max": round(float(rng.uniform(170.0, 300.0)), 1),
-            "trans_width": round(float(rng.uniform(70.0, 150.0)), 1),
-            "filter_smooth": int(rng.choice(np.array([12, 24, 48, 96]))),
-            "bass_first_mode_max_hz": round(float(rng.uniform(150.0, 220.0)), 1),
-            "low_bass_cut_hz": float(low_bass_cut_cand),
-        }
-        if is_mixed:
-            cand["mixed_freq"] = round(float(np.clip(rng.normal(loc=mixed_center, scale=35.0), 80.0, 320.0)), 1)
-        if is_phase_search:
-            phase_lo = float(AUTO_MODE_PHASE_LIMIT_MIN_HZ)
-            phase_hi = float(AUTO_MODE_PHASE_LIMIT_MAX_HZ)
-            phase_global_frac = float(np.clip(_auto_safe_float(AUTO_MODE_PHASE_LIMIT_EXPLORE_GLOBAL_FRAC, 0.35), 0.0, 1.0))
-            phase_uniform_frac = float(np.clip(_auto_safe_float(AUTO_MODE_PHASE_LIMIT_EXPLORE_UNIFORM_FRAC, 0.20), 0.0, 1.0))
-            # Keep mixture probabilities sane.
-            phase_uniform_frac = min(phase_uniform_frac, 1.0 - 1e-6)
-            phase_global_frac = min(phase_global_frac, max(0.0, 1.0 - phase_uniform_frac - 1e-6))
-            phase_u = float(rng.random())
-            if phase_u < phase_uniform_frac:
-                phase_draw = float(rng.uniform(phase_lo, phase_hi))
-            elif phase_u < (phase_uniform_frac + phase_global_frac):
-                phase_draw = float(
-                    rng.normal(
-                        loc=float(AUTO_MODE_PHASE_LIMIT_PRIOR_CENTER_HZ),
-                        scale=float(AUTO_MODE_PHASE_LIMIT_EXPLORE_GLOBAL_SIGMA_HZ),
-                    )
-                )
-            else:
-                phase_draw = float(
-                    rng.normal(
-                        loc=float(phase_center),
-                        scale=float(AUTO_MODE_PHASE_LIMIT_SIGMA_HZ),
-                    )
-                )
-            cand["phase_limit"] = round(
-                float(_clip(phase_draw, phase_lo, phase_hi)),
-                1,
-            )
-        out.append(cand)
-    return out
-
-
-def _build_auto_mode_candidates_optuna(
-    base_data: dict,
-    *,
-    n_trials: int,
-    seed: int,
-    startup_trials: int = AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS,
-    optimize_mag_low: bool = True,
-) -> list[dict] | None:
-    try:
-        import optuna  # type: ignore
-    except Exception:
-        return None
-
-    n_eff = max(1, int(n_trials))
-    startup = int(max(1, min(int(startup_trials), int(n_eff))))
-    sampler = optuna.samplers.TPESampler(seed=int(seed), n_startup_trials=int(startup))
-    study = optuna.create_study(direction="maximize", sampler=sampler)
-
-    goal = _auto_goal(base_data)
-    keep_tdc = bool(base_data.get("enable_tdc", True))
-    keep_afdw = bool(base_data.get("enable_afdw", True))
-    keep_bass_first = bool(base_data.get("bass_first_ai", True))
-    ft = str(base_data.get("filter_type", "") or "").strip().lower()
-    is_mixed = "mixed" in ft
-    is_phase_search = _auto_is_phase_search_filter(ft)
-    tune_mag_low = bool(optimize_mag_low)
-
-    mag_c_min_seed = float(
-        np.clip(
-            _auto_safe_float(base_data.get("mag_c_min", 25.0), 25.0),
-            float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
-            float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
-        )
-    )
-    low_bass_cut_seed = float(
-        np.clip(
-            _auto_safe_float(base_data.get("low_bass_cut_hz", 40.0), 40.0),
-            float(AUTO_MODE_LOW_BASS_MIN_HZ),
-            float(AUTO_MODE_LOW_BASS_MAX_HZ),
-        )
-    )
-
-    out_seed = {}
-    if _auto_goal_norm(goal) == AUTO_MODE_GOAL_LOW_RIPPLE and bool(keep_tdc):
-        out_seed["tdc_strength"] = round(
-            float(max(_auto_safe_float(base_data.get("tdc_strength", 55.0), 55.0), 55.0)),
-            1,
-        )
-    if bool(is_phase_search):
-        out_seed["phase_limit"] = round(float(_auto_phase_limit_center(base_data.get("phase_limit", None))), 1)
-
-    out: list[dict] = [dict(out_seed)]
-    tdc_min = 55.0 if (_auto_goal_norm(goal) == AUTO_MODE_GOAL_LOW_RIPPLE and bool(keep_tdc)) else 15.0
-
-    for _ in range(max(0, n_eff - 1)):
-        tr = study.ask()
-        if bool(tune_mag_low):
-            mag_c_min = float(
-                tr.suggest_float(
-                    "mag_c_min",
-                    float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
-                    float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
-                )
-            )
-            low_delta = float(tr.suggest_float("low_bass_delta_hz", -8.0, 10.0))
-            low_bass_cut_hz = float(
-                np.clip(
-                    float(mag_c_min) + float(low_delta),
-                    float(AUTO_MODE_LOW_BASS_MIN_HZ),
-                    float(AUTO_MODE_LOW_BASS_MAX_HZ),
-                )
-            )
-        else:
-            mag_c_min = float(round(mag_c_min_seed, 1))
-            low_bass_cut_hz = float(round(low_bass_cut_seed, 1))
-
-        cand = {
-            "comparison_mode": True,
-            "enable_tdc": bool(keep_tdc),
-            "enable_afdw": bool(keep_afdw),
-            "bass_first_ai": bool(keep_bass_first),
-            "fdw_cycles": round(float(tr.suggest_float("fdw_cycles", 5.0, 16.0)), 2),
-            "tdc_strength": round(float(tr.suggest_float("tdc_strength", float(tdc_min), 75.0)), 1),
-            "tdc_max_reduction_db": round(float(tr.suggest_float("tdc_max_reduction_db", 6.0, 36.0)), 1),
-            "tdc_slope_db_per_oct": float(tr.suggest_categorical("tdc_slope_db_per_oct", [3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 24.0, 36.0])),
-            "reg_strength": round(float(tr.suggest_float("reg_strength", 15.0, 45.0)), 1),
-            "max_slope_db_per_oct": float(tr.suggest_categorical("max_slope_db_per_oct", [8.0, 10.0, 12.0, 14.0, 16.0])),
-            "max_boost": round(float(tr.suggest_float("max_boost", 3.0, 8.0)), 2),
-            "mag_c_min": float(mag_c_min),
-            "mag_c_max": round(float(tr.suggest_float("mag_c_max", 170.0, 300.0)), 1),
-            "trans_width": round(float(tr.suggest_float("trans_width", 70.0, 150.0)), 1),
-            "filter_smooth": int(tr.suggest_categorical("filter_smooth", [12, 24, 48, 96])),
-            "bass_first_mode_max_hz": round(float(tr.suggest_float("bass_first_mode_max_hz", 150.0, 220.0)), 1),
-            "low_bass_cut_hz": float(low_bass_cut_hz),
-        }
-        if bool(is_mixed):
-            cand["mixed_freq"] = round(float(tr.suggest_float("mixed_freq", 80.0, 320.0)), 1)
-        if bool(is_phase_search):
-            cand["phase_limit"] = round(
-                float(
-                    tr.suggest_float(
-                        "phase_limit",
-                        float(AUTO_MODE_PHASE_LIMIT_MIN_HZ),
-                        float(AUTO_MODE_PHASE_LIMIT_MAX_HZ),
-                    )
-                ),
-                1,
-            )
-
-        # Pilot mode: lightweight surrogate so TPE has feedback between asks.
-        s = 0.0
-        s -= abs(float(cand.get("max_boost", 4.0)) - 4.5)
-        s -= abs(float(cand.get("trans_width", 100.0)) - 100.0) / 40.0
-        s -= abs(float(cand.get("reg_strength", 30.0)) - 30.0) / 20.0
-        if bool(is_mixed):
-            s -= abs(float(cand.get("mixed_freq", 180.0)) - 180.0) / 120.0
-        if bool(is_phase_search):
-            s -= abs(float(cand.get("phase_limit", _auto_phase_limit_center(base_data.get("phase_limit", None)))) - _auto_phase_limit_center(base_data.get("phase_limit", None))) / 120.0
-        study.tell(tr, float(s))
-
-        out.append(cand)
-
-    return out
-
-
-def _build_auto_mode_refine_candidates(
-    base_data: dict,
-    *,
-    anchors: list[dict],
-    n_trials: int,
-    seed: int,
-    optimize_mag_low: bool = True,
-) -> list[dict]:
-    rng = np.random.default_rng(int(seed))
-    n_eff = max(0, int(n_trials))
-    if n_eff <= 0:
-        return []
-    tune_mag_low = bool(optimize_mag_low)
-
-    keep_tdc = bool(base_data.get("enable_tdc", True))
-    keep_afdw = bool(base_data.get("enable_afdw", True))
-    keep_bass_first = bool(base_data.get("bass_first_ai", True))
-    ft = str(base_data.get("filter_type", "") or "").strip().lower()
-    is_mixed = "mixed" in ft
-    is_phase_search = _auto_is_phase_search_filter(ft)
-
-    anchor_items = list(anchors or [])
-    if not anchor_items:
-        anchor_items = [{"preset": {}}]
-
-    def _anchor_val(anchor: dict, key: str, default: float) -> float:
-        p = dict(anchor.get("preset", {}) or {})
-        if key in p:
-            return _auto_safe_float(p.get(key), default)
-        return _auto_safe_float(base_data.get(key), default)
-
-    def _near_discrete(center: float, choices: list[float], sigma: float) -> float:
-        if not choices:
-            return float(center)
-        x = float(rng.normal(loc=float(center), scale=float(max(0.01, sigma))))
-        return float(min(choices, key=lambda c: abs(float(c) - x)))
-
-    out: list[dict] = []
-    slope_choices = [3.0, 4.0, 5.0, 6.0, 8.0]
-    max_slope_choices = [8.0, 10.0, 12.0, 14.0, 16.0]
-    smooth_choices = [96]
-    mag_c_min_seed = float(
-        np.clip(
-            _auto_safe_float(base_data.get("mag_c_min", 25.0), 25.0),
-            float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
-            float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
-        )
-    )
-    low_bass_cut_seed = float(
-        np.clip(
-            _auto_safe_float(base_data.get("low_bass_cut_hz", 40.0), 40.0),
-            float(AUTO_MODE_LOW_BASS_MIN_HZ),
-            float(AUTO_MODE_LOW_BASS_MAX_HZ),
-        )
-    )
-
-    for _ in range(n_eff):
-        a = anchor_items[int(rng.integers(0, len(anchor_items)))]
-        if bool(tune_mag_low):
-            mag_c_min_cand, low_bass_cut_cand = _auto_sample_mag_low_pair(
-                rng,
-                mag_center=_anchor_val(a, "mag_c_min", mag_c_min_seed),
-                low_center=_anchor_val(a, "low_bass_cut_hz", low_bass_cut_seed),
-                mag_sigma=1.8,
-                low_sigma=2.4,
-            )
-        else:
-            mag_c_min_cand = round(
-                _clip(
-                    _anchor_val(a, "mag_c_min", mag_c_min_seed),
-                    float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
-                    float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
-                ),
-                1,
-            )
-            low_bass_cut_cand = round(
-                _clip(
-                    _anchor_val(a, "low_bass_cut_hz", low_bass_cut_seed),
-                    float(AUTO_MODE_LOW_BASS_MIN_HZ),
-                    float(AUTO_MODE_LOW_BASS_MAX_HZ),
-                ),
-                1,
-            )
-        cand = {
-            "comparison_mode": True,
-            "enable_tdc": bool(keep_tdc),
-            "enable_afdw": bool(keep_afdw),
-            "bass_first_ai": bool(keep_bass_first),
-            "fdw_cycles": round(float(np.clip(rng.normal(_anchor_val(a, "fdw_cycles", 10.0), 1.2), 8.0, 16.0)), 2),
-            "tdc_strength": round(float(np.clip(rng.normal(_anchor_val(a, "tdc_strength", 50.0), 5.0), 35.0, 75.0)), 1),
-            "tdc_max_reduction_db": round(float(np.clip(rng.normal(_anchor_val(a, "tdc_max_reduction_db", 9.0), 1.0), 6.0, 12.0)), 1),
-            "tdc_slope_db_per_oct": _near_discrete(_anchor_val(a, "tdc_slope_db_per_oct", 6.0), slope_choices, 0.8),
-            "reg_strength": round(float(np.clip(rng.normal(_anchor_val(a, "reg_strength", 30.0), 4.0), 15.0, 45.0)), 1),
-            "max_slope_db_per_oct": _near_discrete(_anchor_val(a, "max_slope_db_per_oct", 12.0), max_slope_choices, 1.5),
-            "max_boost": round(float(np.clip(rng.normal(_anchor_val(a, "max_boost", 4.0), 0.45), 3.0, 8.0)), 2),
-            "mag_c_min": float(mag_c_min_cand),
-            "mag_c_max": round(float(np.clip(rng.normal(_anchor_val(a, "mag_c_max", 220.0), 15.0), 170.0, 300.0)), 1),
-            "trans_width": round(float(np.clip(rng.normal(_anchor_val(a, "trans_width", 100.0), 10.0), 70.0, 150.0)), 1),
-            "filter_smooth": int(_near_discrete(_anchor_val(a, "filter_smooth", 96.0), [float(x) for x in smooth_choices], 96.0)),
-            "bass_first_mode_max_hz": round(float(np.clip(rng.normal(_anchor_val(a, "bass_first_mode_max_hz", 180.0), 10.0), 150.0, 220.0)), 1),
-            "low_bass_cut_hz": float(low_bass_cut_cand),
-        }
-        if is_mixed:
-            cand["mixed_freq"] = round(float(np.clip(rng.normal(_anchor_val(a, "mixed_freq", 180.0), 12.0), 80.0, 320.0)), 1)
-        if is_phase_search:
-            phase_anchor = _auto_phase_limit_center(_anchor_val(a, "phase_limit", AUTO_MODE_PHASE_LIMIT_DEFAULT_HZ))
-            cand["phase_limit"] = round(
-                float(
-                    np.clip(
-                        rng.normal(
-                            phase_anchor,
-                            float(AUTO_MODE_PHASE_LIMIT_LOCAL_SIGMA_HZ),
-                        ),
-                        float(AUTO_MODE_PHASE_LIMIT_MIN_HZ),
-                        float(AUTO_MODE_PHASE_LIMIT_MAX_HZ),
-                    )
-                ),
-                1,
-            )
-        out.append(cand)
-    return out
-
-
-def _build_auto_mode_candidates_local(
-    base_data: dict,
-    center: dict,
-    n_trials: int,
-    seed: int,
-    shrink: float = AUTO_MODE_LOCAL_REFINE_SHRINK,
-    optimize_mag_low: bool = True,
-) -> list[dict]:
-    n_eff = max(1, int(n_trials))
-    rng = np.random.default_rng(int(seed))
-    s = float(np.clip(_auto_safe_float(shrink, AUTO_MODE_LOCAL_REFINE_SHRINK), 0.05, 1.50))
-    tune_mag_low = bool(optimize_mag_low)
-
-    base = dict(base_data or {})
-    c = dict(base)
-    c.update(dict(center or {}))
-
-    ft = str(c.get("filter_type", base.get("filter_type", "")) or "").strip().lower()
-    is_mixed = "mixed" in ft
-    is_phase_search = _auto_is_phase_search_filter(ft)
-    phase_center = _auto_phase_limit_center(c.get("phase_limit", base.get("phase_limit", None)))
-
-    keep_tdc = bool(c.get("enable_tdc", True))
-    keep_afdw = bool(c.get("enable_afdw", True))
-    keep_bass_first = bool(c.get("bass_first_ai", True))
-    mag_c_min_center = round(
-        _clip(
-            c.get("mag_c_min", base.get("mag_c_min", 25.0)),
-            float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
-            float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
-        ),
-        1,
-    )
-    low_bass_cut_center = round(
-        _clip(
-            c.get("low_bass_cut_hz", base.get("low_bass_cut_hz", 40.0)),
-            float(AUTO_MODE_LOW_BASS_MIN_HZ),
-            float(AUTO_MODE_LOW_BASS_MAX_HZ),
-        ),
-        1,
-    )
-
-    slope_choices = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 24.0, 36.0]
-    slope_center = _auto_safe_float(c.get("tdc_slope_db_per_oct", base.get("tdc_slope_db_per_oct", 6.0)), 6.0)
-    slope_idx = int(min(range(len(slope_choices)), key=lambda i: abs(float(slope_choices[i]) - float(slope_center))))
-
-    center_out = dict(c)
-    center_out["comparison_mode"] = True
-    center_out["enable_tdc"] = bool(keep_tdc)
-    center_out["enable_afdw"] = bool(keep_afdw)
-    center_out["bass_first_ai"] = bool(keep_bass_first)
-    center_out["mag_c_min"] = float(mag_c_min_center)
-    center_out["low_bass_cut_hz"] = float(low_bass_cut_center)
-    if bool(is_phase_search):
-        center_out["phase_limit"] = round(float(phase_center), 1)
-
-    out: list[dict] = [center_out]
-    for _ in range(max(0, n_eff - 1)):
-        step = int(rng.choice(np.array([-1, 0, 1], dtype=int), p=np.array([0.20, 0.60, 0.20])))
-        idx = int(np.clip(int(slope_idx + step), 0, len(slope_choices) - 1))
-        if bool(tune_mag_low):
-            mag_c_min_cand, low_bass_cut_cand = _auto_sample_mag_low_pair(
-                rng,
-                mag_center=_auto_safe_float(c.get("mag_c_min", base.get("mag_c_min", mag_c_min_center)), mag_c_min_center),
-                low_center=_auto_safe_float(c.get("low_bass_cut_hz", base.get("low_bass_cut_hz", low_bass_cut_center)), low_bass_cut_center),
-                mag_sigma=max(0.4, 3.2 * s),
-                low_sigma=max(0.6, 4.0 * s),
-            )
-        else:
-            mag_c_min_cand = float(mag_c_min_center)
-            low_bass_cut_cand = float(low_bass_cut_center)
-        cand = {
-            "comparison_mode": True,
-            "enable_tdc": bool(keep_tdc),
-            "enable_afdw": bool(keep_afdw),
-            "bass_first_ai": bool(keep_bass_first),
-            "fdw_cycles": round(_jitter(rng, c.get("fdw_cycles", None), 2.5 * s, 8.0, 16.0, base_data=base, key="fdw_cycles", default=10.0), 2),
-            "tdc_strength": round(_jitter(rng, c.get("tdc_strength", None), 12.0 * s, 15.0, 75.0, base_data=base, key="tdc_strength", default=50.0), 1),
-            "tdc_max_reduction_db": round(_jitter(rng, c.get("tdc_max_reduction_db", None), 6.0 * s, 6.0, 36.0, base_data=base, key="tdc_max_reduction_db", default=9.0), 1),
-            "tdc_slope_db_per_oct": float(slope_choices[idx]),
-            "reg_strength": round(_jitter(rng, c.get("reg_strength", None), 10.0 * s, 15.0, 45.0, base_data=base, key="reg_strength", default=30.0), 1),
-            "max_boost": round(_jitter(rng, c.get("max_boost", None), 1.0 * s, 3.0, 8.0, base_data=base, key="max_boost", default=4.0), 2),
-            "mag_c_min": float(mag_c_min_cand),
-            "mag_c_max": round(_jitter(rng, c.get("mag_c_max", None), 25.0 * s, 170.0, 300.0, base_data=base, key="mag_c_max", default=220.0), 1),
-            "trans_width": round(_jitter(rng, c.get("trans_width", None), 25.0 * s, 70.0, 150.0, base_data=base, key="trans_width", default=100.0), 1),
-            "bass_first_mode_max_hz": round(_jitter(rng, c.get("bass_first_mode_max_hz", None), 25.0 * s, 150.0, 220.0, base_data=base, key="bass_first_mode_max_hz", default=180.0), 1),
-            "low_bass_cut_hz": float(low_bass_cut_cand),
-        }
-        if is_mixed:
-            cand["mixed_freq"] = round(_jitter(rng, c.get("mixed_freq", None), 35.0 * s, 80.0, 320.0, base_data=base, key="mixed_freq", default=180.0), 1)
-        if is_phase_search:
-            cand["phase_limit"] = round(
-                _jitter(
-                    rng,
-                    c.get("phase_limit", None),
-                    float(AUTO_MODE_PHASE_LIMIT_LOCAL_SIGMA_HZ) * s,
-                    float(AUTO_MODE_PHASE_LIMIT_MIN_HZ),
-                    float(AUTO_MODE_PHASE_LIMIT_MAX_HZ),
-                    base_data=base,
-                    key="phase_limit",
-                    default=float(phase_center),
-                ),
-                1,
-            )
-        out.append(cand)
-    return out
-
-
-def _build_auto_mode_candidates_micro(
-    base_data: dict,
-    center: dict,
-    *,
-    n_trials: int = AUTO_MODE_PHASE3_MICRO_TRIALS,
-    shrink: float = 1.0,
-) -> list[dict]:
-    n_eff = max(1, int(n_trials))
-    p = dict(base_data or {})
-    p.update(dict(center or {}))
-    ft = str(p.get("filter_type", "") or "").strip().lower()
-    is_mixed = "mixed" in ft
-    is_phase_search = _auto_is_phase_search_filter(ft)
-
-    # shrink=1.0 keeps original steps; smaller tightens local search.
-    s = float(np.clip(_auto_safe_float(shrink, 1.0), 0.25, 1.0))
-    mixed_steps = [0.0, -16.0 * s, -8.0 * s, +8.0 * s, +16.0 * s]
-    phase_steps = [0.0, -28.0 * s, -14.0 * s, +14.0 * s, +28.0 * s]
-    tdc_steps = [0.0, -8.0 * s, -4.0 * s, +4.0 * s, +8.0 * s]
-    fdw_steps = [0.0, -1.0 * s, +1.0 * s]
-    reg_steps = [0.0, -6.0 * s, +6.0 * s]
-    tw_steps = [0.0, -15.0 * s, +15.0 * s]
-    # Deterministic pattern list: repeatable and intentionally diverse.
-    patterns = [
-        (0, 0, 0, 0, 0),
-        (2, 2, 1, 1, 1),
-        (3, 3, 2, 2, 2),
-        (1, 1, 2, 1, 2),
-        (4, 4, 1, 2, 1),
-        (2, 1, 2, 2, 0),
-        (3, 4, 1, 0, 2),
-        (1, 3, 0, 2, 0),
-        (4, 2, 2, 0, 1),
-        (0, 4, 1, 2, 2),
-        (0, 1, 2, 0, 1),
-        (2, 0, 0, 1, 2),
-    ]
-
-    base_mixed = _auto_safe_float(p.get("mixed_freq", 180.0), 180.0)
-    base_phase = _auto_phase_limit_center(p.get("phase_limit", None))
-    base_tdc = _auto_safe_float(p.get("tdc_strength", 55.0), 55.0)
-    base_fdw = _auto_safe_float(p.get("fdw_cycles", 10.0), 10.0)
-    base_reg = _auto_safe_float(p.get("reg_strength", 30.0), 30.0)
-    base_tw = _auto_safe_float(p.get("trans_width", 100.0), 100.0)
-
-    out: list[dict] = []
-    seen = set()
-    for i in range(max(1, n_eff)):
-        pi = patterns[int(i % len(patterns))]
-        cand = dict(center or {})
-        cand["comparison_mode"] = True
-        cand["tdc_strength"] = round(_clip(base_tdc + float(tdc_steps[int(pi[1])]), 35.0, 80.0), 1)
-        cand["fdw_cycles"] = round(_clip(base_fdw + float(fdw_steps[int(pi[2])]), 6.0, 16.0), 2)
-        cand["reg_strength"] = round(_clip(base_reg + float(reg_steps[int(pi[3])]), 15.0, 45.0), 1)
-        cand["trans_width"] = round(_clip(base_tw + float(tw_steps[int(pi[4])]), 70.0, 150.0), 1)
-        if bool(is_mixed):
-            cand["mixed_freq"] = round(_clip(base_mixed + float(mixed_steps[int(pi[0])]), 80.0, 320.0), 1)
-        if bool(is_phase_search):
-            cand["phase_limit"] = round(
-                _clip(
-                    base_phase + float(phase_steps[int(pi[0])]),
-                    float(AUTO_MODE_PHASE_LIMIT_MIN_HZ),
-                    float(AUTO_MODE_PHASE_LIMIT_MAX_HZ),
-                ),
-                1,
-            )
-
-        sig = (
-            float(_auto_safe_float(cand.get("mixed_freq", float("nan")), float("nan"))) if bool(is_mixed) else float("nan"),
-            float(_auto_safe_float(cand.get("phase_limit", float("nan")), float("nan"))) if bool(is_phase_search) else float("nan"),
-            float(_auto_safe_float(cand.get("tdc_strength", float("nan")), float("nan"))),
-            float(_auto_safe_float(cand.get("fdw_cycles", float("nan")), float("nan"))),
-            float(_auto_safe_float(cand.get("reg_strength", float("nan")), float("nan"))),
-            float(_auto_safe_float(cand.get("trans_width", float("nan")), float("nan"))),
-        )
-        if sig in seen:
-            continue
-        seen.add(sig)
-        out.append(cand)
-        if len(out) >= n_eff:
-            break
-
-    if not out:
-        base_c = dict(center or {})
-        base_c["comparison_mode"] = True
-        out = [base_c]
-    return out
-
-
-@dataclass
-class _AutoModeSearchState:
-    best_result: object | None = None
-    best_metrics: dict | None = None
-    best_preset: dict | None = None
-    scored: list[dict] = field(default_factory=list)
-    phase2_pool: list[dict] = field(default_factory=list)
-
-
-@dataclass
-class _AutoModePhaseState:
-    ok_n: int = 0
-    tried_n: int = 0
-    plateau_hit: bool = False
-    no_improve_streak: int = 0
-    improved_any: bool = False
+# --------------------------------------------------------------------
+# Auto-mode search state + orchestration
+# --------------------------------------------------------------------
 
 
 def _run_auto_mode_search_impl(
@@ -5418,6 +2714,7 @@ def _run_auto_mode_search_impl(
         target_label = str(search_base_data.get("hc_mode", "") or "").strip()
     except Exception:
         target_label = ""
+    winner_target_name = str(target_label or "").strip() or None
     if not target_label:
         target_label = "n/a"
     f6_hz = _auto_safe_float(
@@ -5616,8 +2913,14 @@ def _run_auto_mode_search_impl(
 
                 if better:
                     prev_best = dict(search_state.best_metrics or {})
-                    search_state.best_metrics = dict(metrics)
-                    search_state.best_preset = dict(trial_preset)
+                    _auto_set_search_winner(
+                        search_state,
+                        metrics,
+                        trial_preset,
+                        prev_metrics=prev_best,
+                        phase_label=phase_label,
+                        target_name=winner_target_name,
+                    )
                     improved = True
                     phase_state.improved_any = True
                     if bool(use_refine_tiebreak) and str(refine_reason) == "mode_ripple":
@@ -5756,8 +3059,9 @@ def _run_auto_mode_search_impl(
         key=lambda x: _auto_rank_key(x.get("metrics", {})),
     )[: int(max(1, cfg.local_refine_top_k))]
     if phase1_top:
-        p1m = dict(phase1_top[0].get("metrics", {}) or {})
-        p1p = dict(phase1_top[0].get("preset", {}) or {})
+        phase1_top_best = dict(_auto_select_best_scored(phase1_top) or phase1_top[0])
+        p1m = dict(phase1_top_best.get("metrics", {}) or {})
+        p1p = dict(phase1_top_best.get("preset", {}) or {})
         p1_mixed = _auto_safe_float(p1p.get("mixed_freq", search_base_data.get("mixed_freq", float("nan"))), float("nan"))
         p1_phase = _auto_safe_float(p1p.get("phase_limit", search_base_data.get("phase_limit", float("nan"))), float("nan"))
         p1_tdc = _auto_safe_float(p1p.get("tdc_strength", search_base_data.get("tdc_strength", float("nan"))), float("nan"))
@@ -5790,8 +3094,9 @@ def _run_auto_mode_search_impl(
                 f"{p1_detail}"
             )
 
-    phase1_best_metrics = dict(phase1_top[0].get("metrics", {}) or {}) if phase1_top else None
-    phase1_best_preset = dict(phase1_top[0].get("preset", {}) or {}) if phase1_top else None
+    phase1_best_item = _auto_select_best_scored(phase1_top) if phase1_top else None
+    phase1_best_metrics = dict((phase1_best_item or {}).get("metrics", {}) or {}) if phase1_best_item else None
+    phase1_best_preset = dict((phase1_best_item or {}).get("preset", {}) or {}) if phase1_best_item else None
     phase2_focus_lo = float("nan")
     phase2_focus_hi = float("nan")
     if bool(cfg.local_refine_enabled) and phase1_top and _auto_goal_uses_local_refine(goal):
@@ -5862,8 +3167,15 @@ def _run_auto_mode_search_impl(
 
     if bool(cfg.local_refine_keep_best_phase1) and isinstance(phase1_best_metrics, dict):
         if search_state.best_metrics is None or _auto_rank_key(search_state.best_metrics) > _auto_rank_key(phase1_best_metrics):
-            search_state.best_metrics = dict(phase1_best_metrics)
-            search_state.best_preset = dict(phase1_best_preset or {})
+            prev_best = dict(search_state.best_metrics or {})
+            _auto_set_search_winner(
+                search_state,
+                phase1_best_metrics,
+                phase1_best_preset or {},
+                prev_metrics=prev_best,
+                phase_label="phase 1 carry-forward",
+                target_name=winner_target_name,
+            )
 
     if (
         bool(cfg.phase3_micro_enabled)
@@ -5960,12 +3272,21 @@ def _run_auto_mode_search_impl(
         if len(phase2_kept) >= pareto_min_n:
             front = _auto_phase2_pareto_front(phase2_kept)
             logger.info(f"Pareto front size: {int(len(front))}")
-            rank_best = dict(phase2_kept[0])
-            pareto_winner = _auto_phase2_pick_pareto_winner(
-                front,
-                phase2_kept,
-                acoustic_drop=float(_auto_safe_float(cfg.phase2_pareto_acoustic_drop, AUTO_MODE_PHASE2_PARETO_ACOUSTIC_DROP)),
-            )
+            rank_best = dict(_auto_select_best_scored(phase2_kept) or phase2_kept[0])
+            pareto_pool = [
+                {
+                    **dict(it or {}),
+                    "_auto_select_kind": "phase2_pareto",
+                    "_phase2_pareto_acoustic_drop": float(
+                        _auto_safe_float(
+                            cfg.phase2_pareto_acoustic_drop,
+                            AUTO_MODE_PHASE2_PARETO_ACOUSTIC_DROP,
+                        )
+                    ),
+                }
+                for it in phase2_kept
+            ]
+            pareto_winner = _auto_select_best_scored(pareto_pool)
             if isinstance(pareto_winner, dict):
                 w_metrics = dict(pareto_winner.get("metrics", {}) or {})
                 w_preset = dict(pareto_winner.get("preset", {}) or {})
@@ -6006,8 +3327,15 @@ def _run_auto_mode_search_impl(
                     f"mode_ripple {w_mode_ripple if np.isfinite(w_mode_ripple) else float('nan'):.3f} vs "
                     f"{rb_mode_ripple if np.isfinite(rb_mode_ripple) else float('nan'):.3f}"
                 )
-                search_state.best_metrics = dict(w_metrics)
-                search_state.best_preset = dict(w_preset)
+                prev_best = dict(search_state.best_metrics or {})
+                _auto_set_search_winner(
+                    search_state,
+                    w_metrics,
+                    w_preset,
+                    prev_metrics=prev_best,
+                    phase_label="phase 2 pareto",
+                    target_name=winner_target_name,
+                )
         else:
             logger.info(
                 "Pareto front skipped: "
@@ -6156,6 +3484,7 @@ def _run_auto_mode_search_impl(
         "best_result": search_state.best_result,
         "best_metrics": dict(search_state.best_metrics),
         "best_preset": dict(search_state.best_preset or {}),
+        "winner_explanation": dict(search_state.winner_explanation or {}),
         "best_auto_exc_freq_hz": float(best_auto_exc_hz) if np.isfinite(best_auto_exc_hz) else float("nan"),
         "auto_goal": str(goal),
         "selection_basis": str(rank_basis),
@@ -6244,5 +3573,3 @@ def _run_auto_mode_search(
         status_cb=status_cb,
         n_trials=int(n_trials),
     ).run()
-
-

@@ -129,7 +129,7 @@ try:
 except Exception:
     pass
 
-VERSION = "v.3.5.3"
+VERSION = "v.3.5.4"
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
@@ -873,6 +873,7 @@ def process_run():
             if isinstance(auto_res, dict):
                 best_preset = dict(auto_res.get("best_preset", {}) or {})
                 best_metrics = dict(auto_res.get("best_metrics", {}) or {})
+                winner_explanation = dict(auto_res.get("winner_explanation", {}) or {})
                 if best_preset:
                     data.update(best_preset)
                     measurements["ui_data"] = data
@@ -931,6 +932,7 @@ def process_run():
                     ),
                     "best_metrics": best_metrics,
                     "best_preset": best_preset,
+                    "winner_explanation": winner_explanation,
                     "top": list(auto_res.get("top", []) or []),
                 }
                 _status(
@@ -1371,4 +1373,3 @@ if __name__ == '__main__':
         auto_open_webbrowser=True,
         static_dir=resolve_static_dir(),
     )
-

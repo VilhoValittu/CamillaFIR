@@ -1,4 +1,5 @@
 import logging
+from html import escape
 from textwrap import dedent
 
 from pywebio.output import (
@@ -162,6 +163,55 @@ def _build_diagnostics_dict(data, fs_v, l_st, r_st):
         "right": _json_safe(r_st),
     }
     return diag
+
+
+def _auto_winner_explanation_view(auto_meta: dict | None) -> dict:
+    explanation = dict((auto_meta or {}).get("winner_explanation", {}) or {})
+    summary = str(explanation.get("summary", "") or "").strip() or "Winner explanation unavailable."
+
+    reasons: list[str] = []
+    reasons_raw = explanation.get("reasons", [])
+    if isinstance(reasons_raw, (list, tuple)):
+        for item in list(reasons_raw):
+            txt = str(item or "").strip()
+            if txt:
+                reasons.append(txt)
+
+    phase_label = str(explanation.get("phase_label", "") or "").strip()
+    target_name = str(explanation.get("target_name", "") or "").strip()
+    meta_parts = []
+    if target_name:
+        meta_parts.append(f"Target: {target_name}")
+    if phase_label:
+        meta_parts.append(f"Winner accepted in {phase_label}")
+
+    return {
+        "summary": summary,
+        "reasons": list(reasons),
+        "meta_line": " | ".join(meta_parts),
+    }
+
+
+def _render_auto_winner_explanation(auto_meta: dict | None) -> None:
+    vm = _auto_winner_explanation_view(auto_meta)
+    put_markdown("### Why this preset won")
+    put_info(str(vm.get("summary", "Winner explanation unavailable.") or "Winner explanation unavailable."))
+
+    meta_line = str(vm.get("meta_line", "") or "").strip()
+    if meta_line:
+        put_html(
+            "<div style='opacity:0.70; font-size:12px; line-height:1.25; margin-top:4px'>"
+            f"{escape(meta_line)}"
+            "</div>"
+        )
+
+    reasons_raw = vm.get("reasons", [])
+    reasons = []
+    if isinstance(reasons_raw, (list, tuple)):
+        reasons = [str(item or "").strip() for item in list(reasons_raw) if str(item or "").strip()]
+    if reasons:
+        items = "".join(f"<li>{escape(reason)}</li>" for reason in reasons)
+        put_html(f"<ul style='margin:8px 0 0 18px; padding:0'>{items}</ul>")
 
 def _render_results(
     data,
@@ -346,7 +396,7 @@ def _render_results(
             mode_ripple = _af(bm.get("mode_ripple_db", float("nan")), float("nan"))
             lf_rms_20_200 = _af(bm.get("realized_rms_20_200_db", float("nan")), float("nan"))
 
-            put_markdown("### CamillaFIR automatic mode - why this preset won")
+            _render_auto_winner_explanation(auto_meta)
             put_info(
                 f"Best winner: rank {rank_sc:.3f}/100, avg {avg_sc:.3f}, "
                 f"boost {boost_db:.2f} dB, dsp_pen {dsp_pen:.2f}, exc_pen {exc_pen:.2f}, "

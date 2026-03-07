@@ -4,6 +4,17 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.5.4] - 2026-03-07
+
+### Automatic mode
+- Refactored automatic-mode code into smaller modules to improve maintainability and make future changes safer.
+- Split automatic-mode logic into clearer parts without changing optimization behavior.
+
+### Notes
+- No DSP changes in this release.
+
+---
+
 ## [3.5.3] - 2026-03-06
 
 ### Automatic mode
