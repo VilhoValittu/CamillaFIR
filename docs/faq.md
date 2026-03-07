@@ -195,3 +195,8 @@ Yes, always verify with a measurement after applying the FIR filter.
 
 ### Disclaimer
 AI was used to translate this document from Finnish to English.
+
+## Next Steps
+- **[Back to Home]({{ site.baseurl }}/)** – Return to the CamillaFIR overview.
+- **[FIR vs IIR Comparison]({{ site.baseurl }}/Comparison_vs_EQ)** – Learn why a FIR filter maker is often superior to standard EQ.
+- **[Technical Deep Dive]({{ site.baseurl }}/Academic_DSP_Explanation)** – Understand the math behind our FIR filter generator.

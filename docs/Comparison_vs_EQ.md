@@ -43,3 +43,9 @@ CamillaFIR intentionally avoids aggressive inversion and prioritizes corrections
 
 ### Disclaimer
 AI was used to translate this document from Finnish to English.
+
+## Summary
+CamillaFIR intentionally avoids aggressive inversion and prioritizes corrections that remain stable and physically plausible.
+
+- **[Get Started with CamillaFIR]({{ site.baseurl }}/)** – Download the FIR filter maker.
+- **[Read the FAQ]({{ site.baseurl }}/faq)** – Common questions about convolution and REW.
