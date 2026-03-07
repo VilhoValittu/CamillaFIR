@@ -4,6 +4,27 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.5.5] - 2026-03-07
+
+### Automatic mode
+- Added exact cache-hit reuse for same measurements + settings in both target-curve selection and preset search, so redundant target trials can be skipped when a matching cached winner already exists.
+- Expanded Optuna-backed candidate generation across main search, local refine, micro-refine, and target-curve trials while preserving seeded presets inside the study.
+- Stored `best_metrics` together with cached presets/targets so cached winners keep their ranking context for later reporting and export summaries.
+- Improved target-selection reporting with clearer method labels (`cache hit`, `trial comparison`, `cache wildcard`, etc.) in status text, logs, and export metadata.
+- Kept automatic excursion protection seed/final frequency tracking visible in export summaries.
+
+### UI & Defaults
+- Simplified automatic-mode result presentation by relying on the winner explanation panel instead of repeating the same winner metrics block.
+- Trimmed the automatic-mode top-5 table to emphasize the core comparison columns.
+- Updated startup defaults to use `Asymmetric` as the default filter type.
+- Added default Optuna sampler settings to config (`multivariate`, `group`, `constant_liar`).
+
+### Docs & Export
+- Extended export summary text with selected target-curve method, target-selection grid details, and cached ranking metadata.
+- Refreshed documentation version references for the 3.5.5 release.
+
+---
+
 ## [3.5.4] - 2026-03-07
 
 ### Automatic mode

@@ -154,6 +154,101 @@ def test_run_auto_mode_search_impl_returns_winner_explanation(monkeypatch):
     assert explanation["target_name"] == "Harman6"
 
 
+def test_run_auto_mode_search_impl_uses_optuna_backend_even_for_small_trial_count(monkeypatch):
+    class _FakeTrialState:
+        FAIL = "fail"
+
+    class _FakeStudy:
+        def __init__(self):
+            self.told = []
+
+        def ask(self):
+            return object()
+
+        def tell(self, trial, value=None, state=None):
+            self.told.append({"trial": trial, "value": value, "state": state})
+
+    class _FakeOptuna:
+        class samplers:
+            class TPESampler:
+                def __init__(self, seed=None, n_startup_trials=None, **kwargs):
+                    self.seed = seed
+                    self.n_startup_trials = n_startup_trials
+                    self.kwargs = dict(kwargs or {})
+
+        class trial:
+            TrialState = _FakeTrialState
+
+        @staticmethod
+        def create_study(direction=None, sampler=None):
+            return _FakeStudy()
+
+    def fake_build_candidates(*args, **kwargs):
+        n_trials = int(kwargs.get("n_trials", 0) or 0)
+        if n_trials <= 1:
+            return [{"preset_id": "seed", "mixed_freq": 180.0}]
+        raise AssertionError("builtin candidate sampler should not be used for full phase1 when optuna is enabled")
+
+    def fake_build_config(*args, **kwargs):
+        return SimpleNamespace()
+
+    def fake_run_pipeline(cfg, measurements, include_response_arrays=False):
+        return SimpleNamespace(metrics={}, ui_data=dict(measurements.get("ui_data", {}) or {}))
+
+    def fake_score_result(result, **kwargs):
+        trial = dict(kwargs.get("base_data", {}) or {})
+        preset_id = str(trial.get("preset_id", "seed"))
+        if preset_id == "optuna":
+            return {
+                "rank_score": 88.0,
+                "avg_score": 84.0,
+                "mode_ripple_db": 0.03,
+                "max_net_boost_db": 2.1,
+                "event_penalty": 0.05,
+            }
+        return {
+            "rank_score": 79.0,
+            "avg_score": 76.0,
+            "mode_ripple_db": 0.08,
+            "max_net_boost_db": 3.8,
+            "event_penalty": 0.30,
+        }
+
+    monkeypatch.setattr(auto, "_auto_import_optuna", lambda: _FakeOptuna)
+    monkeypatch.setattr(auto, "_build_auto_mode_candidates", fake_build_candidates)
+    monkeypatch.setattr(auto, "_suggest_auto_mode_candidate_optuna", lambda *args, **kwargs: {"preset_id": "optuna", "mixed_freq": 160.0})
+    monkeypatch.setattr(auto, "_auto_trial_workers", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(auto, "build_config", fake_build_config)
+    monkeypatch.setattr(auto, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(auto, "_auto_score_result", fake_score_result)
+    monkeypatch.setattr(auto, "summarize_run", lambda result: "summary")
+
+    result = auto._run_auto_mode_search_impl(
+        base_data={
+            "filter_type": "Mixed",
+            "hc_mode": "Harman6",
+            "auto_mode_cache_enabled": False,
+            "auto_mode_local_refine_enabled": False,
+            "auto_mode_phase3_micro_enabled": False,
+            "auto_mode_workers": 1,
+            "auto_mode_optuna": True,
+        },
+        measurements={"ui_data": {}},
+        fs_v=44100,
+        taps_v=2048,
+        xos=[],
+        hpf=None,
+        hc_f=None,
+        hc_m=None,
+        pin_obj=None,
+        status_cb=None,
+        n_trials=2,
+    )
+
+    assert isinstance(result, dict)
+    assert dict(result.get("best_preset", {}) or {}).get("preset_id") == "optuna"
+
+
 def test_render_auto_winner_explanation_handles_missing_explanation(monkeypatch):
     calls = []
 

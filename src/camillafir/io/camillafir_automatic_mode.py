@@ -43,6 +43,12 @@ from .auto_mode.candidate_generation import (
     _build_auto_mode_candidates_micro,
     _build_auto_mode_candidates_optuna,
     _build_auto_mode_refine_candidates,
+    _seed_auto_mode_candidate_local_optuna_params,
+    _seed_auto_mode_candidate_micro_optuna_params,
+    _seed_auto_mode_candidate_optuna_params,
+    _suggest_auto_mode_candidate_local_optuna,
+    _suggest_auto_mode_candidate_micro_optuna,
+    _suggest_auto_mode_candidate_optuna,
 )
 from .auto_mode.scoring_ranking import (
     _auto_adaptive_shrink_factor,
@@ -102,6 +108,7 @@ from .auto_mode.shared import (
     _auto_is_phase_search_filter,
     _auto_metric_text,
     _auto_optimizer_backend,
+    _auto_optuna_sampler_kwargs,
     _auto_phase_limit_center,
     _auto_phase_limit_clip,
     _auto_phase_limit_prior_penalty,
@@ -226,6 +233,9 @@ AUTO_MODE_ADAPTIVE_SHRINK_MIN = 0.20
 AUTO_MODE_ADAPTIVE_SHRINK_MAX = 0.55
 AUTO_MODE_PHASE3_MICRO_ENABLED = True
 AUTO_MODE_PHASE3_MICRO_TRIALS = 12
+AUTO_MODE_CACHE_REFINE_MICRO_TRIALS = 20
+AUTO_MODE_CACHE_REFINE_MAX_ROUNDS = 8
+AUTO_MODE_CACHE_REFINE_MIN_RANK_IMPROVEMENT = 0.02
 AUTO_MODE_HYBRID_MIXED_FREQ_SOFT_MAX_HZ = 110.0
 AUTO_MODE_HYBRID_MIXED_FREQ_SOFT_DEN_HZ = 40.0
 AUTO_MODE_HYBRID_LOCAL_TOP_N = 2
@@ -296,6 +306,163 @@ AUTO_MODE_BUILTIN_TARGET_LOOKUP = {
     str(name).strip().lower(): str(name).strip()
     for name in AUTO_MODE_BUILTIN_TARGETS
 }
+
+
+def _auto_import_optuna():
+    try:
+        import optuna  # type: ignore
+    except Exception:
+        return None
+    return optuna
+
+
+def _auto_optuna_objective_value(metrics: dict | None, *, use_refine_tiebreak: bool = False) -> float:
+    met = dict(metrics or {})
+    key = "rank_score_refine" if bool(use_refine_tiebreak) else "rank_score"
+    value = _auto_safe_float(met.get(key, float("nan")), float("nan"))
+    if (not np.isfinite(value)) and bool(use_refine_tiebreak):
+        value = _auto_safe_float(met.get("rank_score", float("nan")), float("nan"))
+    if np.isfinite(value):
+        return float(value)
+    return float(-1e12)
+
+
+def _auto_run_optuna_eval_loop(
+    *,
+    optuna_mod,
+    n_total: int,
+    seed: int,
+    startup_trials: int,
+    base_data: dict | None,
+    seed_presets: list[dict] | None,
+    build_preset,
+    eval_one,
+    consume_one,
+    objective_value,
+    workers: int,
+    seed_to_params=None,
+) -> None:
+    total = int(max(0, n_total))
+    if total <= 0:
+        return
+    sampler = optuna_mod.samplers.TPESampler(
+        seed=int(seed),
+        n_startup_trials=int(max(1, min(int(startup_trials), int(total)))),
+        **_auto_optuna_sampler_kwargs(base_data, workers=int(workers)),
+    )
+    study = optuna_mod.create_study(direction="maximize", sampler=sampler)
+    fail_state = optuna_mod.trial.TrialState.FAIL
+
+    def _tell(trial_obj, out: dict) -> None:
+        try:
+            if bool(dict(out or {}).get("ok", False)):
+                value = float(objective_value(dict(out or {})))
+                if not np.isfinite(value):
+                    value = float(-1e12)
+                study.tell(trial_obj, float(value))
+            else:
+                study.tell(trial_obj, state=fail_state)
+        except Exception:
+            pass
+
+    idx_next = 1
+    seed_items = list(seed_presets or [])[: int(total)]
+    if callable(seed_to_params) and hasattr(study, "enqueue_trial"):
+        for preset in list(seed_items):
+            try:
+                params = dict(seed_to_params(dict(preset or {})) or {})
+            except Exception:
+                params = {}
+            if params:
+                try:
+                    study.enqueue_trial(dict(params))
+                except Exception:
+                    pass
+
+    for preset in list(seed_items):
+        if idx_next > total:
+            return
+        trial_obj = None
+        preset_eval = dict(preset or {})
+        if callable(seed_to_params):
+            try:
+                trial_obj = study.ask()
+                preset_eval = dict(build_preset(trial_obj) or {})
+            except Exception:
+                trial_obj = None
+                preset_eval = dict(preset or {})
+        try:
+            out = eval_one(int(idx_next), dict(preset_eval or {}))
+        except Exception as exc:
+            out = {
+                "idx": int(idx_next),
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        if trial_obj is not None:
+            _tell(trial_obj, out)
+        if consume_one(int(idx_next), dict(out or {})):
+            return
+        idx_next += 1
+    if idx_next > total:
+        return
+
+    remaining = int(total - idx_next + 1)
+    if workers <= 1 or remaining <= 1:
+        for idx in range(int(idx_next), int(total) + 1):
+            trial_obj = study.ask()
+            preset = dict(build_preset(trial_obj) or {})
+            try:
+                out = eval_one(int(idx), dict(preset))
+            except Exception as exc:
+                out = {
+                    "idx": int(idx),
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            _tell(trial_obj, out)
+            if consume_one(int(idx), dict(out or {})):
+                break
+        return
+
+    chunk_size = int(_auto_trial_chunk_size(workers))
+    while idx_next <= total:
+        chunk_items = []
+        while idx_next <= total and len(chunk_items) < int(chunk_size):
+            trial_obj = study.ask()
+            preset = dict(build_preset(trial_obj) or {})
+            chunk_items.append((int(idx_next), trial_obj, dict(preset)))
+            idx_next += 1
+        if not chunk_items:
+            break
+
+        with ThreadPoolExecutor(max_workers=int(workers)) as ex:
+            fut_map = {
+                ex.submit(eval_one, int(idx), dict(preset)): (int(idx), trial_obj)
+                for idx, trial_obj, preset in chunk_items
+            }
+            chunk_out: dict[int, dict] = {}
+            for fut in as_completed(list(fut_map.keys())):
+                idx, trial_obj = fut_map.get(fut, (0, None))
+                try:
+                    out = fut.result()
+                    if not isinstance(out, dict):
+                        out = {"idx": int(idx), "ok": False, "error": "invalid worker result"}
+                except Exception as exc:
+                    out = {"idx": int(idx), "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                _tell(trial_obj, out)
+                chunk_out[int(idx)] = dict(out or {})
+
+        for idx, _trial_obj, _preset in chunk_items:
+            out = dict(
+                chunk_out.get(
+                    int(idx),
+                    {"idx": int(idx), "ok": False, "error": "missing worker result"},
+                )
+                or {}
+            )
+            if consume_one(int(idx), out):
+                return
 
 
 def _auto_collect_reflections(st: dict | None) -> list:
@@ -537,9 +704,21 @@ def _auto_select_target_curve_with_trials(
     trials_per_curve: int = AUTO_MODE_TARGET_TRIALS_PER_CURVE,
 ) -> dict | None:
     goal = _auto_goal(base_data)
+    cfg = AutoModeConfig.from_base_data(base_data)
     program_version = _auto_program_version(base_data)
     filter_key = _auto_filter_cache_key(base_data)
     rank_basis = _auto_goal_basis_text(goal)
+    optimizer_backend = _auto_optimizer_backend(
+        base_data,
+        default_optuna_enabled=bool(cfg.optuna_pilot_enabled),
+    )
+    optuna_mod = _auto_import_optuna() if str(optimizer_backend) == "optuna" else None
+    if str(optimizer_backend) == "optuna" and optuna_mod is None:
+        logger.warning(
+            "Automatic mode target select: optuna backend requested but unavailable; "
+            "falling back to builtin sampler."
+        )
+        optimizer_backend = "builtin"
     logger.info(f"Automatic mode target select: goal={goal}, basis={rank_basis}")
 
     # Deterministic seed for target-selection trials:
@@ -681,14 +860,14 @@ def _auto_select_target_curve_with_trials(
                 program_version=program_version,
             )
             cached_hc = _auto_builtin_target_name(cached_hc)
-            if (not cached_target_hc) and _cache_target_valid(cached_hc):
+            if _cache_target_valid(cached_hc):
                 cached_target_hc = str(cached_hc)
                 cached_target_preset = _auto_cache_get_best(
                     sig_target,
                     filter_key=filter_key,
                     program_version=program_version,
                 ) or {}
-                cached_target_source = "cache"
+                cached_target_source = "cache_signature"
                 logger.info(
                     "Automatic mode target select: cache seed (signature) target=%s",
                     str(cached_target_hc),
@@ -700,6 +879,31 @@ def _auto_select_target_curve_with_trials(
                     )
         except Exception:
             pass
+
+    if (
+        str(cached_target_source) == "cache_signature"
+        and _cache_target_valid(cached_target_hc)
+        and isinstance(cached_target_preset, dict)
+        and bool(cached_target_preset)
+    ):
+        fallback = _cached_target_return(
+            cached_target_hc,
+            cached_target_preset,
+            selection_method="cache_signature_hit",
+        )
+        if isinstance(fallback, dict):
+            logger.info(
+                "Automatic mode target select: exact cache hit for same measurements + settings, "
+                "using cached target=%s and skipping all target comparison trials",
+                str(cached_target_hc),
+            )
+            if callable(status_cb):
+                status_cb(
+                    "CamillaFIR automatic mode: target loaded directly from cache "
+                    f"(same measurements + settings -> {str(cached_target_hc)}, "
+                    "skipping target comparison trials)"
+                )
+            return dict(fallback)
 
     f6_hz = _auto_safe_float(
         base_data.get("_auto_mag_c_min_hz", base_data.get("mag_c_min", float("nan"))),
@@ -1039,8 +1243,17 @@ def _auto_select_target_curve_with_trials(
         hc_m_arr,
         phase_tag: str,
         target_name: str,
+        n_total_override: int | None = None,
+        seed_presets: list[dict] | None = None,
+        optuna_builder=None,
+        seed_to_params=None,
     ) -> list[dict]:
-        n_total = int(len(cands))
+        use_optuna_trials = bool(
+            str(optimizer_backend) == "optuna"
+            and optuna_mod is not None
+            and callable(optuna_builder)
+        )
+        n_total = int(n_total_override) if n_total_override is not None else int(len(cands))
         if n_total <= 0:
             return []
         workers = int(_auto_trial_workers(base_tc, n_total))
@@ -1051,6 +1264,54 @@ def _auto_select_target_curve_with_trials(
                 str(phase_tag),
                 int(workers),
             )
+
+        if bool(use_optuna_trials):
+            out_by_idx: dict[int, dict] = {}
+
+            def _eval_one(idx: int, preset: dict) -> dict:
+                out = _target_eval_one(
+                    dict(preset or {}),
+                    base_tc=base_tc,
+                    hc_f_arr=hc_f_arr,
+                    hc_m_arr=hc_m_arr,
+                )
+                out = dict(out or {})
+                out["idx"] = int(idx)
+                return out
+
+            def _consume_one(idx: int, out: dict) -> bool:
+                out_by_idx[int(idx)] = dict(out or {})
+                return False
+
+            _auto_run_optuna_eval_loop(
+                optuna_mod=optuna_mod,
+                n_total=int(n_total),
+                seed=int(seed_target + sum(ord(ch) for ch in str(target_name)) * 31 + sum(ord(ch) for ch in str(phase_tag)) * 17),
+                startup_trials=int(cfg.optuna_pilot_startup_trials),
+                base_data=dict(base_tc or {}),
+                seed_presets=list(seed_presets or []),
+                build_preset=optuna_builder,
+                eval_one=_eval_one,
+                consume_one=_consume_one,
+                objective_value=lambda out: _auto_optuna_objective_value(
+                    dict((out or {}).get("metrics", {}) or {}),
+                    use_refine_tiebreak=False,
+                ),
+                workers=int(workers),
+                seed_to_params=seed_to_params,
+            )
+            out = []
+            for idx in range(1, int(n_total) + 1):
+                out.append(
+                    dict(
+                        out_by_idx.get(
+                            int(idx),
+                            {"idx": int(idx), "ok": False, "error": "missing worker result"},
+                        )
+                        or {}
+                    )
+                )
+            return out
 
         idx_presets = list(enumerate(list(cands or []), start=1))
         out_by_idx: dict[int, dict] = {}
@@ -1150,12 +1411,21 @@ def _auto_select_target_curve_with_trials(
                 float(_auto_phase_limit_center(base_tc.get("phase_limit", None))),
                 1,
             )
-        candidates = _build_auto_mode_candidates(
+        use_optuna_curve_trials = bool(str(optimizer_backend) == "optuna" and optuna_mod is not None)
+        candidates = []
+        phase1_seed_presets = _build_auto_mode_candidates(
             base_tc,
-            n_trials=trials_eff,
+            n_trials=1,
             seed=seed_tc,
             optimize_mag_low=False,
         )
+        if not bool(use_optuna_curve_trials):
+            candidates = _build_auto_mode_candidates(
+                base_tc,
+                n_trials=trials_eff,
+                seed=seed_tc,
+                optimize_mag_low=False,
+            )
 
         best_metrics = None
         best_preset = None
@@ -1164,7 +1434,8 @@ def _auto_select_target_curve_with_trials(
         avg_score_sum = 0.0
         phase1_scored = []
         curve_scored = []
-        trials_total_count = int(len(candidates))
+        phase1_trial_total = int(max(1, trials_eff if bool(use_optuna_curve_trials) else len(candidates)))
+        trials_total_count = int(phase1_trial_total)
         cb = status_cb if bool(emit_status) else None
 
         phase1_out = _run_target_trials(
@@ -1174,6 +1445,26 @@ def _auto_select_target_curve_with_trials(
             hc_m_arr=hc_m,
             phase_tag="phase1",
             target_name=hc_name,
+            n_total_override=int(phase1_trial_total),
+            seed_presets=list(phase1_seed_presets or []),
+            optuna_builder=(
+                (lambda tr, _base_tc=dict(base_tc): _suggest_auto_mode_candidate_optuna(
+                    _base_tc,
+                    tr,
+                    optimize_mag_low=False,
+                ))
+                if bool(use_optuna_curve_trials)
+                else None
+            ),
+            seed_to_params=(
+                (lambda preset, _base_tc=dict(base_tc): _seed_auto_mode_candidate_optuna_params(
+                    _base_tc,
+                    preset,
+                    optimize_mag_low=False,
+                ))
+                if bool(use_optuna_curve_trials)
+                else None
+            ),
         )
         for c_idx, out in enumerate(phase1_out, start=1):
             improved = False
@@ -1192,7 +1483,7 @@ def _auto_select_target_curve_with_trials(
             else:
                 logger.warning(
                     f"Automatic mode target trial failed: target={hc_name} "
-                    f"{c_idx}/{len(candidates)} ({str(out.get('error', 'unknown error') or 'unknown error')})"
+                    f"{c_idx}/{int(phase1_trial_total)} ({str(out.get('error', 'unknown error') or 'unknown error')})"
                 )
 
             if callable(cb) and bool(improved):
@@ -1201,7 +1492,7 @@ def _auto_select_target_curve_with_trials(
                 cb(
                     "CamillaFIR automatic mode: target trials best improved "
                     f"(target {t_idx}/{len(shortlisted)} {hc_name}, "
-                    f"trial {c_idx}/{len(candidates)}{f6_txt}, goal {goal}, "
+                    f"trial {c_idx}/{int(phase1_trial_total)}{f6_txt}, goal {goal}, "
                     f"rank {rank_now:.3f}, avg {avg_now:.3f}, "
                     f"fit {_auto_safe_float(tc.get('fit_rms_db', 0.0), 0.0):.3f}, "
                     f"pre {_auto_safe_float(tc.get('preselect_score', tc.get('fit_rms_db', 0.0)), 0.0):.3f})"
@@ -1275,21 +1566,17 @@ def _auto_select_target_curve_with_trials(
                             f"center #{li} {local_detail}"
                         )
 
-                local_candidates = _build_auto_mode_candidates_local(
-                    base_tc,
-                    center,
-                    int(AUTO_MODE_LOCAL_REFINE_TRIALS_PER_TOP),
-                    int(seed_tc + li * 100003),
-                    shrink=float(
-                        _auto_adaptive_shrink_factor(
-                            top_list,
-                            base_shrink=float(AUTO_MODE_LOCAL_REFINEMENT_SHRINK),
-                            plateau_hit=False,
-                        )
-                    ),
-                    optimize_mag_low=False,
+                local_trial_total = int(AUTO_MODE_LOCAL_REFINE_TRIALS_PER_TOP)
+                local_shrink = float(
+                    _auto_adaptive_shrink_factor(
+                        top_list,
+                        base_shrink=float(AUTO_MODE_LOCAL_REFINEMENT_SHRINK),
+                        plateau_hit=False,
+                    )
                 )
-                for cand in local_candidates:
+
+                def _target_local_candidate_clip(cand_in: dict) -> dict:
+                    cand = dict(cand_in or {})
                     mf = _auto_safe_float(cand.get("mixed_freq"), float("nan"))
                     if np.isfinite(mf):
                         cand["mixed_freq"] = _clip(
@@ -1310,7 +1597,33 @@ def _auto_select_target_curve_with_trials(
                             float(_auto_phase_limit_clip(cand.get("phase_limit", base_tc.get("phase_limit", 400.0)), default=400.0)),
                             1,
                         )
-                trials_total_count += int(len(local_candidates))
+                    return dict(cand)
+
+                local_seed_presets = [
+                    _target_local_candidate_clip(c)
+                    for c in _build_auto_mode_candidates_local(
+                        base_tc,
+                        center,
+                        1,
+                        int(seed_tc + li * 100003),
+                        shrink=float(local_shrink),
+                        optimize_mag_low=False,
+                    )
+                ]
+                local_candidates = []
+                if not bool(use_optuna_curve_trials):
+                    local_candidates = [
+                        _target_local_candidate_clip(c)
+                        for c in _build_auto_mode_candidates_local(
+                            base_tc,
+                            center,
+                            int(local_trial_total),
+                            int(seed_tc + li * 100003),
+                            shrink=float(local_shrink),
+                            optimize_mag_low=False,
+                        )
+                    ]
+                trials_total_count += int(local_trial_total)
                 local_out = _run_target_trials(
                     local_candidates,
                     base_tc=base_tc,
@@ -1318,6 +1631,42 @@ def _auto_select_target_curve_with_trials(
                     hc_m_arr=hc_m,
                     phase_tag=f"local_center_{li}",
                     target_name=hc_name,
+                    n_total_override=int(local_trial_total),
+                    seed_presets=list(local_seed_presets or []),
+                    optuna_builder=(
+                        (
+                            lambda tr,
+                            _base_tc=dict(base_tc),
+                            _center=dict(center),
+                            _shrink=float(local_shrink): _target_local_candidate_clip(
+                                _suggest_auto_mode_candidate_local_optuna(
+                                    _base_tc,
+                                    _center,
+                                    tr,
+                                    shrink=float(_shrink),
+                                    optimize_mag_low=False,
+                                )
+                            )
+                        )
+                        if bool(use_optuna_curve_trials)
+                        else None
+                    ),
+                    seed_to_params=(
+                        (
+                            lambda preset,
+                            _base_tc=dict(base_tc),
+                            _center=dict(center),
+                            _shrink=float(local_shrink): _seed_auto_mode_candidate_local_optuna_params(
+                                _base_tc,
+                                _center,
+                                preset,
+                                shrink=float(_shrink),
+                                optimize_mag_low=False,
+                            )
+                        )
+                        if bool(use_optuna_curve_trials)
+                        else None
+                    ),
                 )
                 for lc_idx, out in enumerate(local_out, start=1):
                     if bool(out.get("ok", False)):
@@ -1341,7 +1690,7 @@ def _auto_select_target_curve_with_trials(
                     else:
                         logger.warning(
                             f"Automatic mode target local trial failed: target={hc_name} "
-                            f"center={li} {lc_idx}/{len(local_candidates)} "
+                            f"center={li} {lc_idx}/{int(local_trial_total)} "
                             f"({str(out.get('error', 'unknown error') or 'unknown error')})"
                         )
 
@@ -2610,6 +2959,7 @@ def _run_auto_mode_search_impl(
     status_cb,
     n_trials: int = AUTO_MODE_TRIALS,
 ) -> dict | None:
+    cache_base_data = dict(base_data or {})
     search_base_data = dict(base_data or {})
     cfg = AutoModeConfig.from_base_data(search_base_data)
     n_trials_eff = int(max(1, _auto_safe_int(n_trials, cfg.trials)))
@@ -2621,6 +2971,429 @@ def _run_auto_mode_search_impl(
         search_base_data,
         default_optuna_enabled=bool(cfg.optuna_pilot_enabled),
     )
+    optuna_mod = _auto_import_optuna() if str(optimizer_backend) == "optuna" else None
+    if str(optimizer_backend) == "optuna" and optuna_mod is None:
+        logger.warning(
+            "Automatic mode: optuna backend requested but unavailable; "
+            "falling back to builtin sampler."
+        )
+        optimizer_backend = "builtin"
+    def _cache_ready_preset(
+        preset: dict | None,
+        *,
+        best_metrics: dict | None = None,
+    ) -> dict:
+        out = dict(preset or {})
+        auto_exc_hz = _auto_safe_float(
+            out.get(
+                "_auto_exc_freq_hz",
+                out.get(
+                    "best_auto_exc_freq_hz",
+                    out.get(
+                        "exc_freq",
+                        dict(best_metrics or {}).get("auto_exc_zero_penalty_hz", float("nan")),
+                    ),
+                ),
+            ),
+            float("nan"),
+        )
+        if np.isfinite(auto_exc_hz):
+            auto_exc_hz = float(
+                np.clip(
+                    float(auto_exc_hz),
+                    float(_auto_safe_float(cfg.exc_min_hz, AUTO_MODE_EXC_MIN_HZ)),
+                    float(_auto_safe_float(cfg.exc_max_hz, AUTO_MODE_EXC_MAX_HZ)),
+                )
+            )
+            auto_exc_hz = float(round(auto_exc_hz, 1))
+            out["_auto_exc_freq_hz"] = float(auto_exc_hz)
+            out["best_auto_exc_freq_hz"] = float(auto_exc_hz)
+            out["exc_freq"] = float(auto_exc_hz)
+        return dict(out)
+
+    def _materialize_preset_result(
+        preset: dict | None,
+        *,
+        include_response_arrays: bool,
+        summarize: bool,
+    ) -> tuple[object, dict, dict]:
+        ready_preset = _cache_ready_preset(
+            preset,
+            best_metrics=exact_cached_metrics if isinstance(exact_cached_metrics, dict) else None,
+        )
+        final_data = dict(cache_base_data or {})
+        final_data.update(dict(ready_preset or {}))
+        if str(filter_key) in ("linear", "asym"):
+            final_data["phase_limit"] = round(
+                float(
+                    _auto_phase_limit_clip(
+                        final_data.get("phase_limit", cache_base_data.get("phase_limit", 400.0)),
+                        default=400.0,
+                    )
+                ),
+                1,
+            )
+        final_data["comparison_mode"] = True
+        final_measurements = dict(measurements or {})
+        final_measurements["ui_data"] = final_data
+
+        cfg_final = build_config(
+            final_data,
+            fs_v=int(fs_v),
+            taps_v=int(taps_v),
+            xos=xos,
+            hpf=hpf,
+            hc_f=hc_f,
+            hc_m=hc_m,
+            pin=pin_obj,
+            max_safe_boost=float(MAX_SAFE_BOOST),
+        )
+        try:
+            setattr(cfg_final, "bass_smooth_w_gamma", float(final_data.get("bass_smooth_w_gamma", 2.40)))
+            setattr(cfg_final, "bass_smooth_w_max", float(final_data.get("bass_smooth_w_max", 0.45)))
+        except Exception:
+            pass
+
+        result = run_pipeline(
+            cfg_final,
+            final_measurements,
+            include_response_arrays=bool(include_response_arrays),
+        )
+        if bool(summarize):
+            result.metrics["summary"] = summarize_run(result)
+        metrics = _auto_score_result(
+            result,
+            auto_exc_freq_hz=_auto_safe_float(
+                final_data.get("_auto_exc_freq_hz", float("nan")),
+                float("nan"),
+            ),
+            base_data=final_data,
+        )
+        return result, dict(metrics or {}), dict(final_data or {})
+
+    def _save_cached_best(
+        *,
+        best_preset: dict,
+        best_metrics: dict | None,
+        best_hc_mode: str | None,
+    ) -> None:
+        if not bool(cfg.cache_enabled):
+            return
+        best_hc_mode_builtin = _auto_builtin_target_name(best_hc_mode)
+        measurement_sig = _auto_measurement_signature(measurements)
+        sig = _auto_signature(
+            base_data=cache_base_data,
+            measurements=measurements,
+            fs_v=int(fs_v),
+            taps_v=int(taps_v),
+            xos=xos,
+            hpf=hpf,
+            hc_mode=best_hc_mode,
+            include_hc_mode=True,
+        )
+        sig_target = _auto_signature(
+            base_data=cache_base_data,
+            measurements=measurements,
+            fs_v=int(fs_v),
+            taps_v=int(taps_v),
+            xos=xos,
+            hpf=hpf,
+            hc_mode=None,
+            include_hc_mode=False,
+        )
+        _auto_cache_put_best(
+            sig,
+            best_preset=dict(best_preset or {}),
+            best_metrics=dict(best_metrics or {}),
+            best_hc_mode=best_hc_mode,
+            measurement_sig=measurement_sig,
+            goal=goal,
+            filter_key=filter_key,
+            program_version=program_version,
+        )
+        _auto_cache_put_best(
+            sig_target,
+            best_preset=dict(best_preset or {}),
+            best_metrics=dict(best_metrics or {}),
+            best_hc_mode=best_hc_mode_builtin,
+            measurement_sig=measurement_sig,
+            goal=goal,
+            filter_key=filter_key,
+            program_version=program_version,
+        )
+        _auto_cache_put_target_for_measurements(
+            measurements=measurements,
+            best_hc_mode=best_hc_mode_builtin,
+            best_preset=dict(best_preset or {}),
+            best_metrics=dict(best_metrics or {}),
+            goal=goal,
+            filter_key=filter_key,
+            program_version=program_version,
+        )
+        _auto_cache_put_last_used_best(
+            best_preset=dict(best_preset or {}),
+            best_metrics=dict(best_metrics or {}),
+            best_hc_mode=best_hc_mode,
+            measurement_sig=measurement_sig,
+            goal=goal,
+            filter_key=filter_key,
+            program_version=program_version,
+        )
+
+    exact_cached_preset = {}
+    exact_cached_metrics = {}
+    exact_cache_sig = None
+    if bool(cfg.cache_enabled):
+        try:
+            exact_cache_sig = _auto_signature(
+                base_data=cache_base_data,
+                measurements=measurements,
+                fs_v=int(fs_v),
+                taps_v=int(taps_v),
+                xos=xos,
+                hpf=hpf,
+                hc_mode=str(cache_base_data.get("hc_mode", "") or "").strip() or None,
+                include_hc_mode=True,
+            )
+            exact_cached_entry = _auto_cache_get_entry(
+                exact_cache_sig,
+                filter_key=filter_key,
+                program_version=program_version,
+            ) or {}
+            exact_cached_preset = _auto_cache_get_best(
+                exact_cache_sig,
+                filter_key=filter_key,
+                program_version=program_version,
+            ) or {}
+            exact_cached_metrics = dict((exact_cached_entry or {}).get("best_metrics", {}) or {})
+        except Exception:
+            exact_cached_preset = {}
+            exact_cached_metrics = {}
+
+    if isinstance(exact_cached_preset, dict) and exact_cached_preset:
+        try:
+            cache_target_name = str(cache_base_data.get("hc_mode", "n/a") or "n/a").strip() or "n/a"
+            exact_cached_preset = _cache_ready_preset(
+                exact_cached_preset,
+                best_metrics=exact_cached_metrics,
+            )
+            logger.info(
+                "Automatic mode: exact preset cache hit for same measurements + settings, "
+                "using cached target=%s and running up to %d x %d extra micro-trials around cached winner.",
+                cache_target_name,
+                int(AUTO_MODE_CACHE_REFINE_MAX_ROUNDS),
+                int(AUTO_MODE_CACHE_REFINE_MICRO_TRIALS),
+            )
+            if callable(status_cb):
+                status_cb(
+                    "CamillaFIR automatic mode: preset loaded from cache "
+                    f"(same measurements + settings, target {cache_target_name}, "
+                    f"running up to {int(AUTO_MODE_CACHE_REFINE_MAX_ROUNDS)} x "
+                    f"{int(AUTO_MODE_CACHE_REFINE_MICRO_TRIALS)} extra micro-trials)"
+                )
+            best_result = None
+            best_preset = dict(exact_cached_preset or {})
+            if isinstance(exact_cached_metrics, dict) and exact_cached_metrics:
+                best_metrics = dict(exact_cached_metrics or {})
+            else:
+                best_result, best_metrics, _best_data = _materialize_preset_result(
+                    best_preset,
+                    include_response_arrays=False,
+                    summarize=False,
+                )
+
+            if callable(status_cb):
+                status_cb(
+                    "CamillaFIR automatic mode: cache refine init "
+                    f"(rounds up to {int(AUTO_MODE_CACHE_REFINE_MAX_ROUNDS)}, "
+                    f"{int(AUTO_MODE_CACHE_REFINE_MICRO_TRIALS)} trials/round, "
+                    f"min rank improvement {float(AUTO_MODE_CACHE_REFINE_MIN_RANK_IMPROVEMENT):.2f})"
+                )
+            micro_trials = int(max(1, AUTO_MODE_CACHE_REFINE_MICRO_TRIALS))
+            improved_any = False
+            improved_count_total = 0
+            executed_micro_trials_total = 0
+            initial_best_preset = dict(best_preset or {})
+            rounds_executed = 0
+            stop_reason = "max_rounds"
+            min_round_improvement = float(max(0.0, _auto_safe_float(AUTO_MODE_CACHE_REFINE_MIN_RANK_IMPROVEMENT, 0.02)))
+            for round_idx in range(1, int(max(1, AUTO_MODE_CACHE_REFINE_MAX_ROUNDS)) + 1):
+                rounds_executed = int(round_idx)
+                round_start_metrics = dict(best_metrics or {})
+                round_start_rank = _auto_safe_float(round_start_metrics.get("rank_score"), 0.0)
+                round_start_preset = dict(best_preset or {})
+                round_improved_count = 0
+                round_executed = 0
+                micro_candidates = _build_auto_mode_candidates_micro(
+                    cache_base_data,
+                    dict(best_preset or {}),
+                    n_trials=int(micro_trials + 1),
+                    shrink=1.0,
+                )
+                micro_candidates = [
+                    dict(cand or {})
+                    for cand in list(micro_candidates or [])
+                    if isinstance(cand, dict) and dict(cand or {}) != dict(best_preset or {})
+                ][: int(micro_trials)]
+                if len(micro_candidates) < int(micro_trials):
+                    logger.info(
+                        "Automatic mode cache refine round %d: generated %d/%d micro candidates.",
+                        int(round_idx),
+                        int(len(micro_candidates)),
+                        int(micro_trials),
+                    )
+                if callable(status_cb):
+                    status_cb(
+                        "CamillaFIR automatic mode: cache refine round "
+                        f"{int(round_idx)}/{int(AUTO_MODE_CACHE_REFINE_MAX_ROUNDS)} "
+                        f"({int(len(micro_candidates))}/{int(micro_trials)} candidates)"
+                    )
+
+                for idx, cand in enumerate(micro_candidates, start=1):
+                    _res_i, met_i, _data_i = _materialize_preset_result(
+                        cand,
+                        include_response_arrays=False,
+                        summarize=False,
+                    )
+                    round_executed += 1
+                    executed_micro_trials_total += 1
+                    better, _reason = _auto_is_better_refine(
+                        dict(met_i or {}),
+                        dict(best_metrics or {}),
+                        goal,
+                        return_reason=True,
+                    )
+                    if better:
+                        prev_best = dict(best_metrics or {})
+                        best_metrics = dict(met_i or {})
+                        best_preset = _cache_ready_preset(dict(cand or {}), best_metrics=best_metrics)
+                        improved_any = True
+                        improved_count_total += 1
+                        round_improved_count += 1
+                        logger.info(
+                            "Automatic mode cache refine improved: round %d trial %d/%d, "
+                            "rank_score %.3f -> %.3f, avg_score %.3f -> %.3f",
+                            int(round_idx),
+                            int(idx),
+                            int(len(micro_candidates)),
+                            _auto_safe_float(prev_best.get("rank_score"), 0.0),
+                            _auto_safe_float(best_metrics.get("rank_score"), 0.0),
+                            _auto_safe_float(prev_best.get("avg_score"), 0.0),
+                            _auto_safe_float(best_metrics.get("avg_score"), 0.0),
+                        )
+                        if callable(status_cb):
+                            status_cb(
+                                "CamillaFIR automatic mode: cache refine best improved "
+                                f"(round {int(round_idx)}, {int(idx)}/{int(len(micro_candidates))}, "
+                                f"rank {_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}, "
+                                f"avg {_auto_safe_float(best_metrics.get('avg_score'), 0.0):.3f})"
+                            )
+
+                round_end_rank = _auto_safe_float(dict(best_metrics or {}).get("rank_score"), 0.0)
+                round_delta = float(round_end_rank - round_start_rank)
+                round_winner_changed = bool(dict(best_preset or {}) != dict(round_start_preset or {}))
+                logger.info(
+                    "Automatic mode cache refine round %d summary: executed %d/%d, "
+                    "improvements=%d, winner_changed=%s, rank_delta=%.3f, final_rank=%.3f",
+                    int(round_idx),
+                    int(round_executed),
+                    int(micro_trials),
+                    int(round_improved_count),
+                    str(bool(round_winner_changed)).lower(),
+                    float(round_delta),
+                    float(round_end_rank),
+                )
+                if callable(status_cb):
+                    status_cb(
+                        "CamillaFIR automatic mode: cache refine round summary "
+                        f"(round {int(round_idx)}, executed {int(round_executed)}/{int(micro_trials)}, "
+                        f"improvements {int(round_improved_count)}, delta {float(round_delta):.3f})"
+                    )
+                if round_improved_count <= 0:
+                    stop_reason = "no_improvement"
+                    break
+                if float(round_delta) < float(min_round_improvement):
+                    stop_reason = "below_threshold"
+                    break
+
+            winner_changed = bool(dict(best_preset or {}) != dict(initial_best_preset or {}))
+            logger.info(
+                "Automatic mode cache refine summary: rounds=%d/%d, executed %d/%d micro-trials, "
+                "improvements=%d, winner_changed=%s, stop_reason=%s, final_rank=%.3f, final_avg=%.3f",
+                int(rounds_executed),
+                int(AUTO_MODE_CACHE_REFINE_MAX_ROUNDS),
+                int(executed_micro_trials_total),
+                int(micro_trials * max(1, rounds_executed)),
+                int(improved_count_total),
+                str(bool(winner_changed)).lower(),
+                str(stop_reason),
+                _auto_safe_float(dict(best_metrics or {}).get("rank_score"), 0.0),
+                _auto_safe_float(dict(best_metrics or {}).get("avg_score"), 0.0),
+            )
+            if callable(status_cb):
+                status_cb(
+                    "CamillaFIR automatic mode: cache refine summary "
+                    f"(rounds {int(rounds_executed)}/{int(AUTO_MODE_CACHE_REFINE_MAX_ROUNDS)}, "
+                    f"executed {int(executed_micro_trials_total)} trials, "
+                    f"improvements {int(improved_count_total)}, "
+                    f"winner {'changed' if bool(winner_changed) else 'unchanged'}, "
+                    f"stop {str(stop_reason)})"
+                )
+
+            best_result, _best_metrics_recalc, best_data = _materialize_preset_result(
+                best_preset,
+                include_response_arrays=True,
+                summarize=True,
+            )
+            cached_best_auto_exc_hz = _auto_safe_float(
+                best_data.get("_auto_exc_freq_hz", best_data.get("best_auto_exc_freq_hz", float("nan"))),
+                float("nan"),
+            )
+            _save_cached_best(
+                best_preset=dict(best_preset or {}),
+                best_metrics=dict(best_metrics or {}),
+                best_hc_mode=str(cache_base_data.get("hc_mode", "") or "").strip() or None,
+            )
+            return {
+                "best_result": best_result,
+                "best_metrics": dict(best_metrics or {}),
+                "best_preset": dict(best_preset or {}),
+                "winner_explanation": {
+                    "summary": (
+                        "Loaded exact cached preset and ran extra cache-refine micro-trials."
+                        if bool(improved_any)
+                        else "Loaded exact cached preset and verified it with cache-refine micro-trials."
+                    ),
+                    "reasons": [],
+                    "deltas": {},
+                    "phase_label": "exact cache hit + micro refine",
+                    "target_name": str(cache_target_name),
+                },
+                "best_auto_exc_freq_hz": (
+                    float(cached_best_auto_exc_hz)
+                    if np.isfinite(cached_best_auto_exc_hz)
+                    else float("nan")
+                ),
+                "auto_goal": str(goal),
+                "selection_basis": str(rank_basis),
+                "top": [],
+                "trials_total": int(executed_micro_trials_total),
+                "trials_ok": int(executed_micro_trials_total),
+                "trials_phase1_total": 0,
+                "trials_phase1_ok": 0,
+                "trials_phase2_total": int(executed_micro_trials_total),
+                "trials_phase2_ok": int(executed_micro_trials_total),
+                "phase1_plateau_hit": False,
+                "phase2_plateau_hit": bool(str(stop_reason) in ("no_improvement", "below_threshold")),
+                "search_fs": int(fs_v),
+                "search_taps": int(taps_v),
+            }
+        except Exception as exc:
+            logger.warning(
+                "Automatic mode: exact preset cache materialization failed, "
+                f"falling back to search ({type(exc).__name__}: {exc})"
+            )
+
     try:
         seed_preset = dict(search_base_data.get("_auto_target_seed_preset", {}) or {})
     except Exception:
@@ -2632,13 +3405,13 @@ def _run_auto_mode_search_impl(
     if bool(cfg.cache_enabled) and not seed_preset:
         try:
             sig = _auto_signature(
-                base_data=search_base_data,
+                base_data=cache_base_data,
                 measurements=measurements,
                 fs_v=int(fs_v),
                 taps_v=int(taps_v),
                 xos=xos,
                 hpf=hpf,
-                hc_mode=str(search_base_data.get("hc_mode", "") or "").strip() or None,
+                hc_mode=str(cache_base_data.get("hc_mode", "") or "").strip() or None,
                 include_hc_mode=True,
             )
             cached = _auto_cache_get_best(
@@ -2684,32 +3457,15 @@ def _run_auto_mode_search_impl(
             )
 
     seed = int(20260302 + int(fs_v) * 17 + int(taps_v))
-    candidates = _build_auto_mode_candidates(search_base_data, n_trials=int(n_trials_eff), seed=seed)
-    if str(optimizer_backend) == "optuna":
-        if int(n_trials_eff) >= int(cfg.optuna_pilot_min_trials):
-            optuna_candidates = _build_auto_mode_candidates_optuna(
-                search_base_data,
-                n_trials=int(n_trials_eff),
-                seed=int(seed),
-                startup_trials=int(cfg.optuna_pilot_startup_trials),
-            )
-            if isinstance(optuna_candidates, list) and optuna_candidates:
-                candidates = list(optuna_candidates)
-                logger.info(
-                    "Automatic mode phase1 sampler: optuna "
-                    f"({int(len(candidates))} candidates)"
-                )
-            else:
-                logger.warning(
-                    "Automatic mode optuna sampler requested but unavailable; "
-                    "falling back to builtin candidate sampler."
-                )
-        else:
-            logger.info(
-                "Automatic mode optuna pilot skipped: "
-                f"trials={int(n_trials_eff)} < min={int(cfg.optuna_pilot_min_trials)}; "
-                "using builtin sampler."
-            )
+    use_optuna_trials = bool(str(optimizer_backend) == "optuna" and optuna_mod is not None)
+    candidates = []
+    if not bool(use_optuna_trials):
+        candidates = _build_auto_mode_candidates(search_base_data, n_trials=int(n_trials_eff), seed=seed)
+    elif int(n_trials_eff) > 0:
+        logger.info(
+            "Automatic mode optimizer backend: optuna "
+            f"(trials={int(n_trials_eff)}, startup={int(cfg.optuna_pilot_startup_trials)})"
+        )
     try:
         target_label = str(search_base_data.get("hc_mode", "") or "").strip()
     except Exception:
@@ -2791,9 +3547,18 @@ def _run_auto_mode_search_impl(
         use_refine_tiebreak: bool = False,
         focus_lo_hz: float | None = None,
         focus_hi_hz: float | None = None,
+        n_total_override: int | None = None,
+        seed_presets: list[dict] | None = None,
+        optuna_builder=None,
+        seed_to_params=None,
     ) -> dict:
         phase_state = _AutoModePhaseState()
-        n_total = int(len(cands))
+        use_optuna_phase = bool(
+            str(optimizer_backend) == "optuna"
+            and optuna_mod is not None
+            and callable(optuna_builder)
+        )
+        n_total = int(n_total_override) if n_total_override is not None else int(len(cands))
         workers = int(_auto_trial_workers(search_base_data, n_total))
         if workers > 1:
             logger.info(
@@ -2984,6 +3749,31 @@ def _run_auto_mode_search_impl(
                     return True
             return False
 
+        if bool(use_optuna_phase):
+            _auto_run_optuna_eval_loop(
+                optuna_mod=optuna_mod,
+                n_total=int(n_total),
+                seed=int(seed + sum(ord(ch) for ch in str(phase_label)) * 31),
+                startup_trials=int(cfg.optuna_pilot_startup_trials),
+                base_data=dict(search_base_data or {}),
+                seed_presets=list(seed_presets or []),
+                build_preset=optuna_builder,
+                eval_one=_eval_one,
+                consume_one=_consume_one,
+                objective_value=lambda out: _auto_optuna_objective_value(
+                    dict((out or {}).get("metrics", {}) or {}),
+                    use_refine_tiebreak=bool(use_refine_tiebreak),
+                ),
+                workers=int(workers),
+                seed_to_params=seed_to_params,
+            )
+            return {
+                "ok": int(phase_state.ok_n),
+                "tried": int(phase_state.tried_n),
+                "plateau_hit": bool(phase_state.plateau_hit),
+                "improved_any": bool(phase_state.improved_any),
+            }
+
         idx_presets = list(enumerate(list(cands or []), start=1))
         stop_now = False
         if workers <= 1 or n_total <= 1:
@@ -3039,11 +3829,28 @@ def _run_auto_mode_search_impl(
             "improved_any": bool(phase_state.improved_any),
         }
 
+    phase1_seed_presets = _build_auto_mode_candidates(
+        search_base_data,
+        n_trials=1,
+        seed=int(seed),
+    )
     phase1_stats = _eval_candidates(
         candidates,
         phase_label="phase 1/2",
         plateau_after_no_improve=int(cfg.phase1_plateau_rounds),
         use_refine_tiebreak=False,
+        n_total_override=int(n_trials_eff),
+        seed_presets=list(phase1_seed_presets or []),
+        optuna_builder=(
+            (lambda tr, _base=dict(search_base_data): _suggest_auto_mode_candidate_optuna(_base, tr))
+            if bool(use_optuna_trials)
+            else None
+        ),
+        seed_to_params=(
+            (lambda preset, _base=dict(search_base_data): _seed_auto_mode_candidate_optuna_params(_base, preset))
+            if bool(use_optuna_trials)
+            else None
+        ),
     )
     phase1_ok = int(phase1_stats.get("ok", 0) or 0)
     phase1_tried = int(phase1_stats.get("tried", 0) or 0)
@@ -3138,13 +3945,22 @@ def _run_auto_mode_search_impl(
                     plateau_hit=bool(phase1_plateau_hit),
                 )
             )
-            local_candidates = _build_auto_mode_candidates_local(
+            local_candidates = []
+            local_seed_presets = _build_auto_mode_candidates_local(
                 search_base_data,
                 center,
-                int(cfg.local_refine_trials_per_top),
+                1,
                 int(local_seed),
                 shrink=float(local_shrink),
             )
+            if not bool(use_optuna_trials):
+                local_candidates = _build_auto_mode_candidates_local(
+                    search_base_data,
+                    center,
+                    int(cfg.local_refine_trials_per_top),
+                    int(local_seed),
+                    shrink=float(local_shrink),
+                )
             before = dict(search_state.best_metrics or {})
             stats = _eval_candidates(
                 local_candidates,
@@ -3153,6 +3969,38 @@ def _run_auto_mode_search_impl(
                 use_refine_tiebreak=True,
                 focus_lo_hz=float(phase2_focus_lo) if np.isfinite(phase2_focus_lo) else None,
                 focus_hi_hz=float(phase2_focus_hi) if np.isfinite(phase2_focus_hi) else None,
+                n_total_override=int(cfg.local_refine_trials_per_top),
+                seed_presets=list(local_seed_presets or []),
+                optuna_builder=(
+                    (
+                        lambda tr,
+                        _base=dict(search_base_data),
+                        _center=dict(center),
+                        _shrink=float(local_shrink): _suggest_auto_mode_candidate_local_optuna(
+                            _base,
+                            _center,
+                            tr,
+                            shrink=float(_shrink),
+                        )
+                    )
+                    if bool(use_optuna_trials)
+                    else None
+                ),
+                seed_to_params=(
+                    (
+                        lambda preset,
+                        _base=dict(search_base_data),
+                        _center=dict(center),
+                        _shrink=float(local_shrink): _seed_auto_mode_candidate_local_optuna_params(
+                            _base,
+                            _center,
+                            preset,
+                            shrink=float(_shrink),
+                        )
+                    )
+                    if bool(use_optuna_trials)
+                    else None
+                ),
             )
             phase2_ok += int(stats.get("ok", 0) or 0)
             phase2_tried += int(stats.get("tried", 0) or 0)
@@ -3190,17 +4038,30 @@ def _run_auto_mode_search_impl(
                 plateau_hit=bool(phase1_plateau_hit),
             )
         )
-        micro_candidates = _build_auto_mode_candidates_micro(
+        micro_center = dict(search_state.best_preset or {})
+        micro_candidates = []
+        micro_seed_presets = _build_auto_mode_candidates_micro(
             search_base_data,
-            dict(search_state.best_preset or {}),
-            n_trials=int(cfg.phase3_micro_trials),
+            dict(micro_center),
+            n_trials=1,
             shrink=float(micro_shrink),
         )
-        logger.info(f"Phase3 micro size: {int(len(micro_candidates))}")
+        if not bool(use_optuna_trials):
+            micro_candidates = _build_auto_mode_candidates_micro(
+                search_base_data,
+                dict(micro_center),
+                n_trials=int(cfg.phase3_micro_trials),
+                shrink=float(micro_shrink),
+            )
+        logger.info(
+            "Phase3 micro size: %d%s",
+            int(cfg.phase3_micro_trials),
+            " (optuna)" if bool(use_optuna_trials) else "",
+        )
         if callable(status_cb):
             status_cb(
                 f"CamillaFIR automatic mode: Phase3 micro "
-                f"{int(len(micro_candidates))} trials around current best"
+                f"{int(cfg.phase3_micro_trials)} trials around current best"
             )
         before_micro = dict(search_state.best_metrics or {})
         micro_stats = _eval_candidates(
@@ -3210,6 +4071,38 @@ def _run_auto_mode_search_impl(
             use_refine_tiebreak=True,
             focus_lo_hz=float(phase2_focus_lo) if np.isfinite(phase2_focus_lo) else None,
             focus_hi_hz=float(phase2_focus_hi) if np.isfinite(phase2_focus_hi) else None,
+            n_total_override=int(cfg.phase3_micro_trials),
+            seed_presets=list(micro_seed_presets or []),
+            optuna_builder=(
+                (
+                    lambda tr,
+                    _base=dict(search_base_data),
+                    _center=dict(micro_center),
+                    _shrink=float(micro_shrink): _suggest_auto_mode_candidate_micro_optuna(
+                        _base,
+                        _center,
+                        tr,
+                        shrink=float(_shrink),
+                    )
+                )
+                if bool(use_optuna_trials)
+                else None
+            ),
+            seed_to_params=(
+                (
+                    lambda preset,
+                    _base=dict(search_base_data),
+                    _center=dict(micro_center),
+                    _shrink=float(micro_shrink): _seed_auto_mode_candidate_micro_optuna_params(
+                        _base,
+                        _center,
+                        preset,
+                        shrink=float(_shrink),
+                    )
+                )
+                if bool(use_optuna_trials)
+                else None
+            ),
         )
         phase2_ok += int(micro_stats.get("ok", 0) or 0)
         phase2_tried += int(micro_stats.get("tried", 0) or 0)
@@ -3399,74 +4292,6 @@ def _run_auto_mode_search_impl(
         f"rank={_auto_safe_float(search_state.best_metrics.get('rank_score'), 0.0):.3f}"
     )
 
-    # --- Auto-mode cache: save best preset for this signature ---
-    if bool(cfg.cache_enabled):
-        try:
-            best_hc_mode = str(search_base_data.get("hc_mode", "") or "").strip() or None
-            best_hc_mode_builtin = _auto_builtin_target_name(best_hc_mode)
-            measurement_sig = _auto_measurement_signature(measurements)
-            sig = _auto_signature(
-                base_data=search_base_data,
-                measurements=measurements,
-                fs_v=int(fs_v),
-                taps_v=int(taps_v),
-                xos=xos,
-                hpf=hpf,
-                hc_mode=best_hc_mode,
-                include_hc_mode=True,
-            )
-            sig_target = _auto_signature(
-                base_data=search_base_data,
-                measurements=measurements,
-                fs_v=int(fs_v),
-                taps_v=int(taps_v),
-                xos=xos,
-                hpf=hpf,
-                hc_mode=None,
-                include_hc_mode=False,
-            )
-            _auto_cache_put_best(
-                sig,
-                best_preset=dict(search_state.best_preset or {}),
-                best_metrics=dict(search_state.best_metrics or {}),
-                best_hc_mode=best_hc_mode,
-                measurement_sig=measurement_sig,
-                goal=goal,
-                filter_key=filter_key,
-                program_version=program_version,
-            )
-            _auto_cache_put_best(
-                sig_target,
-                best_preset=dict(search_state.best_preset or {}),
-                best_metrics=dict(search_state.best_metrics or {}),
-                best_hc_mode=best_hc_mode_builtin,
-                measurement_sig=measurement_sig,
-                goal=goal,
-                filter_key=filter_key,
-                program_version=program_version,
-            )
-            _auto_cache_put_target_for_measurements(
-                measurements=measurements,
-                best_hc_mode=best_hc_mode_builtin,
-                best_preset=dict(search_state.best_preset or {}),
-                best_metrics=dict(search_state.best_metrics or {}),
-                goal=goal,
-                filter_key=filter_key,
-                program_version=program_version,
-            )
-            _auto_cache_put_last_used_best(
-                best_preset=dict(search_state.best_preset or {}),
-                best_metrics=dict(search_state.best_metrics or {}),
-                best_hc_mode=best_hc_mode,
-                measurement_sig=measurement_sig,
-                goal=goal,
-                filter_key=filter_key,
-                program_version=program_version,
-            )
-            logger.info("Automatic mode: saved best preset to cache.")
-        except Exception:
-            pass
-
     best_auto_exc_hz = _auto_safe_float(
         dict(search_state.best_metrics or {}).get("auto_exc_zero_penalty_hz", float("nan")),
         float("nan"),
@@ -3479,11 +4304,27 @@ def _run_auto_mode_search_impl(
                 float(_auto_safe_float(cfg.exc_max_hz, AUTO_MODE_EXC_MAX_HZ)),
             )
         )
+    cached_best_preset = _cache_ready_preset(
+        search_state.best_preset,
+        best_metrics=search_state.best_metrics,
+    )
+
+    # --- Auto-mode cache: save best preset for this signature ---
+    if bool(cfg.cache_enabled):
+        try:
+            _save_cached_best(
+                best_preset=dict(cached_best_preset or {}),
+                best_metrics=dict(search_state.best_metrics or {}),
+                best_hc_mode=str(search_base_data.get("hc_mode", "") or "").strip() or None,
+            )
+            logger.info("Automatic mode: saved best preset to cache.")
+        except Exception:
+            pass
 
     return {
         "best_result": search_state.best_result,
         "best_metrics": dict(search_state.best_metrics),
-        "best_preset": dict(search_state.best_preset or {}),
+        "best_preset": dict(cached_best_preset or {}),
         "winner_explanation": dict(search_state.winner_explanation or {}),
         "best_auto_exc_freq_hz": float(best_auto_exc_hz) if np.isfinite(best_auto_exc_hz) else float("nan"),
         "auto_goal": str(goal),

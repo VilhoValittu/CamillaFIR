@@ -1,10 +1,11 @@
 import numpy as np
 
-from ...dsp import camillafir_dsp as dsp
+from ...dsp.smoothing import apply_smoothing_std
 from ...ui.camillafir_housecurve import get_house_curve_by_name
 from .shared import (
     AUTO_MODE_BUILTIN_TARGETS,
     AUTO_MODE_TARGET_PRESELECT_ASYM_W,
+    AUTO_MODE_TARGET_PRESELECT_BASS_SHAPE_W,
     AUTO_MODE_TARGET_PRESELECT_BOOST_W,
     AUTO_MODE_TARGET_PRESELECT_MAX_BASS_BOOST_REF_DB,
     AUTO_MODE_TARGET_PRESELECT_MODE_BAND_MAX_HZ,
@@ -12,6 +13,7 @@ from .shared import (
     AUTO_MODE_TARGET_PRESELECT_MODE_W,
     AUTO_MODE_TARGET_PRESELECT_SLOPE_W,
     AUTO_MODE_TARGET_PRESELECT_SMOOTH_OCT,
+    AUTO_MODE_TARGET_PRESELECT_TREBLE_SHAPE_W,
     AUTO_MODE_TARGET_TOP_N,
     AUTO_MODE_TARGET_TOP_N_MAX,
     AUTO_MODE_TARGET_TOP_N_MIN,
@@ -129,6 +131,31 @@ def _auto_target_preselect_score(
             return float(default)
         return float(np.mean(np.maximum(vv, 0.0)))
 
+    def _weighted_band_median_rms(err_v, bands, *, min_pts: int = 6, default=0.0) -> float:
+        ev = np.asarray(err_v, dtype=float).reshape(-1)
+        if ev.size != n:
+            return float(default)
+        acc = 0.0
+        w_sum = 0.0
+        for lo_hz, hi_hz, weight in list(bands or []):
+            try:
+                lo = float(lo_hz)
+                hi = float(hi_hz)
+                w = float(weight)
+            except Exception:
+                continue
+            if (not np.isfinite(lo)) or (not np.isfinite(hi)) or hi <= lo or w <= 0.0:
+                continue
+            m_band = np.isfinite(ev) & (ff >= lo) & (ff < hi)
+            if int(np.count_nonzero(m_band)) < int(max(1, min_pts)):
+                continue
+            band_med = _safe_median(ev[m_band], 0.0)
+            acc += float(w) * float(band_med) * float(band_med)
+            w_sum += float(w)
+        if w_sum <= 1e-9:
+            return float(default)
+        return float(np.sqrt(acc / w_sum))
+
     lvl_m = _safe_mask(lvl_mask, fallback=np.ones(n, dtype=bool), min_pts=8)
     corr_m = _safe_mask(corr_mask, fallback=np.ones(n, dtype=bool), min_pts=8)
     mode_m = _safe_mask(mode_mask, fallback=corr_m, min_pts=6)
@@ -174,12 +201,40 @@ def _auto_target_preselect_score(
     if not np.isfinite(mode_fit_rms_db):
         mode_fit_rms_db = _safe_rms(err_avg[corr_m], 0.0)
 
+    bass_shape_penalty = _weighted_band_median_rms(
+        err_avg,
+        (
+            (20.0, 35.0, 1.35),
+            (35.0, 55.0, 1.30),
+            (55.0, 85.0, 1.15),
+            (85.0, 130.0, 0.95),
+            (130.0, 220.0, 0.75),
+        ),
+        min_pts=5,
+        default=0.0,
+    )
+    treble_shape_penalty = _weighted_band_median_rms(
+        err_avg,
+        (
+            (2200.0, 4000.0, 0.80),
+            (4000.0, 8000.0, 1.00),
+            (8000.0, 12000.0, 1.15),
+            (12000.0, 18000.0, 1.25),
+        ),
+        min_pts=4,
+        default=0.0,
+    )
+
     preselect_score = (
         float(fit_rms_db)
         + float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_BOOST_W, 0.22)) * float(boost_penalty)
         + float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_SLOPE_W, 0.18)) * float(slope_penalty)
         + float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_ASYM_W, 0.30)) * float(asym_penalty_db)
         + float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_MODE_W, 0.16)) * float(mode_fit_rms_db)
+        + float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_BASS_SHAPE_W, 0.34))
+        * float(bass_shape_penalty)
+        + float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_TREBLE_SHAPE_W, 0.28))
+        * float(treble_shape_penalty)
     )
     if not np.isfinite(preselect_score):
         preselect_score = float(1e9)
@@ -195,6 +250,8 @@ def _auto_target_preselect_score(
         "boost_penalty": float(boost_penalty),
         "slope_penalty": float(slope_penalty),
         "mode_fit_rms_db": float(mode_fit_rms_db),
+        "bass_shape_penalty": float(bass_shape_penalty),
+        "treble_shape_penalty": float(treble_shape_penalty),
         "preselect_score": float(preselect_score),
     }
 
@@ -382,7 +439,7 @@ def _auto_select_builtin_target_curve(
             ml_g = np.interp(fg, fl, ml)
             mr_g = np.interp(fg, fr, mr)
             try:
-                ml_sm, _ = dsp.apply_smoothing_std(
+                ml_sm, _ = apply_smoothing_std(
                     fg,
                     ml_g,
                     np.zeros_like(ml_g),
@@ -392,7 +449,7 @@ def _auto_select_builtin_target_curve(
             except Exception:
                 pass
             try:
-                mr_sm, _ = dsp.apply_smoothing_std(
+                mr_sm, _ = apply_smoothing_std(
                     fg,
                     mr_g,
                     np.zeros_like(mr_g),

@@ -7,13 +7,13 @@ permalink: /guide/
 
 # CamillaFIR Guide (Current Workflow)
 
-This guide reflects the current CamillaFIR workflow (v3.3.0 generation): from REW measurement data to convolution filters for CamillaDSP, Roon, and Equalizer APO.
+This guide reflects the current CamillaFIR workflow (v3.5.5 generation): from REW measurement data to convolution filters for CamillaDSP, Roon, and Equalizer APO.
 
 ## Quick workflow
 
 1. Measure Left and Right in REW.
 2. Export REW data (TXT with magnitude+phase, or WAV/IR workflow).
-3. Open CamillaFIR and choose mode (`BASIC` recommended, `ADVANCED` for expert control).
+3. Open CamillaFIR and choose mode (`AUTO` is the default, `BASIC` for guarded manual setup, `ADVANCED` for expert control).
 4. Apply mode defaults, then set correction band and safety limits.
 5. Generate filters and export ZIP package.
 6. Load WAV filters into your convolution engine.

@@ -195,8 +195,7 @@ def _auto_winner_explanation_view(auto_meta: dict | None) -> dict:
 def _render_auto_winner_explanation(auto_meta: dict | None) -> None:
     vm = _auto_winner_explanation_view(auto_meta)
     put_markdown("### Why this preset won")
-    put_info(str(vm.get("summary", "Winner explanation unavailable.") or "Winner explanation unavailable."))
-
+    put_info(str(vm.get("summary", "") or "Winner explanation unavailable."))
     meta_line = str(vm.get("meta_line", "") or "").strip()
     if meta_line:
         put_html(
@@ -397,12 +396,6 @@ def _render_results(
             lf_rms_20_200 = _af(bm.get("realized_rms_20_200_db", float("nan")), float("nan"))
 
             _render_auto_winner_explanation(auto_meta)
-            put_info(
-                f"Best winner: rank {rank_sc:.3f}/100, avg {avg_sc:.3f}, "
-                f"boost {boost_db:.2f} dB, dsp_pen {dsp_pen:.2f}, exc_pen {exc_pen:.2f}, "
-                f"events {events_n}, event_sev {events_sev:.2f}, "
-                f"L/R delta {lr_delta:.3f} (trials {trials_ok}/{trials_total})."
-            )
             put_markdown(
                 "Selection order: **Rank score** -> **avg score** -> **pre/post ratio** -> "
                 "**mode ripple** -> **LF RMS (20-200 Hz)** -> **net boost**."
@@ -501,7 +494,6 @@ def _render_results(
                     "Boost dB",
                     "L/R delta",
                     "DSP pen",
-                    "Exc pen",
                 ]]
                 for idx, item in enumerate(top[:5], start=1):
                     m = dict(item.get("metrics", {}) or {})
@@ -519,7 +511,6 @@ def _render_results(
                         f"{_af(m.get('max_net_boost_db', 0.0), 0.0):.2f}",
                         f"{_af(m.get('lr_delta_score', 0.0), 0.0):.3f}",
                         f"{_af(m.get('dsp_penalty', 0.0), 0.0):.2f}",
-                        f"{_af(m.get('exc_penalty', 0.0), 0.0):.2f}",
                     ])
                 put_markdown("#### Automatic mode top-5 (by rank)")
                 put_table(top_rows)

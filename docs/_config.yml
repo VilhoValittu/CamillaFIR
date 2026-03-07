@@ -1,5 +1,5 @@
 title: CamillaFIR – FIR Filter Maker & Room Correction Filter Generator
-description: "CamillaFIR is an automatic FIR filter maker / generator for REW measurements. Exports WAV/TXT FIR filters for CamillaDSP, Roon, Equalizer APO and more. Mixed-phase, linear-phase, safe bass correction."
+description: "CamillaFIR is an automatic FIR filter maker / generator for REW measurements. Exports WAV FIR filters and companion config files for CamillaDSP, Roon, Equalizer APO and more. Mixed-phase, linear-phase, safe bass correction."
 url: "https://vilhovalittu.github.io"
 baseurl: "/CamillaFIR"
 

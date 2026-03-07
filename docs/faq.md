@@ -1,6 +1,6 @@
 ---
 layout: default
-title: "CamillaFIR FAQ – FIR Filter Maker (REW → Convolution Filters)"
+title: "CamillaFIR FAQ - FIR Filter Maker (REW to Convolution Filters)"
 description: "Frequently asked questions about CamillaFIR: FIR filter maker / generator for REW measurements. Convolution filters for CamillaDSP, Roon, Equalizer APO."
 permalink: /faq/
 ---
@@ -20,7 +20,7 @@ permalink: /faq/
       "name":"What is CamillaFIR?",
       "acceptedAnswer":{
         "@type":"Answer",
-        "text":"CamillaFIR is an automatic FIR filter maker / generator that converts measurement data (e.g., REW exports) into convolution-ready FIR filters (WAV/TXT) for DSP engines such as CamillaDSP, Roon Convolution, and Equalizer APO."
+        "text":"CamillaFIR is an automatic FIR filter maker / generator that converts measurement data (for example REW exports) into convolution-ready FIR filters, primarily WAV filters plus companion summary/config files, for DSP engines such as CamillaDSP, Roon Convolution, and Equalizer APO."
       }
     },
     {
@@ -52,7 +52,7 @@ permalink: /faq/
       "name":"What output formats does CamillaFIR export?",
       "acceptedAnswer":{
         "@type":"Answer",
-        "text":"CamillaFIR exports convolution-ready FIR filters, typically as WAV files and/or TXT files depending on your workflow and target DSP engine."
+        "text":"CamillaFIR currently exports convolution-ready FIR WAV filters together with summary and config files inside the ZIP package."
       }
     },
     {
@@ -60,7 +60,7 @@ permalink: /faq/
       "name":"Can I use CamillaFIR with CamillaDSP?",
       "acceptedAnswer":{
         "@type":"Answer",
-        "text":"Yes. CamillaFIR output FIR WAV/TXT files can be used in CamillaDSP’s convolution block. Always verify gain staging to avoid clipping."
+        "text":"Yes. CamillaFIR output FIR WAV files can be used in CamillaDSP's convolution block. Always verify gain staging to avoid clipping."
       }
     },
     {
@@ -68,7 +68,7 @@ permalink: /faq/
       "name":"Can I use CamillaFIR with Roon Convolution?",
       "acceptedAnswer":{
         "@type":"Answer",
-        "text":"Yes. Roon supports convolution filters. Export the convolution-ready FIR WAV from CamillaFIR and load it into Roon’s Convolution settings."
+        "text":"Yes. Roon supports convolution filters. Export the convolution-ready FIR WAV from CamillaFIR and load it into Roon's Convolution settings."
       }
     },
     {
@@ -76,7 +76,7 @@ permalink: /faq/
       "name":"Can I use CamillaFIR with Equalizer APO?",
       "acceptedAnswer":{
         "@type":"Answer",
-        "text":"Yes, if you use Equalizer APO’s convolution capability. Load the exported FIR WAV filter and ensure preamp/headroom settings prevent clipping."
+        "text":"Yes, if you use Equalizer APO's convolution capability. Load the exported FIR WAV filter and ensure preamp/headroom settings prevent clipping."
       }
     },
     {
@@ -92,7 +92,7 @@ permalink: /faq/
       "name":"Does CamillaFIR support linear-phase filters?",
       "acceptedAnswer":{
         "@type":"Answer",
-        "text":"Yes. CamillaFIR can generate linear-phase style FIR filters (higher latency, symmetrical impulse response) when that fits your use case."
+        "text":"Yes. CamillaFIR can generate linear-phase style FIR filters when that fits your use case."
       }
     },
     {
@@ -108,7 +108,7 @@ permalink: /faq/
       "name":"What is a safe maximum boost for correction filters?",
       "acceptedAnswer":{
         "@type":"Answer",
-        "text":"As a general safe starting point, keep maximum boost around +3 dB. Higher boost (e.g., +8 dB) can demand much more from amplifiers and speakers and increases the risk of distortion or clipping, especially in the bass."
+        "text":"As a general safe starting point, keep maximum boost around +3 dB. Higher boost (for example +8 dB) can demand much more from amplifiers and speakers and increases the risk of distortion or clipping, especially in the bass."
       }
     },
     {
@@ -116,7 +116,7 @@ permalink: /faq/
       "name":"Should I try to fix deep nulls with FIR correction?",
       "acceptedAnswer":{
         "@type":"Answer",
-        "text":"Usually no. Deep nulls are often caused by room/speaker-listener geometry and reflections. Boosting them can waste headroom without improving the real in-room response. It’s typically better to address nulls with placement, multiple subs, or room treatment."
+        "text":"Usually no. Deep nulls are often caused by room/speaker-listener geometry and reflections. Boosting them can waste headroom without improving the real in-room response. It is typically better to address nulls with placement, multiple subs, or room treatment."
       }
     },
     {
@@ -146,7 +146,7 @@ This page answers common questions about **CamillaFIR**, an automatic **FIR filt
 ## General
 
 ### What is CamillaFIR?
-CamillaFIR is an automatic FIR filter maker / generator that converts measurement data (e.g., REW exports) into convolution-ready FIR filters (WAV/TXT).
+CamillaFIR is an automatic FIR filter maker / generator that converts measurement data (for example REW exports) into convolution-ready FIR filters, primarily WAV filters plus companion summary/config files.
 
 ### What is a FIR filter maker / generator?
 A FIR filter maker generates convolution FIR filters from measurement data and a target response.
@@ -163,13 +163,13 @@ For WAV/IR workflow, use `Mono`, `float32`, `Normalise`, `Place t=0 (256)`.
 ## Compatibility
 
 ### Does CamillaFIR work with CamillaDSP?
-Yes. Use the exported FIR filter in CamillaDSP’s convolution block.
+Yes. Use the exported FIR WAV filter in CamillaDSP's convolution block.
 
 ### Does CamillaFIR work with Roon Convolution?
-Yes. Load the exported convolution-ready FIR filter in Roon’s Convolution settings.
+Yes. Load the exported convolution-ready FIR WAV filter in Roon's Convolution settings.
 
 ### Does CamillaFIR work with Equalizer APO?
-Yes, via Equalizer APO’s convolution support. Ensure correct preamp/headroom.
+Yes, via Equalizer APO's convolution support. Ensure correct preamp/headroom.
 
 ## FIR vs IIR
 
@@ -191,7 +191,7 @@ A good starting point is **+3 dB max boost**. Larger boosts can stress hardware 
 Usually not. Deep nulls are typically position/room related, and boosting them often wastes headroom.
 
 ### Do I need to re-measure?
-Yes—always verify with a measurement after applying the FIR filter.
+Yes, always verify with a measurement after applying the FIR filter.
 
 ### Disclaimer
 AI was used to translate this document from Finnish to English.

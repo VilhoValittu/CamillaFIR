@@ -129,7 +129,7 @@ try:
 except Exception:
     pass
 
-VERSION = "v.3.5.4"
+VERSION = "v.3.5.5"
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
@@ -196,6 +196,27 @@ def _auto_target_mode_norm(mode: typing.Any) -> str:
     if m in ("selected", "manual", "fixed", "user"):
         return "selected"
     return "auto"
+
+
+def _auto_target_selection_method_text(method: typing.Any) -> str:
+    """
+    Muuntaa auto-target-valinnan metodit luettaviksi loki- ja UI-teksteiksi.
+    """
+    try:
+        key = str(method or "").strip().lower()
+    except Exception:
+        key = ""
+
+    mapping = {
+        "cache_signature_hit": "cache hit (same measurements + settings, no target re-evaluation)",
+        "cache_measurement": "measurement cache seed",
+        "cache_signature": "signature cache seed",
+        "trial_with_cache_wildcard": "trial winner with cache wildcard",
+        "top3x10_trials": "trial comparison",
+        "top3x10_trials_rank_tie_composite": "trial comparison with rank tie-break",
+        "fit_rms": "quick fit preselect",
+    }
+    return str(mapping.get(key, key or "unknown"))
 
 
 def _slugify_filename_token(value: typing.Any, *, default: str = "target", max_len: int = 48) -> str:
@@ -590,11 +611,11 @@ def process_run():
             data["_auto_exc_seed_freq_hz"] = float(round(est_exc_freq, 1))
             _status(
                 "CamillaFIR automatic mode: protection seed "
-                f"(smoothed -6 dB {float(est_mag_c_min):.1f} Hz -> "
+                f"(smoothed -6 dB point {float(est_mag_c_min):.1f} Hz -> "
                 f"mag_c_min {float(data['mag_c_min']):.1f} Hz, "
                 f"low-cut {float(data['low_bass_cut_hz']):.1f} Hz, "
                 f"exc seed {float(data['exc_freq']):.1f} Hz, "
-                "final exc auto-tuned in preset search)"
+                "final exc, mag_c_min and low_bass_cut values auto-tuned in preset search)"
             )
             user_hpf_enabled = bool(data.get("hpf_enable", False))
             auto_hpf = _estimate_auto_hpf_from_response(
@@ -725,6 +746,8 @@ def process_run():
                 if isinstance(tc_pick, dict):
                     chosen_hc = str(tc_pick.get("selected_hc_mode", "Harman6") or "Harman6")
                     prev_hc = str(data.get("hc_mode", "") or "")
+                    method_raw = str(tc_pick.get("selection_method", "fit_rms") or "fit_rms")
+                    method_txt = _auto_target_selection_method_text(method_raw)
                     data["hc_mode"] = chosen_hc
                     target_seed_preset = dict(tc_pick.get("best_preset", {}) or {})
                     if target_seed_preset:
@@ -736,7 +759,7 @@ def process_run():
                     data["_auto_target_curve_meta"] = dict(tc_pick)
                     _status(
                         "CamillaFIR automatic mode: target preselect winner "
-                        f"{chosen_hc} (method {str(tc_pick.get('selection_method', 'fit_rms'))}, "
+                        f"{chosen_hc} (method {method_txt}, "
                         f"fit_rms {float(tc_pick.get('fit_rms_db', 0.0)):.3f} dB, "
                         f"tested {int(tc_pick.get('top_n', 0) or 0)} curves x "
                         f"{int(tc_pick.get('trials_per_curve', 0) or 0)} trials)"
@@ -744,7 +767,7 @@ def process_run():
                     logger.info(
                         f"Automatic mode target select: {chosen_hc} "
                         f"(fit_rms={float(tc_pick.get('fit_rms_db', 0.0)):.3f} dB, "
-                        f"method={str(tc_pick.get('selection_method', 'fit_rms'))}, "
+                        f"method={method_txt}, "
                         f"prev={prev_hc or 'n/a'})"
                     )
                     if target_seed_preset:

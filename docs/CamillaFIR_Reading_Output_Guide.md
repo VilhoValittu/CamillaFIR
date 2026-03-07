@@ -1,6 +1,6 @@
 # Reading CamillaFIR Output (Current Behavior)
 
-This guide reflects the current code path in CamillaFIR (v3.5.1 line).
+This guide reflects the current code path in CamillaFIR (v3.5.5 line).
 
 ## 1. What you get after a run
 
@@ -75,6 +75,11 @@ Includes:
 - Key settings used for generation
 - Analysis mode (`native` or `comparison`)
 - Comparison grid metadata when comparison mode is active
+- Automatic-mode export block when `AUTO` was used:
+  - selected target curve and selection method
+  - target-selection trial grid (`top-N x trials`)
+  - cached or searched best preset summary
+  - excursion protection seed -> final frequency when auto-tuned
 
 ### 3.3 Guards and control blocks
 

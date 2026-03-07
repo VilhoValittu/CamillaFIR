@@ -108,15 +108,6 @@ def get_house_curve_by_name(name):
             -3.1, -4.0, -4.4
         ])
 
-    elif 'BK_Medium' in name or 'BK' in name or 'B&K' in name:
-        freqs = full_freqs
-        mags = np.array([
-            3.5,
-            3.5, 3.4, 3.2, 3.0, 2.7, 2.3, 1.9, 1.4, 1.0,
-            0.6, 0.2, -0.2, -0.7, -1.3, -2.0, -2.8,
-            -3.8, -4.8, -5.3
-        ])
-
     elif 'BK_Strong' in name or 'B&K Strong' in name:
         freqs = full_freqs
         mags = np.array([
@@ -124,6 +115,15 @@ def get_house_curve_by_name(name):
             4.5, 4.4, 4.2, 3.9, 3.5, 3.0, 2.4, 1.8, 1.2,
             0.8, 0.3, -0.2, -0.8, -1.5, -2.3, -3.2,
             -4.3, -5.4, -6.0
+        ])
+
+    elif 'BK_Medium' in name or 'BK' in name or 'B&K' in name:
+        freqs = full_freqs
+        mags = np.array([
+            3.5,
+            3.5, 3.4, 3.2, 3.0, 2.7, 2.3, 1.9, 1.4, 1.0,
+            0.6, 0.2, -0.2, -0.7, -1.3, -2.0, -2.8,
+            -3.8, -4.8, -5.3
         ])
 
     elif 'Toole' in name:

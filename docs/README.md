@@ -1,11 +1,18 @@
 # CamillaFIR by Vilho Valittu
 
-## v3.5.4
+## v3.5.5
 
 Stable release - feedback welcome: camillafir.py@gmail.com
 
 CamillaFIR generates high-resolution FIR room-correction filters from REW exports
 (magnitude + phase) and WAV/IR measurements.
+
+## v3.5.5 Highlights - smarter automatic-mode reuse
+
+- **Exact cache-hit reuse:** same measurements + same relevant settings can now skip repeated target-selection and preset-search trial loops.
+- **Seeded Optuna flow:** automatic mode keeps known-good seed presets in play through target trials, phase 1, local refine, and micro-refine.
+- **Clearer reporting:** automatic mode now reports target-selection method text more clearly and exports richer summary metadata for cached winners.
+- **Startup defaults updated:** fresh configs now start with `Asymmetric` as the default filter type.
 
 ## v3.5.0 Highlights - Automatic mode consistency & reproducibility
 

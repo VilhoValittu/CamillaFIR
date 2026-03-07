@@ -19,6 +19,8 @@ TEST_MODE = 1
 
 TEST_MODE = os.environ.get("CAMILLAFIR_TEST", "0") == "1"
 
+_AUTO_ASYM_PHASE1_SEARCH_SPACE_EST = 1877500016615829065655090169509480
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         x = float(value)
@@ -27,6 +29,38 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     except Exception:
         pass
     return float(default)
+
+
+def _auto_search_space_summary(data: dict | None) -> str:
+    try:
+        ft = str((data or {}).get("filter_type", "") or "").strip().lower()
+    except Exception:
+        ft = ""
+
+    if "asym" in ft:
+        return (
+            "Theoretical preset search space (discretized estimate, Asymmetric phase1): "
+            f"~{_AUTO_ASYM_PHASE1_SEARCH_SPACE_EST:.3e} combinations. "
+            "Automatic mode samples only a tiny subset and refines iteratively/cache-guided. "
+            "Because the calculation count is still large, runtime depends strongly on computer performance."
+        )
+    if "linear" in ft:
+        return (
+            "Theoretical preset search space is extremely large. "
+            "Automatic mode samples only a tiny subset and refines iteratively/cache-guided. "
+            "Because the calculation count is still large, runtime depends strongly on computer performance."
+        )
+    if "mixed" in ft or "minimum" in ft or "min" in ft:
+        return (
+            "Theoretical preset search space is extremely large. "
+            "Automatic mode samples only a tiny subset and refines iteratively/cache-guided. "
+            "Because the calculation count is still large, runtime depends strongly on computer performance."
+        )
+    return (
+        "Theoretical preset search space is extremely large. "
+        "Automatic mode samples only a tiny subset and refines iteratively/cache-guided. "
+        "Because the calculation count is still large, runtime depends strongly on computer performance."
+    )
 
 def _collect_reflections(st: dict | None) -> list:
     st = st or {}
@@ -298,6 +332,7 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
                     f"Trials: {int(auto_meta.get('trials_ok', 0))}/{int(auto_meta.get('trials_total', 0))} "
                     f"(search grid: {int(auto_meta.get('search_fs', 0))} Hz, {int(auto_meta.get('search_taps', 0))} taps)\n"
                 )
+                summary_content += _auto_search_space_summary(data) + "\n"
                 if tc:
                     tc_method = str(tc.get("selection_method", "fit_rms"))
                     summary_content += (

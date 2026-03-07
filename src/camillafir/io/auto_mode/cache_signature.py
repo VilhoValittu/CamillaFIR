@@ -437,6 +437,7 @@ def _auto_cache_put_target_for_measurements(
         "best_target_curve": hc_val,
         "best_hc_mode": hc_val,
         "best_preset": dict(best_preset or {}),
+        "best_metrics": dict(best_metrics or {}),
         "best_rank": float(_auto_safe_float((best_metrics or {}).get("rank_score", float("nan")), float("nan"))),
     }
     try:
@@ -483,6 +484,7 @@ def _auto_cache_put_best(
         "auto_goal": str(goal_norm),
         "filter_key": str(_auto_filter_cache_key(filter_type=filter_key)),
         "best_preset": dict(best_preset or {}),
+        "best_metrics": dict(best_metrics or {}),
         "best_rank": float(_auto_safe_float((best_metrics or {}).get("rank_score", float("nan")), float("nan"))),
     }
     hc_val = str(best_hc_mode or "").strip()
@@ -560,6 +562,7 @@ def _auto_cache_put_last_used_best(
         "auto_goal": str(goal_norm),
         "filter_key": str(_auto_filter_cache_key(filter_type=filter_key)),
         "best_preset": dict(best_preset or {}),
+        "best_metrics": dict(best_metrics or {}),
         "best_rank": float(_auto_safe_float((best_metrics or {}).get("rank_score", float("nan")), float("nan"))),
     }
     hc_val = str(best_hc_mode or "").strip()

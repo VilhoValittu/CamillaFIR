@@ -3,10 +3,12 @@ from camillafir.io.camillafir_automatic_mode import (
     _build_auto_mode_candidates,
     _build_auto_mode_candidates_optuna,
     _build_auto_mode_candidates_local,
+    _auto_run_optuna_eval_loop,
     _auto_exc_penalty_bins_from_dbg,
     _auto_exc_zero_penalty_freq_hz_from_stats,
     _auto_goal,
     _auto_hybrid_mixed_freq_penalty,
+    _auto_optuna_sampler_kwargs,
     _auto_optimizer_backend,
     _auto_rank_key,
     _auto_rank_key_goal,
@@ -33,6 +35,9 @@ def test_auto_mode_config_from_base_data_reads_overrides():
             "auto_mode_optuna": True,
             "auto_mode_optuna_min_trials": 40,
             "auto_mode_optuna_startup_trials": 11,
+            "auto_mode_optuna_multivariate": False,
+            "auto_mode_optuna_group": True,
+            "auto_mode_optuna_constant_liar": False,
         }
     )
     assert cfg.trials == 77
@@ -43,6 +48,9 @@ def test_auto_mode_config_from_base_data_reads_overrides():
     assert cfg.optuna_pilot_enabled is True
     assert cfg.optuna_pilot_min_trials == 40
     assert cfg.optuna_pilot_startup_trials == 11
+    assert cfg.optuna_multivariate is False
+    assert cfg.optuna_group is True
+    assert cfg.optuna_constant_liar is False
 
 
 def test_auto_optimizer_backend_selection(monkeypatch):
@@ -53,6 +61,34 @@ def test_auto_optimizer_backend_selection(monkeypatch):
 
     monkeypatch.setenv("CAMILLAFIR_AUTO_MODE_OPTIMIZER", "builtin")
     assert _auto_optimizer_backend({"auto_mode_optimizer": "optuna", "auto_mode_optuna": True}) == "builtin"
+
+
+def test_auto_optuna_sampler_kwargs_defaults_and_parallel_behavior():
+    assert _auto_optuna_sampler_kwargs({}, workers=1) == {
+        "multivariate": True,
+        "group": False,
+        "constant_liar": False,
+    }
+    assert _auto_optuna_sampler_kwargs({}, workers=4) == {
+        "multivariate": True,
+        "group": False,
+        "constant_liar": True,
+    }
+
+
+def test_auto_optuna_sampler_kwargs_group_requires_multivariate():
+    assert _auto_optuna_sampler_kwargs(
+        {
+            "auto_mode_optuna_multivariate": False,
+            "auto_mode_optuna_group": True,
+            "auto_mode_optuna_constant_liar": True,
+        },
+        workers=8,
+    ) == {
+        "multivariate": False,
+        "group": False,
+        "constant_liar": True,
+    }
 
 
 def test_auto_rank_key_goal_balanced_matches_legacy():
@@ -219,6 +255,94 @@ def test_build_auto_mode_candidates_optuna_optional_backend():
         return
     assert isinstance(cands, list)
     assert len(cands) == 8
+
+
+def test_auto_run_optuna_eval_loop_feeds_seed_trials_into_study():
+    class _FakeTrial:
+        def __init__(self, fixed=None):
+            self.fixed = dict(fixed or {})
+
+        def suggest_float(self, name, low, high):
+            if name in self.fixed:
+                return float(self.fixed[name])
+            return float(low)
+
+        def suggest_categorical(self, name, choices):
+            if name in self.fixed:
+                return self.fixed[name]
+            return list(choices)[0]
+
+    class _FakeStudy:
+        def __init__(self):
+            self.enqueued = []
+            self.told = []
+
+        def enqueue_trial(self, params):
+            self.enqueued.append(dict(params or {}))
+
+        def ask(self):
+            if self.enqueued:
+                return _FakeTrial(self.enqueued.pop(0))
+            return _FakeTrial()
+
+        def tell(self, trial, value=None, state=None):
+            self.told.append({"trial": trial, "value": value, "state": state})
+
+    class _FakeTrialState:
+        FAIL = "fail"
+
+    class _FakeOptuna:
+        class samplers:
+            class TPESampler:
+                def __init__(self, seed=None, n_startup_trials=None, **kwargs):
+                    self.seed = seed
+                    self.n_startup_trials = n_startup_trials
+                    self.kwargs = dict(kwargs or {})
+
+        class trial:
+            TrialState = _FakeTrialState
+
+        @staticmethod
+        def create_study(direction=None, sampler=None):
+            return _FakeStudy()
+
+    seen = []
+
+    def _build_preset(trial):
+        return {
+            "max_boost": float(trial.suggest_float("max_boost", 3.0, 8.0)),
+            "reg_strength": float(trial.suggest_float("reg_strength", 15.0, 45.0)),
+        }
+
+    def _eval_one(idx, preset):
+        seen.append((int(idx), dict(preset or {})))
+        return {
+            "idx": int(idx),
+            "ok": True,
+            "metrics": {"rank_score": float(80.0 + idx)},
+        }
+
+    _auto_run_optuna_eval_loop(
+        optuna_mod=_FakeOptuna,
+        n_total=2,
+        seed=123,
+        startup_trials=2,
+        base_data={},
+        seed_presets=[{"max_boost": 6.7, "reg_strength": 22.5}],
+        build_preset=_build_preset,
+        eval_one=_eval_one,
+        consume_one=lambda idx, out: False,
+        objective_value=lambda out: float(dict(out.get("metrics", {}) or {}).get("rank_score", 0.0)),
+        workers=1,
+        seed_to_params=lambda preset: {
+            "max_boost": float(preset.get("max_boost", 4.0)),
+            "reg_strength": float(preset.get("reg_strength", 30.0)),
+        },
+    )
+
+    assert seen
+    assert seen[0][1]["max_boost"] == 6.7
+    assert seen[0][1]["reg_strength"] == 22.5
 
 
 def test_build_auto_mode_candidates_local_center_first_and_clamped():

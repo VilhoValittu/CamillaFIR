@@ -31,6 +31,8 @@ AUTO_MODE_TARGET_PRESELECT_BOOST_W = 0.22
 AUTO_MODE_TARGET_PRESELECT_SLOPE_W = 0.18
 AUTO_MODE_TARGET_PRESELECT_ASYM_W = 0.30
 AUTO_MODE_TARGET_PRESELECT_MODE_W = 0.16
+AUTO_MODE_TARGET_PRESELECT_BASS_SHAPE_W = 0.34
+AUTO_MODE_TARGET_PRESELECT_TREBLE_SHAPE_W = 0.28
 AUTO_MODE_TARGET_PRESELECT_MAX_BASS_BOOST_REF_DB = 8.0
 AUTO_MODE_TARGET_PRESELECT_MODE_BAND_MIN_HZ = 25.0
 AUTO_MODE_TARGET_PRESELECT_MODE_BAND_MAX_HZ = 160.0
@@ -62,6 +64,9 @@ AUTO_MODE_PARALLEL_BATCH_MULTIPLIER = 2
 AUTO_MODE_OPTUNA_PILOT_ENABLED = True
 AUTO_MODE_OPTUNA_PILOT_MIN_TRIALS = 24
 AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS = 12
+AUTO_MODE_OPTUNA_MULTIVARIATE = True
+AUTO_MODE_OPTUNA_GROUP = False
+AUTO_MODE_OPTUNA_CONSTANT_LIAR = True
 AUTO_MODE_DUAL_MODE_ENABLED = True
 AUTO_MODE_DUAL_MODE_TOP_N = 2
 AUTO_MODE_MODE_RIPPLE_OK_DB = 0.030
@@ -270,6 +275,27 @@ def _auto_optimizer_backend(base_data: dict | None, *, default_optuna_enabled: b
     return "builtin"
 
 
+def _auto_optuna_sampler_kwargs(base_data: dict | None, *, workers: int = 1) -> dict:
+    data = dict(base_data or {})
+    multivariate = _auto_safe_bool(
+        data.get("auto_mode_optuna_multivariate", AUTO_MODE_OPTUNA_MULTIVARIATE),
+        AUTO_MODE_OPTUNA_MULTIVARIATE,
+    )
+    group = bool(multivariate) and _auto_safe_bool(
+        data.get("auto_mode_optuna_group", AUTO_MODE_OPTUNA_GROUP),
+        AUTO_MODE_OPTUNA_GROUP,
+    )
+    constant_liar = bool(int(max(1, _auto_safe_int(workers, 1))) > 1) and _auto_safe_bool(
+        data.get("auto_mode_optuna_constant_liar", AUTO_MODE_OPTUNA_CONSTANT_LIAR),
+        AUTO_MODE_OPTUNA_CONSTANT_LIAR,
+    )
+    return {
+        "multivariate": bool(multivariate),
+        "group": bool(group),
+        "constant_liar": bool(constant_liar),
+    }
+
+
 @dataclass(frozen=True)
 class AutoModeConfig:
     trials: int = AUTO_MODE_TRIALS
@@ -300,6 +326,9 @@ class AutoModeConfig:
     optuna_pilot_enabled: bool = AUTO_MODE_OPTUNA_PILOT_ENABLED
     optuna_pilot_min_trials: int = AUTO_MODE_OPTUNA_PILOT_MIN_TRIALS
     optuna_pilot_startup_trials: int = AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS
+    optuna_multivariate: bool = AUTO_MODE_OPTUNA_MULTIVARIATE
+    optuna_group: bool = AUTO_MODE_OPTUNA_GROUP
+    optuna_constant_liar: bool = AUTO_MODE_OPTUNA_CONSTANT_LIAR
 
     @classmethod
     def from_base_data(cls, base_data: dict | None) -> "AutoModeConfig":
@@ -449,6 +478,18 @@ class AutoModeConfig:
                     data.get("auto_mode_optuna_startup_trials", AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS),
                     AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS,
                 ),
+            ),
+            optuna_multivariate=_auto_safe_bool(
+                data.get("auto_mode_optuna_multivariate", AUTO_MODE_OPTUNA_MULTIVARIATE),
+                AUTO_MODE_OPTUNA_MULTIVARIATE,
+            ),
+            optuna_group=_auto_safe_bool(
+                data.get("auto_mode_optuna_group", AUTO_MODE_OPTUNA_GROUP),
+                AUTO_MODE_OPTUNA_GROUP,
+            ),
+            optuna_constant_liar=_auto_safe_bool(
+                data.get("auto_mode_optuna_constant_liar", AUTO_MODE_OPTUNA_CONSTANT_LIAR),
+                AUTO_MODE_OPTUNA_CONSTANT_LIAR,
             ),
         )
 
