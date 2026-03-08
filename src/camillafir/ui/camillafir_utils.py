@@ -1,24 +1,18 @@
 
 def scale_taps_with_fs(
     fs: int,
-    base_fs: int = 44100,
     base_taps: int = 65536,
-    allowed_taps=(
-        512, 1024, 2048, 4096, 8192, 16384,
-        32768, 65536, 131072, 262144, 524288,
-        1048576
-    ),
+    base_fs: int = 44100,
 ) -> int:
-    """Kasittelee signaalia tai dataa: scale taps with fs."""
+    """Scale FIR tap count proportionally so filter time length stays constant."""
     try:
-        fs_i = int(fs)
-        if fs_i <= 0:
-            return int(base_taps)
+        fs_i = int(float(fs))
+        base_taps_i = int(float(base_taps))
+        base_fs_i = int(float(base_fs))
+        if fs_i <= 0 or base_taps_i <= 0 or base_fs_i <= 0:
+            return int(base_taps_i if base_taps_i > 0 else 65536)
 
-        target = float(base_taps) * (fs_i / float(base_fs))
-        for taps in allowed_taps:
-            if int(taps) >= target:
-                return int(taps)
-        return int(allowed_taps[-1])
+        scaled = int(round(float(base_taps_i) * (float(fs_i) / float(base_fs_i))))
+        return max(1, scaled)
     except Exception:
         return int(base_taps)

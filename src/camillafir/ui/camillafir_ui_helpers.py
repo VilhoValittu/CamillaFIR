@@ -843,6 +843,10 @@ def update_taps_auto_info(_=None):
         mr = bool(pin["multi_rate_opt"])
     except Exception:
         mr = False
+    try:
+        base_taps = int(float(pin["taps"]))
+    except Exception:
+        base_taps = 65536
 
     for scope_name in ("taps_auto_info_scope_files", "taps_auto_info_scope_basic"):
         with use_scope(scope_name, clear=True):
@@ -851,12 +855,11 @@ def update_taps_auto_info(_=None):
                 continue
 
             rates = [44100, 48000, 88200, 96000, 176400, 192000]
-            lines = [f"- **{r/1000:.1f} kHz** → **{scale_taps_with_fs(r)}** taps" for r in rates]
-
+            lines = [f"- **{r/1000:.1f} kHz** -> **{scale_taps_with_fs(r, base_taps=base_taps)}** taps" for r in rates]
             put_markdown(
                 f"### {t('auto_taps_title')}\n"
                 f"{t('auto_taps_body')}\n\n"
-                f"{t('auto_taps_ref')}\n\n"
+                f"**Reference:** 44.1 kHz -> {base_taps:,} taps\n\n"
                 + "\n".join(lines)
             )
 

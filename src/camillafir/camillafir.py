@@ -704,7 +704,7 @@ def process_run():
                 pre_target_rates = choose_target_rates(data)
                 pre_fs = int(pre_target_rates[0]) if pre_target_rates else int(data.get("fs", 44100) or 44100)
                 if bool(data.get("multi_rate_opt", False)):
-                    pre_taps = int(scale_taps_with_fs(pre_fs, taps_base))
+                    pre_taps = int(scale_taps_with_fs(pre_fs, base_taps=taps_base))
                 else:
                     pre_taps = int(taps_base)
                 pre_xos, pre_hpf = build_xos_hpf(data)
@@ -863,7 +863,7 @@ def process_run():
             data["comparison_mode"] = True
             auto_search_fs = int(target_rates[0]) if target_rates else int(data.get("fs", 44100) or 44100)
             if bool(data.get("multi_rate_opt", False)):
-                auto_search_taps = int(scale_taps_with_fs(auto_search_fs, taps_base))
+                auto_search_taps = int(scale_taps_with_fs(auto_search_fs, base_taps=taps_base))
             else:
                 auto_search_taps = int(taps_base)
             set_processbar('bar', 0.10)
@@ -985,7 +985,7 @@ def process_run():
 
     for i, fs_v in enumerate(target_rates):
         if bool(data.get('multi_rate_opt', False)):
-            taps_v = scale_taps_with_fs(fs_v, taps_base)
+            taps_v = scale_taps_with_fs(fs_v, base_taps=taps_base)
             logger.info(f"Auto taps: {int(fs_v)} Hz -> {int(taps_v)} taps (ref 44100 Hz -> {taps_base} taps)")
         else:
             taps_v = taps_base
