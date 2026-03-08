@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import math
 from pywebio.output import put_button, put_buttons, put_collapse, put_html, put_markdown, put_row, use_scope
@@ -15,6 +16,8 @@ from .system_health import (
     toast_tdc_preset_applied,
 )
 
+logger = logging.getLogger("CamillaFIR")
+
 try:
     from .camillafir_housecurve import (
         _normalize_hc_mode_key,
@@ -28,10 +31,28 @@ except Exception:
     load_target_curve = None
     load_house_curve = None
 
+
+def _pin_get(name, default=None):
+    """Lukee pin-arvon turvallisesti eri PyWebIO-konteksteissa."""
+    try:
+        return pin[name]
+    except Exception:
+        pass
+
+    try:
+        getter = getattr(pin, "get", None)
+        if callable(getter):
+            v = getter(name, None)
+            return default if v is None else v
+    except Exception:
+        pass
+
+    return default
+
 def _warn_max_boost_if_over_cap(_=None):
     """Sisainen apufunktio: warn max boost if over cap."""
     try:
-        v = pin.get('max_boost', None)
+        v = _pin_get('max_boost', None)
         if v is None or v == '':
             toast_max_boost_over_cap(None, float(globals().get("MAX_SAFE_BOOST", 8.0) or 8.0))
             return
@@ -52,7 +73,7 @@ def _warn_max_boost_if_over_cap(_=None):
 def _warn_taps_if_over_cap(_=None):
     """Sisainen apufunktio: warn taps if over cap."""
     try:
-        v = pin.get('taps', None)
+        v = _pin_get('taps', None)
         if v is None or v == '':
             toast_taps_over_cap(None, int(globals().get("MAX_SAFE_TAPS", 131072) or 131072))
             return
@@ -101,7 +122,11 @@ def update_auto_mode_controls_ui(_=None):
             return pin[name]
         except Exception:
             try:
-                v = pin.get(name, None)
+                getter = getattr(pin, "get", None)
+                if callable(getter):
+                    v = getter(name, None)
+                else:
+                    v = None
                 return default if v is None else v
             except Exception:
                 return default
@@ -146,7 +171,7 @@ def update_auto_mode_controls_ui(_=None):
 def update_basic_clamp_hints_ui(*, pin, pin_update, t):
     """Soveltaa tai paivittaa: update basic clamp hints ui."""
     try:
-        mode_u = str(pin.get("mode", "BASIC") or "BASIC").strip().upper()
+        mode_u = str(_pin_get("mode", "BASIC") or "BASIC").strip().upper()
     except Exception:
         mode_u = "BASIC"
     is_basic = mode_u in ("BASIC", "AUTO")
@@ -1728,6 +1753,6 @@ def update_target_preview_ui(_=None):
                 "</div>"
             )
         try:
-            print("update_target_preview_ui error:", repr(e))
+            logger.warning("update_target_preview_ui error: %r", e)
         except Exception:
             pass

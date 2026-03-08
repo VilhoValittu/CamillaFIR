@@ -52,6 +52,17 @@ def _apply_auto_thread_env() -> tuple[int, int, list[str]]:
 
 _AUTO_THREADS_USE, _AUTO_THREADS_CORES, _AUTO_THREADS_ENV_APPLIED = _apply_auto_thread_env()
 
+
+def _resolve_console_log_level() -> int:
+    """
+    Normalikäytössä konsoli pidetään hiljaisena.
+
+    Oletus on `WARNING`, mutta kehityslokit voi ottaa takaisin kayttoon
+    ymparistomuuttujalla `CAMILLAFIR_LOG_LEVEL` (esim. INFO tai DEBUG).
+    """
+    raw = str(os.environ.get("CAMILLAFIR_LOG_LEVEL", "WARNING") or "WARNING").strip().upper()
+    return int(getattr(logging, raw, logging.WARNING))
+
 import logging  # noqa: E402
 import typing   # noqa: E402
 import re   # noqa: E402
@@ -112,8 +123,16 @@ from .io.camillafir_automatic_mode import (  # noqa: E402
     _run_auto_mode_search,
 )
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
+_CONSOLE_LOG_LEVEL = _resolve_console_log_level()
+
+logging.basicConfig(
+    level=_CONSOLE_LOG_LEVEL,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,
+)
 logger = logging.getLogger("CamillaFIR")
+logger.setLevel(_CONSOLE_LOG_LEVEL)
 
 try:
     logger.info(
@@ -1392,7 +1411,7 @@ if __name__ == '__main__':
     start_server(
         main,
         port=8080,
-        debug=True,
+        debug=bool(str(os.environ.get("CAMILLAFIR_WEB_DEBUG", "0") or "0").strip() == "1"),
         auto_open_webbrowser=True,
         static_dir=resolve_static_dir(),
     )

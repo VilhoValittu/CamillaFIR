@@ -247,10 +247,6 @@ def _render_results(
         update_status(t('stat_plot'))
     time.sleep(0.05)
     set_processbar('bar', 0.8)
-    print("plot_smoothing_level =", data.get("plot_smoothing_level"))
-    print("filter_smooth =", data.get("filter_smooth"))
-    
-
     psl = data.get('plot_smoothing_level', 'Psychoacoustic')
 
     if isinstance(psl, str):
@@ -260,8 +256,6 @@ def _render_results(
             psl_str = psl
     else:
         psl_str = f"1/{int(psl)} octave"
-
-    print("psl_str =", psl_str)
 
     with use_scope('results', clear=True):
         if l_st_f is None or r_st_f is None:

@@ -1,6 +1,7 @@
 import os
 import sys
 import io, scipy.signal, scipy.fft, scipy.ndimage
+import logging
 import numpy as np
 import matplotlib
 matplotlib.use('Agg') 
@@ -16,6 +17,7 @@ from ..dsp.target_match import target_match_from_stats as _target_match_from_sta
 from ..resources.i8n.camillafir_i18n import t
 PHASE_SMOOTH_OCT = 5.5
 GD_SMOOTH_OCT    = 3.0
+logger = logging.getLogger("CamillaFIR")
 
 
 def _float_allow_zero(v, default: float) -> float:
@@ -1782,6 +1784,6 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
         plt.tight_layout(); buf = io.BytesIO(); fig.savefig(buf, format='png', dpi=120); plt.close(fig); buf.seek(0)
         return buf.getvalue()
     except Exception as e:
-        print(f"Visualization error ({title}): {e}")
+        logger.warning(f"Visualization error ({title}): {e}")
         return b""
     
