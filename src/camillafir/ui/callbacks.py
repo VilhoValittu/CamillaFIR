@@ -1,3 +1,6 @@
+import sys
+from datetime import datetime
+
 import numpy as np
 from pywebio.output import put_html, use_scope
 from pywebio.pin import pin, pin_on_change, pin_update
@@ -31,6 +34,20 @@ from .camillafir_ui_helpers import (
 _PROCESS_RUN_HOOK = None
 
 
+def _terminal_run_event(label: str, *, clock_text: str, elapsed_s: float | None = None, started_clock: str | None = None):
+    try:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+        parts = [f"{ts} - INFO - {str(label or '').strip()} {str(clock_text or '').strip()}"]
+        if started_clock:
+            parts.append(f"(started {str(started_clock).strip()})")
+        if elapsed_s is not None:
+            parts.append(f"| {float(elapsed_s):.1f} s")
+        sys.stdout.write(" ".join(parts).strip() + "\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
 def configure_engine_hooks(*, process_run=None):
     global _PROCESS_RUN_HOOK
     _PROCESS_RUN_HOOK = process_run
@@ -49,6 +66,8 @@ def on_start_click():
 
         stop_evt = threading.Event()
         run_started_at = time.perf_counter()
+        run_started_clock = datetime.now().strftime("%H:%M:%S")
+        _terminal_run_event("START", clock_text=run_started_clock)
 
         def _timer_tick():
             try:
@@ -60,6 +79,7 @@ def on_start_click():
                     base = _app.get_status_base_message(default="CamillaFIR running")
                     elapsed = max(0.0, float(time.perf_counter() - run_started_at))
                     _app.update_status(f"{base} | {elapsed:.1f} s")
+                    _terminal_run_event("COUNTING", clock_text=datetime.now().strftime("%H:%M:%S"), elapsed_s=elapsed)
                 except Exception:
                     pass
 
@@ -83,11 +103,31 @@ def on_start_click():
         try:
             try:
                 from . import app as _app
+                _app.set_run_wall_clock_text(run_started_clock)
+                _app.update_status_notices(summary_text="", info_text="")
+                _app.update_auto_selected_bar("")
                 _app.reset_auto_status_details()
                 _app.update_status("CamillaFIR running | 0.0 s")
             except Exception:
                 pass
-            return _PROCESS_RUN_HOOK()
+            result = _PROCESS_RUN_HOOK()
+            elapsed_done = max(0.0, float(time.perf_counter() - run_started_at))
+            _terminal_run_event(
+                "READY",
+                clock_text=datetime.now().strftime("%H:%M:%S"),
+                elapsed_s=elapsed_done,
+                started_clock=run_started_clock,
+            )
+            return result
+        except Exception:
+            elapsed_fail = max(0.0, float(time.perf_counter() - run_started_at))
+            _terminal_run_event(
+                "FAILED",
+                clock_text=datetime.now().strftime("%H:%M:%S"),
+                elapsed_s=elapsed_fail,
+                started_clock=run_started_clock,
+            )
+            raise
         finally:
             stop_evt.set()
     return None

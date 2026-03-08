@@ -467,3 +467,30 @@ def test_auto_score_result_waives_exc_bins_using_zero_penalty_floor():
     assert out["exc_penalty_bins_raw"] > 0.0
     assert out["exc_penalty_bins_waived"] is True
     assert out["exc_penalty_raw"] == 0.0
+
+
+def test_auto_score_result_waives_exc_bins_at_zero_penalty_floor():
+    st = {
+        "exc_prot": True,
+        "exc_freq": 20.0,
+        "boost_candidate_bins_excprot": 2,
+        "boost_candidate_min_hz": 20.0,
+        "lf_boost_max_db": 0.0,
+        "net_boost_peak_db": 0.0,
+        "avg_confidence": 90.0,
+        "freq_axis": [20.0, 30.0, 40.0],
+        "measured_mags": [0.0, 0.0, 0.0],
+        "target_mags": [0.0, 0.0, 0.0],
+        "filter_mags": [0.0, 0.0, 0.0],
+    }
+    from camillafir.io.camillafir_automatic_mode import _auto_score_result
+
+    out = _auto_score_result(
+        SimpleNamespace(l_st=dict(st), r_st=dict(st)),
+        auto_exc_freq_hz=20.0,
+        base_data={},
+    )
+    assert out["auto_exc_zero_penalty_hz"] == 20.0
+    assert out["exc_penalty_bins_raw"] > 0.0
+    assert out["exc_penalty_bins_waived"] is True
+    assert out["exc_penalty_raw"] == 0.0

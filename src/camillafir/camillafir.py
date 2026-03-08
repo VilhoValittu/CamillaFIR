@@ -915,7 +915,6 @@ def process_run():
             if isinstance(auto_res, dict):
                 best_preset = dict(auto_res.get("best_preset", {}) or {})
                 best_metrics = dict(auto_res.get("best_metrics", {}) or {})
-                winner_explanation = dict(auto_res.get("winner_explanation", {}) or {})
                 if best_preset:
                     data.update(best_preset)
                     measurements["ui_data"] = data
@@ -974,7 +973,6 @@ def process_run():
                     ),
                     "best_metrics": best_metrics,
                     "best_preset": best_preset,
-                    "winner_explanation": winner_explanation,
                     "top": list(auto_res.get("top", []) or []),
                 }
                 _status(

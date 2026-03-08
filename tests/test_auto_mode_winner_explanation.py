@@ -3,7 +3,6 @@ from types import SimpleNamespace
 import pytest
 
 from camillafir.io import camillafir_automatic_mode as auto
-from camillafir.ui import camillafir_ui as ui
 
 
 def test_auto_build_winner_explanation_fallback_on_none():
@@ -247,16 +246,3 @@ def test_run_auto_mode_search_impl_uses_optuna_backend_even_for_small_trial_coun
 
     assert isinstance(result, dict)
     assert dict(result.get("best_preset", {}) or {}).get("preset_id") == "optuna"
-
-
-def test_render_auto_winner_explanation_handles_missing_explanation(monkeypatch):
-    calls = []
-
-    monkeypatch.setattr(ui, "put_markdown", lambda text: calls.append(("markdown", text)))
-    monkeypatch.setattr(ui, "put_info", lambda text: calls.append(("info", text)))
-    monkeypatch.setattr(ui, "put_html", lambda text: calls.append(("html", text)))
-
-    ui._render_auto_winner_explanation({})
-
-    assert ("markdown", "### Why this preset won") in calls
-    assert ("info", "Winner explanation unavailable.") in calls

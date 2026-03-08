@@ -4,7 +4,7 @@ import json
 import re
 
 from pywebio import config
-from pywebio.output import put_button, put_html, put_markdown, use_scope
+from pywebio.output import put_button, put_html, put_markdown, put_scope, use_scope
 from pywebio.session import set_env
 
 from ..config.camillafir_config import load_config
@@ -20,10 +20,13 @@ MAX_SAFE_BOOST = 8.0
 _STATUS_BASE_MSG = ""
 _STATUS_DOM_READY = False
 _STATUS_LAST_TEXT = ""
+_STATUS_SUMMARY_TEXT = ""
+_STATUS_INFO_TEXT = ""
 _AUTO_SELECTED_BAR_MSG = ""
 _AUTO_STATUS_DETAILS: list[str] = []
 _AUTO_STATUS_DETAIL_MAX = 80
 _AUTO_STATUS_LAST_DETAIL = ""
+_RUN_WALL_CLOCK_TEXT = ""
 
 
 def build_app(*, process_run, PROGRAM_NAME: str, VERSION: str, MAX_SAFE_BOOST: float):
@@ -137,6 +140,22 @@ def get_status_base_message(default: str = "CamillaFIR running") -> str:
     return v or str(default)
 
 
+def set_run_wall_clock_text(value) -> None:
+    global _RUN_WALL_CLOCK_TEXT
+    try:
+        _RUN_WALL_CLOCK_TEXT = str(value or "").strip()
+    except Exception:
+        _RUN_WALL_CLOCK_TEXT = ""
+
+
+def get_run_wall_clock_text(default: str = "") -> str:
+    try:
+        v = str(_RUN_WALL_CLOCK_TEXT or "").strip()
+    except Exception:
+        v = ""
+    return v or str(default or "")
+
+
 def _normalize_auto_selected_text(msg) -> str:
     try:
         txt = str(msg or "").strip()
@@ -147,8 +166,22 @@ def _normalize_auto_selected_text(msg) -> str:
     return txt
 
 
+def _normalize_status_notice_text(msg) -> str:
+    try:
+        txt = str(msg or "").strip()
+    except Exception:
+        txt = ""
+    return txt
+
+
 def _render_status_area(text: str):
     safe_text = html.escape(str(text or ""))
+    summary_txt = _normalize_status_notice_text(_STATUS_SUMMARY_TEXT)
+    summary_safe = html.escape(summary_txt)
+    summary_display = "block" if summary_txt else "none"
+    info_txt = _normalize_status_notice_text(_STATUS_INFO_TEXT)
+    info_safe = html.escape(info_txt)
+    info_display = "block" if info_txt else "none"
     auto_txt = _normalize_auto_selected_text(_AUTO_SELECTED_BAR_MSG)
     auto_safe = html.escape(auto_txt)
     auto_display = "block" if auto_txt else "none"
@@ -157,6 +190,16 @@ def _render_status_area(text: str):
     detail_display = "block" if detail_body else "none"
     with use_scope("status_area", clear=True):
         put_html(
+            f'<div id="cf_status_summary" '
+            f'style="display:{summary_display}; margin:0 0 10px 0; padding:12px 14px; '
+            f'border:1px solid rgba(34,197,94,0.28); border-radius:12px; '
+            f'background:rgba(34,197,94,0.10); color:rgba(235,255,245,0.92); '
+            f'font-weight:700;">{summary_safe}</div>'
+            f'<div id="cf_status_info" '
+            f'style="display:{info_display}; margin:0 0 10px 0; padding:12px 14px; '
+            f'border:1px solid rgba(59,130,246,0.25); border-radius:12px; '
+            f'background:rgba(59,130,246,0.10); color:rgba(235,245,255,0.92); '
+            f'font-weight:650;">{info_safe}</div>'
             f'<div id="cf_status_text" '
             f'style="font-weight:bold; color:#4CAF50; margin-bottom:10px;">'
             f"{safe_text}</div>"
@@ -204,6 +247,18 @@ def update_status(msg):
         try:
             detail_body = "\n".join(str(x or "") for x in list(_AUTO_STATUS_DETAILS or []))
             run_js(
+                "const summary=document.getElementById('cf_status_summary');"
+                "if(summary){"
+                "const txt=%s;"
+                "summary.textContent=txt;"
+                "summary.style.display=txt?'block':'none';"
+                "}"
+                "const info=document.getElementById('cf_status_info');"
+                "if(info){"
+                "const txt=%s;"
+                "info.textContent=txt;"
+                "info.style.display=txt?'block':'none';"
+                "}"
                 "const el=document.getElementById('cf_status_text');"
                 "if(el){el.textContent=%s;}"
                 "const wrap=document.getElementById('cf_auto_status_details_wrap');"
@@ -213,7 +268,12 @@ def update_status(msg):
                 "body.textContent=det;"
                 "wrap.style.display=det?'block':'none';"
                 "}"
-                % (json.dumps(_STATUS_LAST_TEXT), json.dumps(detail_body))
+                % (
+                    json.dumps(str(_STATUS_SUMMARY_TEXT or "")),
+                    json.dumps(str(_STATUS_INFO_TEXT or "")),
+                    json.dumps(_STATUS_LAST_TEXT),
+                    json.dumps(detail_body),
+                )
             )
             return
         except Exception:
@@ -245,6 +305,49 @@ def update_auto_selected_bar(msg):
                 "bar.style.display=txt?'block':'none';"
                 "}"
                 % json.dumps(str(_AUTO_SELECTED_BAR_MSG or ""))
+            )
+            return
+        except Exception:
+            pass
+
+    _render_status_area(str(_STATUS_LAST_TEXT or _STATUS_BASE_MSG or ""))
+    _STATUS_DOM_READY = True
+
+
+def update_status_notices(*, summary_text=None, info_text=None):
+    global _STATUS_SUMMARY_TEXT, _STATUS_INFO_TEXT, _STATUS_DOM_READY
+    if summary_text is not None:
+        _STATUS_SUMMARY_TEXT = _normalize_status_notice_text(summary_text)
+    if info_text is not None:
+        _STATUS_INFO_TEXT = _normalize_status_notice_text(info_text)
+
+    if not _STATUS_DOM_READY:
+        return
+
+    try:
+        from pywebio.session import run_js
+    except Exception:
+        run_js = None
+
+    if callable(run_js):
+        try:
+            run_js(
+                "const summary=document.getElementById('cf_status_summary');"
+                "if(summary){"
+                "const txt=%s;"
+                "summary.textContent=txt;"
+                "summary.style.display=txt?'block':'none';"
+                "}"
+                "const info=document.getElementById('cf_status_info');"
+                "if(info){"
+                "const txt=%s;"
+                "info.textContent=txt;"
+                "info.style.display=txt?'block':'none';"
+                "}"
+                % (
+                    json.dumps(str(_STATUS_SUMMARY_TEXT or "")),
+                    json.dumps(str(_STATUS_INFO_TEXT or "")),
+                )
             )
             return
         except Exception:
@@ -315,3 +418,5 @@ def main():
         cursor: pointer;
     """
     )
+    put_scope("status_area")
+    put_scope("results")

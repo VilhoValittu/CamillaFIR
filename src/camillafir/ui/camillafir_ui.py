@@ -1,5 +1,4 @@
 import logging
-from html import escape
 from textwrap import dedent
 
 from pywebio.output import (
@@ -9,7 +8,6 @@ from pywebio.output import (
     put_html,
     put_info,
     put_markdown,
-    put_success,
     put_table,
     put_tabs,
     set_processbar,
@@ -42,6 +40,7 @@ def build_app(*, process_run, PROGRAM_NAME: str, VERSION: str, MAX_SAFE_BOOST: f
 
 main = _app.main
 update_status = _app.update_status
+update_status_notices = _app.update_status_notices
 update_auto_selected_bar = _app.update_auto_selected_bar
 
 
@@ -165,53 +164,6 @@ def _build_diagnostics_dict(data, fs_v, l_st, r_st):
     return diag
 
 
-def _auto_winner_explanation_view(auto_meta: dict | None) -> dict:
-    explanation = dict((auto_meta or {}).get("winner_explanation", {}) or {})
-    summary = str(explanation.get("summary", "") or "").strip() or "Winner explanation unavailable."
-
-    reasons: list[str] = []
-    reasons_raw = explanation.get("reasons", [])
-    if isinstance(reasons_raw, (list, tuple)):
-        for item in list(reasons_raw):
-            txt = str(item or "").strip()
-            if txt:
-                reasons.append(txt)
-
-    phase_label = str(explanation.get("phase_label", "") or "").strip()
-    target_name = str(explanation.get("target_name", "") or "").strip()
-    meta_parts = []
-    if target_name:
-        meta_parts.append(f"Target: {target_name}")
-    if phase_label:
-        meta_parts.append(f"Winner accepted in {phase_label}")
-
-    return {
-        "summary": summary,
-        "reasons": list(reasons),
-        "meta_line": " | ".join(meta_parts),
-    }
-
-
-def _render_auto_winner_explanation(auto_meta: dict | None) -> None:
-    vm = _auto_winner_explanation_view(auto_meta)
-    put_markdown("### Why this preset won")
-    put_info(str(vm.get("summary", "") or "Winner explanation unavailable."))
-    meta_line = str(vm.get("meta_line", "") or "").strip()
-    if meta_line:
-        put_html(
-            "<div style='opacity:0.70; font-size:12px; line-height:1.25; margin-top:4px'>"
-            f"{escape(meta_line)}"
-            "</div>"
-        )
-
-    reasons_raw = vm.get("reasons", [])
-    reasons = []
-    if isinstance(reasons_raw, (list, tuple)):
-        reasons = [str(item or "").strip() for item in list(reasons_raw) if str(item or "").strip()]
-    if reasons:
-        items = "".join(f"<li>{escape(reason)}</li>" for reason in reasons)
-        put_html(f"<ul style='margin:8px 0 0 18px; padding:0'>{items}</ul>")
-
 def _render_results(
     data,
     f_l,
@@ -304,11 +256,94 @@ def _render_results(
             net_boost = boost_pre + auto_gain
             return boost_pre, auto_gain, net_boost
 
+        def _metric_cell(value, compare=None):
+            cmp = compare if compare is not None else value
+            if cmp is None:
+                cmp = "-"
+            return {"render": value, "compare": str(cmp)}
+
+        def _metric_row(label, left, right, *, left_compare=None, right_compare=None):
+            return {
+                "label": str(label),
+                "left": _metric_cell(left, left_compare),
+                "right": _metric_cell(right, right_compare),
+            }
+
+        def _put_metric_collapse(title, rows, *, summary_lines=None, open=False):
+            content = []
+            for line in list(summary_lines or []):
+                if line:
+                    content.append(put_markdown(str(line)))
+
+            shared_rows = [["Metric", "Value"]]
+            stereo_rows = [["Metric", "L", "R"]]
+            for row in list(rows or []):
+                left = dict(row.get("left", {}) or {})
+                right = dict(row.get("right", {}) or {})
+                if str(left.get("compare", "")) == str(right.get("compare", "")):
+                    shared_rows.append([row.get("label", ""), left.get("render", "-")])
+                else:
+                    stereo_rows.append([
+                        row.get("label", ""),
+                        left.get("render", "-"),
+                        right.get("render", "-"),
+                    ])
+
+            if len(shared_rows) > 1:
+                content.append(put_table(shared_rows))
+            if len(stereo_rows) > 1:
+                content.append(put_table(stereo_rows))
+            if content:
+                put_collapse(title, content, open=open)
+
+        def _fmt_ai_match(ai):
+            match = ai.get("match", None)
+            if match is None:
+                return _metric_cell("n/a", "n/a")
+            return _metric_cell(f"{float(match):.1f}%", f"{float(match):.3f}")
+
+        def _fmt_ai_score(ai):
+            score = ai.get("score", None)
+            if score is None:
+                return _metric_cell("n/a", "n/a")
+            return _metric_cell(f"{float(score):.3f}/100", f"{float(score):.3f}")
+
+        def _auto_float(v, default=float("nan")):
+            try:
+                x = float(v)
+                if x == x and abs(x) != float("inf"):
+                    return float(x)
+            except Exception:
+                pass
+            return float(default)
+
+        def _auto_int(v, default=0):
+            try:
+                return int(v)
+            except Exception:
+                return int(default)
+
+        def _auto_choice_text(method):
+            try:
+                key = str(method or "").strip().lower()
+            except Exception:
+                key = ""
+            mapping = {
+                "cache_signature_hit": "cache hit",
+                "cache_measurement": "measurement cache seed",
+                "cache_signature": "signature cache seed",
+                "trial_with_cache_wildcard": "cache wildcard winner",
+                "top3x10_trials": "trial comparison",
+                "top3x10_trials_rank_tie_composite": "trial comparison with tie-break",
+                "fit_rms": "quick fit preselect",
+            }
+            return str(mapping.get(key, key or "unknown"))
+
 
         l_boost_pre, l_auto_gain, l_net_boost = _boost_diag(l_st_f)
         r_boost_pre, r_auto_gain, r_net_boost = _boost_diag(r_st_f)
 
-        put_table([
+        """
             ['Speaker', 'L', 'R'],
             ['Target Level', f"{l_st_f.get('eff_target_db', 0):.1f} dB", f"{r_st_f.get('eff_target_db', 0):.1f} dB"],
             ['Smart Scan Range',
@@ -343,7 +378,83 @@ def _render_results(
             ""
             ],
             ['Final Max (post gain)', f"{float(l_st_f.get('final_max_db', 0.0) or 0.0):.2f} dB", f"{float(r_st_f.get('final_max_db', 0.0) or 0.0):.2f} dB"],
-        ])
+        """
+
+        acoustic_summary = []
+        if l_ai.get("score") is not None and r_ai.get("score") is not None:
+            acoustic_summary.append(f"**Average acoustic score:** {avg_pred:.3f}/100")
+        if l_match is not None and r_match is not None:
+            acoustic_summary.append(f"**Average target match:** {avg_match:.1f}%")
+
+        _put_metric_collapse(
+            " Acoustic summary",
+            [
+                _metric_row("Target Level", f"{l_st_f.get('eff_target_db', 0):.1f} dB", f"{r_st_f.get('eff_target_db', 0):.1f} dB"),
+                _metric_row(
+                    "Smart Scan Range",
+                    f"{l_st_f.get('smart_scan_range', [0, 0])[0]:.0f}-{l_st_f.get('smart_scan_range', [0, 0])[1]:.0f} Hz",
+                    f"{r_st_f.get('smart_scan_range', [0, 0])[0]:.0f}-{r_st_f.get('smart_scan_range', [0, 0])[1]:.0f} Hz",
+                ),
+                _metric_row(
+                    "Leveling Tilt",
+                    _fmt_tilt(l_st_f),
+                    _fmt_tilt(r_st_f),
+                    left_compare=_auto_float(l_st_f.get('tilt_slope_db_per_oct', float("nan")), float("nan")),
+                    right_compare=_auto_float(r_st_f.get('tilt_slope_db_per_oct', float("nan")), float("nan")),
+                ),
+                _metric_row("Offset to Meas.", f"{l_st_f.get('offset_db', 0):.1f} dB", f"{r_st_f.get('offset_db', 0):.1f} dB"),
+                {"label": "Target Match", "left": _fmt_ai_match(l_ai), "right": _fmt_ai_match(r_ai)},
+                _metric_row("Acoustic Confidence", f"{l_st_f.get('avg_confidence', 0):.1f}%", f"{r_st_f.get('avg_confidence', 0):.1f}%"),
+                {"label": "Acoustic Score", "left": _fmt_ai_score(l_ai), "right": _fmt_ai_score(r_ai)},
+                _metric_row("Estimated RT60", f"{l_st_f.get('rt60_val', 0):.2f} s", f"{r_st_f.get('rt60_val', 0):.2f} s"),
+            ],
+            summary_lines=acoustic_summary,
+            open=False,
+        )
+
+        _put_metric_collapse(
+            " Gain and headroom",
+            [
+                _metric_row(
+                    "TDC (Temporal Decay Control)",
+                    (
+                        f"ON ({float(data.get('tdc_strength', 0)):.0f}%, -{float(data.get('tdc_max_reduction_db', 0)):.1f} dB)"
+                        if bool(data.get('enable_tdc', False)) else "OFF"
+                    ),
+                    (
+                        f"ON ({float(data.get('tdc_strength', 0)):.0f}%, -{float(data.get('tdc_max_reduction_db', 0)):.1f} dB)"
+                        if bool(data.get('enable_tdc', False)) else "OFF"
+                    ),
+                ),
+                _metric_row(
+                    "Auto Gain Margin",
+                    f"{float(l_st_f.get('gain_margin_db', data.get('gain', 0.0)) or 0.0):.2f} dB",
+                    f"{float(r_st_f.get('gain_margin_db', data.get('gain', 0.0)) or 0.0):.2f} dB",
+                ),
+                _metric_row(
+                    "Applied Auto Gain",
+                    f"{float(l_st_f.get('auto_global_gain_db', 0.0) or 0.0):.2f} dB",
+                    f"{float(r_st_f.get('auto_global_gain_db', 0.0) or 0.0):.2f} dB",
+                ),
+                _metric_row(
+                    "Extra Headroom",
+                    f"{float(l_st_f.get('auto_headroom_db', 0.0) or 0.0):.2f} dB",
+                    f"{float(r_st_f.get('auto_headroom_db', 0.0) or 0.0):.2f} dB",
+                ),
+                _metric_row(
+                    "Net Boost (pre -> net)",
+                    f"{l_boost_pre:.2f} dB -> {l_net_boost:.2f} dB",
+                    f"{r_boost_pre:.2f} dB -> {r_net_boost:.2f} dB",
+                ),
+                _metric_row(
+                    "Final Max (post gain)",
+                    f"{float(l_st_f.get('final_max_db', 0.0) or 0.0):.2f} dB",
+                    f"{float(r_st_f.get('final_max_db', 0.0) or 0.0):.2f} dB",
+                ),
+            ],
+            summary_lines=["Net boost is reduced by baked auto gain (preamp) to prevent clipping."],
+            open=False,
+        )
 
         try:
             mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
@@ -389,14 +500,39 @@ def _render_results(
             mode_ripple = _af(bm.get("mode_ripple_db", float("nan")), float("nan"))
             lf_rms_20_200 = _af(bm.get("realized_rms_20_200_db", float("nan")), float("nan"))
 
-            _render_auto_winner_explanation(auto_meta)
-            put_markdown(
-                "Selection order: **Rank score** -> **avg score** -> **pre/post ratio** -> "
-                "**mode ripple** -> **LF RMS (20-200 Hz)** -> **net boost**."
+            tc_selected = str(tc_meta.get("selected_hc_mode", data.get("hc_mode", "n/a")) or "n/a")
+            tc_method = _auto_choice_text(tc_meta.get("selection_method", ""))
+            search_fs = _ai(auto_meta.get("search_fs", 0), 0)
+            search_taps = _ai(auto_meta.get("search_taps", 0), 0)
+            exc_seed = _af(
+                auto_meta.get(
+                    "auto_exc_seed_freq_hz",
+                    data.get("_auto_exc_seed_freq_hz", data.get("_auto_exc_freq_hz", float("nan"))),
+                ),
+                float("nan"),
             )
+            exc_final = _af(
+                auto_meta.get(
+                    "best_auto_exc_freq_hz",
+                    data.get("_auto_exc_freq_hz", data.get("exc_freq", float("nan"))),
+                ),
+                float("nan"),
+            )
+            exc_text = "n/a"
+            if exc_seed == exc_seed and exc_final == exc_final:
+                exc_text = f"{exc_seed:.1f} Hz -> {exc_final:.1f} Hz"
+            elif exc_final == exc_final:
+                exc_text = f"{exc_final:.1f} Hz"
+            elif exc_seed == exc_seed:
+                exc_text = f"{exc_seed:.1f} Hz"
 
-            best_rows = [
-                ["Metric", "Best preset"],
+            auto_rows = [
+                ["Goal / basis", f"{str(auto_meta.get('auto_goal', 'balanced') or 'balanced')} / {str(auto_meta.get('selection_basis', 'rank_score') or 'rank_score')}"],
+                ["Trials", f"{trials_ok}/{trials_total}"],
+                ["Search grid", f"{search_fs} Hz / {search_taps} taps"],
+                ["Target curve", tc_selected],
+                ["Target selection", tc_method],
+                ["Excursion protection", exc_text],
                 ["Rank score (primary)", f"{rank_sc:.3f}/100"],
                 ["Average acoustic score", f"{avg_sc:.3f}"],
                 ["Pre/post energy ratio (max)", f"{prepost:.4f}" if prepost == prepost else "n/a"],
@@ -408,7 +544,41 @@ def _render_results(
                 ["Excursion penalty", f"{exc_pen:.2f}"],
                 ["Events / severity", f"{events_n} / {events_sev:.2f}"],
             ]
-            put_table(best_rows)
+
+            auto_content = [
+                put_markdown(
+                    "Selection order: **Rank score** -> **avg score** -> **pre/post ratio** -> "
+                    "**mode ripple** -> **LF RMS (20-200 Hz)** -> **net boost**."
+                ),
+                put_table([["Metric", "Value"], *auto_rows]),
+            ]
+            best_preset = dict(auto_meta.get("best_preset", {}) or {})
+            preset_rows = []
+            if best_preset:
+                if "mixed_freq" in best_preset:
+                    preset_rows.append(["Mixed split", f"{_af(best_preset.get('mixed_freq'), 0.0):.1f} Hz"])
+                if "phase_limit" in best_preset:
+                    preset_rows.append(["Phase limit", f"{_af(best_preset.get('phase_limit'), 0.0):.1f} Hz"])
+                if "fdw_cycles" in best_preset:
+                    preset_rows.append(["FDW", f"{_af(best_preset.get('fdw_cycles'), 0.0):.1f}"])
+                if "tdc_strength" in best_preset and "tdc_max_reduction_db" in best_preset:
+                    preset_rows.append([
+                        "TDC preset",
+                        f"{_af(best_preset.get('tdc_strength'), 0.0):.0f}% / -{_af(best_preset.get('tdc_max_reduction_db'), 0.0):.1f} dB",
+                    ])
+                if "reg_strength" in best_preset:
+                    preset_rows.append(["Regularization", f"{_af(best_preset.get('reg_strength'), 0.0):.2f}"])
+                if "max_boost" in best_preset:
+                    preset_rows.append(["Max boost", f"{_af(best_preset.get('max_boost'), 0.0):.1f} dB"])
+                if "mag_c_min" in best_preset and "mag_c_max" in best_preset:
+                    preset_rows.append([
+                        "Magnitude correction range",
+                        f"{_af(best_preset.get('mag_c_min'), 0.0):.0f}-{_af(best_preset.get('mag_c_max'), 0.0):.0f} Hz",
+                    ])
+            if preset_rows:
+                auto_content.append(put_table([["Best preset", "Value"], *preset_rows]))
+
+            put_collapse(" Automatic mode winner", auto_content, open=False)
 
             # Top-3 target curves (auto target selection phase).
             tc_eval = list(tc_meta.get("evaluated", []) or [])
@@ -467,8 +637,11 @@ def _render_results(
                         "n/a",
                     ])
             if len(tc_rows) > 1:
-                put_markdown("#### Target curve top-3")
-                put_table(tc_rows)
+                put_collapse(
+                    " Target curve top-3",
+                    [put_table(tc_rows)],
+                    open=False,
+                )
 
             if top:
                 rank_best = max((_af(dict(it.get("metrics", {}) or {}).get("rank_score", 0.0), 0.0) for it in top), default=rank_sc)
@@ -506,11 +679,269 @@ def _render_results(
                         f"{_af(m.get('lr_delta_score', 0.0), 0.0):.3f}",
                         f"{_af(m.get('dsp_penalty', 0.0), 0.0):.2f}",
                     ])
-                put_markdown("#### Automatic mode top-5 (by rank)")
-                put_table(top_rows)
+                put_collapse(
+                    " Automatic mode top-5 (by rank)",
+                    [put_table(top_rows)],
+                    open=False,
+                )
 
-        put_markdown(f"###  {t('rep_header')}")
-        with put_collapse(" DSP info"):
+    #    put_markdown(f"###  {t('rep_header')}")
+
+        def _phase_clamp_new(st: dict) -> str:
+            try:
+                lim = float((st or {}).get('phase_corr_clamp_deg', 0.0) or 0.0)
+                bef = float((st or {}).get('phase_corr_max_before_deg', 0.0) or 0.0)
+                clipped = bool((st or {}).get('phase_corr_clipped', False))
+                if lim <= 0.0:
+                    return "-"
+                if clipped:
+                    return f"max={bef:.1f} deg -> {lim:.1f} deg"
+                return f"max={bef:.1f} deg (limit {lim:.1f} deg)"
+            except Exception:
+                return "-"
+
+        def _xo_fc_wrapped_new(st: dict) -> str:
+            try:
+                if not isinstance(st, dict) or not st:
+                    return "-"
+                xo_summary = str(st.get("xo_summary", "") or "")
+                freqs = []
+                for part in xo_summary.split(","):
+                    part = part.strip()
+                    if "Hz" in part:
+                        try:
+                            freqs.append(float(part.split("Hz")[0].strip()))
+                        except Exception:
+                            freqs.append(None)
+                items = []
+                for i in range(1, 6):
+                    k = f"xo{i}_dphi_wrapped_deg@fc"
+                    if k not in st:
+                        continue
+                    try:
+                        v = float(st.get(k))
+                    except Exception:
+                        continue
+                    lbl = f"{int(round(freqs[i-1]))}Hz" if i <= len(freqs) and freqs[i-1] is not None else f"XO{i}"
+                    items.append(f"{lbl}:{v:+.1f} deg")
+                return " | ".join(items) if items else "-"
+            except Exception:
+                return "-"
+
+        def _xo_fc_gd_new(st: dict) -> str:
+            try:
+                if not isinstance(st, dict) or not st:
+                    return "-"
+                xo_summary = str(st.get("xo_summary", "") or "")
+                freqs = []
+                for part in xo_summary.split(","):
+                    part = part.strip()
+                    if "Hz" in part:
+                        try:
+                            freqs.append(float(part.split("Hz")[0].strip()))
+                        except Exception:
+                            freqs.append(None)
+                items = []
+                for i in range(1, 6):
+                    k = f"xo{i}_dgd_ms@fc"
+                    if k not in st:
+                        continue
+                    try:
+                        v = float(st.get(k))
+                    except Exception:
+                        continue
+                    lbl = f"{int(round(freqs[i-1]))}Hz" if i <= len(freqs) and freqs[i-1] is not None else f"XO{i}"
+                    items.append(f"{lbl}:{v:+.2f} ms")
+                return " | ".join(items) if items else "-"
+            except Exception:
+                return "-"
+
+        def _xo_phase_model_new(st: dict) -> str:
+            try:
+                s = (st or {}).get("xo_summary", None)
+                if s is None or str(s).strip() == "":
+                    return "-"
+                return str(s)
+            except Exception:
+                return "-"
+
+        def _xo_diff_raw_new(st: dict) -> str:
+            try:
+                p = (st or {}).get("xo_diff_raw_max_phase_deg", None)
+                pf = (st or {}).get("xo_diff_raw_max_phase_hz", None)
+                pfc = (st or {}).get("xo_diff_raw_max_phase_xo_fc_hz", None)
+                g = (st or {}).get("xo_diff_raw_max_gd_ms", None)
+                gf = (st or {}).get("xo_diff_raw_max_gd_hz", None)
+                gfc = (st or {}).get("xo_diff_raw_max_gd_xo_fc_hz", None)
+                if p is None and g is None:
+                    return "-"
+                parts = []
+                if p is not None and pf is not None:
+                    parts.append(
+                        f"max delta phi {float(p):.1f} deg @ {float(pf):.0f} Hz"
+                        + (f" (XO {float(pfc):.0f} Hz)" if pfc is not None else "")
+                    )
+                if g is not None and gf is not None:
+                    parts.append(
+                        f"max delta GD {float(g):.2f} ms @ {float(gf):.0f} Hz"
+                        + (f" (XO {float(gfc):.0f} Hz)" if gfc is not None else "")
+                    )
+                return " | ".join(parts) if parts else "-"
+            except Exception:
+                return "-"
+
+        def _xo_fc_gd_badge_new(st: dict) -> str:
+            try:
+                if not isinstance(st, dict) or not st:
+                    return ""
+                vals = []
+                for i in range(1, 6):
+                    k = f"xo{i}_dgd_ms@fc"
+                    if k not in st:
+                        continue
+                    try:
+                        vals.append(abs(float(st.get(k))))
+                    except Exception:
+                        pass
+                if not vals:
+                    return ""
+                worst = max(vals)
+                if worst < 0.7:
+                    label, bg, fg, title = "LOW", "rgba(46, 125, 50, 0.15)", "rgba(46, 125, 50, 1.0)", "Small XO delta GD at fc (typically subtle)."
+                elif worst < 1.5:
+                    label, bg, fg, title = "MED", "rgba(255, 143, 0, 0.15)", "rgba(255, 143, 0, 1.0)", "Moderate XO delta GD at fc (often audible improvement with XO phase correction)."
+                else:
+                    label, bg, fg, title = "HIGH", "rgba(211, 47, 47, 0.15)", "rgba(211, 47, 47, 1.0)", "Large XO delta GD at fc (aggressive crossover / lots of time smear)."
+                return (
+                    f"<span title='{title}' style='display:inline-block; margin-left:6px; padding:1px 6px; "
+                    f"border-radius:10px; font-size:11px; font-weight:600; background:{bg}; color:{fg}; "
+                    f"vertical-align:middle;'>{label}</span>"
+                )
+            except Exception:
+                return ""
+
+        def _hpf_diff_raw_new(st: dict) -> str:
+            try:
+                p = (st or {}).get("hpf_diff_raw_max_phase_deg", None)
+                pf = (st or {}).get("hpf_diff_raw_max_phase_hz", None)
+                g = (st or {}).get("hpf_diff_raw_max_gd_ms", None)
+                gf = (st or {}).get("hpf_diff_raw_max_gd_hz", None)
+                if p is None and g is None:
+                    return "-"
+                parts = []
+                if p is not None and pf is not None:
+                    parts.append(f"max delta phi {float(p):.1f} deg @ {float(pf):.0f} Hz")
+                if g is not None and gf is not None:
+                    parts.append(f"max delta GD {float(g):.2f} ms @ {float(gf):.0f} Hz")
+                return " | ".join(parts) if parts else "-"
+            except Exception:
+                return "-"
+
+        def _hpf_model_new(st: dict) -> str:
+            try:
+                s = (st or {}).get("hpf_summary", None)
+                if s is None or str(s).strip() == "":
+                    return "-"
+                return str(s)
+            except Exception:
+                return "-"
+
+        def _format_ir_window_new(data: dict) -> str:
+            mode = str(data.get('ir_export_window_mode', '') or '').lower()
+            if mode == 'rew_asym':
+                l = data.get('ir_window_left', None)
+                r = data.get('ir_window_right', data.get('ir_window', None))
+                try:
+                    if l is not None and r is not None:
+                        return f"Asymmetric (Left {float(l):.1f} ms, Right {float(r):.1f} ms)"
+                except Exception:
+                    pass
+                return "Asymmetric"
+            return "Auto (adaptive)"
+
+        def _mixed_blend_new(st: dict, key: str) -> str:
+            try:
+                v = (st or {}).get(key, None)
+                if v is None:
+                    return "-"
+                return f"{float(v):.1f} Hz"
+            except Exception:
+                return "-"
+
+        def _gd_limiter_new(st: dict) -> str:
+            try:
+                s = st or {}
+                enabled = bool(s.get("gd_limiter_enabled", s.get("gd_grad_limiter_enabled", False)))
+                reason = str(s.get("gd_limiter_reason", s.get("gd_grad_limiter_reason", "unknown")) or "unknown")
+                lim = s.get("gd_limiter_limit_ms_per_oct", s.get("gd_grad_limit_ms_per_oct", None))
+                lim_txt = "n/a" if lim is None else f"{float(lim):.2f}"
+                return f"{'ON' if enabled else 'OFF'} (reason={reason}, limit={lim_txt} ms/oct)"
+            except Exception:
+                return "n/a"
+
+        def _gd_grad_max_new(st: dict) -> str:
+            try:
+                s = st or {}
+                for k in (
+                    "gd_limiter_max_grad_ms_per_oct",
+                    "gd_grad_limiter_max_grad_ms_per_oct",
+                    "gd_limiter_max_grad_after_ms_per_oct",
+                    "gd_grad_limiter_max_grad_after_ms_per_oct",
+                    "gd_limiter_max_grad_before_ms_per_oct",
+                    "gd_grad_limiter_max_grad_before_ms_per_oct",
+                ):
+                    try:
+                        v = float(s.get(k, None))
+                        if v == v and abs(v) < float("inf"):
+                            return f"{v:.2f} ms/oct"
+                    except Exception:
+                        continue
+                return "n/a"
+            except Exception:
+                return "n/a"
+
+        _put_metric_collapse(
+            " Filter setup",
+            [
+                _metric_row("Length", f"{data['taps']} taps ({data['taps']/data['fs']*1000:.1f} ms)", f"{data['taps']} taps ({data['taps']/data['fs']*1000:.1f} ms)"),
+                _metric_row("Resolution", f"{data['fs']/data['taps']:.2f} Hz", f"{data['fs']/data['taps']:.2f} Hz"),
+                _metric_row("IR window", _format_ir_window_new(data), _format_ir_window_new(data)),
+                _metric_row("FDW", f"{data['fdw_cycles']}", f"{data['fdw_cycles']}"),
+                _metric_row("House curve", f"{data['hc_mode']} - {data.get('hc_source', 'Unknown')}", f"{data['hc_mode']} - {data.get('hc_source', 'Unknown')}"),
+                _metric_row("Correction range", f"{data['mag_c_min']}-{data['mag_c_max']} Hz", f"{data['mag_c_min']}-{data['mag_c_max']} Hz"),
+                _metric_row("Filter type", f"{data['filter_type']}", f"{data['filter_type']}"),
+                _metric_row("HPF model", _hpf_model_new(l_st_f), _hpf_model_new(r_st_f)),
+                _metric_row("Mixed blend split", _mixed_blend_new(l_st_f, "mixed_blend_split_hz"), _mixed_blend_new(r_st_f, "mixed_blend_split_hz")),
+                _metric_row("Mixed blend transition", _mixed_blend_new(l_st_f, "mixed_blend_transition_hz"), _mixed_blend_new(r_st_f, "mixed_blend_transition_hz")),
+                _metric_row("Smoothing view", psl_str, psl_str),
+                _metric_row("Leveling algo", str(data.get('lvl_algo', '') or "-"), str(data.get('lvl_algo', '') or "-")),
+            ],
+            open=False,
+        )
+
+        xo_gd_left = _xo_fc_gd_new(l_st_f)
+        xo_gd_right = _xo_fc_gd_new(r_st_f)
+        xo_gd_badge = _xo_fc_gd_badge_new(l_st_f) or _xo_fc_gd_badge_new(r_st_f)
+        _put_metric_collapse(
+            " Phase and crossover",
+            [
+                _metric_row("XO phase model", _xo_phase_model_new(l_st_f), _xo_phase_model_new(r_st_f)),
+                _metric_row("XO delta phi@fc (wrapped)", _xo_fc_wrapped_new(l_st_f), _xo_fc_wrapped_new(r_st_f)),
+                {
+                    "label": "XO delta GD@fc",
+                    "left": _metric_cell(put_html(f"{xo_gd_left} {xo_gd_badge}" if xo_gd_badge else xo_gd_left), xo_gd_left),
+                    "right": _metric_cell(xo_gd_right, xo_gd_right),
+                },
+                _metric_row("XO effect (theoretical raw)", _xo_diff_raw_new(l_st_f), _xo_diff_raw_new(r_st_f)),
+                _metric_row("HPF effect (theoretical raw)", _hpf_diff_raw_new(l_st_f), _hpf_diff_raw_new(r_st_f)),
+                _metric_row("Phase correction clamp", _phase_clamp_new(l_st_f), _phase_clamp_new(r_st_f)),
+                _metric_row("GD limiter", _gd_limiter_new(l_st_f), _gd_limiter_new(r_st_f)),
+                _metric_row("A/B GD-gradient max", _gd_grad_max_new(l_st_f), _gd_grad_max_new(r_st_f)),
+            ],
+            open=False,
+        )
+
+        if False:
             def _phase_clamp_str(st: dict) -> str:
                 try:
                     lim = float((st or {}).get('phase_corr_clamp_deg', 0.0) or 0.0)
@@ -861,15 +1292,20 @@ def _render_results(
             except Exception:
                 done_status = f"{done_status} {saved_filters_dir}"
 
-        put_success(t('done_msg'))
+        done_msg = t('done_msg')
         if run_started_at is not None:
             try:
                 total_s = max(0.0, float(time.perf_counter() - float(run_started_at)))
-                put_info(f"Total time: {total_s:.1f} s")
+                update_status_notices(
+                    summary_text=done_msg,
+                    info_text="",
+                )
                 update_status(f"{done_status} | {total_s:.1f} s")
             except Exception:
+                update_status_notices(summary_text=done_msg, info_text="")
                 update_status(done_status)
         else:
+            update_status_notices(summary_text=done_msg, info_text="")
             update_status(done_status)
         set_processbar('bar', 1.0)
     return main

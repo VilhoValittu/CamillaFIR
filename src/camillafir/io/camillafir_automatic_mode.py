@@ -2166,7 +2166,7 @@ def _auto_score_result(
         bool(exc_penalty_waived)
         and np.isfinite(auto_exc_zero_penalty_hz)
         and np.isfinite(auto_exc_hz_now)
-        and float(auto_exc_hz_now) > (float(auto_exc_zero_penalty_hz) + 1e-6)
+        and (float(auto_exc_hz_now) + 1e-6) >= float(auto_exc_zero_penalty_hz)
     ):
         exc_penalty_raw = max(0.0, float(exc_penalty_raw_total) - float(exc_penalty_bins_raw))
         exc_penalty_bins_waived = bool(float(exc_penalty_bins_raw) > 1e-9)
@@ -3340,11 +3340,13 @@ def _run_auto_mode_search_impl(
                     f"stop {str(stop_reason)})"
                 )
 
-            best_result, _best_metrics_recalc, best_data = _materialize_preset_result(
+            best_result, best_metrics_recalc, best_data = _materialize_preset_result(
                 best_preset,
                 include_response_arrays=True,
                 summarize=True,
             )
+            best_metrics = dict(best_metrics_recalc or best_metrics or {})
+            best_preset = dict(best_data or best_preset or {})
             cached_best_auto_exc_hz = _auto_safe_float(
                 best_data.get("_auto_exc_freq_hz", best_data.get("best_auto_exc_freq_hz", float("nan"))),
                 float("nan"),
@@ -4240,8 +4242,25 @@ def _run_auto_mode_search_impl(
 
     # Materialize full output only once for the final winner.
     try:
+        final_best_preset = dict(search_state.best_preset or {})
+        final_auto_exc_hz = _auto_safe_float(
+            dict(search_state.best_metrics or {}).get("auto_exc_zero_penalty_hz", float("nan")),
+            float("nan"),
+        )
+        if np.isfinite(final_auto_exc_hz):
+            final_auto_exc_hz = float(
+                np.clip(
+                    float(final_auto_exc_hz),
+                    float(_auto_safe_float(cfg.exc_min_hz, AUTO_MODE_EXC_MIN_HZ)),
+                    float(_auto_safe_float(cfg.exc_max_hz, AUTO_MODE_EXC_MAX_HZ)),
+                )
+            )
+            final_auto_exc_hz = float(round(final_auto_exc_hz, 1))
+            final_best_preset["_auto_exc_freq_hz"] = float(final_auto_exc_hz)
+            final_best_preset["best_auto_exc_freq_hz"] = float(final_auto_exc_hz)
+            final_best_preset["exc_freq"] = float(final_auto_exc_hz)
         final_data = dict(search_base_data or {})
-        final_data.update(dict(search_state.best_preset or {}))
+        final_data.update(dict(final_best_preset or {}))
         if str(filter_key) in ("linear", "asym"):
             final_data["phase_limit"] = round(
                 float(
@@ -4274,6 +4293,15 @@ def _run_auto_mode_search_impl(
             pass
         search_state.best_result = run_pipeline(cfg_final, final_measurements, include_response_arrays=True)
         search_state.best_result.metrics["summary"] = summarize_run(search_state.best_result)
+        search_state.best_metrics = _auto_score_result(
+            search_state.best_result,
+            auto_exc_freq_hz=_auto_safe_float(
+                final_data.get("_auto_exc_freq_hz", float("nan")),
+                float("nan"),
+            ),
+            base_data=final_data,
+        )
+        search_state.best_preset = dict(final_best_preset or {})
     except Exception as exc:
         logger.warning(
             "Automatic mode final materialization failed: "
