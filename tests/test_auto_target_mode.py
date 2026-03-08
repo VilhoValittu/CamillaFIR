@@ -143,6 +143,8 @@ def test_auto_mode_search_uses_exact_signature_cache_without_trials(monkeypatch)
             "hc_mode": "Harman8",
             "filter_type": "Asymmetric",
             "auto_goal": "balanced",
+            "auto_mode_optuna": False,
+            "auto_mode_optuna_persistent_study": False,
         },
         measurements={
             "f_l": [20.0, 100.0],
@@ -171,3 +173,102 @@ def test_auto_mode_search_uses_exact_signature_cache_without_trials(monkeypatch)
     assert result.get("best_auto_exc_freq_hz") == 31.5
     assert int(trial_counter["n"]) == 21
     assert bool(result.get("phase2_plateau_hit", False)) is True
+
+
+def test_auto_mode_search_replays_exact_cache_results_into_optuna_study(monkeypatch):
+    from types import SimpleNamespace
+
+    remembered = []
+
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_cache_get_entry",
+        lambda *args, **kwargs: {
+            "best_preset": {
+                "phase_limit": 432.1,
+                "tdc_strength": 54.5,
+                "preset_id": "exact-cache",
+                "_auto_exc_freq_hz": 31.5,
+            },
+            "best_metrics": {"rank_score": 87.5, "avg_score": 81.7},
+        },
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_cache_get_best",
+        lambda *args, **kwargs: {
+            "phase_limit": 432.1,
+            "tdc_strength": 54.5,
+            "preset_id": "exact-cache",
+            "_auto_exc_freq_hz": 31.5,
+        },
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode.build_config",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode.run_pipeline",
+        lambda *args, **kwargs: SimpleNamespace(l_st={}, r_st={}, metrics={}),
+    )
+
+    def _score_result(result, **kwargs):
+        base = dict(kwargs.get("base_data", {}) or {})
+        preset_id = str(base.get("preset_id", "exact-cache"))
+        if preset_id == "micro-1":
+            return {"rank_score": 87.7, "avg_score": 81.6}
+        return {"rank_score": 87.5, "avg_score": 81.7}
+
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode.summarize_run",
+        lambda result: "cached-summary",
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_score_result",
+        _score_result,
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._build_auto_mode_candidates_micro",
+        lambda *args, **kwargs: [
+            {"phase_limit": 432.1, "tdc_strength": 54.5, "preset_id": "exact-cache", "_auto_exc_freq_hz": 31.5},
+            {"phase_limit": 430.0, "tdc_strength": 53.0, "preset_id": "micro-1", "_auto_exc_freq_hz": 31.5},
+        ],
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_import_optuna",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_optuna_remember_result",
+        lambda *args, **kwargs: remembered.append(dict(kwargs or {})) or True,
+    )
+
+    result = _run_auto_mode_search(
+        base_data={
+            "program_version": "test-version",
+            "hc_mode": "Harman8",
+            "filter_type": "Asymmetric",
+            "auto_goal": "balanced",
+            "auto_mode_optuna": True,
+            "auto_mode_optuna_persistent_study": True,
+        },
+        measurements={
+            "f_l": [20.0, 100.0],
+            "m_l": [0.0, 0.0],
+            "f_r": [20.0, 100.0],
+            "m_r": [0.0, 0.0],
+        },
+        fs_v=44100,
+        taps_v=65536,
+        xos=[],
+        hpf=None,
+        hc_f=[20.0, 100.0],
+        hc_m=[0.0, 0.0],
+        pin_obj=None,
+        status_cb=None,
+    )
+
+    assert result is not None
+    assert len(remembered) >= 2
+    assert any(str(call.get("study_name", "")).find("phase3-micro") >= 0 for call in remembered)
+    assert any(str(call.get("study_name", "")).find("phase1") >= 0 for call in remembered)
+    assert any(dict(call.get("preset", {}) or {}).get("preset_id") == "micro-1" for call in remembered)
+    assert any(dict(call.get("preset", {}) or {}).get("preset_id") == "exact-cache" for call in remembered)

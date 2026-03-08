@@ -664,6 +664,7 @@
         "paths_path": "Polku",
         "paths_export_folder": "Tallennettu kansioon ",
         "paths_auto_mode_cache": "Automaattitilan cache",
+        "paths_optuna_storage": "Optuna journal",
         "ph_l": "Valitse vasen .txt",
         "ph_r": "Valitse oikea .txt",
         "phase_limit": "Vaihekorjauksen yläraja (Hz)",

@@ -221,6 +221,57 @@ def _auto_optuna_suggest_centered_float(trial, name: str, center: float, span: f
     return float(trial.suggest_float(str(name), float(lo_eff), float(hi_eff)))
 
 
+def _auto_optuna_project_to_unit(value: float, *, lo_eff: float, hi_eff: float) -> float:
+    lo_f = float(lo_eff)
+    hi_f = float(hi_eff)
+    if abs(float(hi_f) - float(lo_f)) <= 1e-9:
+        return 0.5
+    v = float(np.clip(_auto_safe_float(value, lo_f), lo_f, hi_f))
+    return float(np.clip((v - lo_f) / max(1e-12, hi_f - lo_f), 0.0, 1.0))
+
+
+def _auto_optuna_suggest_centered_unit_float(trial, name: str, center: float, span: float, lo: float, hi: float) -> float:
+    lo_eff, hi_eff = _auto_optuna_window(center, span, lo, hi)
+    if abs(float(hi_eff) - float(lo_eff)) <= 1e-9:
+        return float(lo_eff)
+    u = float(trial.suggest_float(f"{str(name)}_u", 0.0, 1.0))
+    return float(lo_eff + u * (hi_eff - lo_eff))
+
+
+def _auto_optuna_seed_centered_unit_float(
+    value: float,
+    *,
+    center: float,
+    span: float,
+    lo: float,
+    hi: float,
+) -> float:
+    lo_eff, hi_eff = _auto_optuna_window(center, span, lo, hi)
+    return float(_auto_optuna_project_to_unit(value, lo_eff=float(lo_eff), hi_eff=float(hi_eff)))
+
+
+def _auto_optuna_choice_from_unit(trial, name: str, choices: list[float], center: float, *, radius: int) -> float:
+    band = _auto_optuna_choice_band(choices, float(center), radius=int(radius))
+    if not band:
+        return float(center)
+    if len(band) == 1:
+        return float(band[0])
+    u = float(trial.suggest_float(f"{str(name)}_u", 0.0, 1.0))
+    idx = int(np.clip(round(u * float(len(band) - 1)), 0, len(band) - 1))
+    return float(band[idx])
+
+
+def _auto_optuna_seed_choice_unit(value: float, choices: list[float], center: float, *, radius: int, default: float) -> float:
+    band = _auto_optuna_choice_band(choices, float(center), radius=int(radius))
+    if not band:
+        return 0.5
+    pick = _auto_optuna_nearest_choice(value, band, default=float(default))
+    if len(band) <= 1:
+        return 0.5
+    idx = int(min(range(len(band)), key=lambda i: abs(float(band[i]) - float(pick))))
+    return float(idx / float(len(band) - 1))
+
+
 def _auto_optuna_choice_band(choices: list[float], center: float, *, radius: int) -> list[float]:
     if not choices:
         return []
@@ -457,7 +508,7 @@ def _suggest_auto_mode_candidate_local_optuna(
 
     if bool(tune_mag_low):
         mag_c_min_cand = round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "mag_c_min",
                 float(mag_c_min_center),
@@ -468,7 +519,7 @@ def _suggest_auto_mode_candidate_local_optuna(
             1,
         )
         low_bass_cut_cand = round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "low_bass_cut_hz",
                 float(low_bass_cut_center),
@@ -488,7 +539,7 @@ def _suggest_auto_mode_candidate_local_optuna(
         "enable_afdw": bool(keep_afdw),
         "bass_first_ai": bool(keep_bass_first),
         "fdw_cycles": round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "fdw_cycles",
                 _auto_safe_float(c.get("fdw_cycles", base.get("fdw_cycles", 10.0)), 10.0),
@@ -499,7 +550,7 @@ def _suggest_auto_mode_candidate_local_optuna(
             2,
         ),
         "tdc_strength": round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "tdc_strength",
                 _auto_safe_float(c.get("tdc_strength", base.get("tdc_strength", 50.0)), 50.0),
@@ -510,7 +561,7 @@ def _suggest_auto_mode_candidate_local_optuna(
             1,
         ),
         "tdc_max_reduction_db": round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "tdc_max_reduction_db",
                 _auto_safe_float(c.get("tdc_max_reduction_db", base.get("tdc_max_reduction_db", 9.0)), 9.0),
@@ -521,13 +572,16 @@ def _suggest_auto_mode_candidate_local_optuna(
             1,
         ),
         "tdc_slope_db_per_oct": float(
-            trial.suggest_categorical(
+            _auto_optuna_choice_from_unit(
+                trial,
                 "tdc_slope_db_per_oct",
-                _auto_optuna_choice_band(slope_choices, float(slope_center), radius=max(1, int(round(1.5 * s)))),
+                slope_choices,
+                float(slope_center),
+                radius=max(1, int(round(1.5 * s))),
             )
         ),
         "reg_strength": round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "reg_strength",
                 _auto_safe_float(c.get("reg_strength", base.get("reg_strength", 30.0)), 30.0),
@@ -538,13 +592,16 @@ def _suggest_auto_mode_candidate_local_optuna(
             1,
         ),
         "max_slope_db_per_oct": float(
-            trial.suggest_categorical(
+            _auto_optuna_choice_from_unit(
+                trial,
                 "max_slope_db_per_oct",
-                _auto_optuna_choice_band(max_slope_choices, float(max_slope_center), radius=max(1, int(round(1.5 * s)))),
+                max_slope_choices,
+                float(max_slope_center),
+                radius=max(1, int(round(1.5 * s))),
             )
         ),
         "max_boost": round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "max_boost",
                 _auto_safe_float(c.get("max_boost", base.get("max_boost", 4.0)), 4.0),
@@ -556,7 +613,7 @@ def _suggest_auto_mode_candidate_local_optuna(
         ),
         "mag_c_min": float(mag_c_min_cand),
         "mag_c_max": round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "mag_c_max",
                 _auto_safe_float(c.get("mag_c_max", base.get("mag_c_max", 220.0)), 220.0),
@@ -567,7 +624,7 @@ def _suggest_auto_mode_candidate_local_optuna(
             1,
         ),
         "trans_width": round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "trans_width",
                 _auto_safe_float(c.get("trans_width", base.get("trans_width", 100.0)), 100.0),
@@ -579,7 +636,7 @@ def _suggest_auto_mode_candidate_local_optuna(
         ),
         "filter_smooth": int(round(_auto_safe_float(c.get("filter_smooth", base.get("filter_smooth", 96.0)), 96.0))),
         "bass_first_mode_max_hz": round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "bass_first_mode_max_hz",
                 _auto_safe_float(c.get("bass_first_mode_max_hz", base.get("bass_first_mode_max_hz", 180.0)), 180.0),
@@ -593,7 +650,7 @@ def _suggest_auto_mode_candidate_local_optuna(
     }
     if bool(is_mixed):
         cand["mixed_freq"] = round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "mixed_freq",
                 _auto_safe_float(c.get("mixed_freq", base.get("mixed_freq", 180.0)), 180.0),
@@ -605,7 +662,7 @@ def _suggest_auto_mode_candidate_local_optuna(
         )
     if bool(is_phase_search):
         cand["phase_limit"] = round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "phase_limit",
                 float(phase_center),
@@ -660,15 +717,20 @@ def _seed_auto_mode_candidate_local_optuna_params(
     max_slope_choices = [8.0, 10.0, 12.0, 14.0, 16.0]
     slope_center = _auto_safe_float(c.get("tdc_slope_db_per_oct", base.get("tdc_slope_db_per_oct", 6.0)), 6.0)
     max_slope_center = _auto_safe_float(c.get("max_slope_db_per_oct", base.get("max_slope_db_per_oct", 12.0)), 12.0)
-    slope_band = _auto_optuna_choice_band(slope_choices, float(slope_center), radius=max(1, int(round(1.5 * s))))
-    max_slope_band = _auto_optuna_choice_band(max_slope_choices, float(max_slope_center), radius=max(1, int(round(1.5 * s))))
-
-    def _windowed_value(name: str, center_v: float, span: float, lo: float, hi: float, default: float) -> float:
-        lo_eff, hi_eff = _auto_optuna_window(center_v, span, lo, hi)
-        return float(np.clip(_auto_safe_float(p.get(name, default), default), float(lo_eff), float(hi_eff)))
+    def _windowed_unit(name: str, center_v: float, span: float, lo: float, hi: float, default: float) -> float:
+        value = float(np.clip(_auto_safe_float(p.get(name, default), default), float(lo), float(hi)))
+        return float(
+            _auto_optuna_seed_centered_unit_float(
+                value,
+                center=float(center_v),
+                span=float(span),
+                lo=float(lo),
+                hi=float(hi),
+            )
+        )
 
     out = {
-        "fdw_cycles": _windowed_value(
+        "fdw_cycles_u": _windowed_unit(
             "fdw_cycles",
             _auto_safe_float(c.get("fdw_cycles", base.get("fdw_cycles", 10.0)), 10.0),
             2.5 * s,
@@ -676,7 +738,7 @@ def _seed_auto_mode_candidate_local_optuna_params(
             16.0,
             10.0,
         ),
-        "tdc_strength": _windowed_value(
+        "tdc_strength_u": _windowed_unit(
             "tdc_strength",
             _auto_safe_float(c.get("tdc_strength", base.get("tdc_strength", 50.0)), 50.0),
             12.0 * s,
@@ -684,7 +746,7 @@ def _seed_auto_mode_candidate_local_optuna_params(
             75.0,
             50.0,
         ),
-        "tdc_max_reduction_db": _windowed_value(
+        "tdc_max_reduction_db_u": _windowed_unit(
             "tdc_max_reduction_db",
             _auto_safe_float(c.get("tdc_max_reduction_db", base.get("tdc_max_reduction_db", 9.0)), 9.0),
             6.0 * s,
@@ -692,12 +754,14 @@ def _seed_auto_mode_candidate_local_optuna_params(
             36.0,
             9.0,
         ),
-        "tdc_slope_db_per_oct": _auto_optuna_nearest_choice(
+        "tdc_slope_db_per_oct_u": _auto_optuna_seed_choice_unit(
             _auto_safe_float(p.get("tdc_slope_db_per_oct", slope_center), slope_center),
-            slope_band,
+            slope_choices,
+            float(slope_center),
+            radius=max(1, int(round(1.5 * s))),
             default=slope_center,
         ),
-        "reg_strength": _windowed_value(
+        "reg_strength_u": _windowed_unit(
             "reg_strength",
             _auto_safe_float(c.get("reg_strength", base.get("reg_strength", 30.0)), 30.0),
             10.0 * s,
@@ -705,12 +769,14 @@ def _seed_auto_mode_candidate_local_optuna_params(
             45.0,
             30.0,
         ),
-        "max_slope_db_per_oct": _auto_optuna_nearest_choice(
+        "max_slope_db_per_oct_u": _auto_optuna_seed_choice_unit(
             _auto_safe_float(p.get("max_slope_db_per_oct", max_slope_center), max_slope_center),
-            max_slope_band,
+            max_slope_choices,
+            float(max_slope_center),
+            radius=max(1, int(round(1.5 * s))),
             default=max_slope_center,
         ),
-        "max_boost": _windowed_value(
+        "max_boost_u": _windowed_unit(
             "max_boost",
             _auto_safe_float(c.get("max_boost", base.get("max_boost", 4.0)), 4.0),
             1.0 * s,
@@ -718,7 +784,7 @@ def _seed_auto_mode_candidate_local_optuna_params(
             8.0,
             4.0,
         ),
-        "mag_c_max": _windowed_value(
+        "mag_c_max_u": _windowed_unit(
             "mag_c_max",
             _auto_safe_float(c.get("mag_c_max", base.get("mag_c_max", 220.0)), 220.0),
             25.0 * s,
@@ -726,7 +792,7 @@ def _seed_auto_mode_candidate_local_optuna_params(
             300.0,
             220.0,
         ),
-        "trans_width": _windowed_value(
+        "trans_width_u": _windowed_unit(
             "trans_width",
             _auto_safe_float(c.get("trans_width", base.get("trans_width", 100.0)), 100.0),
             25.0 * s,
@@ -734,7 +800,7 @@ def _seed_auto_mode_candidate_local_optuna_params(
             150.0,
             100.0,
         ),
-        "bass_first_mode_max_hz": _windowed_value(
+        "bass_first_mode_max_hz_u": _windowed_unit(
             "bass_first_mode_max_hz",
             _auto_safe_float(c.get("bass_first_mode_max_hz", base.get("bass_first_mode_max_hz", 180.0)), 180.0),
             25.0 * s,
@@ -744,7 +810,7 @@ def _seed_auto_mode_candidate_local_optuna_params(
         ),
     }
     if bool(optimize_mag_low):
-        out["mag_c_min"] = _windowed_value(
+        out["mag_c_min_u"] = _windowed_unit(
             "mag_c_min",
             float(mag_c_min_center),
             max(0.4, 3.2 * s),
@@ -752,7 +818,7 @@ def _seed_auto_mode_candidate_local_optuna_params(
             float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
             float(mag_c_min_center),
         )
-        out["low_bass_cut_hz"] = _windowed_value(
+        out["low_bass_cut_hz_u"] = _windowed_unit(
             "low_bass_cut_hz",
             float(low_bass_cut_center),
             max(0.6, 4.0 * s),
@@ -761,7 +827,7 @@ def _seed_auto_mode_candidate_local_optuna_params(
             float(low_bass_cut_center),
         )
     if bool(is_mixed):
-        out["mixed_freq"] = _windowed_value(
+        out["mixed_freq_u"] = _windowed_unit(
             "mixed_freq",
             _auto_safe_float(c.get("mixed_freq", base.get("mixed_freq", 180.0)), 180.0),
             35.0 * s,
@@ -770,7 +836,7 @@ def _seed_auto_mode_candidate_local_optuna_params(
             180.0,
         )
     if bool(is_phase_search):
-        out["phase_limit"] = _windowed_value(
+        out["phase_limit_u"] = _windowed_unit(
             "phase_limit",
             float(phase_center),
             float(AUTO_MODE_PHASE_LIMIT_LOCAL_SIGMA_HZ) * s,
@@ -805,7 +871,7 @@ def _suggest_auto_mode_candidate_micro_optuna(
     cand = dict(center or {})
     cand["comparison_mode"] = True
     cand["tdc_strength"] = round(
-        _auto_optuna_suggest_centered_float(
+        _auto_optuna_suggest_centered_unit_float(
             trial,
             "tdc_strength",
             float(base_tdc),
@@ -816,7 +882,7 @@ def _suggest_auto_mode_candidate_micro_optuna(
         1,
     )
     cand["fdw_cycles"] = round(
-        _auto_optuna_suggest_centered_float(
+        _auto_optuna_suggest_centered_unit_float(
             trial,
             "fdw_cycles",
             float(base_fdw),
@@ -827,7 +893,7 @@ def _suggest_auto_mode_candidate_micro_optuna(
         2,
     )
     cand["reg_strength"] = round(
-        _auto_optuna_suggest_centered_float(
+        _auto_optuna_suggest_centered_unit_float(
             trial,
             "reg_strength",
             float(base_reg),
@@ -838,7 +904,7 @@ def _suggest_auto_mode_candidate_micro_optuna(
         1,
     )
     cand["trans_width"] = round(
-        _auto_optuna_suggest_centered_float(
+        _auto_optuna_suggest_centered_unit_float(
             trial,
             "trans_width",
             float(base_tw),
@@ -850,7 +916,7 @@ def _suggest_auto_mode_candidate_micro_optuna(
     )
     if bool(is_mixed):
         cand["mixed_freq"] = round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "mixed_freq",
                 float(base_mixed),
@@ -862,7 +928,7 @@ def _suggest_auto_mode_candidate_micro_optuna(
         )
     if bool(is_phase_search):
         cand["phase_limit"] = round(
-            _auto_optuna_suggest_centered_float(
+            _auto_optuna_suggest_centered_unit_float(
                 trial,
                 "phase_limit",
                 float(base_phase),
@@ -897,20 +963,28 @@ def _seed_auto_mode_candidate_micro_optuna_params(
     base_reg = _auto_safe_float(p.get("reg_strength", 30.0), 30.0)
     base_tw = _auto_safe_float(p.get("trans_width", 100.0), 100.0)
 
-    def _windowed_value(name: str, center_v: float, span: float, lo: float, hi: float, default: float) -> float:
-        lo_eff, hi_eff = _auto_optuna_window(center_v, span, lo, hi)
-        return float(np.clip(_auto_safe_float(d.get(name, default), default), float(lo_eff), float(hi_eff)))
+    def _windowed_unit(name: str, center_v: float, span: float, lo: float, hi: float, default: float) -> float:
+        value = float(np.clip(_auto_safe_float(d.get(name, default), default), float(lo), float(hi)))
+        return float(
+            _auto_optuna_seed_centered_unit_float(
+                value,
+                center=float(center_v),
+                span=float(span),
+                lo=float(lo),
+                hi=float(hi),
+            )
+        )
 
     out = {
-        "tdc_strength": _windowed_value("tdc_strength", float(base_tdc), 8.0 * s, 35.0, 80.0, float(base_tdc)),
-        "fdw_cycles": _windowed_value("fdw_cycles", float(base_fdw), 1.0 * s, 6.0, 16.0, float(base_fdw)),
-        "reg_strength": _windowed_value("reg_strength", float(base_reg), 6.0 * s, 15.0, 45.0, float(base_reg)),
-        "trans_width": _windowed_value("trans_width", float(base_tw), 15.0 * s, 70.0, 150.0, float(base_tw)),
+        "tdc_strength_u": _windowed_unit("tdc_strength", float(base_tdc), 8.0 * s, 35.0, 80.0, float(base_tdc)),
+        "fdw_cycles_u": _windowed_unit("fdw_cycles", float(base_fdw), 1.0 * s, 6.0, 16.0, float(base_fdw)),
+        "reg_strength_u": _windowed_unit("reg_strength", float(base_reg), 6.0 * s, 15.0, 45.0, float(base_reg)),
+        "trans_width_u": _windowed_unit("trans_width", float(base_tw), 15.0 * s, 70.0, 150.0, float(base_tw)),
     }
     if bool(is_mixed):
-        out["mixed_freq"] = _windowed_value("mixed_freq", float(base_mixed), 16.0 * s, 80.0, 320.0, float(base_mixed))
+        out["mixed_freq_u"] = _windowed_unit("mixed_freq", float(base_mixed), 16.0 * s, 80.0, 320.0, float(base_mixed))
     if bool(is_phase_search):
-        out["phase_limit"] = _windowed_value(
+        out["phase_limit_u"] = _windowed_unit(
             "phase_limit",
             float(base_phase),
             28.0 * s,

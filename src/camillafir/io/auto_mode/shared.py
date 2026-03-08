@@ -67,6 +67,8 @@ AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS = 12
 AUTO_MODE_OPTUNA_MULTIVARIATE = True
 AUTO_MODE_OPTUNA_GROUP = False
 AUTO_MODE_OPTUNA_CONSTANT_LIAR = True
+AUTO_MODE_OPTUNA_PERSISTENT_STUDY = True
+AUTO_MODE_OPTUNA_AVOID_DUPLICATES = True
 AUTO_MODE_DUAL_MODE_ENABLED = True
 AUTO_MODE_DUAL_MODE_TOP_N = 2
 AUTO_MODE_MODE_RIPPLE_OK_DB = 0.030
@@ -329,6 +331,8 @@ class AutoModeConfig:
     optuna_multivariate: bool = AUTO_MODE_OPTUNA_MULTIVARIATE
     optuna_group: bool = AUTO_MODE_OPTUNA_GROUP
     optuna_constant_liar: bool = AUTO_MODE_OPTUNA_CONSTANT_LIAR
+    optuna_persistent_study: bool = AUTO_MODE_OPTUNA_PERSISTENT_STUDY
+    optuna_avoid_duplicates: bool = AUTO_MODE_OPTUNA_AVOID_DUPLICATES
 
     @classmethod
     def from_base_data(cls, base_data: dict | None) -> "AutoModeConfig":
@@ -490,6 +494,14 @@ class AutoModeConfig:
             optuna_constant_liar=_auto_safe_bool(
                 data.get("auto_mode_optuna_constant_liar", AUTO_MODE_OPTUNA_CONSTANT_LIAR),
                 AUTO_MODE_OPTUNA_CONSTANT_LIAR,
+            ),
+            optuna_persistent_study=_auto_safe_bool(
+                data.get("auto_mode_optuna_persistent_study", AUTO_MODE_OPTUNA_PERSISTENT_STUDY),
+                AUTO_MODE_OPTUNA_PERSISTENT_STUDY,
+            ),
+            optuna_avoid_duplicates=_auto_safe_bool(
+                data.get("auto_mode_optuna_avoid_duplicates", AUTO_MODE_OPTUNA_AVOID_DUPLICATES),
+                AUTO_MODE_OPTUNA_AVOID_DUPLICATES,
             ),
         )
 

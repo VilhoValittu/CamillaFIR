@@ -186,6 +186,7 @@ def _render_results(
     per_fs_stats=None,
     saved_filters_dir=None,
     auto_cache_path=None,
+    optuna_storage_path=None,
 ):
     import time
     _render_started_at = time.perf_counter()
@@ -1246,6 +1247,8 @@ def _render_results(
                 path_rows.append([t("paths_export_folder"), str(saved_filters_dir)])
             if auto_cache_path:
                 path_rows.append([t("paths_auto_mode_cache"), str(auto_cache_path)])
+            if optuna_storage_path:
+                path_rows.append([t("paths_optuna_storage"), str(optuna_storage_path)])
             if len(path_rows) > 1:
                 path_rows[0] = [t("paths_item"), t("paths_path")]
                 put_markdown(f"### {t('paths_title')}")

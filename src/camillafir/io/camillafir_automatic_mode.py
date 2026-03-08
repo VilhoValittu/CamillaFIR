@@ -3,6 +3,7 @@ import math
 import json
 import os
 import hashlib
+import re
 import time
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -145,6 +146,9 @@ AUTO_MODE_CACHE_MAX_ITEMS = 64
 AUTO_MODE_CACHE_FILENAME = "camillafir_auto_mode_cache.json"
 AUTO_MODE_CACHE_FILTER_KEYS = ("linear", "mixed", "minimum", "asym")
 _AUTO_CACHE_VERSION_MISMATCH_LOGGED = False
+AUTO_MODE_OPTUNA_STORAGE_FILENAME = "camillafir_auto_mode_optuna_journal.log"
+AUTO_MODE_OPTUNA_DUPLICATE_MAX_ATTEMPTS = 24
+AUTO_MODE_OPTUNA_USER_ATTR_OUT = "camillafir_out"
 
 
 AUTO_MODE_PHASE1_PLATEAU_ROUNDS = 5
@@ -316,6 +320,266 @@ def _auto_import_optuna():
     return optuna
 
 
+def _auto_optuna_storage_path() -> str:
+    preferred_base = os.fspath(camillafir_data_dir())
+    preferred_path = os.path.join(preferred_base, AUTO_MODE_OPTUNA_STORAGE_FILENAME)
+    legacy_base = os.path.join(os.path.expanduser("~"), ".camillafir")
+    legacy_path = os.path.join(legacy_base, AUTO_MODE_OPTUNA_STORAGE_FILENAME)
+
+    try:
+        os.makedirs(preferred_base, exist_ok=True)
+    except Exception:
+        try:
+            os.makedirs(legacy_base, exist_ok=True)
+        except Exception:
+            pass
+        return legacy_path
+    return preferred_path
+
+
+def _auto_optuna_study_name(*, study_sig: str | None, scope: str | None) -> str:
+    sig_txt = str(study_sig or "").strip().lower()
+    scope_txt = str(scope or "study").strip().lower()
+    scope_tok = re.sub(r"[^a-z0-9._-]+", "-", scope_txt).strip("-") or "study"
+    scope_hash = hashlib.sha1(scope_txt.encode("utf-8", "ignore")).hexdigest()[:12]
+    sig_tok = sig_txt[:32] if sig_txt else "nosig"
+    return f"camillafir-{scope_tok[:48]}-{scope_hash}-{sig_tok}"
+
+
+def _auto_optuna_create_storage(optuna_mod, *, base_data: dict | None):
+    if not _auto_safe_bool((base_data or {}).get("auto_mode_optuna_persistent_study", True), True):
+        return None
+    storages_mod = getattr(optuna_mod, "storages", None)
+    if storages_mod is None:
+        return None
+    path = _auto_optuna_storage_path()
+    candidates = [
+        (
+            getattr(getattr(storages_mod, "journal", None), "JournalStorage", None),
+            getattr(getattr(storages_mod, "journal", None), "JournalFileBackend", None),
+            getattr(getattr(storages_mod, "journal", None), "JournalFileOpenLock", None),
+        ),
+        (
+            getattr(storages_mod, "JournalStorage", None),
+            getattr(storages_mod, "JournalFileStorage", None),
+            getattr(storages_mod, "JournalFileOpenLock", None),
+        ),
+        (
+            getattr(getattr(storages_mod, "journal", None), "JournalStorage", None),
+            getattr(getattr(storages_mod, "journal", None), "JournalFileBackend", None),
+            None,
+        ),
+    ]
+    for storage_cls, backend_cls, open_lock_cls in candidates:
+        if not callable(storage_cls) or not callable(backend_cls):
+            continue
+        try:
+            if callable(open_lock_cls):
+                return storage_cls(backend_cls(path, lock_obj=open_lock_cls(path)))
+            return storage_cls(backend_cls(path))
+        except Exception:
+            continue
+    return None
+
+
+def _auto_optuna_create_study(
+    optuna_mod,
+    *,
+    sampler,
+    base_data: dict | None,
+    study_name: str | None,
+):
+    storage = _auto_optuna_create_storage(optuna_mod, base_data=base_data)
+    if storage is not None and study_name:
+        try:
+            return optuna_mod.create_study(
+                direction="maximize",
+                sampler=sampler,
+                storage=storage,
+                study_name=str(study_name),
+                load_if_exists=True,
+            )
+        except TypeError:
+            pass
+        except Exception as exc:
+            logger.warning(
+                "Automatic mode Optuna storage unavailable for study %s (%s: %s). "
+                "Falling back to in-memory study.",
+                str(study_name),
+                type(exc).__name__,
+                exc,
+            )
+    return optuna_mod.create_study(direction="maximize", sampler=sampler)
+
+
+def _auto_optuna_jsonable(value):
+    if isinstance(value, dict):
+        return {str(k): _auto_optuna_jsonable(v) for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(value, (list, tuple)):
+        return [_auto_optuna_jsonable(v) for v in value]
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating, float)):
+        v = float(value)
+        if np.isnan(v):
+            return "nan"
+        if np.isposinf(v):
+            return "inf"
+        if np.isneginf(v):
+            return "-inf"
+        return round(v, 6)
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    if isinstance(value, (bool, int, str)) or value is None:
+        return value
+    return str(value)
+
+
+def _auto_optuna_param_signature(params: dict | None) -> str:
+    if not isinstance(params, dict) or not params:
+        return ""
+    try:
+        payload = json.dumps(_auto_optuna_jsonable(params), sort_keys=True, separators=(",", ":"))
+    except Exception:
+        payload = str(params)
+    return hashlib.sha1(payload.encode("utf-8", "ignore")).hexdigest()
+
+
+def _auto_optuna_trial_params(
+    *,
+    trial_obj,
+    preset: dict | None,
+    seed_to_params=None,
+) -> dict:
+    if callable(seed_to_params):
+        try:
+            params = dict(seed_to_params(dict(preset or {})) or {})
+        except Exception:
+            params = {}
+        if params:
+            return params
+    try:
+        params = dict(getattr(trial_obj, "params", {}) or {})
+    except Exception:
+        params = {}
+    if params:
+        return params
+    return dict(preset or {})
+
+
+def _auto_optuna_study_records(study) -> dict[str, dict]:
+    try:
+        trials = study.get_trials(deepcopy=False)
+    except TypeError:
+        trials = study.get_trials()
+    except Exception:
+        trials = getattr(study, "trials", [])
+    out: dict[str, dict] = {}
+    for tr in list(trials or []):
+        try:
+            params = dict(getattr(tr, "params", {}) or {})
+        except Exception:
+            params = {}
+        sig = _auto_optuna_param_signature(params)
+        if not sig:
+            continue
+        rec = {"params": dict(params)}
+        val = getattr(tr, "value", None)
+        if val is None:
+            vals = getattr(tr, "values", None)
+            if isinstance(vals, (list, tuple)) and vals:
+                val = vals[0]
+        try:
+            val_f = float(val)
+        except Exception:
+            val_f = float("nan")
+        if np.isfinite(val_f):
+            rec["value"] = float(val_f)
+        state = getattr(tr, "state", None)
+        if state is not None:
+            rec["state"] = state
+        try:
+            user_attrs = dict(getattr(tr, "user_attrs", {}) or {})
+        except Exception:
+            user_attrs = {}
+        cached_out = dict(user_attrs.get(AUTO_MODE_OPTUNA_USER_ATTR_OUT, {}) or {})
+        if cached_out:
+            rec["out"] = cached_out
+        out[sig] = rec
+    return out
+
+
+def _auto_optuna_remember_result(
+    optuna_mod,
+    *,
+    base_data: dict | None,
+    study_name: str | None,
+    seed: int,
+    preset: dict | None,
+    metrics: dict | None,
+    seed_to_params=None,
+    use_refine_tiebreak: bool = False,
+    out_payload: dict | None = None,
+) -> bool:
+    if optuna_mod is None or not study_name or not callable(seed_to_params):
+        return False
+    params = {}
+    try:
+        params = dict(seed_to_params(dict(preset or {})) or {})
+    except Exception:
+        params = {}
+    params_sig = _auto_optuna_param_signature(params)
+    if not params_sig:
+        return False
+    sampler = optuna_mod.samplers.TPESampler(
+        seed=int(seed),
+        n_startup_trials=1,
+        **_auto_optuna_sampler_kwargs(base_data, workers=1),
+    )
+    study = _auto_optuna_create_study(
+        optuna_mod,
+        sampler=sampler,
+        base_data=base_data,
+        study_name=study_name,
+    )
+    if params_sig in _auto_optuna_study_records(study):
+        return False
+    if not hasattr(study, "enqueue_trial") or not hasattr(study, "ask") or not hasattr(study, "tell"):
+        return False
+    try:
+        study.enqueue_trial(dict(params))
+        trial_obj = study.ask()
+    except Exception:
+        return False
+    try:
+        if hasattr(trial_obj, "set_user_attr"):
+            trial_obj.set_user_attr(
+                AUTO_MODE_OPTUNA_USER_ATTR_OUT,
+                _auto_optuna_jsonable(
+                    dict(
+                        out_payload
+                        or {
+                            "ok": True,
+                            "metrics": dict(metrics or {}),
+                            "trial_preset": dict(preset or {}),
+                            "replayed_from_cache": True,
+                        }
+                    )
+                ),
+            )
+    except Exception:
+        pass
+    value = _auto_optuna_objective_value(
+        dict(metrics or {}),
+        use_refine_tiebreak=bool(use_refine_tiebreak),
+    )
+    try:
+        study.tell(trial_obj, float(value))
+    except Exception:
+        return False
+    return True
+
+
 def _auto_optuna_objective_value(metrics: dict | None, *, use_refine_tiebreak: bool = False) -> float:
     met = dict(metrics or {})
     key = "rank_score_refine" if bool(use_refine_tiebreak) else "rank_score"
@@ -341,6 +605,7 @@ def _auto_run_optuna_eval_loop(
     objective_value,
     workers: int,
     seed_to_params=None,
+    study_name: str | None = None,
 ) -> None:
     total = int(max(0, n_total))
     if total <= 0:
@@ -350,10 +615,30 @@ def _auto_run_optuna_eval_loop(
         n_startup_trials=int(max(1, min(int(startup_trials), int(total)))),
         **_auto_optuna_sampler_kwargs(base_data, workers=int(workers)),
     )
-    study = optuna_mod.create_study(direction="maximize", sampler=sampler)
+    study = _auto_optuna_create_study(
+        optuna_mod,
+        sampler=sampler,
+        base_data=base_data,
+        study_name=study_name,
+    )
     fail_state = optuna_mod.trial.TrialState.FAIL
+    duplicate_guard = bool(
+        _auto_safe_bool((base_data or {}).get("auto_mode_optuna_avoid_duplicates", True), True)
+    )
+    known_records = _auto_optuna_study_records(study) if bool(duplicate_guard) else {}
+    reserved_signatures: set[str] = set()
+    duplicate_skips = 0
 
-    def _tell(trial_obj, out: dict) -> None:
+    def _tell(trial_obj, out: dict, *, params_sig: str = "") -> None:
+        value = None
+        try:
+            if hasattr(trial_obj, "set_user_attr"):
+                trial_obj.set_user_attr(
+                    AUTO_MODE_OPTUNA_USER_ATTR_OUT,
+                    _auto_optuna_jsonable(dict(out or {})),
+                )
+        except Exception:
+            pass
         try:
             if bool(dict(out or {}).get("ok", False)):
                 value = float(objective_value(dict(out or {})))
@@ -364,33 +649,117 @@ def _auto_run_optuna_eval_loop(
                 study.tell(trial_obj, state=fail_state)
         except Exception:
             pass
+        if params_sig:
+            reserved_signatures.discard(str(params_sig))
+            rec = {"params_sig": str(params_sig)}
+            if bool(dict(out or {}).get("ok", False)) and value is not None and np.isfinite(value):
+                rec["value"] = float(value)
+            else:
+                rec["state"] = fail_state
+            if isinstance(out, dict) and out:
+                rec["out"] = dict(out or {})
+            known_records[str(params_sig)] = rec
+
+    def _reuse_duplicate_trial(trial_obj, params_sig: str) -> None:
+        rec = dict(known_records.get(str(params_sig), {}) or {})
+        out_prev = dict(rec.get("out", {}) or {})
+        if out_prev and hasattr(trial_obj, "set_user_attr"):
+            try:
+                trial_obj.set_user_attr(
+                    AUTO_MODE_OPTUNA_USER_ATTR_OUT,
+                    _auto_optuna_jsonable(out_prev),
+                )
+            except Exception:
+                pass
+        val = rec.get("value", None)
+        try:
+            if val is not None and np.isfinite(float(val)):
+                study.tell(trial_obj, float(val))
+            else:
+                study.tell(trial_obj, state=fail_state)
+        except Exception:
+            pass
+
+    def _ask_new_trial():
+        nonlocal duplicate_skips
+        attempts = int(max(1, AUTO_MODE_OPTUNA_DUPLICATE_MAX_ATTEMPTS))
+        last_error = None
+        for _ in range(attempts):
+            try:
+                trial_obj = study.ask()
+                preset = dict(build_preset(trial_obj) or {})
+            except Exception as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                break
+            params = _auto_optuna_trial_params(
+                trial_obj=trial_obj,
+                preset=preset,
+                seed_to_params=seed_to_params,
+            )
+            params_sig = _auto_optuna_param_signature(params)
+            if (not bool(duplicate_guard)) or (not params_sig):
+                if params_sig:
+                    reserved_signatures.add(str(params_sig))
+                return trial_obj, preset, str(params_sig), None
+            if params_sig in reserved_signatures:
+                duplicate_skips += 1
+                try:
+                    study.tell(trial_obj, state=fail_state)
+                except Exception:
+                    pass
+                continue
+            if params_sig in known_records:
+                duplicate_skips += 1
+                _reuse_duplicate_trial(trial_obj, str(params_sig))
+                continue
+            reserved_signatures.add(str(params_sig))
+            return trial_obj, preset, str(params_sig), None
+        return None, {}, "", str(last_error or "no unique optuna candidate available")
 
     idx_next = 1
     seed_items = list(seed_presets or [])[: int(total)]
     if callable(seed_to_params) and hasattr(study, "enqueue_trial"):
+        seed_items_filtered = []
+        enqueued_signatures: set[str] = set()
         for preset in list(seed_items):
             try:
                 params = dict(seed_to_params(dict(preset or {})) or {})
             except Exception:
                 params = {}
+            params_sig = _auto_optuna_param_signature(params)
+            if bool(duplicate_guard) and params_sig and (
+                params_sig in known_records or params_sig in enqueued_signatures
+            ):
+                duplicate_skips += 1
+                continue
             if params:
                 try:
                     study.enqueue_trial(dict(params))
+                    if params_sig:
+                        enqueued_signatures.add(str(params_sig))
                 except Exception:
                     pass
+            seed_items_filtered.append(dict(preset or {}))
+        seed_items = list(seed_items_filtered)
 
     for preset in list(seed_items):
         if idx_next > total:
             return
         trial_obj = None
+        params_sig = ""
         preset_eval = dict(preset or {})
         if callable(seed_to_params):
-            try:
-                trial_obj = study.ask()
-                preset_eval = dict(build_preset(trial_obj) or {})
-            except Exception:
-                trial_obj = None
-                preset_eval = dict(preset or {})
+            trial_obj, preset_eval, params_sig, ask_error = _ask_new_trial()
+            if trial_obj is None:
+                out = {
+                    "idx": int(idx_next),
+                    "ok": False,
+                    "error": str(ask_error or "no unique optuna candidate available"),
+                }
+                if consume_one(int(idx_next), dict(out or {})):
+                    return
+                idx_next += 1
+                continue
         try:
             out = eval_one(int(idx_next), dict(preset_eval or {}))
         except Exception as exc:
@@ -400,18 +769,32 @@ def _auto_run_optuna_eval_loop(
                 "error": f"{type(exc).__name__}: {exc}",
             }
         if trial_obj is not None:
-            _tell(trial_obj, out)
+            _tell(trial_obj, out, params_sig=params_sig)
         if consume_one(int(idx_next), dict(out or {})):
             return
         idx_next += 1
     if idx_next > total:
+        if duplicate_skips > 0:
+            logger.info(
+                "Automatic mode Optuna duplicate guard skipped %d duplicate suggestions in study %s.",
+                int(duplicate_skips),
+                str(study_name or "in-memory"),
+            )
         return
 
     remaining = int(total - idx_next + 1)
     if workers <= 1 or remaining <= 1:
         for idx in range(int(idx_next), int(total) + 1):
-            trial_obj = study.ask()
-            preset = dict(build_preset(trial_obj) or {})
+            trial_obj, preset, params_sig, ask_error = _ask_new_trial()
+            if trial_obj is None:
+                out = {
+                    "idx": int(idx),
+                    "ok": False,
+                    "error": str(ask_error or "no unique optuna candidate available"),
+                }
+                if consume_one(int(idx), dict(out or {})):
+                    break
+                continue
             try:
                 out = eval_one(int(idx), dict(preset))
             except Exception as exc:
@@ -420,49 +803,86 @@ def _auto_run_optuna_eval_loop(
                     "ok": False,
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-            _tell(trial_obj, out)
+            _tell(trial_obj, out, params_sig=params_sig)
             if consume_one(int(idx), dict(out or {})):
                 break
+        if duplicate_skips > 0:
+            logger.info(
+                "Automatic mode Optuna duplicate guard skipped %d duplicate suggestions in study %s.",
+                int(duplicate_skips),
+                str(study_name or "in-memory"),
+            )
         return
 
     chunk_size = int(_auto_trial_chunk_size(workers))
     while idx_next <= total:
         chunk_items = []
         while idx_next <= total and len(chunk_items) < int(chunk_size):
-            trial_obj = study.ask()
-            preset = dict(build_preset(trial_obj) or {})
-            chunk_items.append((int(idx_next), trial_obj, dict(preset)))
+            trial_obj, preset, params_sig, ask_error = _ask_new_trial()
+            if trial_obj is None:
+                chunk_items.append(
+                    (
+                        int(idx_next),
+                        None,
+                        {},
+                        "",
+                        {
+                            "idx": int(idx_next),
+                            "ok": False,
+                            "error": str(ask_error or "no unique optuna candidate available"),
+                        },
+                    )
+                )
+                idx_next += 1
+                continue
+            chunk_items.append((int(idx_next), trial_obj, dict(preset), str(params_sig), None))
             idx_next += 1
         if not chunk_items:
             break
 
         with ThreadPoolExecutor(max_workers=int(workers)) as ex:
             fut_map = {
-                ex.submit(eval_one, int(idx), dict(preset)): (int(idx), trial_obj)
-                for idx, trial_obj, preset in chunk_items
+                ex.submit(eval_one, int(idx), dict(preset)): (int(idx), trial_obj, str(params_sig))
+                for idx, trial_obj, preset, params_sig, pre_out in chunk_items
+                if trial_obj is not None and pre_out is None
             }
             chunk_out: dict[int, dict] = {}
             for fut in as_completed(list(fut_map.keys())):
-                idx, trial_obj = fut_map.get(fut, (0, None))
+                idx, trial_obj, params_sig = fut_map.get(fut, (0, None, ""))
                 try:
                     out = fut.result()
                     if not isinstance(out, dict):
                         out = {"idx": int(idx), "ok": False, "error": "invalid worker result"}
                 except Exception as exc:
                     out = {"idx": int(idx), "ok": False, "error": f"{type(exc).__name__}: {exc}"}
-                _tell(trial_obj, out)
+                _tell(trial_obj, out, params_sig=params_sig)
                 chunk_out[int(idx)] = dict(out or {})
 
-        for idx, _trial_obj, _preset in chunk_items:
-            out = dict(
-                chunk_out.get(
-                    int(idx),
-                    {"idx": int(idx), "ok": False, "error": "missing worker result"},
+        for idx, _trial_obj, _preset, _params_sig, pre_out in chunk_items:
+            if isinstance(pre_out, dict):
+                out = dict(pre_out or {})
+            else:
+                out = dict(
+                    chunk_out.get(
+                        int(idx),
+                        {"idx": int(idx), "ok": False, "error": "missing worker result"},
+                    )
+                    or {}
                 )
-                or {}
-            )
             if consume_one(int(idx), out):
+                if duplicate_skips > 0:
+                    logger.info(
+                        "Automatic mode Optuna duplicate guard skipped %d duplicate suggestions in study %s.",
+                        int(duplicate_skips),
+                        str(study_name or "in-memory"),
+                    )
                 return
+    if duplicate_skips > 0:
+        logger.info(
+            "Automatic mode Optuna duplicate guard skipped %d duplicate suggestions in study %s.",
+            int(duplicate_skips),
+            str(study_name or "in-memory"),
+        )
 
 
 def _auto_collect_reflections(st: dict | None) -> list:
@@ -735,6 +1155,16 @@ def _auto_select_target_curve_with_trials(
     )
     _auto_apply_seed(seed_target)
     logger.info(f"Automatic mode target select: seed={int(seed_target)}")
+    target_study_sig = _auto_signature(
+        base_data=base_data,
+        measurements=measurements,
+        fs_v=int(fs_v),
+        taps_v=int(taps_v),
+        xos=xos,
+        hpf=hpf,
+        hc_mode=None,
+        include_hc_mode=False,
+    )
 
     def _cached_target_fit(hc_name: str) -> tuple[float, float]:
         fit_rms_db = float("nan")
@@ -1299,6 +1729,10 @@ def _auto_select_target_curve_with_trials(
                 ),
                 workers=int(workers),
                 seed_to_params=seed_to_params,
+                study_name=_auto_optuna_study_name(
+                    study_sig=target_study_sig,
+                    scope=f"target-{str(target_name)}-{str(phase_tag)}",
+                ),
             )
             out = []
             for idx in range(1, int(n_total) + 1):
@@ -1629,7 +2063,7 @@ def _auto_select_target_curve_with_trials(
                     base_tc=base_tc,
                     hc_f_arr=hc_f,
                     hc_m_arr=hc_m,
-                    phase_tag=f"local_center_{li}",
+                    phase_tag=f"local_center_{li}_u1",
                     target_name=hc_name,
                     n_total_override=int(local_trial_total),
                     seed_presets=list(local_seed_presets or []),
@@ -3143,6 +3577,17 @@ def _run_auto_mode_search_impl(
     exact_cached_preset = {}
     exact_cached_metrics = {}
     exact_cache_sig = None
+    seed = int(20260302 + int(fs_v) * 17 + int(taps_v))
+    optuna_search_sig = _auto_signature(
+        base_data=cache_base_data,
+        measurements=measurements,
+        fs_v=int(fs_v),
+        taps_v=int(taps_v),
+        xos=xos,
+        hpf=hpf,
+        hc_mode=str(cache_base_data.get("hc_mode", "") or "").strip() or None,
+        include_hc_mode=True,
+    )
     if bool(cfg.cache_enabled):
         try:
             exact_cache_sig = _auto_signature(
@@ -3255,6 +3700,38 @@ def _run_auto_mode_search_impl(
                         include_response_arrays=False,
                         summarize=False,
                     )
+                    if bool(str(optimizer_backend) == "optuna" and optuna_mod is not None):
+                        _auto_optuna_remember_result(
+                            optuna_mod,
+                            base_data=dict(cache_base_data or {}),
+                            study_name=_auto_optuna_study_name(
+                                study_sig=optuna_search_sig,
+                                scope="phase3-micro-u1",
+                            ),
+                            seed=int(seed + 700001 + round_idx * 1009 + idx * 31),
+                            preset=dict(cand or {}),
+                            metrics=dict(met_i or {}),
+                            seed_to_params=(
+                                lambda preset,
+                                _base=dict(cache_base_data),
+                                _center=dict(round_start_preset or best_preset or {}),
+                                _shrink=1.0: _seed_auto_mode_candidate_micro_optuna_params(
+                                    _base,
+                                    _center,
+                                    preset,
+                                    shrink=float(_shrink),
+                                )
+                            ),
+                            use_refine_tiebreak=True,
+                            out_payload={
+                                "idx": int(idx),
+                                "ok": True,
+                                "metrics": dict(met_i or {}),
+                                "trial_preset": dict(cand or {}),
+                                "phase": "exact_cache_micro_refine",
+                                "round": int(round_idx),
+                            },
+                        )
                     round_executed += 1
                     executed_micro_trials_total += 1
                     better, _reason = _auto_is_better_refine(
@@ -3347,6 +3824,33 @@ def _run_auto_mode_search_impl(
             )
             best_metrics = dict(best_metrics_recalc or best_metrics or {})
             best_preset = dict(best_data or best_preset or {})
+            if bool(str(optimizer_backend) == "optuna" and optuna_mod is not None):
+                _auto_optuna_remember_result(
+                    optuna_mod,
+                    base_data=dict(cache_base_data or {}),
+                    study_name=_auto_optuna_study_name(
+                        study_sig=optuna_search_sig,
+                        scope="phase1",
+                    ),
+                    seed=int(seed + 500001),
+                    preset=dict(best_preset or {}),
+                    metrics=dict(best_metrics or {}),
+                    seed_to_params=(
+                        lambda preset,
+                        _base=dict(cache_base_data): _seed_auto_mode_candidate_optuna_params(
+                            _base,
+                            preset,
+                        )
+                    ),
+                    use_refine_tiebreak=False,
+                    out_payload={
+                        "idx": 1,
+                        "ok": True,
+                        "metrics": dict(best_metrics or {}),
+                        "trial_preset": dict(best_preset or {}),
+                        "phase": "exact_cache_replay",
+                    },
+                )
             cached_best_auto_exc_hz = _auto_safe_float(
                 best_data.get("_auto_exc_freq_hz", best_data.get("best_auto_exc_freq_hz", float("nan"))),
                 float("nan"),
@@ -3458,7 +3962,6 @@ def _run_auto_mode_search_impl(
                 f"for {str(filter_key)} filter"
             )
 
-    seed = int(20260302 + int(fs_v) * 17 + int(taps_v))
     use_optuna_trials = bool(str(optimizer_backend) == "optuna" and optuna_mod is not None)
     candidates = []
     if not bool(use_optuna_trials):
@@ -3553,6 +4056,7 @@ def _run_auto_mode_search_impl(
         seed_presets: list[dict] | None = None,
         optuna_builder=None,
         seed_to_params=None,
+        study_scope: str | None = None,
     ) -> dict:
         phase_state = _AutoModePhaseState()
         use_optuna_phase = bool(
@@ -3768,6 +4272,10 @@ def _run_auto_mode_search_impl(
                 ),
                 workers=int(workers),
                 seed_to_params=seed_to_params,
+                study_name=_auto_optuna_study_name(
+                    study_sig=optuna_search_sig,
+                    scope=str(study_scope or phase_label),
+                ),
             )
             return {
                 "ok": int(phase_state.ok_n),
@@ -3853,6 +4361,7 @@ def _run_auto_mode_search_impl(
             if bool(use_optuna_trials)
             else None
         ),
+        study_scope="phase1",
     )
     phase1_ok = int(phase1_stats.get("ok", 0) or 0)
     phase1_tried = int(phase1_stats.get("tried", 0) or 0)
@@ -4003,6 +4512,7 @@ def _run_auto_mode_search_impl(
                     if bool(use_optuna_trials)
                     else None
                 ),
+                study_scope=f"phase2-local-center-{int(ci)}-u1",
             )
             phase2_ok += int(stats.get("ok", 0) or 0)
             phase2_tried += int(stats.get("tried", 0) or 0)
@@ -4105,6 +4615,7 @@ def _run_auto_mode_search_impl(
                 if bool(use_optuna_trials)
                 else None
             ),
+            study_scope="phase3-micro-u1",
         )
         phase2_ok += int(micro_stats.get("ok", 0) or 0)
         phase2_tried += int(micro_stats.get("tried", 0) or 0)

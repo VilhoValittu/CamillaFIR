@@ -406,7 +406,7 @@ def build_filter_section(*, t, get_val, fs_opts, taps_opts, on_mode_apply_defaul
                     "filter_type",
                     label=t("filter_type"),
                     options=[t("ft_linear"), t("ft_min"), t("ft_mixed"), t("ft_asymmetric")],
-                    value=get_val("filter_type", t("ft_linear")),
+                    value=get_val("filter_type", t("ft_asymmetric")),
                     help_text=(t("ft_help")),
                 ),
                 put_scope("update_mixed_freq_scope"),

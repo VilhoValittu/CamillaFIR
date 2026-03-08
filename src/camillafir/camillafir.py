@@ -113,6 +113,7 @@ from .io.camillafir_automatic_mode import (  # noqa: E402
     AUTO_MODE_TARGET_TOP_N,
     AUTO_MODE_TARGET_TRIALS_PER_CURVE,
     AUTO_MODE_TRIALS,
+    _auto_optuna_storage_path,
     get_auto_mode_cache_path,
     _auto_goal_norm,
     _auto_safe_float,
@@ -148,7 +149,7 @@ try:
 except Exception:
     pass
 
-VERSION = "v.3.5.6"
+VERSION = "v.3.5.6_beta4"
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
@@ -1073,6 +1074,7 @@ def process_run():
         program_version=str(data.get("program_version", VERSION) or VERSION),
     )
     auto_cache_path = None
+    optuna_storage_path = None
     try:
         mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
     except Exception:
@@ -1082,6 +1084,11 @@ def process_run():
             auto_cache_path = str(get_auto_mode_cache_path())
         except Exception:
             auto_cache_path = None
+        try:
+            if bool(data.get("auto_mode_optuna_persistent_study", True)):
+                optuna_storage_path = str(_auto_optuna_storage_path())
+        except Exception:
+            optuna_storage_path = None
 
     if l_st_f is None or r_st_f is None or l_imp_f is None or r_imp_f is None:
         fallback = results_by_fs[-1]
@@ -1112,6 +1119,7 @@ def process_run():
         per_fs_stats=per_fs_stats,
         saved_filters_dir=saved_filters_dir,
         auto_cache_path=auto_cache_path,
+        optuna_storage_path=optuna_storage_path,
     )
 
 def _ui_pick(stats, key):

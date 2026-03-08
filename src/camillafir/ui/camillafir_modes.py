@@ -47,7 +47,7 @@ def _apply_clamps(cfg: FilterConfig, clamps: Dict[str, Tuple[Any, Any]]) -> None
 
 MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "BASIC": {
-        "filter_type_str": "Linear Phase",
+        "filter_type_str": "Mixed Phase",
         "global_gain_db": 0.0,
 
         "enable_mag_correction": True,
@@ -102,7 +102,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
 
     "ADVANCED": {
-        "filter_type_str": "Mixed Phase",
+        "filter_type_str": "asymmetric",
         "global_gain_db": 0.0,
 
         "enable_mag_correction": True,

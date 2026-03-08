@@ -7,7 +7,7 @@ class FilterConfig:
     
     fs: int = 44100
     num_taps: int = 65536
-    filter_type_str: str = "Linear Phase"
+    filter_type_str: str = "Asymmetric"
     global_gain_db: float = 0.0
     
     mag_c_min: float = 10.0

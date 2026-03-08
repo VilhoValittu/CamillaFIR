@@ -15,6 +15,10 @@ from camillafir.io.camillafir_automatic_mode import (
     _auto_reject,
     _auto_trial_workers,
 )
+from camillafir.io.auto_mode.candidate_generation import (
+    _seed_auto_mode_candidate_local_optuna_params,
+    _seed_auto_mode_candidate_micro_optuna_params,
+)
 from types import SimpleNamespace
 
 
@@ -38,6 +42,8 @@ def test_auto_mode_config_from_base_data_reads_overrides():
             "auto_mode_optuna_multivariate": False,
             "auto_mode_optuna_group": True,
             "auto_mode_optuna_constant_liar": False,
+            "auto_mode_optuna_persistent_study": False,
+            "auto_mode_optuna_avoid_duplicates": False,
         }
     )
     assert cfg.trials == 77
@@ -51,6 +57,8 @@ def test_auto_mode_config_from_base_data_reads_overrides():
     assert cfg.optuna_multivariate is False
     assert cfg.optuna_group is True
     assert cfg.optuna_constant_liar is False
+    assert cfg.optuna_persistent_study is False
+    assert cfg.optuna_avoid_duplicates is False
 
 
 def test_auto_optimizer_backend_selection(monkeypatch):
@@ -345,6 +353,170 @@ def test_auto_run_optuna_eval_loop_feeds_seed_trials_into_study():
     assert seen[0][1]["reg_strength"] == 22.5
 
 
+def test_auto_run_optuna_eval_loop_uses_persistent_study_when_available():
+    class _FakeTrial:
+        def suggest_float(self, name, low, high):
+            return float(low)
+
+        def suggest_categorical(self, name, choices):
+            return list(choices)[0]
+
+        def set_user_attr(self, name, value):
+            self.user_attrs = getattr(self, "user_attrs", {})
+            self.user_attrs[name] = value
+
+    class _FakeStudy:
+        def __init__(self):
+            self.told = []
+
+        def ask(self):
+            return _FakeTrial()
+
+        def tell(self, trial, value=None, state=None):
+            self.told.append({"trial": trial, "value": value, "state": state})
+
+    calls = []
+
+    class _FakeTrialState:
+        FAIL = "fail"
+
+    class _FakeOptuna:
+        class samplers:
+            class TPESampler:
+                def __init__(self, seed=None, n_startup_trials=None, **kwargs):
+                    self.seed = seed
+                    self.n_startup_trials = n_startup_trials
+                    self.kwargs = dict(kwargs or {})
+
+        class storages:
+            class JournalFileStorage:
+                def __init__(self, path, lock_obj=None):
+                    self.path = path
+                    self.lock_obj = lock_obj
+
+            class JournalFileOpenLock:
+                def __init__(self, path):
+                    self.path = path
+
+            class JournalStorage:
+                def __init__(self, backend):
+                    self.backend = backend
+
+        class trial:
+            TrialState = _FakeTrialState
+
+        @staticmethod
+        def create_study(**kwargs):
+            calls.append(dict(kwargs or {}))
+            return _FakeStudy()
+
+    _auto_run_optuna_eval_loop(
+        optuna_mod=_FakeOptuna,
+        n_total=1,
+        seed=123,
+        startup_trials=1,
+        base_data={"auto_mode_optuna_persistent_study": True},
+        seed_presets=[],
+        build_preset=lambda trial: {"max_boost": float(trial.suggest_float("max_boost", 3.0, 8.0))},
+        eval_one=lambda idx, preset: {"idx": int(idx), "ok": True, "metrics": {"rank_score": 90.0}},
+        consume_one=lambda idx, out: False,
+        objective_value=lambda out: float(dict(out.get("metrics", {}) or {}).get("rank_score", 0.0)),
+        workers=1,
+        study_name="camillafir-test-study",
+    )
+
+    assert calls
+    assert calls[0]["study_name"] == "camillafir-test-study"
+    assert calls[0]["load_if_exists"] is True
+    assert "storage" in calls[0]
+
+
+def test_auto_run_optuna_eval_loop_skips_duplicate_trials_from_existing_study():
+    class _FrozenTrial:
+        def __init__(self, params, value):
+            self.params = dict(params or {})
+            self.value = float(value)
+            self.state = "complete"
+            self.user_attrs = {}
+
+    class _FakeTrial:
+        def __init__(self, fixed=None):
+            self.fixed = dict(fixed or {})
+            self.params = {}
+            self.user_attrs = {}
+
+        def suggest_float(self, name, low, high):
+            value = float(self.fixed.get(name, low))
+            self.params[str(name)] = float(value)
+            return float(value)
+
+        def suggest_categorical(self, name, choices):
+            value = self.fixed.get(name, list(choices)[0])
+            self.params[str(name)] = value
+            return value
+
+        def set_user_attr(self, name, value):
+            self.user_attrs[str(name)] = value
+
+    class _FakeStudy:
+        def __init__(self):
+            self.trials = [_FrozenTrial({"max_boost": 4.0}, 91.0)]
+            self._ask_queue = [_FakeTrial({"max_boost": 4.0}), _FakeTrial({"max_boost": 6.0})]
+            self.told = []
+
+        def ask(self):
+            return self._ask_queue.pop(0)
+
+        def tell(self, trial, value=None, state=None):
+            self.told.append({"trial": trial, "value": value, "state": state})
+
+    class _FakeTrialState:
+        FAIL = "fail"
+
+    study = _FakeStudy()
+    seen = []
+
+    class _FakeOptuna:
+        class samplers:
+            class TPESampler:
+                def __init__(self, seed=None, n_startup_trials=None, **kwargs):
+                    self.seed = seed
+                    self.n_startup_trials = n_startup_trials
+                    self.kwargs = dict(kwargs or {})
+
+        class trial:
+            TrialState = _FakeTrialState
+
+        @staticmethod
+        def create_study(direction=None, sampler=None):
+            return study
+
+    _auto_run_optuna_eval_loop(
+        optuna_mod=_FakeOptuna,
+        n_total=1,
+        seed=123,
+        startup_trials=1,
+        base_data={"auto_mode_optuna_persistent_study": False, "auto_mode_optuna_avoid_duplicates": True},
+        seed_presets=[],
+        build_preset=lambda trial: {"max_boost": float(trial.suggest_float("max_boost", 3.0, 8.0))},
+        eval_one=lambda idx, preset: seen.append(dict(preset or {})) or {
+            "idx": int(idx),
+            "ok": True,
+            "metrics": {"rank_score": 82.0},
+        },
+        consume_one=lambda idx, out: False,
+        objective_value=lambda out: float(dict(out.get("metrics", {}) or {}).get("rank_score", 0.0)),
+        workers=1,
+        seed_to_params=lambda preset: {"max_boost": float(preset.get("max_boost", 0.0))},
+        study_name="camillafir-test-dup",
+    )
+
+    assert seen == [{"max_boost": 6.0}]
+    assert len(study.told) == 2
+    assert float(study.told[0]["value"]) == 91.0
+    assert float(study.told[1]["value"]) == 82.0
+
+
 def test_build_auto_mode_candidates_local_center_first_and_clamped():
     base = {
         "filter_type": "Mixed",
@@ -413,6 +585,66 @@ def test_build_auto_mode_candidates_local_varies_mag_and_low_cut():
     lows = {round(float(c.get("low_bass_cut_hz", 0.0)), 1) for c in cands}
     assert len(mags) > 1
     assert len(lows) > 1
+
+
+def test_optuna_local_and_micro_seed_params_use_static_unit_space():
+    base = {
+        "filter_type": "Linear",
+        "mag_c_min": 26.0,
+        "low_bass_cut_hz": 34.0,
+        "phase_limit": 360.0,
+    }
+    center = {
+        "fdw_cycles": 10.0,
+        "tdc_strength": 58.0,
+        "tdc_max_reduction_db": 12.0,
+        "tdc_slope_db_per_oct": 6.0,
+        "reg_strength": 28.0,
+        "max_slope_db_per_oct": 12.0,
+        "max_boost": 4.0,
+        "mag_c_max": 230.0,
+        "trans_width": 105.0,
+        "bass_first_mode_max_hz": 185.0,
+        "phase_limit": 350.0,
+    }
+    preset = {
+        "fdw_cycles": 11.0,
+        "tdc_strength": 60.0,
+        "tdc_max_reduction_db": 14.0,
+        "tdc_slope_db_per_oct": 8.0,
+        "reg_strength": 31.0,
+        "max_slope_db_per_oct": 14.0,
+        "max_boost": 4.5,
+        "mag_c_min": 27.5,
+        "low_bass_cut_hz": 36.0,
+        "mag_c_max": 240.0,
+        "trans_width": 110.0,
+        "bass_first_mode_max_hz": 190.0,
+        "phase_limit": 340.0,
+    }
+
+    local_params = _seed_auto_mode_candidate_local_optuna_params(
+        base,
+        center,
+        preset,
+        shrink=0.6,
+        optimize_mag_low=True,
+    )
+    micro_params = _seed_auto_mode_candidate_micro_optuna_params(
+        base,
+        center,
+        preset,
+        shrink=0.8,
+    )
+
+    assert local_params
+    assert micro_params
+    assert all(str(key).endswith("_u") for key in local_params.keys())
+    assert all(str(key).endswith("_u") for key in micro_params.keys())
+    assert "tdc_strength" not in local_params
+    assert "tdc_strength" not in micro_params
+    assert all(0.0 <= float(value) <= 1.0 for value in local_params.values())
+    assert all(0.0 <= float(value) <= 1.0 for value in micro_params.values())
 
 
 def test_auto_trial_workers_respects_auto_and_caps(monkeypatch):

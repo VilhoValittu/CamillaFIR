@@ -17,6 +17,8 @@ def load_config() -> dict:
         "auto_mode_optuna_multivariate": True,
         "auto_mode_optuna_group": False,
         "auto_mode_optuna_constant_liar": True,
+        "auto_mode_optuna_persistent_study": True,
+        "auto_mode_optuna_avoid_duplicates": True,
         "filter_type": "Asymmetric",
         "gain": 0.0,
         "hc_mode": "Harman6",
