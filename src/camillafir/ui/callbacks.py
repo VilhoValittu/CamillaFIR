@@ -41,6 +41,12 @@ def on_start_click():
         import threading
         import time
 
+        try:
+            with use_scope("results", clear=True):
+                pass
+        except Exception:
+            pass
+
         stop_evt = threading.Event()
         run_started_at = time.perf_counter()
 
