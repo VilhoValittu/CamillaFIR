@@ -4,6 +4,26 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.5.6] - 2026-03-08
+
+### UI & Results
+- Cleared previous results and plots immediately when starting a new run so stale output no longer remains visible during processing.
+- Reworked the results view into clearer collapsible sections for acoustic summary, gain/headroom, filter setup, and phase/crossover diagnostics.
+- Expanded automatic-mode results with a dedicated winner summary, best-preset table, target-curve top-3 table, and rank-ordered top-5 comparison.
+- Moved the completion message into status notices for a cleaner final status presentation.
+
+### Automatic mode
+- Fixed exact cache-hit micro-refine finalization so recalculated winner metrics and preset data stay synchronized before saving cache/output metadata.
+- Adjusted excursion-penalty waiving so the zero-penalty floor is also honored when automatic excursion protection lands exactly on that floor.
+
+### Multi-rate & Runtime
+- Fixed automatic tap scaling for higher sample rates by scaling directly from the selected 44.1 kHz base tap count, preserving FIR time length more accurately in multi-rate mode.
+- Updated the automatic multi-rate tap info panel to reflect the current base tap setting instead of fixed default values.
+- Reduced default console noise by lowering normal console logging to `WARNING`, while keeping opt-in debug logging available through environment variables.
+- Hardened PyWebIO pin access and routed preview/visualization failures through the logger instead of noisy direct console prints.
+
+---
+
 ## [3.5.5] - 2026-03-07
 
 ### Automatic mode
