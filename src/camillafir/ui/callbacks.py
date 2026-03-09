@@ -79,7 +79,6 @@ def on_start_click():
                     base = _app.get_status_base_message(default="CamillaFIR running")
                     elapsed = max(0.0, float(time.perf_counter() - run_started_at))
                     _app.update_status(f"{base} | {elapsed:.1f} s")
-                    _terminal_run_event("COUNTING", clock_text=datetime.now().strftime("%H:%M:%S"), elapsed_s=elapsed)
                 except Exception:
                     pass
 
@@ -274,7 +273,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
         _refresh_ir_window_controls()
 
     pin_on_change("hc_mode", onchange=lambda _: update_target_preview_ui())
-    pin_on_change("auto_target_mode", onchange=lambda _: update_target_preview_ui())
+    pin_on_change("auto_target_mode", onchange=lambda _: (update_target_preview_ui(), update_auto_mode_controls_ui()))
     pin_on_change("hc_custom_file", onchange=lambda _: update_target_preview_ui())
     pin_on_change("mag_c_min", onchange=lambda _: update_target_preview_ui())
     pin_on_change("mag_c_max", onchange=lambda _: update_target_preview_ui())

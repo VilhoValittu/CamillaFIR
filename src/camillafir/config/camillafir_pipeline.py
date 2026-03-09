@@ -6,6 +6,100 @@ import logging
 import math
 import numpy as np
 
+from ..io.auto_mode.filter_priors import get_auto_mode_filter_auto_defaults
+from ..ui.camillafir_modes import MODE_DEFAULTS
+
+
+_AUTO_MODE_DEFAULT_CFG_TO_UI = {
+    "global_gain_db": "gain",
+    "mag_c_min": "mag_c_min",
+    "mag_c_max": "mag_c_max",
+    "max_boost_db": "max_boost",
+    "max_cut_db": "max_cut_db",
+    "phase_limit": "phase_limit",
+    "reg_strength": "reg_strength",
+    "fdw_cycles": "fdw_cycles",
+    "filter_smooth": "filter_smooth",
+    "tdc_strength": "tdc_strength",
+    "tdc_max_reduction_db": "tdc_max_reduction_db",
+    "tdc_slope_db_per_oct": "tdc_slope_db_per_oct",
+    "low_bass_cut_hz": "low_bass_cut_hz",
+    "ir_window_ms": "ir_window",
+    "ir_window_ms_left": "ir_window_left",
+    "ir_window_right": "ir_window",
+    "ir_window_left": "ir_window_left",
+    "mixed_split_freq": "mixed_freq",
+    "trans_width": "trans_width",
+    "bass_first_mode_max_hz": "bass_first_mode_max_hz",
+    "max_slope_db_per_oct": "max_slope_db_per_oct",
+    "max_slope_boost_db_per_oct": "max_slope_boost_db_per_oct",
+    "max_slope_cut_db_per_oct": "max_slope_cut_db_per_oct",
+    "lvl_manual_db": "lvl_manual_db",
+    "lvl_min": "lvl_min",
+    "lvl_max": "lvl_max",
+    "conf_pull_floor": "conf_pull_floor",
+    "conf_pull_max_hz": "conf_pull_max_hz",
+    "conf_pull_gamma_cut": "conf_pull_gamma_cut",
+    "conf_pull_gamma_boost": "conf_pull_gamma_boost",
+    "low_bass_cut_strength": "low_bass_cut_strength",
+    "filter_type_str": "filter_type",
+    "plot_smoothing_level": "plot_smoothing_level",
+    "lvl_mode": "lvl_mode",
+    "lvl_algo": "lvl_algo",
+    "stereo_link_strategy": "stereo_link_strategy",
+    "enable_mag_correction": "mag_correct",
+    "unsafe_raw_dsp": "unsafe_raw_dsp",
+    "exc_prot": "exc_prot",
+    "enable_tdc": "enable_tdc",
+    "enable_afdw": "enable_afdw",
+    "df_smoothing": "df_smoothing",
+    "comparison_mode": "comparison_mode",
+    "bass_first_ai": "bass_first_ai",
+    "phase_safe_2058": "phase_safe_2058",
+    "stereo_link": "stereo_link",
+    "low_bass_cut_enable": "low_bass_cut_enable",
+}
+
+
+def _apply_auto_mode_managed_settings(data: Dict[str, Any]) -> None:
+    """Force AUTO mode to use program-managed settings except allowed user choices."""
+    try:
+        filter_type = str(data.get("filter_type", "Asymmetric") or "Asymmetric")
+    except Exception:
+        filter_type = "Asymmetric"
+
+    merged_defaults = dict(MODE_DEFAULTS.get("AUTO", {}) or {})
+    merged_defaults.update(dict(get_auto_mode_filter_auto_defaults(filter_type) or {}))
+
+    forced = {
+        "mode": "AUTO",
+        "camillafir_automatic_mode": True,
+        "auto_mode_workers": 0,
+        "mag_correct": True,
+        "gain": 0.0,
+        "lvl_mode": "Auto",
+        "lvl_algo": "Median",
+        "lvl_manual_db": 0.0,
+        "normalize_opt": False,
+        "align_opt": True,
+        "unsafe_raw_dsp": False,
+        "stereo_link": True,
+        "stereo_link_strategy": "auto",
+        "exc_prot": True,
+        "low_bass_cut_enable": True,
+        "hpf_enable": False,
+        "comparison_mode": True,
+        "df_smoothing": False,
+        "auto_target_mode": str(data.get("auto_target_mode", "auto") or "auto"),
+    }
+
+    for cfg_key, ui_key in _AUTO_MODE_DEFAULT_CFG_TO_UI.items():
+        if cfg_key in merged_defaults:
+            forced[ui_key] = merged_defaults[cfg_key]
+
+    for key, value in forced.items():
+        data[key] = value
+
 def collect_ui_data(pin) -> Dict[str, Any]:
     """Funktio: collect ui data."""
     logger = logging.getLogger("CamillaFIR")
@@ -101,6 +195,9 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     else:
         atm = "auto"
     data["auto_target_mode"] = str(atm)
+
+    if is_auto_mode:
+        _apply_auto_mode_managed_settings(data)
 
     if mode_u in ("BASIC", "AUTO"):
         data["lvl_mode"] = "Auto"
@@ -504,7 +601,17 @@ def build_filter_config(
         lb_hz = 0.0
     else:
         lb_hz = _as_float(lb_raw, 40.0)
-    df_smoothing = _as_bool_default(_pin_get("df_smoothing", data.get("df_smoothing", False)), False)
+    try:
+        mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
+    except Exception:
+        mode_u = "BASIC"
+    auto_mode_locked = bool(mode_u == "AUTO" or data.get("camillafir_automatic_mode", False))
+    df_smoothing = _as_bool_default(
+        data.get("df_smoothing", False)
+        if auto_mode_locked
+        else _pin_get("df_smoothing", data.get("df_smoothing", False)),
+        False,
+    )
     bass_smooth_adaptive = _as_bool_default(
         _pin_get("bass_smooth_adaptive", data.get("bass_smooth_adaptive", True)),
         True,
@@ -574,19 +681,39 @@ def build_filter_config(
         bass_boost_cap_kwargs["bass_boost_post_restore_enable"] = bool(bass_boost_post_restore_enable)
     if hasattr(FilterConfig_cls, "bass_boost_post_restore_strength"):
         bass_boost_cap_kwargs["bass_boost_post_restore_strength"] = float(np.clip(bass_boost_post_restore_strength, 0.0, 1.0))
-    enable_afdw = _as_bool_default(_pin_get("enable_afdw", data.get("enable_afdw", False)), False)
-    enable_tdc = _as_bool_default(_pin_get("enable_tdc", data.get("enable_tdc", False)), False)
-    tdc_max_red = _as_float(_pin_get("tdc_max_reduction_db", data.get("tdc_max_reduction_db", 9.0)), 9.0)
-    tdc_slope = _as_float(_pin_get("tdc_slope_db_per_oct", data.get("tdc_slope_db_per_oct", 0.0)), 0.0)
+    enable_afdw = _as_bool_default(
+        data.get("enable_afdw", False)
+        if auto_mode_locked
+        else _pin_get("enable_afdw", data.get("enable_afdw", False)),
+        False,
+    )
+    enable_tdc = _as_bool_default(
+        data.get("enable_tdc", False)
+        if auto_mode_locked
+        else _pin_get("enable_tdc", data.get("enable_tdc", False)),
+        False,
+    )
+    tdc_max_red = _as_float(
+        data.get("tdc_max_reduction_db", 9.0)
+        if auto_mode_locked
+        else _pin_get("tdc_max_reduction_db", data.get("tdc_max_reduction_db", 9.0)),
+        9.0,
+    )
+    tdc_slope = _as_float(
+        data.get("tdc_slope_db_per_oct", 0.0)
+        if auto_mode_locked
+        else _pin_get("tdc_slope_db_per_oct", data.get("tdc_slope_db_per_oct", 0.0)),
+        0.0,
+    )
     filter_smooth = _as_int(
-        _pin_get("filter_smooth", data.get("filter_smooth", data.get("smoothing_level", 12))),
+        (
+            data.get("filter_smooth", data.get("smoothing_level", 12))
+            if auto_mode_locked
+            else _pin_get("filter_smooth", data.get("filter_smooth", data.get("smoothing_level", 12)))
+        ),
         12
     )
     comparison_mode = bool(data.get("comparison_mode", True))
-    try:
-        mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
-    except Exception:
-        mode_u = "BASIC"
     lvl_mode = str(data.get("lvl_mode", "Auto") or "Auto")
     if mode_u in ("BASIC", "AUTO"):
         lvl_mode = "Auto"

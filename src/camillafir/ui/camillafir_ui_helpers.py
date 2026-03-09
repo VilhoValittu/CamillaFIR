@@ -6,6 +6,7 @@ from pywebio.input import FLOAT
 from pywebio.pin import pin, pin_update, put_checkbox, put_input, put_select
 
 from ..resources.i8n.camillafir_i18n import t
+from ..io.auto_mode.filter_priors import get_auto_mode_filter_auto_defaults
 from .camillafir_modes import MODE_DEFAULTS, MODE_CLAMPS
 from .camillafir_utils import scale_taps_with_fs
 from .system_health import (
@@ -136,7 +137,11 @@ def update_auto_mode_controls_ui(_=None):
     except Exception:
         m = "BASIC"
     is_auto = (m == "AUTO")
-    js_disable = "false" if is_auto else "true"
+    auto_target_mode = str(_p("auto_target_mode", "auto") or "auto").strip().lower()
+    house_curve_locked = bool(is_auto and auto_target_mode != "selected")
+    auto_only_disabled = "false" if is_auto else "true"
+    auto_locked_disabled = "true" if is_auto else "false"
+    house_curve_disabled = "true" if house_curve_locked else "false"
 
     with use_scope("auto_mode_controls_state_scope", clear=True):
         put_html(
@@ -144,24 +149,71 @@ def update_auto_mode_controls_ui(_=None):
 <script>
 (function() {{
   try {{
-    var disable = {js_disable};
-    function setState(name) {{
-      var el = document.querySelector('select[name="' + name + '"]');
-      if (!el) return;
-      el.disabled = disable;
-      var wrap = el.closest('.form-group') || el.closest('div');
+    function setState(name, disable) {{
+      var els = document.querySelectorAll('[name="' + name + '"]');
+      if (!els.length) return;
+      els.forEach(function(el) {{
+        el.disabled = disable;
+      }});
+      var wrap = els[0].closest('.form-group') || els[0].closest('.custom-control') || els[0].closest('div');
       if (wrap) {{
         wrap.style.opacity = disable ? '0.55' : '';
         wrap.style.pointerEvents = disable ? 'none' : '';
         wrap.style.filter = disable ? 'grayscale(1)' : '';
-      }} else {{
-        el.style.opacity = disable ? '0.55' : '';
-        el.style.pointerEvents = disable ? 'none' : '';
-        el.style.filter = disable ? 'grayscale(1)' : '';
       }}
     }}
-    setState('auto_goal');
-    setState('auto_target_mode');
+    ['auto_goal', 'auto_target_mode'].forEach(function(name) {{
+      setState(name, {auto_only_disabled});
+    }});
+    [
+      'comparison_mode',
+      'gain',
+      'lvl_algo',
+      'lvl_min',
+      'lvl_max',
+      'lvl_mode',
+      'lvl_manual_db',
+      'mag_correct',
+      'mag_c_min',
+      'mag_c_max',
+      'max_boost',
+      'plot_smoothing_level',
+      'bass_first_ai',
+      'bass_first_mode_max_hz',
+      'max_slope_db_per_oct',
+      'max_cut_db',
+      'max_slope_boost_db_per_oct',
+      'max_slope_cut_db_per_oct',
+      'trans_width',
+      'filter_smooth',
+      'phase_limit',
+      'df_smoothing',
+      'reg_strength',
+      'stereo_link',
+      'stereo_link_strategy',
+      'exc_prot',
+      'exc_freq',
+      'low_bass_cut_enable',
+      'low_bass_cut_hz',
+      'hpf_enable',
+      'hpf_freq',
+      'hpf_slope',
+      'ir_export_window_mode',
+      'ir_export_window_shape',
+      'ir_export_tukey_alpha',
+      'enable_afdw',
+      'fdw_cycles',
+      'enable_tdc',
+      'tdc_strength',
+      'tdc_max_reduction_db',
+      'tdc_slope_db_per_oct',
+      'mixed_freq'
+    ].forEach(function(name) {{
+      setState(name, {auto_locked_disabled});
+    }});
+    ['hc_mode', 'hc_custom_file'].forEach(function(name) {{
+      setState(name, {house_curve_disabled});
+    }});
   }} catch(e) {{}}
 }})();
 </script>
@@ -434,6 +486,8 @@ def update_ir_lr_window_ui(_=None):
             return default
 
     try:
+        app_mode = str(_p("mode", "BASIC") or "BASIC").strip().upper()
+        is_auto_mode = bool(app_mode == "AUTO")
         mode = str(_p("ir_export_window_mode", "auto") or "auto").strip().lower()
         is_rew_asym = (mode == "rew_asym")
 
@@ -483,12 +537,12 @@ def update_ir_lr_window_ui(_=None):
                 help_text=t("ir_korkea"),
             )
 
-            if not enable_left:
+            if not enable_left or is_auto_mode:
                 w_left.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
-            if not enable_right:
+            if not enable_right or is_auto_mode:
                 w_right.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
 
-            if (not enable_left) and (not enable_right):
+            if (not enable_left and not enable_right) or is_auto_mode:
                 try:
                     msg = t("ir_lr_window_hint")
                 except Exception:
@@ -646,6 +700,8 @@ def update_afdw_cycles_ui(*, pin, get_val, t):
             return default
 
     try:
+        app_mode = str(_p("mode", "BASIC") or "BASIC").strip().upper()
+        is_auto_mode = bool(app_mode == "AUTO")
         en_raw = _p("enable_afdw", None)
         if isinstance(en_raw, (list, tuple, set)):
             enabled = (len(en_raw) > 0)
@@ -660,6 +716,7 @@ def update_afdw_cycles_ui(*, pin, get_val, t):
         v = float(get_val("fdw_cycles", 10.0) or 10.0)
 
     with use_scope("afdw_cycles_scope", clear=True):
+        put_html("<div id='afdw_box' style='margin-top:6px'>")
         w = put_input(
             "fdw_cycles",
             label=t("fdw"),
@@ -667,12 +724,25 @@ def update_afdw_cycles_ui(*, pin, get_val, t):
             value=v,
             help_text=t("fdw_help"),
         )
-        if not enabled:
+        put_html("</div>")
+        if (not enabled) or is_auto_mode:
             w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
             put_html(
                 f"<div style='margin-top:6px; color:#9aa0a6; font-size:13px;'>"
                 f"{t('afdw_disabled_hint') if 'afdw_disabled_hint' else 'OFF'}"
                 f"</div>"
+            )
+            put_html(
+                "<script>"
+                "(function(){"
+                "var box=document.getElementById('afdw_box');"
+                "if(!box) return;"
+                "box.style.opacity='0.55';"
+                "box.style.pointerEvents='none';"
+                "box.style.filter='grayscale(1)';"
+                "box.querySelectorAll('button,input,select,textarea').forEach(function(el){el.disabled=true;});"
+                "})();"
+                "</script>"
             )
 
 def update_tdc_controls_ui(*, pin, get_val, t, apply_tdc_preset):
@@ -684,6 +754,8 @@ def update_tdc_controls_ui(*, pin, get_val, t, apply_tdc_preset):
             return default
 
     try:
+        app_mode = str(_p("mode", "BASIC") or "BASIC").strip().upper()
+        is_auto_mode = bool(app_mode == "AUTO")
         en_raw = _p("enable_tdc", None)
         if isinstance(en_raw, (list, tuple, set)):
             enabled = (len(en_raw) > 0)
@@ -747,10 +819,19 @@ def update_tdc_controls_ui(*, pin, get_val, t, apply_tdc_preset):
 
         put_html("</div>")
 
-    if not enabled:
-        put_html("<script>document.getElementById('tdc_box').style.opacity='0.55';"
-                 "document.getElementById('tdc_box').style.pointerEvents='none';"
-                 "document.getElementById('tdc_box').style.filter='grayscale(1)';</script>")
+    if (not enabled) or is_auto_mode:
+        put_html(
+            "<script>"
+            "(function(){"
+            "var box=document.getElementById('tdc_box');"
+            "if(!box) return;"
+            "box.style.opacity='0.55';"
+            "box.style.pointerEvents='none';"
+            "box.style.filter='grayscale(1)';"
+            "box.querySelectorAll('button,input,select,textarea').forEach(function(el){el.disabled=true;});"
+            "})();"
+            "</script>"
+        )
 
 
 
@@ -765,6 +846,15 @@ def apply_mode_defaults_to_ui(_=None):
         mode = "BASIC"
 
     d = MODE_DEFAULTS.get(mode, {}) or {}
+    if mode == "AUTO":
+        try:
+            filter_type = str(_pin_get("filter_type", d.get("filter_type_str", "Asymmetric")) or "")
+        except Exception:
+            filter_type = str(d.get("filter_type_str", "Asymmetric") or "Asymmetric")
+        prior_defaults = get_auto_mode_filter_auto_defaults(filter_type)
+        if prior_defaults:
+            d = dict(d)
+            d.update(dict(prior_defaults))
 
     map_num = {
         "global_gain_db": "gain",

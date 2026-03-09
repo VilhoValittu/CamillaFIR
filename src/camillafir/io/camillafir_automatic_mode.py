@@ -51,6 +51,7 @@ from .auto_mode.candidate_generation import (
     _suggest_auto_mode_candidate_micro_optuna,
     _suggest_auto_mode_candidate_optuna,
 )
+from .auto_mode.filter_priors import get_auto_mode_filter_seed_preset
 from .auto_mode.scoring_ranking import (
     _auto_adaptive_shrink_factor,
     _auto_apply_goal_tiebreak_metrics,
@@ -100,6 +101,15 @@ from .auto_mode.target_preselection import (
 )
 from .auto_mode.shared import (
     AutoModeConfig,
+    AUTO_MODE_OPTUNA_CONSTRAINTS_ENABLED,
+    AUTO_MODE_OPTUNA_CONSTRAINTS_USE_EVENTS_IN_REFINE,
+    AUTO_MODE_OPTUNA_CONSTRAINTS_ZERO_FEASIBLE_FALLBACK,
+    AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_EVENTS_SEVERITY,
+    AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_MODE_RIPPLE_DB,
+    AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_NET_BOOST_DB,
+    AUTO_MODE_OPTUNA_CONSTRAINTS_REFINE_ONLY,
+    AUTO_MODE_OPTUNA_TELEMETRY,
+    AUTO_MODE_OPTUNA_TELEMETRY_LOG_SUMMARY,
     _auto_builtin_target_name,
     _auto_filter_cache_key,
     _auto_goal,
@@ -435,6 +445,32 @@ def _auto_optuna_jsonable(value):
     return str(value)
 
 
+def _auto_optuna_scope_context_hash(
+    *,
+    center: dict | None = None,
+    shrink: float | None = None,
+    extra: dict | None = None,
+) -> str:
+    payload = {
+        "center": _auto_optuna_jsonable(dict(center or {})),
+        "shrink": None if shrink is None else round(float(shrink), 6),
+        "extra": _auto_optuna_jsonable(dict(extra or {})),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()[:12]
+
+
+def _auto_optuna_scope_with_context(
+    scope_base: str,
+    *,
+    center: dict | None = None,
+    shrink: float | None = None,
+    extra: dict | None = None,
+) -> str:
+    ctx = _auto_optuna_scope_context_hash(center=center, shrink=shrink, extra=extra)
+    return f"{str(scope_base)}-{ctx}"
+
+
 def _auto_optuna_param_signature(params: dict | None) -> str:
     if not isinstance(params, dict) or not params:
         return ""
@@ -465,6 +501,838 @@ def _auto_optuna_trial_params(
     if params:
         return params
     return dict(preset or {})
+
+
+def _auto_optuna_startup_for_phase_kind(cfg, *, phase_kind: str | None, total: int) -> int:
+    kind = str(phase_kind or "").strip().lower()
+    total_i = int(max(1, total))
+
+    if kind == "phase1":
+        base = int(getattr(cfg, "optuna_startup_phase1", getattr(cfg, "optuna_pilot_startup_trials", 12)))
+    elif kind == "target":
+        base = int(getattr(cfg, "optuna_startup_target", getattr(cfg, "optuna_pilot_startup_trials", 12)))
+    elif kind == "local":
+        base = int(getattr(cfg, "optuna_startup_local", getattr(cfg, "optuna_pilot_startup_trials", 12)))
+    elif kind == "micro":
+        base = int(getattr(cfg, "optuna_startup_micro", getattr(cfg, "optuna_pilot_startup_trials", 12)))
+    else:
+        base = int(getattr(cfg, "optuna_pilot_startup_trials", 12))
+
+    return int(max(1, min(base, total_i)))
+
+
+def _auto_optuna_is_refine_phase_kind(phase_kind: str | None) -> bool:
+    kind = str(phase_kind or "").strip().lower()
+    return kind in {"local", "micro"}
+
+
+def _auto_optuna_constraint_scope_kind(scope: str | None) -> str:
+    scope_txt = str(scope or "").strip().lower()
+    if not scope_txt:
+        return ""
+    if "phase2-local" in scope_txt or "local_center_" in scope_txt:
+        return "local"
+    if "phase3-micro" in scope_txt or "cache-micro" in scope_txt or "cache_micro" in scope_txt:
+        return "micro"
+    return ""
+
+
+def _auto_optuna_constraints_enabled_for_scope(
+    base_data: dict | None,
+    scope: str | None,
+    *,
+    phase_kind: str | None = None,
+) -> bool:
+    data = dict(base_data or {})
+    enabled = _auto_safe_bool(
+        data.get("auto_mode_optuna_constraints", AUTO_MODE_OPTUNA_CONSTRAINTS_ENABLED),
+        AUTO_MODE_OPTUNA_CONSTRAINTS_ENABLED,
+    )
+    if not enabled:
+        return False
+    refine_only = _auto_safe_bool(
+        data.get("auto_mode_optuna_constraints_refine_only", AUTO_MODE_OPTUNA_CONSTRAINTS_REFINE_ONLY),
+        AUTO_MODE_OPTUNA_CONSTRAINTS_REFINE_ONLY,
+    )
+    if not refine_only:
+        return True
+    if str(phase_kind or "").strip():
+        return bool(_auto_optuna_is_refine_phase_kind(phase_kind))
+    return bool(_auto_optuna_constraint_scope_kind(scope))
+
+
+def _auto_optuna_effective_scope(
+    base_data: dict | None,
+    scope: str | None,
+    *,
+    phase_kind: str | None = None,
+) -> str:
+    scope_txt = str(scope or "study").strip() or "study"
+    if _auto_optuna_is_refine_phase_kind(phase_kind) and str(phase_kind or "").strip().lower() == "local":
+        if not str(scope_txt).lower().endswith("-locv2") and "-locv2-" not in str(scope_txt).lower():
+            scope_txt = f"{scope_txt}-locv2"
+    if str(scope_txt).lower().endswith("-c1"):
+        return str(scope_txt)
+    if _auto_optuna_constraints_enabled_for_scope(base_data, scope_txt, phase_kind=phase_kind):
+        return f"{scope_txt}-c1"
+    return str(scope_txt)
+
+
+def _auto_optuna_constraint_thresholds(base_data: dict | None, scope: str | None) -> dict:
+    data = dict(base_data or {})
+    kind = _auto_optuna_constraint_scope_kind(scope)
+
+    max_mode_ripple = max(
+        0.0,
+        _auto_safe_float(
+            data.get(
+                "auto_mode_optuna_constraints_max_mode_ripple_db",
+                AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_MODE_RIPPLE_DB,
+            ),
+            AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_MODE_RIPPLE_DB,
+        ),
+    )
+    max_events = max(
+        0.0,
+        _auto_safe_float(
+            data.get(
+                "auto_mode_optuna_constraints_max_events_severity",
+                AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_EVENTS_SEVERITY,
+            ),
+            AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_EVENTS_SEVERITY,
+        ),
+    )
+    max_boost = max(
+        0.0,
+        _auto_safe_float(
+            data.get(
+                "auto_mode_optuna_constraints_max_net_boost_db",
+                AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_NET_BOOST_DB,
+            ),
+            AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_NET_BOOST_DB,
+        ),
+    )
+
+    return {
+        "kind": str(kind),
+        "max_mode_ripple_db": float(max_mode_ripple),
+        "max_events_severity": float(max_events),
+        "max_net_boost_db": float(max_boost),
+    }
+
+
+def _auto_optuna_trial_out_payload(trial) -> dict:
+    try:
+        user_attrs = dict(getattr(trial, "user_attrs", {}) or {})
+    except Exception:
+        user_attrs = {}
+    out = user_attrs.get(AUTO_MODE_OPTUNA_USER_ATTR_OUT, {})
+    if isinstance(out, dict):
+        return dict(out or {})
+    return {}
+
+
+def _auto_optuna_constraint_vector_from_metrics(
+    metrics: dict | None,
+    *,
+    max_mode_ripple_db: float,
+    max_events_severity: float,
+    max_net_boost_db: float,
+    use_events: bool = True,
+) -> tuple[float, float, float]:
+    met = dict(metrics or {})
+
+    ripple = _auto_ripple_metric_for_gate(met)
+    events = _auto_safe_float(met.get("events_severity", float("nan")), float("nan"))
+    boost = _auto_safe_float(met.get("max_net_boost_db", float("nan")), float("nan"))
+
+    ripple_violation = 0.0
+    event_violation = 0.0
+    boost_violation = 0.0
+
+    if np.isfinite(ripple):
+        ripple_violation = float(max(0.0, float(ripple) - float(max_mode_ripple_db)))
+    if bool(use_events) and np.isfinite(events):
+        event_violation = float(max(0.0, float(events) - float(max_events_severity)))
+    if np.isfinite(boost):
+        boost_violation = float(max(0.0, float(boost) - float(max_net_boost_db)))
+
+    return (
+        float(ripple_violation),
+        float(event_violation),
+        float(boost_violation),
+    )
+
+
+def _auto_optuna_use_events_constraint(
+    base_data: dict | None,
+    *,
+    phase_kind: str | None,
+) -> bool:
+    data = dict(base_data or {})
+    kind = str(phase_kind or "").strip().lower()
+
+    if kind in {"local", "micro"}:
+        return _auto_safe_bool(
+            data.get(
+                "auto_mode_optuna_constraints_use_events_in_refine",
+                AUTO_MODE_OPTUNA_CONSTRAINTS_USE_EVENTS_IN_REFINE,
+            ),
+            AUTO_MODE_OPTUNA_CONSTRAINTS_USE_EVENTS_IN_REFINE,
+        )
+
+    return True
+
+
+def _auto_optuna_constraints_func(
+    *,
+    base_data: dict | None,
+    scope: str | None,
+    phase_kind: str | None = None,
+):
+    if not _auto_optuna_constraints_enabled_for_scope(base_data, scope, phase_kind=phase_kind):
+        return None
+
+    thr = _auto_optuna_constraint_thresholds(base_data, scope)
+    use_events = _auto_optuna_use_events_constraint(
+        base_data,
+        phase_kind=phase_kind,
+    )
+    logger.info(
+        "Automatic mode Optuna constraints: phase_kind=%s use_events=%s scope=%s",
+        str(phase_kind or ""),
+        str(bool(use_events)),
+        str(scope or ""),
+    )
+
+    def _constraints(trial):
+        out = _auto_optuna_trial_out_payload(trial)
+        metrics = dict(out.get("metrics", {}) or {})
+        return _auto_optuna_constraint_vector_from_metrics(
+            metrics,
+            max_mode_ripple_db=float(thr["max_mode_ripple_db"]),
+            max_events_severity=float(thr["max_events_severity"]),
+            max_net_boost_db=float(thr["max_net_boost_db"]),
+            use_events=bool(use_events),
+        )
+
+    return _constraints
+
+
+def _auto_optuna_run_token(
+    *,
+    study_name: str | None,
+    study_scope: str | None,
+    seed: int,
+    total: int,
+    startup_trials: int,
+) -> str:
+    payload = {
+        "study_name": str(study_name or ""),
+        "study_scope": str(study_scope or ""),
+        "seed": int(seed),
+        "total": int(total),
+        "startup_trials": int(startup_trials),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()[:16]
+
+
+def _auto_optuna_constraint_info_for_metrics(
+    *,
+    base_data: dict | None,
+    scope: str | None,
+    metrics: dict | None,
+    phase_kind: str | None = None,
+) -> dict:
+    enabled = bool(_auto_optuna_constraints_enabled_for_scope(base_data, scope, phase_kind=phase_kind))
+    if not enabled:
+        return {
+            "constraints_active": False,
+            "feasible": None,
+            "violations": {},
+            "constraint_flags": {},
+        }
+
+    thr = _auto_optuna_constraint_thresholds(base_data, scope)
+    use_events = _auto_optuna_use_events_constraint(
+        base_data,
+        phase_kind=phase_kind,
+    )
+    vec = _auto_optuna_constraint_vector_from_metrics(
+        dict(metrics or {}),
+        max_mode_ripple_db=float(thr["max_mode_ripple_db"]),
+        max_events_severity=float(thr["max_events_severity"]),
+        max_net_boost_db=float(thr["max_net_boost_db"]),
+        use_events=bool(use_events),
+    )
+    ripple_v, events_v, boost_v = vec
+    feasible = bool(
+        float(ripple_v) <= 0.0
+        and float(events_v) <= 0.0
+        and float(boost_v) <= 0.0
+    )
+    return {
+        "constraints_active": True,
+        "feasible": bool(feasible),
+        "violations": {
+            "ripple": float(ripple_v),
+            "events": float(events_v),
+            "boost": float(boost_v),
+        },
+        "constraint_flags": {
+            "use_events": bool(use_events),
+        },
+    }
+
+
+def _auto_optuna_trial_objective_value(trial, out_payload: dict | None = None) -> float | None:
+    out = dict(out_payload or {})
+    opt_meta = dict(out.get("optuna", {}) or {})
+    val = opt_meta.get("objective_value", None)
+    try:
+        if val is not None and np.isfinite(float(val)):
+            return float(val)
+    except Exception:
+        pass
+
+    direct_val = getattr(trial, "value", None)
+    try:
+        if direct_val is not None and np.isfinite(float(direct_val)):
+            return float(direct_val)
+    except Exception:
+        pass
+
+    vals = getattr(trial, "values", None)
+    try:
+        if vals and np.isfinite(float(vals[0])):
+            return float(vals[0])
+    except Exception:
+        pass
+
+    return None
+
+
+def _auto_optuna_attach_out_telemetry(
+    out: dict | None,
+    *,
+    base_data: dict | None,
+    study_name: str | None,
+    study_scope: str | None,
+    phase_kind: str | None = None,
+    run_token: str,
+    source: str,
+    objective_value_num: float | None,
+) -> dict:
+    out2 = dict(out or {})
+    metrics = dict(out2.get("metrics", {}) or {})
+    cinfo = _auto_optuna_constraint_info_for_metrics(
+        base_data=base_data,
+        scope=study_scope,
+        metrics=metrics,
+        phase_kind=phase_kind,
+    )
+    out2["optuna"] = {
+        "study_name": str(study_name or ""),
+        "study_scope": str(study_scope or ""),
+        "phase_kind": str(phase_kind or ""),
+        "run_token": str(run_token),
+        "source": str(source or ""),
+        "objective_value": (
+            None
+            if objective_value_num is None or not np.isfinite(float(objective_value_num))
+            else float(objective_value_num)
+        ),
+        "constraints_active": bool(cinfo.get("constraints_active", False)),
+        "feasible": cinfo.get("feasible", None),
+        "violations": dict(cinfo.get("violations", {}) or {}),
+        "constraint_flags": dict(cinfo.get("constraint_flags", {}) or {}),
+    }
+    return out2
+
+
+def _auto_metric_summary(values) -> dict:
+    vals = []
+    for v in list(values or []):
+        try:
+            fv = float(v)
+            if np.isfinite(fv):
+                vals.append(float(fv))
+        except Exception:
+            pass
+
+    if not vals:
+        return {"count": 0, "min": None, "median": None, "max": None}
+
+    arr = np.asarray(vals, dtype=float)
+    return {
+        "count": int(arr.size),
+        "min": float(np.min(arr)),
+        "median": float(np.median(arr)),
+        "max": float(np.max(arr)),
+    }
+
+
+def _auto_metric_summary_text(name: str, summary: dict | None, ndigits: int = 3) -> str:
+    s = dict(summary or {})
+    if int(s.get("count", 0) or 0) <= 0:
+        return f"{str(name)} n/a"
+
+    def _fmt(x):
+        try:
+            fx = float(x)
+            if np.isfinite(fx):
+                return f"{fx:.{int(ndigits)}f}"
+        except Exception:
+            pass
+        return "n/a"
+
+    return (
+        f"{str(name)} min/med/max "
+        f"{_fmt(s.get('min'))}/{_fmt(s.get('median'))}/{_fmt(s.get('max'))}"
+    )
+
+
+def _auto_optuna_base_data_without_constraints(base_data: dict | None) -> dict:
+    data = dict(base_data or {})
+    data["auto_mode_optuna_constraints"] = False
+    return data
+
+
+def _auto_optuna_needs_zero_feasible_rescue(
+    *,
+    base_data: dict | None,
+    phase_kind: str | None,
+    telemetry: dict | None,
+) -> bool:
+    tel = dict(telemetry or {})
+    enabled = _auto_safe_bool(
+        (base_data or {}).get(
+            "auto_mode_optuna_constraints_zero_feasible_fallback",
+            AUTO_MODE_OPTUNA_CONSTRAINTS_ZERO_FEASIBLE_FALLBACK,
+        ),
+        AUTO_MODE_OPTUNA_CONSTRAINTS_ZERO_FEASIBLE_FALLBACK,
+    )
+    if not enabled:
+        return False
+
+    kind = str(phase_kind or "").strip().lower()
+    if kind not in {"local", "micro"}:
+        return False
+    if not bool(tel.get("constraints_active", False)):
+        return False
+    if _auto_optuna_is_refine_phase_kind(phase_kind):
+        cflags = dict(tel.get("constraint_flags", {}) or {})
+        if not bool(cflags.get("use_events", True)):
+            vc = dict(tel.get("violation_counts", {}) or {})
+            ripple_bad = int(vc.get("ripple", 0) or 0)
+            boost_bad = int(vc.get("boost", 0) or 0)
+            if ripple_bad == 0 and boost_bad == 0:
+                return False
+
+    complete_n = int(tel.get("complete_trials", 0) or 0)
+    feasible_n = int(tel.get("feasible_trials", 0) or 0)
+    infeasible_n = int(tel.get("infeasible_trials", 0) or 0)
+    return bool(complete_n > 0 and feasible_n == 0 and infeasible_n > 0)
+
+
+def _auto_optuna_build_run_telemetry(
+    study,
+    *,
+    base_data: dict | None,
+    study_name: str | None,
+    study_scope: str | None,
+    phase_kind: str | None,
+    run_token: str,
+    requested_total: int,
+    startup_trials: int,
+    duplicate_skips: int,
+    duplicate_replays: int,
+    duplicate_reserved: int,
+) -> dict:
+    try:
+        trials = list(
+            study.get_trials(deepcopy=False)
+            if hasattr(study, "get_trials")
+            else getattr(study, "trials", [])
+        )
+    except Exception:
+        trials = []
+
+    run_trials = []
+    for tr in list(trials or []):
+        try:
+            user_attrs = dict(getattr(tr, "user_attrs", {}) or {})
+        except Exception:
+            user_attrs = {}
+        out = dict(user_attrs.get(AUTO_MODE_OPTUNA_USER_ATTR_OUT, {}) or {})
+        opt_meta = dict(out.get("optuna", {}) or {})
+        if str(opt_meta.get("run_token", "")) == str(run_token):
+            run_trials.append((tr, out, opt_meta))
+
+    state_counts = {}
+    complete_n = 0
+    fail_n = 0
+    feasible_n = 0
+    infeasible_n = 0
+    best_raw_value = None
+    best_raw_trial = None
+    best_feasible_value = None
+    best_feasible_trial = None
+
+    violation_counts = {"ripple": 0, "events": 0, "boost": 0}
+    violation_max = {"ripple": 0.0, "events": 0.0, "boost": 0.0}
+    source_counts = {}
+    events_all = []
+    events_feasible = []
+    events_infeasible = []
+    constraint_flags = {}
+    run_phase_kind = ""
+
+    for tr, out, opt_meta in list(run_trials):
+        state_obj = getattr(tr, "state", None)
+        state_name = str(getattr(state_obj, "name", state_obj or "UNKNOWN"))
+        state_counts[state_name] = int(state_counts.get(state_name, 0) or 0) + 1
+
+        source = str(opt_meta.get("source", "") or "")
+        if source:
+            source_counts[source] = int(source_counts.get(source, 0) or 0) + 1
+        if not run_phase_kind:
+            run_phase_kind = str(opt_meta.get("phase_kind", "") or "")
+
+        if state_name == "COMPLETE":
+            complete_n += 1
+        elif state_name == "FAIL":
+            fail_n += 1
+
+        constraints_active = bool(opt_meta.get("constraints_active", False))
+        feasible = opt_meta.get("feasible", None)
+        violations = dict(opt_meta.get("violations", {}) or {})
+        trial_constraint_flags = dict(opt_meta.get("constraint_flags", {}) or {})
+        if trial_constraint_flags and not constraint_flags:
+            constraint_flags = dict(trial_constraint_flags)
+
+        if constraints_active and feasible is True:
+            feasible_n += 1
+        elif constraints_active and feasible is False:
+            infeasible_n += 1
+
+        for key in ("ripple", "events", "boost"):
+            v = _auto_safe_float(violations.get(key, 0.0), 0.0)
+            if float(v) > 0.0:
+                violation_counts[key] = int(violation_counts.get(key, 0) or 0) + 1
+                violation_max[key] = float(max(float(violation_max.get(key, 0.0) or 0.0), float(v)))
+
+        if state_name == "COMPLETE":
+            metrics = dict(out.get("metrics", {}) or {})
+            events_val = _auto_safe_float(metrics.get("events_severity", float("nan")), float("nan"))
+            if np.isfinite(events_val):
+                events_all.append(float(events_val))
+                if constraints_active and feasible is True:
+                    events_feasible.append(float(events_val))
+                elif constraints_active and feasible is False:
+                    events_infeasible.append(float(events_val))
+            obj_val = _auto_optuna_trial_objective_value(tr, out)
+            if obj_val is not None:
+                if best_raw_value is None or float(obj_val) > float(best_raw_value):
+                    best_raw_value = float(obj_val)
+                    best_raw_trial = int(getattr(tr, "number", -1))
+
+                feasible_ok = opt_meta.get("feasible", None)
+                if feasible_ok is True:
+                    if best_feasible_value is None or float(obj_val) > float(best_feasible_value):
+                        best_feasible_value = float(obj_val)
+                        best_feasible_trial = int(getattr(tr, "number", -1))
+
+    startup_complete = int(min(max(1, int(startup_trials)), int(complete_n))) if complete_n > 0 else 0
+    model_complete = int(max(0, int(complete_n) - int(startup_complete)))
+    constraints_active_any = bool(_auto_optuna_constraints_enabled_for_scope(base_data, study_scope, phase_kind=phase_kind or run_phase_kind))
+    constraint_thresholds = {}
+    try:
+        thr = _auto_optuna_constraint_thresholds(base_data, study_scope)
+        constraint_thresholds = {
+            "max_events_severity": float(thr["max_events_severity"]),
+            "max_mode_ripple_db": float(thr["max_mode_ripple_db"]),
+            "max_net_boost_db": float(thr["max_net_boost_db"]),
+        }
+    except Exception:
+        constraint_thresholds = {}
+
+    return {
+        "study_name": str(study_name or "in-memory"),
+        "study_scope": str(study_scope or ""),
+        "phase_kind": str(run_phase_kind or phase_kind or ""),
+        "run_token": str(run_token),
+        "requested_total": int(requested_total),
+        "run_trials": int(len(run_trials)),
+        "complete_trials": int(complete_n),
+        "failed_trials": int(fail_n),
+        "state_counts": dict(state_counts or {}),
+        "startup_trials": int(startup_trials),
+        "startup_complete": int(startup_complete),
+        "model_complete": int(model_complete),
+        "duplicate_skips": int(duplicate_skips),
+        "duplicate_replays": int(duplicate_replays),
+        "duplicate_reserved": int(duplicate_reserved),
+        "constraints_active": bool(constraints_active_any),
+        "feasible_trials": int(feasible_n) if bool(constraints_active_any) else 0,
+        "infeasible_trials": int(infeasible_n) if bool(constraints_active_any) else 0,
+        "best_raw_value": best_raw_value,
+        "best_raw_trial": best_raw_trial,
+        "best_feasible_value": best_feasible_value if bool(constraints_active_any) else None,
+        "best_feasible_trial": best_feasible_trial if bool(constraints_active_any) else None,
+        "violation_counts": dict(violation_counts or {}),
+        "violation_max": dict(violation_max or {}),
+        "events_summary": _auto_metric_summary(events_all),
+        "events_feasible_summary": _auto_metric_summary(events_feasible),
+        "events_infeasible_summary": _auto_metric_summary(events_infeasible),
+        "constraint_thresholds": dict(constraint_thresholds or {}),
+        "constraint_flags": dict(constraint_flags or {}),
+        "source_counts": dict(source_counts or {}),
+    }
+
+
+def _auto_optuna_log_run_telemetry(logger, *, phase_label: str, tel: dict | None) -> None:
+    tel = dict(tel or {})
+    if not tel:
+        return
+
+    msg = (
+        "Automatic mode Optuna telemetry [%s]: requested=%d run=%d complete=%d fail=%d "
+        "startup=%d model=%d dup=%d(replay=%d,reserved=%d)"
+        % (
+            str(phase_label),
+            int(tel.get("requested_total", 0) or 0),
+            int(tel.get("run_trials", 0) or 0),
+            int(tel.get("complete_trials", 0) or 0),
+            int(tel.get("failed_trials", 0) or 0),
+            int(tel.get("startup_complete", 0) or 0),
+            int(tel.get("model_complete", 0) or 0),
+            int(tel.get("duplicate_skips", 0) or 0),
+            int(tel.get("duplicate_replays", 0) or 0),
+            int(tel.get("duplicate_reserved", 0) or 0),
+        )
+    )
+    logger.info(msg)
+
+    if bool(tel.get("constraints_active", False)):
+        cflags = dict(tel.get("constraint_flags", {}) or {})
+        use_events = bool(cflags.get("use_events", True))
+        logger.info(
+            "Automatic mode Optuna feasible [%s]: feasible=%d infeasible=%d "
+            "best_raw=%s best_feasible=%s violations(r=%d,e=%d,b=%d)",
+            str(phase_label),
+            int(tel.get("feasible_trials", 0) or 0),
+            int(tel.get("infeasible_trials", 0) or 0),
+            "n/a" if tel.get("best_raw_value", None) is None else f"{float(tel['best_raw_value']):.6f}",
+            "n/a" if tel.get("best_feasible_value", None) is None else f"{float(tel['best_feasible_value']):.6f}",
+            int((tel.get("violation_counts", {}) or {}).get("ripple", 0) or 0),
+            int((tel.get("violation_counts", {}) or {}).get("events", 0) or 0),
+            int((tel.get("violation_counts", {}) or {}).get("boost", 0) or 0),
+        )
+        if not use_events:
+            logger.info(
+                "Automatic mode Optuna refine constraints [%s]: events constraint disabled for refine scope",
+                str(phase_label),
+            )
+        if (
+            use_events
+            and
+            int(tel.get("complete_trials", 0) or 0) > 0
+            and int(tel.get("feasible_trials", 0) or 0) == 0
+            and int(tel.get("infeasible_trials", 0) or 0) > 0
+        ):
+            ev_all_txt = _auto_metric_summary_text("events", tel.get("events_summary", {}), 3)
+            ev_bad_txt = _auto_metric_summary_text("events_bad", tel.get("events_infeasible_summary", {}), 3)
+            ev_thr = ((tel.get("constraint_thresholds", {}) or {}).get("max_events_severity", None))
+            logger.warning(
+                "Automatic mode Optuna zero-feasible [%s]: all complete trials violated constraints, "
+                "events<=%s required, %s, %s",
+                str(phase_label),
+                "n/a" if ev_thr is None else f"{float(ev_thr):.3f}",
+                str(ev_all_txt),
+                str(ev_bad_txt),
+            )
+
+
+def _auto_optuna_fmt_value(v, ndigits: int = 3) -> str:
+    try:
+        fv = float(v)
+        if np.isfinite(fv):
+            return f"{fv:.{int(ndigits)}f}"
+    except Exception:
+        pass
+    return "n/a"
+
+
+def _auto_optuna_telemetry_text(tel: dict | None) -> str:
+    return _auto_optuna_telemetry_text_ex(tel, include_phase_kind=False)
+
+
+def _auto_optuna_telemetry_text_ex(tel: dict | None, *, include_phase_kind: bool = False) -> str:
+    t = dict(tel or {})
+    if not t:
+        return ""
+
+    run_n = int(t.get("run_trials", 0) or 0)
+    complete_n = int(t.get("complete_trials", 0) or 0)
+    startup_n = int(t.get("startup_complete", 0) or 0)
+    model_n = int(t.get("model_complete", 0) or 0)
+    dup_n = int(t.get("duplicate_skips", 0) or 0)
+
+    parts = [
+        f"optuna run={run_n}",
+        f"ok={complete_n}",
+        f"startup={startup_n}",
+        f"model={model_n}",
+    ]
+    if bool(include_phase_kind):
+        phase_kind = str(t.get("phase_kind", "") or "").strip()
+        if phase_kind:
+            parts.insert(0, f"phase={phase_kind}")
+    if dup_n > 0:
+        parts.append(f"dup={dup_n}")
+
+    if bool(t.get("constraints_active", False)):
+        cflags = dict(t.get("constraint_flags", {}) or {})
+        feas_n = int(t.get("feasible_trials", 0) or 0)
+        infeas_n = int(t.get("infeasible_trials", 0) or 0)
+        parts.append(f"feas={feas_n}/{feas_n + infeas_n}")
+        if not bool(cflags.get("use_events", True)):
+            parts.append("events=off")
+        best_raw = t.get("best_raw_value", None)
+        best_feas = t.get("best_feasible_value", None)
+        if best_raw is not None:
+            parts.append(f"raw={_auto_optuna_fmt_value(best_raw, 3)}")
+        if best_feas is not None:
+            parts.append(f"best={_auto_optuna_fmt_value(best_feas, 3)}")
+
+        vc = dict(t.get("violation_counts", {}) or {})
+        vr = int(vc.get("ripple", 0) or 0)
+        ve = int(vc.get("events", 0) or 0)
+        vb = int(vc.get("boost", 0) or 0)
+        if (vr + ve + vb) > 0:
+            parts.append(f"viol r/e/b={vr}/{ve}/{vb}")
+    else:
+        best_raw = t.get("best_raw_value", None)
+        if best_raw is not None:
+            parts.append(f"best={_auto_optuna_fmt_value(best_raw, 3)}")
+
+    return ", ".join(parts)
+
+
+def _auto_optuna_events_debug_text(tel: dict | None, ndigits: int = 3) -> str:
+    t = dict(tel or {})
+    thr = dict(t.get("constraint_thresholds", {}) or {})
+    cflags = dict(t.get("constraint_flags", {}) or {})
+    use_events = bool(cflags.get("use_events", True))
+    ev_thr = thr.get("max_events_severity", None)
+    summ = dict(t.get("events_summary", {}) or {})
+
+    def _fmt(x):
+        try:
+            fx = float(x)
+            if np.isfinite(fx):
+                return f"{fx:.{int(ndigits)}f}"
+        except Exception:
+            pass
+        return "n/a"
+
+    ev_body = "events n/a"
+    if int(summ.get("count", 0) or 0) > 0:
+        ev_body = (
+            f"events min/med/max "
+            f"{_fmt(summ.get('min'))}/{_fmt(summ.get('median'))}/{_fmt(summ.get('max'))}"
+        )
+    if not use_events:
+        return f"events=off, {ev_body}"
+    if ev_thr is None:
+        return str(ev_body)
+    return f"events<={_fmt(ev_thr)}, {ev_body}"
+
+
+def _auto_optuna_fallback_summary_text(tel: dict | None) -> str:
+    t = dict(tel or {})
+    fallback_tel = dict(t.get("fallback_telemetry", {}) or {})
+    constrained_txt = _auto_optuna_telemetry_text(t)
+    fallback_txt = _auto_optuna_telemetry_text(fallback_tel)
+    events_txt = _auto_optuna_events_debug_text(t, 3)
+
+    parts = []
+    if constrained_txt:
+        parts.append(f"constrained {constrained_txt}")
+    if fallback_txt:
+        parts.append(f"fallback {fallback_txt}")
+    if events_txt:
+        parts.append(str(events_txt))
+    return "; ".join(parts)
+
+
+def _auto_optuna_telemetry_rollup(items: list[dict] | None) -> dict:
+    arr = [dict(x or {}) for x in list(items or []) if isinstance(x, dict) and x]
+    if not arr:
+        return {}
+
+    out = {
+        "run_trials": 0,
+        "complete_trials": 0,
+        "failed_trials": 0,
+        "startup_complete": 0,
+        "model_complete": 0,
+        "duplicate_skips": 0,
+        "duplicate_replays": 0,
+        "duplicate_reserved": 0,
+        "constraints_active": False,
+        "feasible_trials": 0,
+        "infeasible_trials": 0,
+        "best_raw_value": None,
+        "best_feasible_value": None,
+        "violation_counts": {"ripple": 0, "events": 0, "boost": 0},
+    }
+
+    for t in arr:
+        out["run_trials"] += int(t.get("run_trials", 0) or 0)
+        out["complete_trials"] += int(t.get("complete_trials", 0) or 0)
+        out["failed_trials"] += int(t.get("failed_trials", 0) or 0)
+        out["startup_complete"] += int(t.get("startup_complete", 0) or 0)
+        out["model_complete"] += int(t.get("model_complete", 0) or 0)
+        out["duplicate_skips"] += int(t.get("duplicate_skips", 0) or 0)
+        out["duplicate_replays"] += int(t.get("duplicate_replays", 0) or 0)
+        out["duplicate_reserved"] += int(t.get("duplicate_reserved", 0) or 0)
+
+        if bool(t.get("constraints_active", False)):
+            out["constraints_active"] = True
+            out["feasible_trials"] += int(t.get("feasible_trials", 0) or 0)
+            out["infeasible_trials"] += int(t.get("infeasible_trials", 0) or 0)
+
+        br = t.get("best_raw_value", None)
+        if br is not None:
+            try:
+                brf = float(br)
+                if np.isfinite(brf) and (
+                    out["best_raw_value"] is None or brf > float(out["best_raw_value"])
+                ):
+                    out["best_raw_value"] = float(brf)
+            except Exception:
+                pass
+
+        bf = t.get("best_feasible_value", None)
+        if bf is not None:
+            try:
+                bff = float(bf)
+                if np.isfinite(bff) and (
+                    out["best_feasible_value"] is None or bff > float(out["best_feasible_value"])
+                ):
+                    out["best_feasible_value"] = float(bff)
+            except Exception:
+                pass
+
+        vc = dict(t.get("violation_counts", {}) or {})
+        out["violation_counts"]["ripple"] += int(vc.get("ripple", 0) or 0)
+        out["violation_counts"]["events"] += int(vc.get("events", 0) or 0)
+        out["violation_counts"]["boost"] += int(vc.get("boost", 0) or 0)
+
+    return out
 
 
 def _auto_optuna_study_records(study) -> dict[str, dict]:
@@ -514,6 +1382,8 @@ def _auto_optuna_remember_result(
     *,
     base_data: dict | None,
     study_name: str | None,
+    study_scope: str | None = None,
+    phase_kind: str | None = None,
     seed: int,
     preset: dict | None,
     metrics: dict | None,
@@ -531,10 +1401,26 @@ def _auto_optuna_remember_result(
     params_sig = _auto_optuna_param_signature(params)
     if not params_sig:
         return False
+    scope_eff = _auto_optuna_effective_scope(base_data, study_scope or study_name, phase_kind=phase_kind)
+    run_token = _auto_optuna_run_token(
+        study_name=study_name,
+        study_scope=scope_eff,
+        seed=int(seed),
+        total=1,
+        startup_trials=1,
+    )
+    sampler_kwargs = dict(_auto_optuna_sampler_kwargs(base_data, workers=1) or {})
+    constraint_fn = _auto_optuna_constraints_func(
+        base_data=base_data,
+        scope=scope_eff,
+        phase_kind=phase_kind,
+    )
+    if callable(constraint_fn):
+        sampler_kwargs["constraints_func"] = constraint_fn
     sampler = optuna_mod.samplers.TPESampler(
         seed=int(seed),
         n_startup_trials=1,
-        **_auto_optuna_sampler_kwargs(base_data, workers=1),
+        **sampler_kwargs,
     )
     study = _auto_optuna_create_study(
         optuna_mod,
@@ -551,28 +1437,34 @@ def _auto_optuna_remember_result(
         trial_obj = study.ask()
     except Exception:
         return False
-    try:
-        if hasattr(trial_obj, "set_user_attr"):
-            trial_obj.set_user_attr(
-                AUTO_MODE_OPTUNA_USER_ATTR_OUT,
-                _auto_optuna_jsonable(
-                    dict(
-                        out_payload
-                        or {
-                            "ok": True,
-                            "metrics": dict(metrics or {}),
-                            "trial_preset": dict(preset or {}),
-                            "replayed_from_cache": True,
-                        }
-                    )
-                ),
-            )
-    except Exception:
-        pass
     value = _auto_optuna_objective_value(
         dict(metrics or {}),
         use_refine_tiebreak=bool(use_refine_tiebreak),
     )
+    payload = _auto_optuna_attach_out_telemetry(
+        out_payload
+        or {
+            "ok": True,
+            "metrics": dict(metrics or {}),
+            "trial_preset": dict(preset or {}),
+            "replayed_from_cache": True,
+        },
+        base_data=base_data,
+        study_name=study_name,
+        study_scope=scope_eff,
+        phase_kind=phase_kind,
+        run_token=run_token,
+        source="remembered",
+        objective_value_num=float(value) if np.isfinite(value) else None,
+    )
+    try:
+        if hasattr(trial_obj, "set_user_attr"):
+            trial_obj.set_user_attr(
+                AUTO_MODE_OPTUNA_USER_ATTR_OUT,
+                _auto_optuna_jsonable(dict(payload or {})),
+            )
+    except Exception:
+        pass
     try:
         study.tell(trial_obj, float(value))
     except Exception:
@@ -594,9 +1486,9 @@ def _auto_optuna_objective_value(metrics: dict | None, *, use_refine_tiebreak: b
 def _auto_run_optuna_eval_loop(
     *,
     optuna_mod,
+    cfg: AutoModeConfig | None = None,
     n_total: int,
     seed: int,
-    startup_trials: int,
     base_data: dict | None,
     seed_presets: list[dict] | None,
     build_preset,
@@ -606,15 +1498,74 @@ def _auto_run_optuna_eval_loop(
     workers: int,
     seed_to_params=None,
     study_name: str | None = None,
-) -> None:
+    study_scope: str | None = None,
+    phase_label: str | None = None,
+    phase_kind: str | None = None,
+) -> dict:
     total = int(max(0, n_total))
     if total <= 0:
-        return
+        return {}
+    cfg_optuna = cfg if isinstance(cfg, AutoModeConfig) else AutoModeConfig.from_base_data(base_data)
+    scope_eff = _auto_optuna_effective_scope(base_data, study_scope or study_name, phase_kind=phase_kind)
+    # Startup is selected exclusively by phase_kind + total; callers do not override it.
+    startup_effective = _auto_optuna_startup_for_phase_kind(
+        cfg_optuna,
+        phase_kind=phase_kind,
+        total=int(total),
+    )
+    logger.info(
+        "Automatic mode Optuna startup policy: phase_kind=%s scope=%s total=%d startup=%d",
+        str(phase_kind or ""),
+        str(study_scope or study_name or ""),
+        int(total),
+        int(startup_effective),
+    )
+    run_token = _auto_optuna_run_token(
+        study_name=study_name,
+        study_scope=scope_eff,
+        seed=int(seed),
+        total=int(total),
+        startup_trials=int(startup_effective),
+    )
+    sampler_kwargs = dict(_auto_optuna_sampler_kwargs(base_data, workers=int(workers)) or {})
+    constraint_fn = _auto_optuna_constraints_func(
+        base_data=base_data,
+        scope=scope_eff,
+        phase_kind=phase_kind,
+    )
+    if callable(constraint_fn):
+        sampler_kwargs["constraints_func"] = constraint_fn
     sampler = optuna_mod.samplers.TPESampler(
         seed=int(seed),
-        n_startup_trials=int(max(1, min(int(startup_trials), int(total)))),
-        **_auto_optuna_sampler_kwargs(base_data, workers=int(workers)),
+        n_startup_trials=int(startup_effective),
+        **sampler_kwargs,
     )
+    logger.info(
+        "Automatic mode Optuna study %s: startup=%d total=%d",
+        str(study_name or "in-memory"),
+        int(startup_effective),
+        int(total),
+    )
+    logger.info(
+        "Automatic mode Optuna phase=%s scope=%s startup=%d total=%d",
+        str(phase_kind or ""),
+        str(study_scope or study_name or ""),
+        int(startup_effective),
+        int(total),
+    )
+    if callable(constraint_fn):
+        thr = _auto_optuna_constraint_thresholds(base_data, scope_eff)
+        use_events = _auto_optuna_use_events_constraint(
+            base_data,
+            phase_kind=phase_kind,
+        )
+        logger.info(
+            "Automatic mode Optuna constraints enabled: scope=%s ripple<=%.3f events=%s boost<=%.3f",
+            str(scope_eff),
+            float(thr["max_mode_ripple_db"]),
+            "off" if not bool(use_events) else f"{float(thr['max_events_severity']):.3f}",
+            float(thr["max_net_boost_db"]),
+        )
     study = _auto_optuna_create_study(
         optuna_mod,
         sampler=sampler,
@@ -628,22 +1579,73 @@ def _auto_run_optuna_eval_loop(
     known_records = _auto_optuna_study_records(study) if bool(duplicate_guard) else {}
     reserved_signatures: set[str] = set()
     duplicate_skips = 0
+    duplicate_replays = 0
+    duplicate_reserved = 0
 
-    def _tell(trial_obj, out: dict, *, params_sig: str = "") -> None:
+    def _finalize_telemetry() -> dict:
+        if not bool(
+            _auto_safe_bool(
+                (base_data or {}).get("auto_mode_optuna_telemetry", AUTO_MODE_OPTUNA_TELEMETRY),
+                AUTO_MODE_OPTUNA_TELEMETRY,
+            )
+        ):
+            return {}
+        telemetry = _auto_optuna_build_run_telemetry(
+            study,
+            base_data=base_data,
+            study_name=study_name,
+            study_scope=scope_eff,
+            phase_kind=phase_kind,
+            run_token=run_token,
+            requested_total=int(total),
+            startup_trials=int(startup_effective),
+            duplicate_skips=int(duplicate_skips),
+            duplicate_replays=int(duplicate_replays),
+            duplicate_reserved=int(duplicate_reserved),
+        )
+        if bool(
+            _auto_safe_bool(
+                (base_data or {}).get("auto_mode_optuna_telemetry_log_summary", AUTO_MODE_OPTUNA_TELEMETRY_LOG_SUMMARY),
+                AUTO_MODE_OPTUNA_TELEMETRY_LOG_SUMMARY,
+            )
+        ):
+            _auto_optuna_log_run_telemetry(
+                logger,
+                phase_label=str(phase_label or scope_eff or "optuna"),
+                tel=telemetry,
+            )
+        return dict(telemetry or {})
+
+    def _tell(trial_obj, out: dict, *, params_sig: str = "", source: str = "optuna") -> None:
         value = None
+        out_payload = dict(out or {})
+        if bool(out_payload.get("ok", False)):
+            try:
+                value = float(objective_value(dict(out_payload or {})))
+                if not np.isfinite(value):
+                    value = float(-1e12)
+            except Exception:
+                value = float(-1e12)
+        out_payload = _auto_optuna_attach_out_telemetry(
+            out_payload,
+            base_data=base_data,
+            study_name=study_name,
+            study_scope=scope_eff,
+            phase_kind=phase_kind,
+            run_token=run_token,
+            source=str(source or "optuna"),
+            objective_value_num=value,
+        )
         try:
             if hasattr(trial_obj, "set_user_attr"):
                 trial_obj.set_user_attr(
                     AUTO_MODE_OPTUNA_USER_ATTR_OUT,
-                    _auto_optuna_jsonable(dict(out or {})),
+                    _auto_optuna_jsonable(dict(out_payload or {})),
                 )
         except Exception:
             pass
         try:
-            if bool(dict(out or {}).get("ok", False)):
-                value = float(objective_value(dict(out or {})))
-                if not np.isfinite(value):
-                    value = float(-1e12)
+            if bool(dict(out_payload or {}).get("ok", False)):
                 study.tell(trial_obj, float(value))
             else:
                 study.tell(trial_obj, state=fail_state)
@@ -652,26 +1654,40 @@ def _auto_run_optuna_eval_loop(
         if params_sig:
             reserved_signatures.discard(str(params_sig))
             rec = {"params_sig": str(params_sig)}
-            if bool(dict(out or {}).get("ok", False)) and value is not None and np.isfinite(value):
+            if bool(dict(out_payload or {}).get("ok", False)) and value is not None and np.isfinite(value):
                 rec["value"] = float(value)
             else:
                 rec["state"] = fail_state
-            if isinstance(out, dict) and out:
-                rec["out"] = dict(out or {})
+            if isinstance(out_payload, dict) and out_payload:
+                rec["out"] = dict(out_payload or {})
             known_records[str(params_sig)] = rec
 
     def _reuse_duplicate_trial(trial_obj, params_sig: str) -> None:
         rec = dict(known_records.get(str(params_sig), {}) or {})
         out_prev = dict(rec.get("out", {}) or {})
-        if out_prev and hasattr(trial_obj, "set_user_attr"):
+        val = rec.get("value", None)
+        out_payload = _auto_optuna_attach_out_telemetry(
+            out_prev,
+            base_data=base_data,
+            study_name=study_name,
+            study_scope=scope_eff,
+            phase_kind=phase_kind,
+            run_token=run_token,
+            source="replayed",
+            objective_value_num=(
+                float(val)
+                if val is not None and np.isfinite(_auto_safe_float(val, float("nan")))
+                else None
+            ),
+        )
+        if out_payload and hasattr(trial_obj, "set_user_attr"):
             try:
                 trial_obj.set_user_attr(
                     AUTO_MODE_OPTUNA_USER_ATTR_OUT,
-                    _auto_optuna_jsonable(out_prev),
+                    _auto_optuna_jsonable(out_payload),
                 )
             except Exception:
                 pass
-        val = rec.get("value", None)
         try:
             if val is not None and np.isfinite(float(val)):
                 study.tell(trial_obj, float(val))
@@ -681,7 +1697,7 @@ def _auto_run_optuna_eval_loop(
             pass
 
     def _ask_new_trial():
-        nonlocal duplicate_skips
+        nonlocal duplicate_reserved, duplicate_replays, duplicate_skips
         attempts = int(max(1, AUTO_MODE_OPTUNA_DUPLICATE_MAX_ATTEMPTS))
         last_error = None
         for _ in range(attempts):
@@ -703,13 +1719,33 @@ def _auto_run_optuna_eval_loop(
                 return trial_obj, preset, str(params_sig), None
             if params_sig in reserved_signatures:
                 duplicate_skips += 1
+                duplicate_reserved += 1
+                reserved_out = _auto_optuna_attach_out_telemetry(
+                    {
+                        "ok": False,
+                        "error": "duplicate suggestion reserved in current batch",
+                    },
+                    base_data=base_data,
+                    study_name=study_name,
+                    study_scope=scope_eff,
+                    phase_kind=phase_kind,
+                    run_token=run_token,
+                    source="reserved",
+                    objective_value_num=None,
+                )
                 try:
+                    if hasattr(trial_obj, "set_user_attr"):
+                        trial_obj.set_user_attr(
+                            AUTO_MODE_OPTUNA_USER_ATTR_OUT,
+                            _auto_optuna_jsonable(dict(reserved_out or {})),
+                        )
                     study.tell(trial_obj, state=fail_state)
                 except Exception:
                     pass
                 continue
             if params_sig in known_records:
                 duplicate_skips += 1
+                duplicate_replays += 1
                 _reuse_duplicate_trial(trial_obj, str(params_sig))
                 continue
             reserved_signatures.add(str(params_sig))
@@ -744,7 +1780,7 @@ def _auto_run_optuna_eval_loop(
 
     for preset in list(seed_items):
         if idx_next > total:
-            return
+            return _finalize_telemetry()
         trial_obj = None
         params_sig = ""
         preset_eval = dict(preset or {})
@@ -757,7 +1793,7 @@ def _auto_run_optuna_eval_loop(
                     "error": str(ask_error or "no unique optuna candidate available"),
                 }
                 if consume_one(int(idx_next), dict(out or {})):
-                    return
+                    return _finalize_telemetry()
                 idx_next += 1
                 continue
         try:
@@ -769,9 +1805,9 @@ def _auto_run_optuna_eval_loop(
                 "error": f"{type(exc).__name__}: {exc}",
             }
         if trial_obj is not None:
-            _tell(trial_obj, out, params_sig=params_sig)
+            _tell(trial_obj, out, params_sig=params_sig, source="seed")
         if consume_one(int(idx_next), dict(out or {})):
-            return
+            return _finalize_telemetry()
         idx_next += 1
     if idx_next > total:
         if duplicate_skips > 0:
@@ -780,7 +1816,7 @@ def _auto_run_optuna_eval_loop(
                 int(duplicate_skips),
                 str(study_name or "in-memory"),
             )
-        return
+        return _finalize_telemetry()
 
     remaining = int(total - idx_next + 1)
     if workers <= 1 or remaining <= 1:
@@ -803,7 +1839,7 @@ def _auto_run_optuna_eval_loop(
                     "ok": False,
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-            _tell(trial_obj, out, params_sig=params_sig)
+            _tell(trial_obj, out, params_sig=params_sig, source="optuna")
             if consume_one(int(idx), dict(out or {})):
                 break
         if duplicate_skips > 0:
@@ -812,7 +1848,7 @@ def _auto_run_optuna_eval_loop(
                 int(duplicate_skips),
                 str(study_name or "in-memory"),
             )
-        return
+        return _finalize_telemetry()
 
     chunk_size = int(_auto_trial_chunk_size(workers))
     while idx_next <= total:
@@ -855,7 +1891,7 @@ def _auto_run_optuna_eval_loop(
                         out = {"idx": int(idx), "ok": False, "error": "invalid worker result"}
                 except Exception as exc:
                     out = {"idx": int(idx), "ok": False, "error": f"{type(exc).__name__}: {exc}"}
-                _tell(trial_obj, out, params_sig=params_sig)
+                _tell(trial_obj, out, params_sig=params_sig, source="optuna")
                 chunk_out[int(idx)] = dict(out or {})
 
         for idx, _trial_obj, _preset, _params_sig, pre_out in chunk_items:
@@ -876,13 +1912,14 @@ def _auto_run_optuna_eval_loop(
                         int(duplicate_skips),
                         str(study_name or "in-memory"),
                     )
-                return
+                return _finalize_telemetry()
     if duplicate_skips > 0:
         logger.info(
             "Automatic mode Optuna duplicate guard skipped %d duplicate suggestions in study %s.",
             int(duplicate_skips),
             str(study_name or "in-memory"),
         )
+    return _finalize_telemetry()
 
 
 def _auto_collect_reflections(st: dict | None) -> list:
@@ -1673,6 +2710,7 @@ def _auto_select_target_curve_with_trials(
         hc_m_arr,
         phase_tag: str,
         target_name: str,
+        phase_kind: str | None = None,
         n_total_override: int | None = None,
         seed_presets: list[dict] | None = None,
         optuna_builder=None,
@@ -1697,6 +2735,12 @@ def _auto_select_target_curve_with_trials(
 
         if bool(use_optuna_trials):
             out_by_idx: dict[int, dict] = {}
+            raw_scope = f"target-{str(target_name)}-{str(phase_tag)}"
+            scope_eff = _auto_optuna_effective_scope(base_tc, raw_scope, phase_kind=phase_kind)
+            study_name = _auto_optuna_study_name(
+                study_sig=target_study_sig,
+                scope=scope_eff,
+            )
 
             def _eval_one(idx: int, preset: dict) -> dict:
                 out = _target_eval_one(
@@ -1713,11 +2757,11 @@ def _auto_select_target_curve_with_trials(
                 out_by_idx[int(idx)] = dict(out or {})
                 return False
 
-            _auto_run_optuna_eval_loop(
+            target_tel = _auto_run_optuna_eval_loop(
                 optuna_mod=optuna_mod,
+                cfg=cfg,
                 n_total=int(n_total),
                 seed=int(seed_target + sum(ord(ch) for ch in str(target_name)) * 31 + sum(ord(ch) for ch in str(phase_tag)) * 17),
-                startup_trials=int(cfg.optuna_pilot_startup_trials),
                 base_data=dict(base_tc or {}),
                 seed_presets=list(seed_presets or []),
                 build_preset=optuna_builder,
@@ -1729,11 +2773,12 @@ def _auto_select_target_curve_with_trials(
                 ),
                 workers=int(workers),
                 seed_to_params=seed_to_params,
-                study_name=_auto_optuna_study_name(
-                    study_sig=target_study_sig,
-                    scope=f"target-{str(target_name)}-{str(phase_tag)}",
-                ),
+                study_name=study_name,
+                study_scope=raw_scope,
+                phase_label=f"target {str(target_name)} {str(phase_tag)}",
+                phase_kind=phase_kind,
             )
+            _ = dict(target_tel or {})
             out = []
             for idx in range(1, int(n_total) + 1):
                 out.append(
@@ -1879,6 +2924,7 @@ def _auto_select_target_curve_with_trials(
             hc_m_arr=hc_m,
             phase_tag="phase1",
             target_name=hc_name,
+            phase_kind="target",
             n_total_override=int(phase1_trial_total),
             seed_presets=list(phase1_seed_presets or []),
             optuna_builder=(
@@ -2063,8 +3109,17 @@ def _auto_select_target_curve_with_trials(
                     base_tc=base_tc,
                     hc_f_arr=hc_f,
                     hc_m_arr=hc_m,
-                    phase_tag=f"local_center_{li}_u1",
+                    phase_tag=_auto_optuna_scope_with_context(
+                        f"local_center_{li}_u1",
+                        center=dict(center or {}),
+                        shrink=float(local_shrink),
+                        extra={
+                            "filter_key": str(filter_key),
+                            "target_name": str(hc_name),
+                        },
+                    ),
                     target_name=hc_name,
+                    phase_kind="local",
                     n_total_override=int(local_trial_total),
                     seed_presets=list(local_seed_presets or []),
                     optuna_builder=(
@@ -3661,6 +4716,7 @@ def _run_auto_mode_search_impl(
             initial_best_preset = dict(best_preset or {})
             rounds_executed = 0
             stop_reason = "max_rounds"
+            cache_refine_optuna_tels = []
             min_round_improvement = float(max(0.0, _auto_safe_float(AUTO_MODE_CACHE_REFINE_MIN_RANK_IMPROVEMENT, 0.02)))
             for round_idx in range(1, int(max(1, AUTO_MODE_CACHE_REFINE_MAX_ROUNDS)) + 1):
                 rounds_executed = int(round_idx)
@@ -3669,78 +4725,70 @@ def _run_auto_mode_search_impl(
                 round_start_preset = dict(best_preset or {})
                 round_improved_count = 0
                 round_executed = 0
-                micro_candidates = _build_auto_mode_candidates_micro(
-                    cache_base_data,
-                    dict(best_preset or {}),
-                    n_trials=int(micro_trials + 1),
-                    shrink=1.0,
-                )
-                micro_candidates = [
-                    dict(cand or {})
-                    for cand in list(micro_candidates or [])
-                    if isinstance(cand, dict) and dict(cand or {}) != dict(best_preset or {})
-                ][: int(micro_trials)]
-                if len(micro_candidates) < int(micro_trials):
-                    logger.info(
-                        "Automatic mode cache refine round %d: generated %d/%d micro candidates.",
-                        int(round_idx),
-                        int(len(micro_candidates)),
-                        int(micro_trials),
+                round_tel = {}
+                if bool(str(optimizer_backend) == "optuna" and optuna_mod is not None):
+                    round_seed_presets = _build_auto_mode_candidates_micro(
+                        cache_base_data,
+                        dict(round_start_preset or {}),
+                        n_trials=1,
+                        shrink=1.0,
                     )
-                if callable(status_cb):
-                    status_cb(
-                        "CamillaFIR automatic mode: cache refine round "
-                        f"{int(round_idx)}/{int(AUTO_MODE_CACHE_REFINE_MAX_ROUNDS)} "
-                        f"({int(len(micro_candidates))}/{int(micro_trials)} candidates)"
+                    raw_scope = _auto_optuna_scope_with_context(
+                        "phase3-micro-u1-cache",
+                        center=dict(round_start_preset or {}),
+                        shrink=1.0,
+                        extra={
+                            "filter_key": str(filter_key),
+                            "round": int(round_idx),
+                        },
                     )
-
-                for idx, cand in enumerate(micro_candidates, start=1):
-                    _res_i, met_i, _data_i = _materialize_preset_result(
-                        cand,
-                        include_response_arrays=False,
-                        summarize=False,
-                    )
-                    if bool(str(optimizer_backend) == "optuna" and optuna_mod is not None):
-                        _auto_optuna_remember_result(
-                            optuna_mod,
-                            base_data=dict(cache_base_data or {}),
-                            study_name=_auto_optuna_study_name(
-                                study_sig=optuna_search_sig,
-                                scope="phase3-micro-u1",
-                            ),
-                            seed=int(seed + 700001 + round_idx * 1009 + idx * 31),
-                            preset=dict(cand or {}),
-                            metrics=dict(met_i or {}),
-                            seed_to_params=(
-                                lambda preset,
-                                _base=dict(cache_base_data),
-                                _center=dict(round_start_preset or best_preset or {}),
-                                _shrink=1.0: _seed_auto_mode_candidate_micro_optuna_params(
-                                    _base,
-                                    _center,
-                                    preset,
-                                    shrink=float(_shrink),
-                                )
-                            ),
-                            use_refine_tiebreak=True,
-                            out_payload={
-                                "idx": int(idx),
-                                "ok": True,
-                                "metrics": dict(met_i or {}),
-                                "trial_preset": dict(cand or {}),
-                                "phase": "exact_cache_micro_refine",
-                                "round": int(round_idx),
-                            },
+                    if callable(status_cb):
+                        status_cb(
+                            "CamillaFIR automatic mode: cache refine round "
+                            f"{int(round_idx)}/{int(AUTO_MODE_CACHE_REFINE_MAX_ROUNDS)} "
+                            f"(optuna {int(micro_trials)} trials)"
                         )
-                    round_executed += 1
-                    executed_micro_trials_total += 1
-                    better, _reason = _auto_is_better_refine(
-                        dict(met_i or {}),
-                        dict(best_metrics or {}),
-                        goal,
-                        return_reason=True,
-                    )
-                    if better:
+
+                    def _cache_eval_one(idx: int, preset: dict) -> dict:
+                        _res_i, met_i, _data_i = _materialize_preset_result(
+                            preset,
+                            include_response_arrays=False,
+                            summarize=False,
+                        )
+                        return {
+                            "idx": int(idx),
+                            "ok": True,
+                            "metrics": dict(met_i or {}),
+                            "trial_preset": dict(preset or {}),
+                            "phase": "exact_cache_micro_refine",
+                            "round": int(round_idx),
+                        }
+
+                    def _cache_consume_one(idx: int, out: dict) -> bool:
+                        nonlocal best_metrics, best_preset, improved_any, improved_count_total, round_improved_count, round_executed, executed_micro_trials_total
+                        round_executed += 1
+                        executed_micro_trials_total += 1
+                        if not bool(dict(out or {}).get("ok", False)):
+                            err_txt = str((out or {}).get("error", "unknown error") or "unknown error")
+                            logger.warning(
+                                "Automatic mode cache refine round %d trial %d/%d failed: %s",
+                                int(round_idx),
+                                int(idx),
+                                int(micro_trials),
+                                str(err_txt),
+                            )
+                            return False
+
+                        met_i = dict((out or {}).get("metrics", {}) or {})
+                        cand = dict((out or {}).get("trial_preset", {}) or {})
+                        better, _reason = _auto_is_better_refine(
+                            dict(met_i or {}),
+                            dict(best_metrics or {}),
+                            goal,
+                            return_reason=True,
+                        )
+                        if not better:
+                            return False
                         prev_best = dict(best_metrics or {})
                         best_metrics = dict(met_i or {})
                         best_preset = _cache_ready_preset(dict(cand or {}), best_metrics=best_metrics)
@@ -3752,7 +4800,7 @@ def _run_auto_mode_search_impl(
                             "rank_score %.3f -> %.3f, avg_score %.3f -> %.3f",
                             int(round_idx),
                             int(idx),
-                            int(len(micro_candidates)),
+                            int(micro_trials),
                             _auto_safe_float(prev_best.get("rank_score"), 0.0),
                             _auto_safe_float(best_metrics.get("rank_score"), 0.0),
                             _auto_safe_float(prev_best.get("avg_score"), 0.0),
@@ -3761,17 +4809,133 @@ def _run_auto_mode_search_impl(
                         if callable(status_cb):
                             status_cb(
                                 "CamillaFIR automatic mode: cache refine best improved "
-                                f"(round {int(round_idx)}, {int(idx)}/{int(len(micro_candidates))}, "
+                                f"(round {int(round_idx)}, {int(idx)}/{int(micro_trials)}, "
                                 f"rank {_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}, "
                                 f"avg {_auto_safe_float(best_metrics.get('avg_score'), 0.0):.3f})"
                             )
+                        return False
+
+                    round_tel = dict(
+                        _auto_run_optuna_eval_loop(
+                            optuna_mod=optuna_mod,
+                            cfg=cfg,
+                            n_total=int(micro_trials),
+                            seed=int(seed + 700000 + round_idx * 1009),
+                            base_data=dict(cache_base_data or {}),
+                            seed_presets=list(round_seed_presets or []),
+                            build_preset=(
+                                lambda tr,
+                                _base=dict(cache_base_data),
+                                _center=dict(round_start_preset or {}),
+                                _shrink=1.0: _suggest_auto_mode_candidate_micro_optuna(
+                                    _base,
+                                    _center,
+                                    tr,
+                                    shrink=float(_shrink),
+                                )
+                            ),
+                            eval_one=_cache_eval_one,
+                            consume_one=_cache_consume_one,
+                            objective_value=lambda out: _auto_optuna_objective_value(
+                                dict((out or {}).get("metrics", {}) or {}),
+                                use_refine_tiebreak=True,
+                            ),
+                            workers=int(_auto_trial_workers(cache_base_data, int(micro_trials))),
+                            seed_to_params=(
+                                lambda preset,
+                                _base=dict(cache_base_data),
+                                _center=dict(round_start_preset or {}),
+                                _shrink=1.0: _seed_auto_mode_candidate_micro_optuna_params(
+                                    _base,
+                                    _center,
+                                    preset,
+                                    shrink=float(_shrink),
+                                )
+                            ),
+                            study_name=_auto_optuna_study_name(
+                                study_sig=optuna_search_sig,
+                                scope=_auto_optuna_effective_scope(cache_base_data, raw_scope, phase_kind="micro"),
+                            ),
+                            study_scope=raw_scope,
+                            phase_label=f"cache refine round {int(round_idx)}/{int(AUTO_MODE_CACHE_REFINE_MAX_ROUNDS)}",
+                            phase_kind="micro",
+                        )
+                        or {}
+                    )
+                    if round_tel:
+                        cache_refine_optuna_tels.append(dict(round_tel))
+                else:
+                    micro_candidates = _build_auto_mode_candidates_micro(
+                        cache_base_data,
+                        dict(best_preset or {}),
+                        n_trials=int(micro_trials + 1),
+                        shrink=1.0,
+                    )
+                    micro_candidates = [
+                        dict(cand or {})
+                        for cand in list(micro_candidates or [])
+                        if isinstance(cand, dict) and dict(cand or {}) != dict(best_preset or {})
+                    ][: int(micro_trials)]
+                    if len(micro_candidates) < int(micro_trials):
+                        logger.info(
+                            "Automatic mode cache refine round %d: generated %d/%d micro candidates.",
+                            int(round_idx),
+                            int(len(micro_candidates)),
+                            int(micro_trials),
+                        )
+                    if callable(status_cb):
+                        status_cb(
+                            "CamillaFIR automatic mode: cache refine round "
+                            f"{int(round_idx)}/{int(AUTO_MODE_CACHE_REFINE_MAX_ROUNDS)} "
+                            f"({int(len(micro_candidates))}/{int(micro_trials)} candidates)"
+                        )
+
+                    for idx, cand in enumerate(micro_candidates, start=1):
+                        _res_i, met_i, _data_i = _materialize_preset_result(
+                            cand,
+                            include_response_arrays=False,
+                            summarize=False,
+                        )
+                        round_executed += 1
+                        executed_micro_trials_total += 1
+                        better, _reason = _auto_is_better_refine(
+                            dict(met_i or {}),
+                            dict(best_metrics or {}),
+                            goal,
+                            return_reason=True,
+                        )
+                        if better:
+                            prev_best = dict(best_metrics or {})
+                            best_metrics = dict(met_i or {})
+                            best_preset = _cache_ready_preset(dict(cand or {}), best_metrics=best_metrics)
+                            improved_any = True
+                            improved_count_total += 1
+                            round_improved_count += 1
+                            logger.info(
+                                "Automatic mode cache refine improved: round %d trial %d/%d, "
+                                "rank_score %.3f -> %.3f, avg_score %.3f -> %.3f",
+                                int(round_idx),
+                                int(idx),
+                                int(len(micro_candidates)),
+                                _auto_safe_float(prev_best.get("rank_score"), 0.0),
+                                _auto_safe_float(best_metrics.get("rank_score"), 0.0),
+                                _auto_safe_float(prev_best.get("avg_score"), 0.0),
+                                _auto_safe_float(best_metrics.get("avg_score"), 0.0),
+                            )
+                            if callable(status_cb):
+                                status_cb(
+                                    "CamillaFIR automatic mode: cache refine best improved "
+                                    f"(round {int(round_idx)}, {int(idx)}/{int(len(micro_candidates))}, "
+                                    f"rank {_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}, "
+                                    f"avg {_auto_safe_float(best_metrics.get('avg_score'), 0.0):.3f})"
+                                )
 
                 round_end_rank = _auto_safe_float(dict(best_metrics or {}).get("rank_score"), 0.0)
                 round_delta = float(round_end_rank - round_start_rank)
                 round_winner_changed = bool(dict(best_preset or {}) != dict(round_start_preset or {}))
                 logger.info(
                     "Automatic mode cache refine round %d summary: executed %d/%d, "
-                    "improvements=%d, winner_changed=%s, rank_delta=%.3f, final_rank=%.3f",
+                    "improvements=%d, winner_changed=%s, rank_delta=%.3f, final_rank=%.3f%s",
                     int(round_idx),
                     int(round_executed),
                     int(micro_trials),
@@ -3779,12 +4943,14 @@ def _run_auto_mode_search_impl(
                     str(bool(round_winner_changed)).lower(),
                     float(round_delta),
                     float(round_end_rank),
+                    "" if not round_tel else f", {_auto_optuna_telemetry_text(round_tel)}",
                 )
                 if callable(status_cb):
                     status_cb(
                         "CamillaFIR automatic mode: cache refine round summary "
                         f"(round {int(round_idx)}, executed {int(round_executed)}/{int(micro_trials)}, "
-                        f"improvements {int(round_improved_count)}, delta {float(round_delta):.3f})"
+                        f"improvements {int(round_improved_count)}, delta {float(round_delta):.3f}"
+                        f"{'' if not round_tel else f', {_auto_optuna_telemetry_text(round_tel)}'})"
                     )
                 if round_improved_count <= 0:
                     stop_reason = "no_improvement"
@@ -3794,6 +4960,7 @@ def _run_auto_mode_search_impl(
                     break
 
             winner_changed = bool(dict(best_preset or {}) != dict(initial_best_preset or {}))
+            cache_refine_rollup_tel = _auto_optuna_telemetry_rollup(cache_refine_optuna_tels)
             logger.info(
                 "Automatic mode cache refine summary: rounds=%d/%d, executed %d/%d micro-trials, "
                 "improvements=%d, winner_changed=%s, stop_reason=%s, final_rank=%.3f, final_avg=%.3f",
@@ -3825,13 +4992,17 @@ def _run_auto_mode_search_impl(
             best_metrics = dict(best_metrics_recalc or best_metrics or {})
             best_preset = dict(best_data or best_preset or {})
             if bool(str(optimizer_backend) == "optuna" and optuna_mod is not None):
+                raw_scope = "phase1"
+                scope_eff = _auto_optuna_effective_scope(cache_base_data, raw_scope, phase_kind="phase1")
                 _auto_optuna_remember_result(
                     optuna_mod,
                     base_data=dict(cache_base_data or {}),
                     study_name=_auto_optuna_study_name(
                         study_sig=optuna_search_sig,
-                        scope="phase1",
+                        scope=scope_eff,
                     ),
+                    study_scope=scope_eff,
+                    phase_kind="phase1",
                     seed=int(seed + 500001),
                     preset=dict(best_preset or {}),
                     metrics=dict(best_metrics or {}),
@@ -3889,6 +5060,10 @@ def _run_auto_mode_search_impl(
                 "trials_phase1_ok": 0,
                 "trials_phase2_total": int(executed_micro_trials_total),
                 "trials_phase2_ok": int(executed_micro_trials_total),
+                "optuna_phase1_telemetry": {},
+                "optuna_phase2_local_telemetry": [],
+                "optuna_phase3_micro_telemetry": dict(cache_refine_rollup_tel or {}),
+                "optuna_phase2_rollup_telemetry": dict(cache_refine_rollup_tel or {}),
                 "phase1_plateau_hit": False,
                 "phase2_plateau_hit": bool(str(stop_reason) in ("no_improvement", "below_threshold")),
                 "search_fs": int(fs_v),
@@ -3904,6 +5079,15 @@ def _run_auto_mode_search_impl(
         seed_preset = dict(search_base_data.get("_auto_target_seed_preset", {}) or {})
     except Exception:
         seed_preset = {}
+    try:
+        prior_seed_preset = dict(
+            get_auto_mode_filter_seed_preset(
+                search_base_data.get("filter_type", cache_base_data.get("filter_type", ""))
+            )
+            or {}
+        )
+    except Exception:
+        prior_seed_preset = {}
     if seed_preset:
         search_base_data.update(seed_preset)
 
@@ -3969,7 +5153,8 @@ def _run_auto_mode_search_impl(
     elif int(n_trials_eff) > 0:
         logger.info(
             "Automatic mode optimizer backend: optuna "
-            f"(trials={int(n_trials_eff)}, startup={int(cfg.optuna_pilot_startup_trials)})"
+            f"(trials={int(n_trials_eff)}, "
+            f"startup={int(_auto_optuna_startup_for_phase_kind(cfg, phase_kind='phase1', total=int(n_trials_eff)))})"
         )
     try:
         target_label = str(search_base_data.get("hc_mode", "") or "").strip()
@@ -4043,11 +5228,15 @@ def _run_auto_mode_search_impl(
     phase2_tried = 0
     phase1_plateau_hit = False
     phase2_plateau_hit = False
+    phase1_optuna_tel = {}
+    phase2_local_optuna_tels = []
+    phase3_micro_optuna_tel = {}
 
     def _eval_candidates(
         cands: list[dict],
         *,
         phase_label: str,
+        phase_kind: str | None = None,
         plateau_after_no_improve: int = 0,
         use_refine_tiebreak: bool = False,
         focus_lo_hz: float | None = None,
@@ -4256,11 +5445,18 @@ def _run_auto_mode_search_impl(
             return False
 
         if bool(use_optuna_phase):
-            _auto_run_optuna_eval_loop(
+            raw_scope = str(study_scope or phase_label)
+            scope_eff = _auto_optuna_effective_scope(search_base_data, raw_scope, phase_kind=phase_kind)
+            study_name = _auto_optuna_study_name(
+                study_sig=optuna_search_sig,
+                scope=scope_eff,
+            )
+            phase_tel = dict(
+                _auto_run_optuna_eval_loop(
                 optuna_mod=optuna_mod,
+                cfg=cfg,
                 n_total=int(n_total),
                 seed=int(seed + sum(ord(ch) for ch in str(phase_label)) * 31),
-                startup_trials=int(cfg.optuna_pilot_startup_trials),
                 base_data=dict(search_base_data or {}),
                 seed_presets=list(seed_presets or []),
                 build_preset=optuna_builder,
@@ -4272,16 +5468,83 @@ def _run_auto_mode_search_impl(
                 ),
                 workers=int(workers),
                 seed_to_params=seed_to_params,
-                study_name=_auto_optuna_study_name(
-                    study_sig=optuna_search_sig,
-                    scope=str(study_scope or phase_label),
-                ),
+                study_name=study_name,
+                study_scope=raw_scope,
+                phase_label=str(phase_label),
+                phase_kind=phase_kind,
             )
+                or {}
+            )
+            if _auto_optuna_needs_zero_feasible_rescue(
+                base_data=search_base_data,
+                phase_kind=phase_kind,
+                telemetry=phase_tel,
+            ):
+                logger.warning(
+                    "Automatic mode Optuna rescue fallback: phase=%s scope=%s rerunning without constraints",
+                    str(phase_kind or ""),
+                    str(raw_scope),
+                )
+                rescue_base_data = _auto_optuna_base_data_without_constraints(search_base_data)
+                rescue_scope = f"{str(raw_scope)}-zf0"
+                rescue_scope_eff = _auto_optuna_effective_scope(rescue_base_data, rescue_scope, phase_kind=phase_kind)
+                rescue_tel = dict(
+                    _auto_run_optuna_eval_loop(
+                        optuna_mod=optuna_mod,
+                        cfg=cfg,
+                        n_total=int(n_total),
+                        seed=int(seed + sum(ord(ch) for ch in str(phase_label)) * 31),
+                        base_data=dict(rescue_base_data or {}),
+                        seed_presets=list(seed_presets or []),
+                        build_preset=optuna_builder,
+                        eval_one=_eval_one,
+                        consume_one=_consume_one,
+                        objective_value=lambda out: _auto_optuna_objective_value(
+                            dict((out or {}).get("metrics", {}) or {}),
+                            use_refine_tiebreak=bool(use_refine_tiebreak),
+                        ),
+                        workers=int(workers),
+                        seed_to_params=seed_to_params,
+                        study_name=_auto_optuna_study_name(
+                            study_sig=optuna_search_sig,
+                            scope=rescue_scope_eff,
+                        ),
+                        study_scope=rescue_scope,
+                        phase_label=f"{str(phase_label)} rescue",
+                        phase_kind=phase_kind,
+                    )
+                    or {}
+                )
+                logger.info(
+                    "Automatic mode Optuna rescue result [%s]: run=%d ok=%d startup=%d model=%d best=%s",
+                    str(phase_label),
+                    int((rescue_tel or {}).get("run_trials", 0) or 0),
+                    int((rescue_tel or {}).get("complete_trials", 0) or 0),
+                    int((rescue_tel or {}).get("startup_complete", 0) or 0),
+                    int((rescue_tel or {}).get("model_complete", 0) or 0),
+                    "n/a"
+                    if (rescue_tel or {}).get("best_raw_value", None) is None
+                    else f"{float(rescue_tel['best_raw_value']):.3f}",
+                )
+                phase_tel = {
+                    **dict(phase_tel or {}),
+                    "zero_feasible_fallback_used": True,
+                    "fallback_reason": "zero_feasible",
+                    "fallback_telemetry": dict(rescue_tel or {}),
+                }
+            else:
+                phase_tel = {
+                    **dict(phase_tel or {}),
+                    "zero_feasible_fallback_used": False,
+                }
             return {
                 "ok": int(phase_state.ok_n),
                 "tried": int(phase_state.tried_n),
                 "plateau_hit": bool(phase_state.plateau_hit),
                 "improved_any": bool(phase_state.improved_any),
+                "optuna_telemetry": dict(phase_tel or {}),
+                "optuna_zero_feasible_fallback_used": bool(phase_tel.get("zero_feasible_fallback_used", False)),
+                "optuna_zero_feasible_fallback_telemetry": dict(phase_tel.get("fallback_telemetry", {}) or {}),
             }
 
         idx_presets = list(enumerate(list(cands or []), start=1))
@@ -4337,16 +5600,29 @@ def _run_auto_mode_search_impl(
             "tried": int(phase_state.tried_n),
             "plateau_hit": bool(phase_state.plateau_hit),
             "improved_any": bool(phase_state.improved_any),
+            "optuna_telemetry": {},
+            "optuna_zero_feasible_fallback_used": False,
+            "optuna_zero_feasible_fallback_telemetry": {},
         }
 
-    phase1_seed_presets = _build_auto_mode_candidates(
-        search_base_data,
-        n_trials=1,
-        seed=int(seed),
+    phase1_seed_presets = []
+    if isinstance(prior_seed_preset, dict) and prior_seed_preset:
+        phase1_seed_presets.append(dict(prior_seed_preset))
+        logger.info(
+            "Automatic mode: loaded built-in prior seed preset for %s filter.",
+            str(filter_key),
+        )
+    phase1_seed_presets.extend(
+        _build_auto_mode_candidates(
+            search_base_data,
+            n_trials=1,
+            seed=int(seed),
+        )
     )
     phase1_stats = _eval_candidates(
         candidates,
         phase_label="phase 1/2",
+        phase_kind="phase1",
         plateau_after_no_improve=int(cfg.phase1_plateau_rounds),
         use_refine_tiebreak=False,
         n_total_override=int(n_trials_eff),
@@ -4366,6 +5642,7 @@ def _run_auto_mode_search_impl(
     phase1_ok = int(phase1_stats.get("ok", 0) or 0)
     phase1_tried = int(phase1_stats.get("tried", 0) or 0)
     phase1_plateau_hit = bool(phase1_stats.get("plateau_hit", False))
+    phase1_optuna_tel = dict(phase1_stats.get("optuna_telemetry", {}) or {})
 
     phase1_entries = [
         dict(it)
@@ -4397,10 +5674,12 @@ def _run_auto_mode_search_impl(
             )
         else:
             p1_detail = f"tdc={p1_tdc:.1f}"
+        p1_optuna_txt = _auto_optuna_telemetry_text(phase1_optuna_tel)
+        p1_status_suffix = f", {p1_optuna_txt}" if p1_optuna_txt else ""
         logger.info(
             "Automatic mode Phase1 done: "
             f"avg_score={_auto_safe_float(p1m.get('avg_score'), 0.0):.3f}, "
-            f"{p1_detail}"
+            f"{p1_detail}{p1_status_suffix}"
         )
         if callable(status_cb):
             status_cb(
@@ -4409,7 +5688,7 @@ def _run_auto_mode_search_impl(
                 f"avg_score={_auto_safe_float(p1m.get('avg_score'), 0.0):.3f}, "
                 f"mode_ripple={p1_mode_txt}, "
                 f"boost={p1_boost_txt}, "
-                f"{p1_detail}"
+                f"{p1_detail}{p1_status_suffix}"
             )
 
     phase1_best_item = _auto_select_best_scored(phase1_top) if phase1_top else None
@@ -4476,6 +5755,7 @@ def _run_auto_mode_search_impl(
             stats = _eval_candidates(
                 local_candidates,
                 phase_label=f"phase 2/2 local center#{ci}",
+                phase_kind="local",
                 plateau_after_no_improve=0,
                 use_refine_tiebreak=True,
                 focus_lo_hz=float(phase2_focus_lo) if np.isfinite(phase2_focus_lo) else None,
@@ -4512,10 +5792,59 @@ def _run_auto_mode_search_impl(
                     if bool(use_optuna_trials)
                     else None
                 ),
-                study_scope=f"phase2-local-center-{int(ci)}-u1",
+                study_scope=_auto_optuna_scope_with_context(
+                    f"phase2-local-center-{int(ci)}-u1",
+                    center=dict(center or {}),
+                    shrink=float(local_shrink),
+                    extra={
+                        "filter_key": str(filter_key),
+                        "target": str(winner_target_name or ""),
+                    },
+                ),
             )
             phase2_ok += int(stats.get("ok", 0) or 0)
             phase2_tried += int(stats.get("tried", 0) or 0)
+            local_tel = dict(stats.get("optuna_telemetry", {}) or {})
+            if local_tel:
+                phase2_local_optuna_tels.append(
+                    {
+                        "center_index": int(ci),
+                        "phase_label": f"phase 2/2 local center#{ci}",
+                        "telemetry": dict(local_tel),
+                    }
+                )
+            local_tel_txt = _auto_optuna_telemetry_text(local_tel)
+            local_rescue_suffix = ", zero-feasible fallback used" if bool(stats.get("optuna_zero_feasible_fallback_used", False)) else ""
+            local_fallback_txt = _auto_optuna_fallback_summary_text(local_tel) if bool(stats.get("optuna_zero_feasible_fallback_used", False)) else ""
+            local_best_metrics = dict(search_state.best_metrics or {})
+            local_rank_txt = _auto_optuna_fmt_value(local_best_metrics.get("rank_score"), 3)
+            local_avg_txt = _auto_optuna_fmt_value(local_best_metrics.get("avg_score"), 3)
+            logger.info(
+                "Automatic mode Local refine summary: center #%d, rank=%s, avg=%s%s%s",
+                int(ci),
+                str(local_rank_txt),
+                str(local_avg_txt),
+                "" if not local_tel_txt else f", {local_tel_txt}",
+                str(local_rescue_suffix),
+            )
+            if callable(status_cb):
+                status_cb(
+                    "CamillaFIR automatic mode: Local refine summary "
+                    f"center #{int(ci)}, rank={local_rank_txt}, avg_score={local_avg_txt}"
+                    f"{'' if not local_tel_txt else f', {local_tel_txt}'}"
+                    f"{local_rescue_suffix}"
+                )
+            if local_fallback_txt:
+                logger.info(
+                    "Automatic mode Local refine fallback detail: center #%d, %s",
+                    int(ci),
+                    str(local_fallback_txt),
+                )
+                if callable(status_cb):
+                    status_cb(
+                        "CamillaFIR automatic mode: Local refine fallback "
+                        f"center #{int(ci)}, {local_fallback_txt}"
+                    )
             if bool(stats.get("improved_any", False)):
                 logger.info(
                     "Automatic mode Local refine winner improved: "
@@ -4579,6 +5908,7 @@ def _run_auto_mode_search_impl(
         micro_stats = _eval_candidates(
             micro_candidates,
             phase_label="phase 3/3 micro",
+            phase_kind="micro",
             plateau_after_no_improve=0,
             use_refine_tiebreak=True,
             focus_lo_hz=float(phase2_focus_lo) if np.isfinite(phase2_focus_lo) else None,
@@ -4615,10 +5945,19 @@ def _run_auto_mode_search_impl(
                 if bool(use_optuna_trials)
                 else None
             ),
-            study_scope="phase3-micro-u1",
+            study_scope=_auto_optuna_scope_with_context(
+                "phase3-micro-u1",
+                center=dict(micro_center or {}),
+                shrink=float(micro_shrink),
+                extra={
+                    "filter_key": str(filter_key),
+                    "target": str(winner_target_name or ""),
+                },
+            ),
         )
         phase2_ok += int(micro_stats.get("ok", 0) or 0)
         phase2_tried += int(micro_stats.get("tried", 0) or 0)
+        phase3_micro_optuna_tel = dict(micro_stats.get("optuna_telemetry", {}) or {})
         if bool(micro_stats.get("improved_any", False)):
             logger.info(
                 "Automatic mode Phase3 micro improved: "
@@ -4627,6 +5966,46 @@ def _run_auto_mode_search_impl(
                 f"rank_score {_auto_safe_float(before_micro.get('rank_score'), 0.0):.3f}"
                 f" -> {_auto_safe_float((search_state.best_metrics or {}).get('rank_score'), 0.0):.3f}"
             )
+        micro_tel_txt = _auto_optuna_telemetry_text(phase3_micro_optuna_tel)
+        micro_rescue_suffix = ", zero-feasible fallback used" if bool(micro_stats.get("optuna_zero_feasible_fallback_used", False)) else ""
+        micro_fallback_txt = _auto_optuna_fallback_summary_text(phase3_micro_optuna_tel) if bool(micro_stats.get("optuna_zero_feasible_fallback_used", False)) else ""
+        micro_best_metrics = dict(search_state.best_metrics or {})
+        micro_rank_txt = _auto_optuna_fmt_value(micro_best_metrics.get("rank_score"), 3)
+        micro_avg_txt = _auto_optuna_fmt_value(micro_best_metrics.get("avg_score"), 3)
+        logger.info(
+            "Automatic mode Phase3 micro summary: rank=%s, avg=%s%s%s",
+            str(micro_rank_txt),
+            str(micro_avg_txt),
+            "" if not micro_tel_txt else f", {micro_tel_txt}",
+            str(micro_rescue_suffix),
+        )
+        if callable(status_cb):
+            status_cb(
+                "CamillaFIR automatic mode: Phase3 micro summary "
+                f"rank={micro_rank_txt}, avg_score={micro_avg_txt}"
+                f"{'' if not micro_tel_txt else f', {micro_tel_txt}'}"
+                f"{micro_rescue_suffix}"
+            )
+        if micro_fallback_txt:
+            logger.info(
+                "Automatic mode Phase3 micro fallback detail: %s",
+                str(micro_fallback_txt),
+            )
+            if callable(status_cb):
+                status_cb(
+                    "CamillaFIR automatic mode: Phase3 micro fallback "
+                    f"{micro_fallback_txt}"
+                )
+
+    phase2_roll_items = [dict((it or {}).get("telemetry", {}) or {}) for it in phase2_local_optuna_tels]
+    if phase3_micro_optuna_tel:
+        phase2_roll_items.append(dict(phase3_micro_optuna_tel))
+    phase2_rollup_tel = _auto_optuna_telemetry_rollup(phase2_roll_items)
+    phase2_rollup_txt = _auto_optuna_telemetry_text(phase2_rollup_tel)
+    if phase2_rollup_txt:
+        logger.info("Automatic mode Phase2 summary: %s", str(phase2_rollup_txt))
+        if callable(status_cb):
+            status_cb(f"CamillaFIR automatic mode: Phase2 summary {phase2_rollup_txt}")
 
     phase2_pool_raw = [dict(it or {}) for it in (search_state.phase2_pool or []) if isinstance(it, dict)]
     if phase2_pool_raw:
@@ -4875,6 +6254,10 @@ def _run_auto_mode_search_impl(
         "trials_phase1_ok": int(phase1_ok),
         "trials_phase2_total": int(phase2_tried),
         "trials_phase2_ok": int(phase2_ok),
+        "optuna_phase1_telemetry": dict(phase1_optuna_tel or {}),
+        "optuna_phase2_local_telemetry": list(phase2_local_optuna_tels or []),
+        "optuna_phase3_micro_telemetry": dict(phase3_micro_optuna_tel or {}),
+        "optuna_phase2_rollup_telemetry": dict(phase2_rollup_tel or {}),
         "phase1_plateau_hit": bool(phase1_plateau_hit),
         "phase2_plateau_hit": bool(phase2_plateau_hit),
         "search_fs": int(fs_v),

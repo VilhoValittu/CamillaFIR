@@ -149,7 +149,7 @@ try:
 except Exception:
     pass
 
-VERSION = "v.3.5.6_beta4"
+VERSION = "v.3.5.6"
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000

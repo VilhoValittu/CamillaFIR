@@ -64,6 +64,19 @@ AUTO_MODE_PARALLEL_BATCH_MULTIPLIER = 2
 AUTO_MODE_OPTUNA_PILOT_ENABLED = True
 AUTO_MODE_OPTUNA_PILOT_MIN_TRIALS = 24
 AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS = 12
+AUTO_MODE_OPTUNA_STARTUP_PHASE1 = 12
+AUTO_MODE_OPTUNA_STARTUP_TARGET = 4
+AUTO_MODE_OPTUNA_STARTUP_LOCAL = 4
+AUTO_MODE_OPTUNA_STARTUP_MICRO = 3
+AUTO_MODE_OPTUNA_CONSTRAINTS_ENABLED = True
+AUTO_MODE_OPTUNA_CONSTRAINTS_REFINE_ONLY = True
+AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_MODE_RIPPLE_DB = 0.12
+AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_EVENTS_SEVERITY = 0.75
+AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_NET_BOOST_DB = 7.5
+AUTO_MODE_OPTUNA_CONSTRAINTS_USE_EVENTS_IN_REFINE = False
+AUTO_MODE_OPTUNA_TELEMETRY = True
+AUTO_MODE_OPTUNA_TELEMETRY_LOG_SUMMARY = True
+AUTO_MODE_OPTUNA_CONSTRAINTS_ZERO_FEASIBLE_FALLBACK = True
 AUTO_MODE_OPTUNA_MULTIVARIATE = True
 AUTO_MODE_OPTUNA_GROUP = False
 AUTO_MODE_OPTUNA_CONSTANT_LIAR = True
@@ -328,6 +341,19 @@ class AutoModeConfig:
     optuna_pilot_enabled: bool = AUTO_MODE_OPTUNA_PILOT_ENABLED
     optuna_pilot_min_trials: int = AUTO_MODE_OPTUNA_PILOT_MIN_TRIALS
     optuna_pilot_startup_trials: int = AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS
+    optuna_startup_phase1: int = AUTO_MODE_OPTUNA_STARTUP_PHASE1
+    optuna_startup_target: int = AUTO_MODE_OPTUNA_STARTUP_TARGET
+    optuna_startup_local: int = AUTO_MODE_OPTUNA_STARTUP_LOCAL
+    optuna_startup_micro: int = AUTO_MODE_OPTUNA_STARTUP_MICRO
+    optuna_constraints_enabled: bool = AUTO_MODE_OPTUNA_CONSTRAINTS_ENABLED
+    optuna_constraints_refine_only: bool = AUTO_MODE_OPTUNA_CONSTRAINTS_REFINE_ONLY
+    optuna_constraints_max_mode_ripple_db: float = AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_MODE_RIPPLE_DB
+    optuna_constraints_max_events_severity: float = AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_EVENTS_SEVERITY
+    optuna_constraints_max_net_boost_db: float = AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_NET_BOOST_DB
+    optuna_constraints_use_events_in_refine: bool = AUTO_MODE_OPTUNA_CONSTRAINTS_USE_EVENTS_IN_REFINE
+    optuna_telemetry: bool = AUTO_MODE_OPTUNA_TELEMETRY
+    optuna_telemetry_log_summary: bool = AUTO_MODE_OPTUNA_TELEMETRY_LOG_SUMMARY
+    optuna_constraints_zero_feasible_fallback: bool = AUTO_MODE_OPTUNA_CONSTRAINTS_ZERO_FEASIBLE_FALLBACK
     optuna_multivariate: bool = AUTO_MODE_OPTUNA_MULTIVARIATE
     optuna_group: bool = AUTO_MODE_OPTUNA_GROUP
     optuna_constant_liar: bool = AUTO_MODE_OPTUNA_CONSTANT_LIAR
@@ -337,6 +363,13 @@ class AutoModeConfig:
     @classmethod
     def from_base_data(cls, base_data: dict | None) -> "AutoModeConfig":
         data = dict(base_data or {})
+        legacy_startup = max(
+            1,
+            _auto_safe_int(
+                data.get("auto_mode_optuna_startup_trials", AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS),
+                AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS,
+            ),
+        )
         return cls(
             trials=max(1, _auto_safe_int(data.get("auto_mode_trials", AUTO_MODE_TRIALS), AUTO_MODE_TRIALS)),
             refine_trials=max(1, _auto_safe_int(data.get("auto_mode_refine_trials", AUTO_MODE_REFINE_TRIALS), AUTO_MODE_REFINE_TRIALS)),
@@ -479,9 +512,97 @@ class AutoModeConfig:
             optuna_pilot_startup_trials=max(
                 1,
                 _auto_safe_int(
-                    data.get("auto_mode_optuna_startup_trials", AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS),
-                    AUTO_MODE_OPTUNA_PILOT_STARTUP_TRIALS,
+                    data.get("auto_mode_optuna_startup_trials", legacy_startup),
+                    legacy_startup,
                 ),
+            ),
+            optuna_startup_phase1=max(
+                1,
+                _auto_safe_int(
+                    data.get("auto_mode_optuna_startup_phase1", AUTO_MODE_OPTUNA_STARTUP_PHASE1),
+                    AUTO_MODE_OPTUNA_STARTUP_PHASE1,
+                ),
+            ),
+            optuna_startup_target=max(
+                1,
+                _auto_safe_int(
+                    data.get("auto_mode_optuna_startup_target", AUTO_MODE_OPTUNA_STARTUP_TARGET),
+                    AUTO_MODE_OPTUNA_STARTUP_TARGET,
+                ),
+            ),
+            optuna_startup_local=max(
+                1,
+                _auto_safe_int(
+                    data.get("auto_mode_optuna_startup_local", AUTO_MODE_OPTUNA_STARTUP_LOCAL),
+                    AUTO_MODE_OPTUNA_STARTUP_LOCAL,
+                ),
+            ),
+            optuna_startup_micro=max(
+                1,
+                _auto_safe_int(
+                    data.get("auto_mode_optuna_startup_micro", AUTO_MODE_OPTUNA_STARTUP_MICRO),
+                    AUTO_MODE_OPTUNA_STARTUP_MICRO,
+                ),
+            ),
+            optuna_constraints_enabled=_auto_safe_bool(
+                data.get("auto_mode_optuna_constraints", AUTO_MODE_OPTUNA_CONSTRAINTS_ENABLED),
+                AUTO_MODE_OPTUNA_CONSTRAINTS_ENABLED,
+            ),
+            optuna_constraints_refine_only=_auto_safe_bool(
+                data.get("auto_mode_optuna_constraints_refine_only", AUTO_MODE_OPTUNA_CONSTRAINTS_REFINE_ONLY),
+                AUTO_MODE_OPTUNA_CONSTRAINTS_REFINE_ONLY,
+            ),
+            optuna_constraints_max_mode_ripple_db=max(
+                0.0,
+                _auto_safe_float(
+                    data.get(
+                        "auto_mode_optuna_constraints_max_mode_ripple_db",
+                        AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_MODE_RIPPLE_DB,
+                    ),
+                    AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_MODE_RIPPLE_DB,
+                ),
+            ),
+            optuna_constraints_max_events_severity=max(
+                0.0,
+                _auto_safe_float(
+                    data.get(
+                        "auto_mode_optuna_constraints_max_events_severity",
+                        AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_EVENTS_SEVERITY,
+                    ),
+                    AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_EVENTS_SEVERITY,
+                ),
+            ),
+            optuna_constraints_max_net_boost_db=max(
+                0.0,
+                _auto_safe_float(
+                    data.get(
+                        "auto_mode_optuna_constraints_max_net_boost_db",
+                        AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_NET_BOOST_DB,
+                    ),
+                    AUTO_MODE_OPTUNA_CONSTRAINTS_MAX_NET_BOOST_DB,
+                ),
+            ),
+            optuna_constraints_use_events_in_refine=_auto_safe_bool(
+                data.get(
+                    "auto_mode_optuna_constraints_use_events_in_refine",
+                    AUTO_MODE_OPTUNA_CONSTRAINTS_USE_EVENTS_IN_REFINE,
+                ),
+                AUTO_MODE_OPTUNA_CONSTRAINTS_USE_EVENTS_IN_REFINE,
+            ),
+            optuna_telemetry=_auto_safe_bool(
+                data.get("auto_mode_optuna_telemetry", AUTO_MODE_OPTUNA_TELEMETRY),
+                AUTO_MODE_OPTUNA_TELEMETRY,
+            ),
+            optuna_telemetry_log_summary=_auto_safe_bool(
+                data.get("auto_mode_optuna_telemetry_log_summary", AUTO_MODE_OPTUNA_TELEMETRY_LOG_SUMMARY),
+                AUTO_MODE_OPTUNA_TELEMETRY_LOG_SUMMARY,
+            ),
+            optuna_constraints_zero_feasible_fallback=_auto_safe_bool(
+                data.get(
+                    "auto_mode_optuna_constraints_zero_feasible_fallback",
+                    AUTO_MODE_OPTUNA_CONSTRAINTS_ZERO_FEASIBLE_FALLBACK,
+                ),
+                AUTO_MODE_OPTUNA_CONSTRAINTS_ZERO_FEASIBLE_FALLBACK,
             ),
             optuna_multivariate=_auto_safe_bool(
                 data.get("auto_mode_optuna_multivariate", AUTO_MODE_OPTUNA_MULTIVARIATE),

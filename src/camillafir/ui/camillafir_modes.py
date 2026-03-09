@@ -47,7 +47,7 @@ def _apply_clamps(cfg: FilterConfig, clamps: Dict[str, Tuple[Any, Any]]) -> None
 
 MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "BASIC": {
-        "filter_type_str": "Mixed Phase",
+        "filter_type_str": "Asymmetric",
         "global_gain_db": 0.0,
 
         "enable_mag_correction": True,
@@ -102,7 +102,7 @@ MODE_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
 
     "ADVANCED": {
-        "filter_type_str": "asymmetric",
+        "filter_type_str": "Asymmetric",
         "global_gain_db": 0.0,
 
         "enable_mag_correction": True,
@@ -188,7 +188,7 @@ MODE_CLAMPS: Dict[str, Dict[str, Tuple[Any, Any]]] = {
     "ADVANCED": {},
 }
 
-# AUTO uses BASIC defaults/guardrails but enables automatic preset search.
+# AUTO uses ADVENCED defaults/guardrails but enables automatic preset search.
 MODE_DEFAULTS["AUTO"] = dict(MODE_DEFAULTS.get("ADVANCED", {}))
 MODE_CLAMPS["AUTO"] = dict(MODE_CLAMPS.get("ADVANCED", {}))
 MODE_DEFAULTS["AUTO"]["stereo_link_strategy"] = "auto"

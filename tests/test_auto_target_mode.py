@@ -1,4 +1,7 @@
+from camillafir.config.camillafir_config import load_config
+from camillafir.config.camillafir_pipeline import build_filter_config
 from camillafir.config.camillafir_pipeline import collect_ui_data
+from camillafir.config.models import FilterConfig
 from camillafir.io.camillafir_automatic_mode import _auto_select_target_curve_with_trials
 from camillafir.io.camillafir_automatic_mode import _run_auto_mode_search
 
@@ -21,6 +24,138 @@ def test_collect_ui_data_accepts_selected_aliases_for_auto_target_mode():
     }
     data = collect_ui_data(pin)
     assert str(data.get("auto_target_mode")) == "selected"
+
+
+def test_collect_ui_data_auto_mode_preserves_allowed_inputs_but_forces_managed_settings(monkeypatch):
+    monkeypatch.setattr(
+        "camillafir.config.camillafir_pipeline.get_auto_mode_filter_auto_defaults",
+        lambda filter_type: {
+            "filter_type_str": str(filter_type),
+            "phase_limit": 407.2,
+            "enable_tdc": True,
+            "enable_afdw": True,
+            "filter_smooth": 12,
+            "max_boost_db": 4.11,
+            "mixed_split_freq": 177.3,
+            "comparison_mode": True,
+        },
+    )
+
+    pin = {
+        "mode": "AUTO",
+        "camillafir_automatic_mode": True,
+        "filter_type": "Mixed Phase",
+        "auto_goal": "low-ripple",
+        "auto_target_mode": "selected",
+        "hc_mode": "Cinema",
+        "fs": 96000,
+        "taps": 131072,
+        "multi_rate_opt": [True],
+        "gain": 9.5,
+        "phase_limit": 999.0,
+        "enable_tdc": [],
+        "enable_afdw": [],
+        "filter_smooth": 96,
+        "max_boost": 12.0,
+        "comparison_mode": [],
+        "xo1_f": 80.0,
+        "xo1_s": 24,
+        "xo2_f": 2200.0,
+        "xo2_s": 12,
+    }
+
+    data = collect_ui_data(pin)
+
+    assert str(data.get("filter_type")) == "Mixed Phase"
+    assert str(data.get("auto_goal")) == "low-ripple"
+    assert str(data.get("auto_target_mode")) == "selected"
+    assert str(data.get("hc_mode")) == "Cinema"
+    assert int(data.get("fs")) == 96000
+    assert int(data.get("taps")) == 131072
+    assert bool(data.get("multi_rate_opt")) is True
+    assert float(data.get("phase_limit")) == 407.2
+    assert bool(data.get("enable_tdc")) is True
+    assert bool(data.get("enable_afdw")) is True
+    assert int(data.get("filter_smooth")) == 12
+    assert float(data.get("max_boost")) == 4.11
+    assert float(data.get("mixed_freq")) == 177.3
+    assert bool(data.get("comparison_mode")) is True
+    assert float(data.get("gain")) == 0.0
+    assert float(data.get("xo1_f")) == 80.0
+    assert int(data.get("xo1_s")) == 24
+    assert float(data.get("xo2_f")) == 2200.0
+    assert int(data.get("xo2_s")) == 12
+
+
+def test_build_filter_config_auto_mode_does_not_crash_and_uses_locked_data_values():
+    class _Pin:
+        def __init__(self):
+            self._d = {
+                "enable_tdc": [],
+                "enable_afdw": [],
+                "filter_smooth": 96,
+                "df_smoothing": [True],
+            }
+
+        def get(self, key, default=None):
+            return self._d.get(key, default)
+
+        def __getitem__(self, key):
+            if key in self._d:
+                return self._d[key]
+            raise KeyError(key)
+
+    data = load_config()
+    data.update(
+        {
+            "mode": "AUTO",
+            "camillafir_automatic_mode": True,
+            "filter_type": "Linear Phase",
+            "mixed_freq": 180.0,
+            "mag_c_min": 15.0,
+            "mag_c_max": 196.1,
+            "max_boost": 3.22,
+            "phase_limit": 448.0,
+            "mag_correct": True,
+            "reg_strength": 22.5,
+            "normalize_opt": False,
+            "exc_prot": True,
+            "exc_freq": 24.0,
+            "low_bass_cut_hz": 18.0,
+            "low_bass_cut_enable": True,
+            "ir_window_right": 500.0,
+            "ir_window_left": 85.0,
+            "lvl_manual_db": 0.0,
+            "lvl_min": 200.0,
+            "lvl_max": 3000.0,
+            "lvl_algo": "Median",
+            "trans_width": 139.2,
+            "enable_tdc": True,
+            "enable_afdw": True,
+            "tdc_strength": 63.9,
+            "tdc_max_reduction_db": 23.7,
+            "tdc_slope_db_per_oct": 12.0,
+            "filter_smooth": 12,
+            "df_smoothing": False,
+        }
+    )
+
+    cfg = build_filter_config(
+        FilterConfig_cls=FilterConfig,
+        fs_v=44100,
+        taps_v=65536,
+        data=data,
+        xos=[],
+        hpf=None,
+        hc_f=None,
+        hc_m=None,
+        pin=_Pin(),
+    )
+
+    assert bool(getattr(cfg, "enable_tdc", False)) is True
+    assert bool(getattr(cfg, "enable_afdw", False)) is True
+    assert int(getattr(cfg, "filter_smooth", 0)) == 12
+    assert bool(getattr(cfg, "df_smoothing", True)) is False
 
 
 def test_auto_target_curve_selection_uses_exact_signature_cache_without_recomputing(monkeypatch):

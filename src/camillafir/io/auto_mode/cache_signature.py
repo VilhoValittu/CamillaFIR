@@ -22,9 +22,6 @@ from .shared import (
     logger,
 )
 
-_AUTO_CACHE_VERSION_MISMATCH_LOGGED = False
-
-
 def _auto_cache_path() -> str:
     preferred_base = os.fspath(camillafir_data_dir())
     preferred_path = os.path.join(preferred_base, AUTO_MODE_CACHE_FILENAME)
@@ -218,7 +215,6 @@ def _auto_apply_seed(seed: int) -> None:
 
 
 def _auto_cache_load(*, program_version: str | None = None) -> dict:
-    global _AUTO_CACHE_VERSION_MISMATCH_LOGGED
     path = _auto_cache_path()
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -226,19 +222,9 @@ def _auto_cache_load(*, program_version: str | None = None) -> dict:
         if not isinstance(obj, dict):
             obj = {}
         expected_ver = str(program_version or "").strip()
-        if not expected_ver:
-            return obj
-        cached_ver = str(obj.get("program_version", "") or "").strip()
-        if cached_ver == expected_ver:
-            return obj
-        if not bool(_AUTO_CACHE_VERSION_MISMATCH_LOGGED):
-            logger.info(
-                "Automatic mode cache version mismatch: "
-                f"cached='{cached_ver or 'n/a'}', current='{expected_ver}'. "
-                "Ignoring cache and running fresh trials."
-            )
-            _AUTO_CACHE_VERSION_MISMATCH_LOGGED = True
-        return _auto_cache_empty(program_version=expected_ver)
+        if expected_ver and not str(obj.get("program_version", "") or "").strip():
+            obj["program_version"] = str(expected_ver)
+        return obj
     except Exception:
         expected_ver = str(program_version or "").strip()
         if expected_ver:
