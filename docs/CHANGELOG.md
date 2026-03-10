@@ -4,6 +4,12 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.5.7] - 2026-03-10
+
+- Optuna optimization
+
+---
+
 ## [3.5.6] - 2026-03-08
 
 ### UI & Results
