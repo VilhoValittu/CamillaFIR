@@ -330,6 +330,23 @@ def _auto_import_optuna():
     return optuna
 
 
+def _auto_optuna_module_ready(optuna_mod) -> bool:
+    if optuna_mod is None:
+        return False
+    try:
+        sampler_cls = getattr(getattr(optuna_mod, "samplers", None), "TPESampler", None)
+        create_study = getattr(optuna_mod, "create_study", None)
+        trial_state = getattr(getattr(optuna_mod, "trial", None), "TrialState", None)
+    except Exception:
+        return False
+    return bool(
+        callable(sampler_cls)
+        and callable(create_study)
+        and trial_state is not None
+        and hasattr(trial_state, "FAIL")
+    )
+
+
 def _auto_optuna_storage_path() -> str:
     preferred_base = os.fspath(camillafir_data_dir())
     preferred_path = os.path.join(preferred_base, AUTO_MODE_OPTUNA_STORAGE_FILENAME)
@@ -1391,7 +1408,7 @@ def _auto_optuna_remember_result(
     use_refine_tiebreak: bool = False,
     out_payload: dict | None = None,
 ) -> bool:
-    if optuna_mod is None or not study_name or not callable(seed_to_params):
+    if (not _auto_optuna_module_ready(optuna_mod)) or not study_name or not callable(seed_to_params):
         return False
     params = {}
     try:
@@ -1489,6 +1506,7 @@ def _auto_run_optuna_eval_loop(
     cfg: AutoModeConfig | None = None,
     n_total: int,
     seed: int,
+    startup_trials: int | None = None,
     base_data: dict | None,
     seed_presets: list[dict] | None,
     build_preset,
@@ -1502,17 +1520,20 @@ def _auto_run_optuna_eval_loop(
     phase_label: str | None = None,
     phase_kind: str | None = None,
 ) -> dict:
+    if not _auto_optuna_module_ready(optuna_mod):
+        return {}
     total = int(max(0, n_total))
     if total <= 0:
         return {}
     cfg_optuna = cfg if isinstance(cfg, AutoModeConfig) else AutoModeConfig.from_base_data(base_data)
     scope_eff = _auto_optuna_effective_scope(base_data, study_scope or study_name, phase_kind=phase_kind)
-    # Startup is selected exclusively by phase_kind + total; callers do not override it.
     startup_effective = _auto_optuna_startup_for_phase_kind(
         cfg_optuna,
         phase_kind=phase_kind,
         total=int(total),
     )
+    if startup_trials is not None and not str(phase_kind or "").strip():
+        startup_effective = int(max(1, min(int(total), _auto_safe_int(startup_trials, startup_effective))))
     logger.info(
         "Automatic mode Optuna startup policy: phase_kind=%s scope=%s total=%d startup=%d",
         str(phase_kind or ""),
@@ -2718,7 +2739,7 @@ def _auto_select_target_curve_with_trials(
     ) -> list[dict]:
         use_optuna_trials = bool(
             str(optimizer_backend) == "optuna"
-            and optuna_mod is not None
+            and _auto_optuna_module_ready(optuna_mod)
             and callable(optuna_builder)
         )
         n_total = int(n_total_override) if n_total_override is not None else int(len(cands))
@@ -2890,7 +2911,9 @@ def _auto_select_target_curve_with_trials(
                 float(_auto_phase_limit_center(base_tc.get("phase_limit", None))),
                 1,
             )
-        use_optuna_curve_trials = bool(str(optimizer_backend) == "optuna" and optuna_mod is not None)
+        use_optuna_curve_trials = bool(
+            str(optimizer_backend) == "optuna" and _auto_optuna_module_ready(optuna_mod)
+        )
         candidates = []
         phase1_seed_presets = _build_auto_mode_candidates(
             base_tc,
@@ -4726,22 +4749,56 @@ def _run_auto_mode_search_impl(
                 round_improved_count = 0
                 round_executed = 0
                 round_tel = {}
+                raw_scope = _auto_optuna_scope_with_context(
+                    "phase3-micro-u1-cache",
+                    center=dict(round_start_preset or {}),
+                    shrink=1.0,
+                    extra={
+                        "filter_key": str(filter_key),
+                        "round": int(round_idx),
+                    },
+                )
+                round_seed_presets = _build_auto_mode_candidates_micro(
+                    cache_base_data,
+                    dict(round_start_preset or {}),
+                    n_trials=1,
+                    shrink=1.0,
+                )
                 if bool(str(optimizer_backend) == "optuna" and optuna_mod is not None):
-                    round_seed_presets = _build_auto_mode_candidates_micro(
-                        cache_base_data,
-                        dict(round_start_preset or {}),
-                        n_trials=1,
-                        shrink=1.0,
-                    )
-                    raw_scope = _auto_optuna_scope_with_context(
-                        "phase3-micro-u1-cache",
-                        center=dict(round_start_preset or {}),
-                        shrink=1.0,
-                        extra={
-                            "filter_key": str(filter_key),
+                    _auto_optuna_remember_result(
+                        optuna_mod,
+                        base_data=dict(cache_base_data or {}),
+                        study_name=_auto_optuna_study_name(
+                            study_sig=optuna_search_sig,
+                            scope=_auto_optuna_effective_scope(cache_base_data, raw_scope, phase_kind="micro"),
+                        ),
+                        study_scope=raw_scope,
+                        phase_kind="micro",
+                        seed=int(seed + 700000 + round_idx * 1009),
+                        preset=dict(round_start_preset or {}),
+                        metrics=dict(round_start_metrics or {}),
+                        seed_to_params=(
+                            lambda preset,
+                            _base=dict(cache_base_data),
+                            _center=dict(round_start_preset or {}),
+                            _shrink=1.0: _seed_auto_mode_candidate_micro_optuna_params(
+                                _base,
+                                _center,
+                                preset,
+                                shrink=float(_shrink),
+                            )
+                        ),
+                        use_refine_tiebreak=True,
+                        out_payload={
+                            "idx": 0,
+                            "ok": True,
+                            "metrics": dict(round_start_metrics or {}),
+                            "trial_preset": dict(round_start_preset or {}),
+                            "phase": "exact_cache_micro_refine_seed",
                             "round": int(round_idx),
                         },
                     )
+                if bool(str(optimizer_backend) == "optuna" and _auto_optuna_module_ready(optuna_mod)):
                     if callable(status_cb):
                         status_cb(
                             "CamillaFIR automatic mode: cache refine round "
@@ -4896,6 +4953,40 @@ def _run_auto_mode_search_impl(
                             include_response_arrays=False,
                             summarize=False,
                         )
+                        if bool(str(optimizer_backend) == "optuna" and optuna_mod is not None):
+                            _auto_optuna_remember_result(
+                                optuna_mod,
+                                base_data=dict(cache_base_data or {}),
+                                study_name=_auto_optuna_study_name(
+                                    study_sig=optuna_search_sig,
+                                    scope=_auto_optuna_effective_scope(cache_base_data, raw_scope, phase_kind="micro"),
+                                ),
+                                study_scope=raw_scope,
+                                phase_kind="micro",
+                                seed=int(seed + 700000 + round_idx * 1009 + idx),
+                                preset=dict(cand or {}),
+                                metrics=dict(met_i or {}),
+                                seed_to_params=(
+                                    lambda preset,
+                                    _base=dict(cache_base_data),
+                                    _center=dict(round_start_preset or {}),
+                                    _shrink=1.0: _seed_auto_mode_candidate_micro_optuna_params(
+                                        _base,
+                                        _center,
+                                        preset,
+                                        shrink=float(_shrink),
+                                    )
+                                ),
+                                use_refine_tiebreak=True,
+                                out_payload={
+                                    "idx": int(idx),
+                                    "ok": True,
+                                    "metrics": dict(met_i or {}),
+                                    "trial_preset": dict(cand or {}),
+                                    "phase": "exact_cache_micro_refine",
+                                    "round": int(round_idx),
+                                },
+                            )
                         round_executed += 1
                         executed_micro_trials_total += 1
                         better, _reason = _auto_is_better_refine(
@@ -5146,7 +5237,9 @@ def _run_auto_mode_search_impl(
                 f"for {str(filter_key)} filter"
             )
 
-    use_optuna_trials = bool(str(optimizer_backend) == "optuna" and optuna_mod is not None)
+    use_optuna_trials = bool(
+        str(optimizer_backend) == "optuna" and _auto_optuna_module_ready(optuna_mod)
+    )
     candidates = []
     if not bool(use_optuna_trials):
         candidates = _build_auto_mode_candidates(search_base_data, n_trials=int(n_trials_eff), seed=seed)
@@ -5250,7 +5343,7 @@ def _run_auto_mode_search_impl(
         phase_state = _AutoModePhaseState()
         use_optuna_phase = bool(
             str(optimizer_backend) == "optuna"
-            and optuna_mod is not None
+            and _auto_optuna_module_ready(optuna_mod)
             and callable(optuna_builder)
         )
         n_total = int(n_total_override) if n_total_override is not None else int(len(cands))
