@@ -1088,8 +1088,8 @@ def update_lvl_ui(_=None):
                     value=float(_p("lvl_manual_db", 0.0) or 0.0), # type: ignore
                     help_text=t("lvl_manual_help"),
                 ),
-                put_button("-", onclick=lambda: _step_manual_target(-0.1), color="secondary").style("margin-top:28px; min-width:34px; margin-right:4px;"),
-                put_button("+", onclick=lambda: _step_manual_target(+0.1), color="secondary").style("margin-top:28px; min-width:34px;"),
+                put_button("+", onclick=lambda: _step_manual_target(-0.1), color="secondary").style("margin-top:28px; min-width:34px; margin-right:4px;"),
+                put_button("-", onclick=lambda: _step_manual_target(+0.1), color="secondary").style("margin-top:28px; min-width:34px;"),
             ], size="1fr auto auto")
             put_html(
                 f"<div style='opacity:0.75; font-size:12px; margin-top:4px;'>"
