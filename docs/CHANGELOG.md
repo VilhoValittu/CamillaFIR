@@ -4,6 +4,21 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.5.8] - 2026-03-11
+
+### Automatic mode
+- Improved phase-1 Optuna search so trial parameters now match the actual evaluated preset values more closely, reducing duplicate/mismatch noise in the sampler model.
+- Canonicalized Optuna preset parameter handling for persistent studies, improving duplicate detection and reuse of previously evaluated trials across runs.
+- Updated remembered/evaluated trial insertion to prefer Optuna completed-trial style recording before falling back to the older enqueue/ask/tell path.
+- Added `max_slope_boost_db_per_oct`, `max_slope_cut_db_per_oct`, and `conf_pull_max_hz` to the main phase-1/global Optuna search space.
+- Kept those new secondary parameters restricted to the main/global search after testing showed that letting later refine or micro phases retune them reduced result quality.
+- Reduced default phase-3 micro trial count and tightened the micro search shrink range so more of the useful optimization happens earlier in the pipeline.
+
+### Export
+- Expanded automatic-mode winner summary export so the additional phase-1/global Optuna parameters are visible in the saved best-preset text.
+
+---
+
 ## [3.5.7] - 2026-03-10
 
 - Optuna optimization
