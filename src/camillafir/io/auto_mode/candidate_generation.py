@@ -30,6 +30,15 @@ from .shared import (
 )
 
 
+def _auto_optuna_snap_to_step(value: float, *, lo: float, hi: float, step: float) -> float:
+    clipped = float(np.clip(_auto_safe_float(value, lo), float(lo), float(hi)))
+    step_f = float(max(step, 1e-9))
+    snapped = float(lo) + round((clipped - float(lo)) / step_f) * step_f
+    decimals_txt = f"{step_f:.10f}".rstrip("0")
+    decimals = len(decimals_txt.split(".", 1)[1]) if "." in decimals_txt else 0
+    return float(np.clip(round(snapped, decimals), float(lo), float(hi)))
+
+
 def _build_auto_mode_candidates(
     base_data: dict,
     *,
@@ -323,20 +332,27 @@ def _suggest_auto_mode_candidate_optuna(
     tdc_min = 55.0 if (_auto_goal_norm(goal) == AUTO_MODE_GOAL_LOW_RIPPLE and bool(keep_tdc)) else 15.0
 
     if bool(tune_mag_low):
-        mag_c_min = float(
+        mag_c_min = _auto_optuna_snap_to_step(
             trial.suggest_float(
                 "mag_c_min",
                 float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
                 float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
-            )
+                step=0.1,
+            ),
+            lo=float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
+            hi=float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
+            step=0.1,
         )
-        low_delta = float(trial.suggest_float("low_bass_delta_hz", -8.0, 10.0))
-        low_bass_cut_hz = float(
-            np.clip(
-                float(mag_c_min) + float(low_delta),
+        low_bass_cut_hz = _auto_optuna_snap_to_step(
+            trial.suggest_float(
+                "low_bass_cut_hz",
                 float(AUTO_MODE_LOW_BASS_MIN_HZ),
                 float(AUTO_MODE_LOW_BASS_MAX_HZ),
-            )
+                step=0.1,
+            ),
+            lo=float(AUTO_MODE_LOW_BASS_MIN_HZ),
+            hi=float(AUTO_MODE_LOW_BASS_MAX_HZ),
+            step=0.1,
         )
     else:
         mag_c_min = float(round(mag_c_min_seed, 1))
@@ -347,32 +363,90 @@ def _suggest_auto_mode_candidate_optuna(
         "enable_tdc": bool(keep_tdc),
         "enable_afdw": bool(keep_afdw),
         "bass_first_ai": bool(keep_bass_first),
-        "fdw_cycles": round(float(trial.suggest_float("fdw_cycles", 5.0, 16.0)), 2),
-        "tdc_strength": round(float(trial.suggest_float("tdc_strength", float(tdc_min), 75.0)), 1),
-        "tdc_max_reduction_db": round(float(trial.suggest_float("tdc_max_reduction_db", 6.0, 36.0)), 1),
+        "fdw_cycles": _auto_optuna_snap_to_step(
+            trial.suggest_float("fdw_cycles", 5.0, 16.0, step=0.01),
+            lo=5.0,
+            hi=16.0,
+            step=0.01,
+        ),
+        "tdc_strength": _auto_optuna_snap_to_step(
+            trial.suggest_float("tdc_strength", float(tdc_min), 75.0, step=0.1),
+            lo=float(tdc_min),
+            hi=75.0,
+            step=0.1,
+        ),
+        "tdc_max_reduction_db": _auto_optuna_snap_to_step(
+            trial.suggest_float("tdc_max_reduction_db", 6.0, 36.0, step=0.1),
+            lo=6.0,
+            hi=36.0,
+            step=0.1,
+        ),
         "tdc_slope_db_per_oct": float(trial.suggest_categorical("tdc_slope_db_per_oct", [3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 24.0, 36.0])),
-        "reg_strength": round(float(trial.suggest_float("reg_strength", 15.0, 45.0)), 1),
+        "reg_strength": _auto_optuna_snap_to_step(
+            trial.suggest_float("reg_strength", 15.0, 45.0, step=0.1),
+            lo=15.0,
+            hi=45.0,
+            step=0.1,
+        ),
         "max_slope_db_per_oct": float(trial.suggest_categorical("max_slope_db_per_oct", [8.0, 10.0, 12.0, 14.0, 16.0])),
-        "max_boost": round(float(trial.suggest_float("max_boost", 3.0, 8.0)), 2),
+        "max_slope_boost_db_per_oct": float(
+            trial.suggest_categorical("max_slope_boost_db_per_oct", [0.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 24.0, 36.0])
+        ),
+        "max_slope_cut_db_per_oct": float(
+            trial.suggest_categorical("max_slope_cut_db_per_oct", [0.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 24.0, 36.0])
+        ),
+        "max_boost": _auto_optuna_snap_to_step(
+            trial.suggest_float("max_boost", 3.0, 8.0, step=0.01),
+            lo=3.0,
+            hi=8.0,
+            step=0.01,
+        ),
         "mag_c_min": float(mag_c_min),
-        "mag_c_max": round(float(trial.suggest_float("mag_c_max", 170.0, 300.0)), 1),
-        "trans_width": round(float(trial.suggest_float("trans_width", 70.0, 150.0)), 1),
+        "mag_c_max": _auto_optuna_snap_to_step(
+            trial.suggest_float("mag_c_max", 170.0, 300.0, step=0.1),
+            lo=170.0,
+            hi=300.0,
+            step=0.1,
+        ),
+        "trans_width": _auto_optuna_snap_to_step(
+            trial.suggest_float("trans_width", 70.0, 150.0, step=0.1),
+            lo=70.0,
+            hi=150.0,
+            step=0.1,
+        ),
         "filter_smooth": int(trial.suggest_categorical("filter_smooth", [12, 24, 48, 96])),
-        "bass_first_mode_max_hz": round(float(trial.suggest_float("bass_first_mode_max_hz", 150.0, 220.0)), 1),
+        "bass_first_mode_max_hz": _auto_optuna_snap_to_step(
+            trial.suggest_float("bass_first_mode_max_hz", 150.0, 220.0, step=0.1),
+            lo=150.0,
+            hi=220.0,
+            step=0.1,
+        ),
+        "conf_pull_max_hz": _auto_optuna_snap_to_step(
+            trial.suggest_float("conf_pull_max_hz", 120.0, 260.0, step=5.0),
+            lo=120.0,
+            hi=260.0,
+            step=5.0,
+        ),
         "low_bass_cut_hz": float(low_bass_cut_hz),
     }
     if bool(is_mixed):
-        cand["mixed_freq"] = round(float(trial.suggest_float("mixed_freq", 80.0, 320.0)), 1)
+        cand["mixed_freq"] = _auto_optuna_snap_to_step(
+            trial.suggest_float("mixed_freq", 80.0, 320.0, step=0.1),
+            lo=80.0,
+            hi=320.0,
+            step=0.1,
+        )
     if bool(is_phase_search):
-        cand["phase_limit"] = round(
-            float(
-                trial.suggest_float(
-                    "phase_limit",
-                    float(AUTO_MODE_PHASE_LIMIT_MIN_HZ),
-                    float(AUTO_MODE_PHASE_LIMIT_MAX_HZ),
-                )
+        cand["phase_limit"] = _auto_optuna_snap_to_step(
+            trial.suggest_float(
+                "phase_limit",
+                float(AUTO_MODE_PHASE_LIMIT_MIN_HZ),
+                float(AUTO_MODE_PHASE_LIMIT_MAX_HZ),
+                step=0.1,
             ),
-            1,
+            lo=float(AUTO_MODE_PHASE_LIMIT_MIN_HZ),
+            hi=float(AUTO_MODE_PHASE_LIMIT_MAX_HZ),
+            step=0.1,
         )
     return cand
 
@@ -408,23 +482,43 @@ def _seed_auto_mode_candidate_optuna_params(
     tdc_min = 55.0 if (_auto_goal_norm(goal) == AUTO_MODE_GOAL_LOW_RIPPLE and bool(keep_tdc)) else 15.0
 
     out = {
-        "fdw_cycles": float(np.clip(_auto_safe_float(p.get("fdw_cycles", 10.0), 10.0), 5.0, 16.0)),
-        "tdc_strength": float(np.clip(_auto_safe_float(p.get("tdc_strength", 50.0), 50.0), float(tdc_min), 75.0)),
-        "tdc_max_reduction_db": float(np.clip(_auto_safe_float(p.get("tdc_max_reduction_db", 9.0), 9.0), 6.0, 36.0)),
+        "fdw_cycles": _auto_optuna_snap_to_step(_auto_safe_float(p.get("fdw_cycles", 10.0), 10.0), lo=5.0, hi=16.0, step=0.01),
+        "tdc_strength": _auto_optuna_snap_to_step(
+            _auto_safe_float(p.get("tdc_strength", 50.0), 50.0),
+            lo=float(tdc_min),
+            hi=75.0,
+            step=0.1,
+        ),
+        "tdc_max_reduction_db": _auto_optuna_snap_to_step(
+            _auto_safe_float(p.get("tdc_max_reduction_db", 9.0), 9.0),
+            lo=6.0,
+            hi=36.0,
+            step=0.1,
+        ),
         "tdc_slope_db_per_oct": _auto_optuna_nearest_choice(
             _auto_safe_float(p.get("tdc_slope_db_per_oct", 6.0), 6.0),
             [3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 24.0, 36.0],
             default=6.0,
         ),
-        "reg_strength": float(np.clip(_auto_safe_float(p.get("reg_strength", 30.0), 30.0), 15.0, 45.0)),
+        "reg_strength": _auto_optuna_snap_to_step(_auto_safe_float(p.get("reg_strength", 30.0), 30.0), lo=15.0, hi=45.0, step=0.1),
         "max_slope_db_per_oct": _auto_optuna_nearest_choice(
             _auto_safe_float(p.get("max_slope_db_per_oct", 12.0), 12.0),
             [8.0, 10.0, 12.0, 14.0, 16.0],
             default=12.0,
         ),
-        "max_boost": float(np.clip(_auto_safe_float(p.get("max_boost", 4.0), 4.0), 3.0, 8.0)),
-        "mag_c_max": float(np.clip(_auto_safe_float(p.get("mag_c_max", 220.0), 220.0), 170.0, 300.0)),
-        "trans_width": float(np.clip(_auto_safe_float(p.get("trans_width", 100.0), 100.0), 70.0, 150.0)),
+        "max_slope_boost_db_per_oct": _auto_optuna_nearest_choice(
+            _auto_safe_float(p.get("max_slope_boost_db_per_oct", 0.0), 0.0),
+            [0.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 24.0, 36.0],
+            default=0.0,
+        ),
+        "max_slope_cut_db_per_oct": _auto_optuna_nearest_choice(
+            _auto_safe_float(p.get("max_slope_cut_db_per_oct", 0.0), 0.0),
+            [0.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 24.0, 36.0],
+            default=0.0,
+        ),
+        "max_boost": _auto_optuna_snap_to_step(_auto_safe_float(p.get("max_boost", 4.0), 4.0), lo=3.0, hi=8.0, step=0.01),
+        "mag_c_max": _auto_optuna_snap_to_step(_auto_safe_float(p.get("mag_c_max", 220.0), 220.0), lo=170.0, hi=300.0, step=0.1),
+        "trans_width": _auto_optuna_snap_to_step(_auto_safe_float(p.get("trans_width", 100.0), 100.0), lo=70.0, hi=150.0, step=0.1),
         "filter_smooth": int(
             round(
                 _auto_optuna_nearest_choice(
@@ -434,26 +528,45 @@ def _seed_auto_mode_candidate_optuna_params(
                 )
             )
         ),
-        "bass_first_mode_max_hz": float(
-            np.clip(
-                _auto_safe_float(p.get("bass_first_mode_max_hz", 180.0), 180.0),
-                150.0,
-                220.0,
-            )
+        "bass_first_mode_max_hz": _auto_optuna_snap_to_step(
+            _auto_safe_float(p.get("bass_first_mode_max_hz", 180.0), 180.0),
+            lo=150.0,
+            hi=220.0,
+            step=0.1,
+        ),
+        "conf_pull_max_hz": _auto_optuna_snap_to_step(
+            _auto_safe_float(p.get("conf_pull_max_hz", 200.0), 200.0),
+            lo=120.0,
+            hi=260.0,
+            step=5.0,
         ),
     }
     if bool(optimize_mag_low):
-        out["mag_c_min"] = float(mag_c_min)
-        out["low_bass_delta_hz"] = float(np.clip(low_bass_cut_hz - float(mag_c_min), -8.0, 10.0))
+        out["mag_c_min"] = _auto_optuna_snap_to_step(
+            float(mag_c_min),
+            lo=float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
+            hi=float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
+            step=0.1,
+        )
+        out["low_bass_cut_hz"] = _auto_optuna_snap_to_step(
+            float(low_bass_cut_hz),
+            lo=float(AUTO_MODE_LOW_BASS_MIN_HZ),
+            hi=float(AUTO_MODE_LOW_BASS_MAX_HZ),
+            step=0.1,
+        )
     if bool(is_mixed):
-        out["mixed_freq"] = float(np.clip(_auto_safe_float(p.get("mixed_freq", 180.0), 180.0), 80.0, 320.0))
+        out["mixed_freq"] = _auto_optuna_snap_to_step(
+            _auto_safe_float(p.get("mixed_freq", 180.0), 180.0),
+            lo=80.0,
+            hi=320.0,
+            step=0.1,
+        )
     if bool(is_phase_search):
-        out["phase_limit"] = float(
-            np.clip(
-                _auto_safe_float(p.get("phase_limit", _auto_phase_limit_center(base_data.get("phase_limit", None))), 320.0),
-                float(AUTO_MODE_PHASE_LIMIT_MIN_HZ),
-                float(AUTO_MODE_PHASE_LIMIT_MAX_HZ),
-            )
+        out["phase_limit"] = _auto_optuna_snap_to_step(
+            _auto_safe_float(p.get("phase_limit", _auto_phase_limit_center(base_data.get("phase_limit", None))), 320.0),
+            lo=float(AUTO_MODE_PHASE_LIMIT_MIN_HZ),
+            hi=float(AUTO_MODE_PHASE_LIMIT_MAX_HZ),
+            step=0.1,
         )
     return dict(out)
 
@@ -1163,7 +1276,6 @@ def _build_auto_mode_candidates_local(
     slope_choices = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 24.0, 36.0]
     slope_center = _auto_safe_float(c.get("tdc_slope_db_per_oct", base.get("tdc_slope_db_per_oct", 6.0)), 6.0)
     slope_idx = int(min(range(len(slope_choices)), key=lambda i: abs(float(slope_choices[i]) - float(slope_center))))
-
     center_out = dict(c)
     center_out["comparison_mode"] = True
     center_out["enable_tdc"] = bool(keep_tdc)

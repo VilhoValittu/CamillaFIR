@@ -101,6 +101,10 @@ from .auto_mode.target_preselection import (
 )
 from .auto_mode.shared import (
     AutoModeConfig,
+    AUTO_MODE_LOW_BASS_MAX_HZ,
+    AUTO_MODE_LOW_BASS_MIN_HZ,
+    AUTO_MODE_MAG_C_MIN_MAX_HZ,
+    AUTO_MODE_MAG_C_MIN_MIN_HZ,
     AUTO_MODE_OPTUNA_CONSTRAINTS_ENABLED,
     AUTO_MODE_OPTUNA_CONSTRAINTS_USE_EVENTS_IN_REFINE,
     AUTO_MODE_OPTUNA_CONSTRAINTS_ZERO_FEASIBLE_FALLBACK,
@@ -110,6 +114,8 @@ from .auto_mode.shared import (
     AUTO_MODE_OPTUNA_CONSTRAINTS_REFINE_ONLY,
     AUTO_MODE_OPTUNA_TELEMETRY,
     AUTO_MODE_OPTUNA_TELEMETRY_LOG_SUMMARY,
+    AUTO_MODE_PHASE_LIMIT_MAX_HZ,
+    AUTO_MODE_PHASE_LIMIT_MIN_HZ,
     _auto_builtin_target_name,
     _auto_filter_cache_key,
     _auto_goal,
@@ -246,7 +252,7 @@ AUTO_MODE_ADAPTIVE_SHRINK_ENABLED = True
 AUTO_MODE_ADAPTIVE_SHRINK_MIN = 0.20
 AUTO_MODE_ADAPTIVE_SHRINK_MAX = 0.55
 AUTO_MODE_PHASE3_MICRO_ENABLED = True
-AUTO_MODE_PHASE3_MICRO_TRIALS = 12
+AUTO_MODE_PHASE3_MICRO_TRIALS = 6
 AUTO_MODE_CACHE_REFINE_MICRO_TRIALS = 20
 AUTO_MODE_CACHE_REFINE_MAX_ROUNDS = 8
 AUTO_MODE_CACHE_REFINE_MIN_RANK_IMPROVEMENT = 0.02
@@ -518,6 +524,120 @@ def _auto_optuna_trial_params(
     if params:
         return params
     return dict(preset or {})
+
+
+def _auto_optuna_trial_payload_preset(user_attrs: dict | None) -> dict:
+    payload = dict((user_attrs or {}).get(AUTO_MODE_OPTUNA_USER_ATTR_OUT, {}) or {})
+    preset = payload.get("trial_preset", None)
+    if not isinstance(preset, dict) or not preset:
+        preset = payload.get("preset", None)
+    return dict(preset or {})
+
+
+def _auto_optuna_tdc_min(base_data: dict | None) -> float:
+    if (_auto_goal_norm(_auto_goal(base_data)) == AUTO_MODE_GOAL_LOW_RIPPLE) and bool((base_data or {}).get("enable_tdc", True)):
+        return 55.0
+    return 15.0
+
+
+def _auto_optuna_trial_distributions(optuna_mod, *, params: dict | None, base_data: dict | None) -> dict | None:
+    params_in = dict(params or {})
+    if not params_in:
+        return None
+    dist_mod = getattr(optuna_mod, "distributions", None)
+    float_dist = getattr(dist_mod, "FloatDistribution", None)
+    cat_dist = getattr(dist_mod, "CategoricalDistribution", None)
+    if not callable(float_dist) or not callable(cat_dist):
+        return None
+
+    tdc_min = float(_auto_optuna_tdc_min(base_data))
+    categorical_choices = {
+        "tdc_slope_db_per_oct": [3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 24.0, 36.0],
+        "max_slope_db_per_oct": [8.0, 10.0, 12.0, 14.0, 16.0],
+        "max_slope_boost_db_per_oct": [0.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 24.0, 36.0],
+        "max_slope_cut_db_per_oct": [0.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 24.0, 36.0],
+        "filter_smooth": [12, 24, 48, 96],
+    }
+    float_ranges = {
+        "fdw_cycles": (5.0, 16.0, 0.01),
+        "tdc_strength": (tdc_min, 75.0, 0.1),
+        "tdc_max_reduction_db": (6.0, 36.0, 0.1),
+        "reg_strength": (15.0, 45.0, 0.1),
+        "max_boost": (3.0, 8.0, 0.01),
+        "mag_c_min": (float(AUTO_MODE_MAG_C_MIN_MIN_HZ), float(AUTO_MODE_MAG_C_MIN_MAX_HZ), 0.1),
+        "mag_c_max": (170.0, 300.0, 0.1),
+        "trans_width": (70.0, 150.0, 0.1),
+        "bass_first_mode_max_hz": (150.0, 220.0, 0.1),
+        "conf_pull_max_hz": (120.0, 260.0, 5.0),
+        "low_bass_cut_hz": (float(AUTO_MODE_LOW_BASS_MIN_HZ), float(AUTO_MODE_LOW_BASS_MAX_HZ), 0.1),
+        "mixed_freq": (80.0, 320.0, 0.1),
+        "phase_limit": (float(AUTO_MODE_PHASE_LIMIT_MIN_HZ), float(AUTO_MODE_PHASE_LIMIT_MAX_HZ), 0.1),
+    }
+
+    out: dict[str, object] = {}
+    for name in list(params_in.keys()):
+        key = str(name)
+        if key.endswith("_u"):
+            try:
+                out[key] = float_dist(0.0, 1.0)
+            except Exception:
+                return None
+            continue
+        if key in categorical_choices:
+            try:
+                out[key] = cat_dist(list(categorical_choices[key]))
+            except Exception:
+                return None
+            continue
+        if key in float_ranges:
+            lo, hi, step = float_ranges[key]
+            try:
+                out[key] = float_dist(float(lo), float(hi), step=float(step))
+            except Exception:
+                return None
+            continue
+        return None
+    return dict(out)
+
+
+def _auto_optuna_build_completed_trial(
+    optuna_mod,
+    *,
+    params: dict | None,
+    value: float,
+    user_attrs: dict | None,
+    base_data: dict | None,
+):
+    create_trial = getattr(getattr(optuna_mod, "trial", None), "create_trial", None)
+    if not callable(create_trial):
+        create_trial = getattr(optuna_mod, "create_trial", None)
+    if not callable(create_trial):
+        return None
+    distributions = _auto_optuna_trial_distributions(optuna_mod, params=params, base_data=base_data)
+    if not distributions:
+        return None
+
+    trial_kwargs = {
+        "params": dict(params or {}),
+        "distributions": dict(distributions),
+        "value": float(value),
+        "user_attrs": dict(user_attrs or {}),
+    }
+    try:
+        return create_trial(**trial_kwargs)
+    except TypeError:
+        pass
+    except Exception:
+        return None
+
+    trial_state = getattr(getattr(optuna_mod, "trial", None), "TrialState", None)
+    complete_state = getattr(trial_state, "COMPLETE", None) if trial_state is not None else None
+    if complete_state is None:
+        return None
+    try:
+        return create_trial(state=complete_state, **trial_kwargs)
+    except Exception:
+        return None
 
 
 def _auto_optuna_startup_for_phase_kind(cfg, *, phase_kind: str | None, total: int) -> int:
@@ -1352,7 +1472,7 @@ def _auto_optuna_telemetry_rollup(items: list[dict] | None) -> dict:
     return out
 
 
-def _auto_optuna_study_records(study) -> dict[str, dict]:
+def _auto_optuna_study_records(study, *, seed_to_params=None) -> dict[str, dict]:
     try:
         trials = study.get_trials(deepcopy=False)
     except TypeError:
@@ -1362,9 +1482,21 @@ def _auto_optuna_study_records(study) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for tr in list(trials or []):
         try:
+            user_attrs = dict(getattr(tr, "user_attrs", {}) or {})
+        except Exception:
+            user_attrs = {}
+        payload_preset = _auto_optuna_trial_payload_preset(user_attrs)
+        try:
             params = dict(getattr(tr, "params", {}) or {})
         except Exception:
             params = {}
+        if callable(seed_to_params) and payload_preset:
+            try:
+                canonical_params = dict(seed_to_params(dict(payload_preset)) or {})
+            except Exception:
+                canonical_params = {}
+            if canonical_params:
+                params = dict(canonical_params)
         sig = _auto_optuna_param_signature(params)
         if not sig:
             continue
@@ -1383,10 +1515,6 @@ def _auto_optuna_study_records(study) -> dict[str, dict]:
         state = getattr(tr, "state", None)
         if state is not None:
             rec["state"] = state
-        try:
-            user_attrs = dict(getattr(tr, "user_attrs", {}) or {})
-        except Exception:
-            user_attrs = {}
         cached_out = dict(user_attrs.get(AUTO_MODE_OPTUNA_USER_ATTR_OUT, {}) or {})
         if cached_out:
             rec["out"] = cached_out
@@ -1445,14 +1573,7 @@ def _auto_optuna_remember_result(
         base_data=base_data,
         study_name=study_name,
     )
-    if params_sig in _auto_optuna_study_records(study):
-        return False
-    if not hasattr(study, "enqueue_trial") or not hasattr(study, "ask") or not hasattr(study, "tell"):
-        return False
-    try:
-        study.enqueue_trial(dict(params))
-        trial_obj = study.ask()
-    except Exception:
+    if params_sig in _auto_optuna_study_records(study, seed_to_params=seed_to_params):
         return False
     value = _auto_optuna_objective_value(
         dict(metrics or {}),
@@ -1474,11 +1595,33 @@ def _auto_optuna_remember_result(
         source="remembered",
         objective_value_num=float(value) if np.isfinite(value) else None,
     )
+    payload_json = _auto_optuna_jsonable(dict(payload or {}))
+    if hasattr(study, "add_trial"):
+        add_trial_obj = _auto_optuna_build_completed_trial(
+            optuna_mod,
+            params=params,
+            value=float(value),
+            user_attrs={AUTO_MODE_OPTUNA_USER_ATTR_OUT: payload_json},
+            base_data=base_data,
+        )
+        if add_trial_obj is not None:
+            try:
+                study.add_trial(add_trial_obj)
+                return True
+            except Exception:
+                pass
+    if not hasattr(study, "enqueue_trial") or not hasattr(study, "ask") or not hasattr(study, "tell"):
+        return False
+    try:
+        study.enqueue_trial(dict(params))
+        trial_obj = study.ask()
+    except Exception:
+        return False
     try:
         if hasattr(trial_obj, "set_user_attr"):
             trial_obj.set_user_attr(
                 AUTO_MODE_OPTUNA_USER_ATTR_OUT,
-                _auto_optuna_jsonable(dict(payload or {})),
+                payload_json,
             )
     except Exception:
         pass
@@ -1597,7 +1740,7 @@ def _auto_run_optuna_eval_loop(
     duplicate_guard = bool(
         _auto_safe_bool((base_data or {}).get("auto_mode_optuna_avoid_duplicates", True), True)
     )
-    known_records = _auto_optuna_study_records(study) if bool(duplicate_guard) else {}
+    known_records = _auto_optuna_study_records(study, seed_to_params=seed_to_params) if bool(duplicate_guard) else {}
     reserved_signatures: set[str] = set()
     duplicate_skips = 0
     duplicate_replays = 0
@@ -5970,6 +6113,13 @@ def _run_auto_mode_search_impl(
                 phase1_top,
                 base_shrink=float(cfg.adaptive_shrink_max),
                 plateau_hit=bool(phase1_plateau_hit),
+            )
+        )
+        micro_shrink = float(
+            np.clip(
+                micro_shrink * 0.70,
+                AUTO_MODE_ADAPTIVE_SHRINK_MIN,
+                1.0,
             )
         )
         micro_center = dict(search_state.best_preset or {})

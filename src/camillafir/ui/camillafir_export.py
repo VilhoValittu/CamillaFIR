@@ -404,12 +404,15 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
                         "tdc_slope_db_per_oct",
                         "reg_strength",
                         "max_slope_db_per_oct",
+                        "max_slope_boost_db_per_oct",
+                        "max_slope_cut_db_per_oct",
                         "max_boost",
                         "mag_c_min",
                         "mag_c_max",
                         "trans_width",
                         "filter_smooth",
                         "bass_first_mode_max_hz",
+                        "conf_pull_max_hz",
                         "low_bass_cut_hz",
                     ]
                     picked = [f"{k}={bp[k]}" for k in keys if k in bp]
