@@ -87,7 +87,6 @@ def _apply_auto_mode_managed_settings(data: Dict[str, Any]) -> None:
         "stereo_link_strategy": "auto",
         "exc_prot": True,
         "low_bass_cut_enable": True,
-        "hpf_enable": False,
         "comparison_mode": True,
         "df_smoothing": False,
         "auto_target_mode": str(data.get("auto_target_mode", "auto") or "auto"),

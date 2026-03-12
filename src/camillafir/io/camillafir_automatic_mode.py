@@ -4595,6 +4595,34 @@ def _estimate_auto_hpf_from_response(
         "channels": valid,
     }
 
+
+def _resolve_auto_hpf_application(auto_hpf: dict | None, *, user_hpf_enabled: bool) -> dict:
+    """
+    Decide whether AUTO mode may apply the estimated HPF.
+
+    AUTO should not silently inject an HPF into runs where the user did not
+    request one, because that changes LF phase behavior compared with the
+    normal BASIC/ADVANCED DSP path. In that case we keep the estimate only as
+    metadata/suggestion.
+    """
+    meta = dict(auto_hpf or {})
+    method = str(meta.get("method", "") or "").strip().lower()
+    enabled = bool(meta.get("enabled", False))
+
+    if bool(user_hpf_enabled) and method == "response_fit":
+        applied = True
+        decision = "apply_user_hpf_fit"
+    elif enabled and method == "response_fit":
+        applied = False
+        decision = "suggest_only"
+    else:
+        applied = False
+        decision = "skip"
+
+    meta["applied"] = bool(applied)
+    meta["decision"] = str(decision)
+    return meta
+
 # --------------------------------------------------------------------
 # Auto-mode search state + orchestration
 # --------------------------------------------------------------------

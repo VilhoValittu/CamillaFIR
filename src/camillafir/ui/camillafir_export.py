@@ -2,6 +2,7 @@ import json
 import io
 import logging
 import os
+import sys
 import time
 import zipfile
 from typing import Any
@@ -61,6 +62,36 @@ def _auto_search_space_summary(data: dict | None) -> str:
         "Automatic mode samples only a tiny subset and refines iteratively/cache-guided. "
         "Because the calculation count is still large, runtime depends strongly on computer performance."
     )
+
+
+def _module_runtime_version(module_name: str) -> str:
+    try:
+        mod = __import__(str(module_name))
+        ver = str(getattr(mod, "__version__", "") or "").strip()
+        if ver:
+            return ver
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import version
+
+        ver = str(version(str(module_name)) or "").strip()
+        if ver:
+            return ver
+    except Exception:
+        pass
+    return "n/a"
+
+
+def _runtime_versions_text() -> str:
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    parts = [
+        f"Python {py_ver}",
+        f"numpy {_module_runtime_version('numpy')}",
+        f"scipy {_module_runtime_version('scipy')}",
+        f"optuna {_module_runtime_version('optuna')}",
+    ]
+    return "Runtime: " + " | ".join(parts)
 
 def _collect_reflections(st: dict | None) -> list:
     st = st or {}
@@ -335,6 +366,7 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
                 optimizer_backend = str(auto_meta.get("optimizer_backend", "") or "").strip()
                 if optimizer_backend:
                     summary_content += f"Optimizer backend: {optimizer_backend}\n"
+                summary_content += _runtime_versions_text() + "\n"
                 summary_content += _auto_search_space_summary(data) + "\n"
                 if tc:
                     tc_method = str(tc.get("selection_method", "fit_rms"))

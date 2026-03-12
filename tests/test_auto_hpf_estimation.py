@@ -1,6 +1,9 @@
 import numpy as np
 
-from camillafir.io.camillafir_automatic_mode import _estimate_auto_hpf_from_response
+from camillafir.io.camillafir_automatic_mode import (
+    _estimate_auto_hpf_from_response,
+    _resolve_auto_hpf_application,
+)
 
 
 def _butter_hpf_mag_db(freqs: np.ndarray, fc_hz: float, order: int) -> np.ndarray:
@@ -60,3 +63,34 @@ def test_auto_hpf_estimator_stays_off_for_flat_response():
     assert abs(float(res.get("freq", 0.0)) - 23.0) <= 0.1
     assert int(res.get("slope_db_oct", 0)) == 24
     assert float(res.get("confidence", 1.0)) <= 0.1
+
+
+def test_auto_hpf_is_only_a_suggestion_when_user_has_not_enabled_hpf():
+    auto_hpf = {
+        "enabled": True,
+        "freq": 18.2,
+        "slope_db_oct": 24,
+        "confidence": 0.81,
+        "method": "response_fit",
+    }
+
+    resolved = _resolve_auto_hpf_application(auto_hpf, user_hpf_enabled=False)
+
+    assert bool(resolved.get("enabled", False))
+    assert not bool(resolved.get("applied", True))
+    assert str(resolved.get("decision")) == "suggest_only"
+
+
+def test_auto_hpf_applies_response_fit_when_user_hpf_is_enabled():
+    auto_hpf = {
+        "enabled": False,
+        "freq": 22.0,
+        "slope_db_oct": 18,
+        "confidence": 0.52,
+        "method": "response_fit",
+    }
+
+    resolved = _resolve_auto_hpf_application(auto_hpf, user_hpf_enabled=True)
+
+    assert bool(resolved.get("applied", False))
+    assert str(resolved.get("decision")) == "apply_user_hpf_fit"

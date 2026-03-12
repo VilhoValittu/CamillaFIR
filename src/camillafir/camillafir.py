@@ -121,6 +121,7 @@ from .io.camillafir_automatic_mode import (  # noqa: E402
     _auto_select_target_curve_with_trials,
     _estimate_auto_hpf_from_response,
     _estimate_auto_mag_c_min_hz,
+    _resolve_auto_hpf_application,
     _run_auto_mode_search,
 )
 
@@ -647,13 +648,14 @@ def process_run():
                 default_slope_db_oct=int(_auto_safe_float(data.get("hpf_slope", 24), 24.0)),
             )
             if isinstance(auto_hpf, dict):
+                auto_hpf = _resolve_auto_hpf_application(
+                    auto_hpf,
+                    user_hpf_enabled=bool(user_hpf_enabled),
+                )
                 auto_hpf_conf = _auto_safe_float(auto_hpf.get("confidence", 0.0), 0.0)
                 auto_hpf_method = str(auto_hpf.get("method", "") or "").strip().lower()
-                auto_hpf_apply = bool(auto_hpf.get("enabled", False))
-                # If user has HPF enabled in AUTO mode, always follow response-based estimate.
-                if bool(user_hpf_enabled) and auto_hpf_method == "response_fit":
-                    auto_hpf_apply = True
-                auto_hpf["applied"] = bool(auto_hpf_apply)
+                auto_hpf_apply = bool(auto_hpf.get("applied", False))
+                auto_hpf_decision = str(auto_hpf.get("decision", "") or "").strip().lower()
                 data["_auto_hpf_meta"] = dict(auto_hpf)
                 if auto_hpf_apply:
                     auto_hpf_freq = _auto_safe_float(
@@ -676,6 +678,25 @@ def process_run():
                         f"{float(data['hpf_freq']):.1f} Hz/{int(data['hpf_slope'])} dB/oct "
                         f"(method {auto_hpf_method or 'n/a'}, confidence {auto_hpf_conf:.2f}, "
                         f"user_hpf={'on' if bool(user_hpf_enabled) else 'off'})"
+                    )
+                elif auto_hpf_decision == "suggest_only":
+                    auto_hpf_freq = _auto_safe_float(
+                        auto_hpf.get("freq", data.get("hpf_freq", 20.0)),
+                        _auto_safe_float(data.get("hpf_freq", 20.0), 20.0),
+                    )
+                    auto_hpf_slope = int(
+                        round(
+                            _auto_safe_float(
+                                auto_hpf.get("slope_db_oct", data.get("hpf_slope", 24)),
+                                _auto_safe_float(data.get("hpf_slope", 24), 24.0),
+                            )
+                        )
+                    )
+                    _status(
+                        "CamillaFIR automatic mode: HPF auto-fit suggestion "
+                        f"{float(auto_hpf_freq):.1f} Hz/{int(max(6, auto_hpf_slope))} dB/oct "
+                        f"(method {auto_hpf_method or 'n/a'}, confidence {auto_hpf_conf:.2f}) -> "
+                        "not auto-applied"
                     )
                 elif user_hpf_enabled:
                     _status(

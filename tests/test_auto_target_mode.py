@@ -58,6 +58,9 @@ def test_collect_ui_data_auto_mode_preserves_allowed_inputs_but_forces_managed_s
         "filter_smooth": 96,
         "max_boost": 12.0,
         "comparison_mode": [],
+        "hpf_enable": [True],
+        "hpf_freq": 27.5,
+        "hpf_slope": 18,
         "xo1_f": 80.0,
         "xo1_s": 24,
         "xo2_f": 2200.0,
@@ -80,6 +83,9 @@ def test_collect_ui_data_auto_mode_preserves_allowed_inputs_but_forces_managed_s
     assert float(data.get("max_boost")) == 4.11
     assert float(data.get("mixed_freq")) == 177.3
     assert bool(data.get("comparison_mode")) is True
+    assert bool(data.get("hpf_enable")) is True
+    assert float(data.get("hpf_freq")) == 27.5
+    assert int(data.get("hpf_slope")) == 18
     assert float(data.get("gain")) == 0.0
     assert float(data.get("xo1_f")) == 80.0
     assert int(data.get("xo1_s")) == 24

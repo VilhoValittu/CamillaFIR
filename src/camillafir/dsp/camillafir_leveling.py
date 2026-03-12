@@ -11,7 +11,7 @@ __all__ = [
 
 @dataclass(frozen=True)
 class StereoLinkContext:
-    """Eksplisiittinen stereo-linkin levelointikonteksti."""
+
 
     forced_window_hz: tuple[float, float] | None = None
     forced_offset_db: float | None = None
@@ -44,7 +44,7 @@ def _tilt_aware_offset_db(
     *,
     max_db_per_oct: float = 2.0,
 ) -> float:
-    """Sisainen apufunktio: tilt aware offset db."""
+
     try:
         f = np.asarray(freq_axis, dtype=float)
         y = np.asarray(diff_db, dtype=float)
@@ -159,7 +159,7 @@ def find_stable_level_window(
     window_size_octaves: float = 1.0,
     hpf_freq: float = 0.0,
 ) -> Tuple[float, float]:
-    """Hakee tai ratkaisee: find stable level window."""
+
     try:
         f_min = _to_float(f_min, 0.0)
         f_max = _to_float(f_max, 0.0)
