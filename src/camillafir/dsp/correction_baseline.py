@@ -247,6 +247,16 @@ def _prepare_correction_baseline(
     meas_level_db_window = 0.0
     target_level_db_window = 0.0
     offset_method = "Init"
+    shared_target_shift_db = None
+    if stereo_link_ctx is not None:
+        try:
+            v = getattr(stereo_link_ctx, "shared_target_shift_db", None)
+            if v is not None:
+                v = float(v)
+                if np.isfinite(v):
+                    shared_target_shift_db = float(v)
+        except Exception:
+            shared_target_shift_db = None
     try:
         s_min = float(getattr(cfg, "lvl_min", 500.0) or 500.0)
         s_max = float(getattr(cfg, "lvl_max", 2000.0) or 2000.0)
@@ -274,22 +284,35 @@ def _prepare_correction_baseline(
     try:
         f = np.asarray(freq_axis, dtype=float)
         t = np.asarray(target_mags, dtype=float)
-        if f.size == t.size and f.size > 16 and np.isfinite(float(s_min)) and np.isfinite(float(s_max)):
-            mask_lvl = (f >= float(s_min)) & (f <= float(s_max))
-            if int(np.count_nonzero(mask_lvl)) > 10:
-                tgt_win_mean = float(np.mean(t[mask_lvl]))
-                if np.isfinite(tgt_win_mean) and np.isfinite(float(target_level_db)):
-                    target_shift_db = float(target_level_db) - tgt_win_mean
-                    target_mags = t + target_shift_db
-                    (
-                        target_level_db,
-                        calc_offset_db,
-                        meas_level_db_window,
-                        target_level_db_window,
-                        offset_method,
-                        s_min,
-                        s_max,
-                    ) = compute_leveling(cfg, f, m_anal, target_mags, stereo_link_ctx=stereo_link_ctx)
+        if f.size == t.size and f.size > 16:
+            if shared_target_shift_db is not None:
+                target_shift_db = float(shared_target_shift_db)
+                target_mags = t + target_shift_db
+                (
+                    target_level_db,
+                    calc_offset_db,
+                    meas_level_db_window,
+                    target_level_db_window,
+                    offset_method,
+                    s_min,
+                    s_max,
+                ) = compute_leveling(cfg, f, m_anal, target_mags, stereo_link_ctx=stereo_link_ctx)
+            elif np.isfinite(float(s_min)) and np.isfinite(float(s_max)):
+                mask_lvl = (f >= float(s_min)) & (f <= float(s_max))
+                if int(np.count_nonzero(mask_lvl)) > 10:
+                    tgt_win_mean = float(np.mean(t[mask_lvl]))
+                    if np.isfinite(tgt_win_mean) and np.isfinite(float(target_level_db)):
+                        target_shift_db = float(target_level_db) - tgt_win_mean
+                        target_mags = t + target_shift_db
+                        (
+                            target_level_db,
+                            calc_offset_db,
+                            meas_level_db_window,
+                            target_level_db_window,
+                            offset_method,
+                            s_min,
+                            s_max,
+                        ) = compute_leveling(cfg, f, m_anal, target_mags, stereo_link_ctx=stereo_link_ctx)
     except Exception:
         target_shift_db = 0.0
     try:

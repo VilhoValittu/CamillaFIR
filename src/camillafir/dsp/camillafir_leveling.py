@@ -16,6 +16,7 @@ class StereoLinkContext:
     forced_window_hz: tuple[float, float] | None = None
     forced_offset_db: float | None = None
     shared_target_level_db: float | None = None
+    shared_target_shift_db: float | None = None
 
 
 def _to_float(x, default: float) -> float:

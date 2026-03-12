@@ -906,6 +906,16 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
         target_shared = float(tgt_r)
     else:
         target_shared = None
+    tshift_l = _as_stat_float(l_st1, "target_shift_db", np.nan)
+    tshift_r = _as_stat_float(r_st1, "target_shift_db", np.nan)
+    if np.isfinite(tshift_l) and np.isfinite(tshift_r):
+        target_shift_shared = 0.5 * (float(tshift_l) + float(tshift_r))
+    elif np.isfinite(tshift_l):
+        target_shift_shared = float(tshift_l)
+    elif np.isfinite(tshift_r):
+        target_shift_shared = float(tshift_r)
+    else:
+        target_shift_shared = None
 
     try:
         strategy_req = str(getattr(cfg, "stereo_link_strategy", "shared") or "shared").strip().lower()
@@ -961,17 +971,20 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
             forced_window_hz=(float(win_l[0]), float(win_l[1])),
             forced_offset_db=float(off_shared),
             shared_target_level_db=(float(target_shared) if target_shared is not None else None),
+            shared_target_shift_db=(float(target_shift_shared) if target_shift_shared is not None else None),
         )
         stereo_ctx_r = StereoLinkContext(
             forced_window_hz=(float(win_r[0]), float(win_r[1])),
             forced_offset_db=float(off_shared),
             shared_target_level_db=(float(target_shared) if target_shared is not None else None),
+            shared_target_shift_db=(float(target_shift_shared) if target_shift_shared is not None else None),
         )
     else:
         stereo_ctx = StereoLinkContext(
             forced_window_hz=(float(win_shared[0]), float(win_shared[1])),
             forced_offset_db=float(off_shared),
             shared_target_level_db=(float(target_shared) if target_shared is not None else None),
+            shared_target_shift_db=(float(target_shift_shared) if target_shift_shared is not None else None),
         )
         stereo_ctx_l = stereo_ctx
         stereo_ctx_r = stereo_ctx
@@ -992,6 +1005,8 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
             l_st2["stereo_link_shared_offset_db"] = float(off_shared)
             if target_shared is not None and np.isfinite(float(target_shared)):
                 l_st2["stereo_link_shared_target_level_db"] = float(target_shared)
+            if target_shift_shared is not None and np.isfinite(float(target_shift_shared)):
+                l_st2["stereo_link_shared_target_shift_db"] = float(target_shift_shared)
             l_st2["stereo_link_window_used"] = [float(win_l[0]), float(win_l[1])] if strategy_resolved == "hybrid" else [float(win_shared[0]), float(win_shared[1])]
             if strategy_resolved != "hybrid":
                 l_st2["stereo_link_shared_window"] = [float(win_shared[0]), float(win_shared[1])]
@@ -1009,6 +1024,8 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
             r_st2["stereo_link_shared_offset_db"] = float(off_shared)
             if target_shared is not None and np.isfinite(float(target_shared)):
                 r_st2["stereo_link_shared_target_level_db"] = float(target_shared)
+            if target_shift_shared is not None and np.isfinite(float(target_shift_shared)):
+                r_st2["stereo_link_shared_target_shift_db"] = float(target_shift_shared)
             r_st2["stereo_link_window_used"] = [float(win_r[0]), float(win_r[1])] if strategy_resolved == "hybrid" else [float(win_shared[0]), float(win_shared[1])]
             if strategy_resolved != "hybrid":
                 r_st2["stereo_link_shared_window"] = [float(win_shared[0]), float(win_shared[1])]
