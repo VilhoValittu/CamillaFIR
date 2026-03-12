@@ -125,6 +125,7 @@ from .io.camillafir_automatic_mode import (  # noqa: E402
     _resolve_auto_hpf_application,
     _run_auto_mode_search,
 )
+from .io.auto_mode.rank_score import attach_official_rank_score, official_rank_score  # noqa: E402
 
 _CONSOLE_LOG_LEVEL = _resolve_console_log_level()
 
@@ -510,8 +511,8 @@ def process_run():
         mixed_hz = _auto_safe_float(run_data.get("mixed_freq", float("nan")), float("nan"))
         mixed_txt = f"{mixed_hz:.1f} Hz" if np.isfinite(mixed_hz) else "n/a"
 
-        best_metrics = dict(run_data.get("best_metrics", {}) or {})
-        rank_score = _auto_safe_float(best_metrics.get("rank_score", float("nan")), float("nan"))
+        best_metrics = attach_official_rank_score(run_data.get("best_metrics", {}))
+        rank_score = official_rank_score(best_metrics)
         rank_txt = f", winner rank {rank_score:.3f}/100" if np.isfinite(rank_score) else ""
 
         detail_txt = ""
@@ -594,7 +595,7 @@ def process_run():
         auto_mode_preview = False
     auto_goal = _auto_goal_norm(str(data.get("auto_goal", "balanced") or "balanced"))
     data["auto_goal"] = str(auto_goal)
-    auto_basis = "rank_score"
+    auto_basis = "preset_objective_score"
     logger.info(f"Automatic mode goal: {auto_goal} (basis: {auto_basis})")
     if auto_mode_preview:
         try:
@@ -941,7 +942,8 @@ def process_run():
             )
             if isinstance(auto_res, dict):
                 best_preset = dict(auto_res.get("best_preset", {}) or {})
-                best_metrics = dict(auto_res.get("best_metrics", {}) or {})
+                best_metrics = attach_official_rank_score(auto_res.get("best_metrics", {}))
+                winner_meta = dict(auto_res.get("winner", {}) or {})
                 if best_preset:
                     data.update(best_preset)
                     data["program_version"] = VERSION
@@ -1002,11 +1004,23 @@ def process_run():
                     ),
                     "best_metrics": best_metrics,
                     "best_preset": best_preset,
+                    "winner": {
+                        "rank_score_official": float(
+                            _auto_safe_float(
+                                winner_meta.get("rank_score_official", best_metrics.get("rank_score_official", float("nan"))),
+                                float("nan"),
+                            )
+                        ),
+                        "rank_score_components": dict(
+                            winner_meta.get("rank_score_components", best_metrics.get("rank_score_components", {}) or {})
+                        ),
+                    },
                     "top": list(auto_res.get("top", []) or []),
                 }
+                best_rank_official = official_rank_score(best_metrics)
                 _status(
                     "CamillaFIR automatic mode: finalize "
-                    f"(winner rank {_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}/100, "
+                    f"(winner rank {best_rank_official:.3f}/100, "
                     f"avg {_auto_safe_float(best_metrics.get('avg_score'), 0.0):.3f}, "
                     f"boost {_auto_safe_float(best_metrics.get('max_net_boost_db'), 0.0):.2f} dB, "
                     f"events {int(best_metrics.get('events_total', 0) or 0)})"
@@ -1015,7 +1029,7 @@ def process_run():
                 logger.info(
                     "Automatic mode best: "
                     f"goal={sel_goal}, basis={sel_basis}, "
-                    f"rank={_auto_safe_float(best_metrics.get('rank_score'), 0.0):.3f}/100, "
+                    f"rank={best_rank_official:.3f}/100, "
                     f"avg={_auto_safe_float(best_metrics.get('avg_score'), 0.0):.3f}, "
                     f"dsp_pen={_auto_safe_float(best_metrics.get('dsp_penalty'), 0.0):.3f}, "
                     f"exc_pen={_auto_safe_float(best_metrics.get('exc_penalty'), 0.0):.3f}, "

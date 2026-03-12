@@ -791,7 +791,7 @@ def _auto_goal(base_data: dict | None, default: str = AUTO_MODE_GOAL_DEFAULT) ->
 
 
 def _auto_goal_basis_text(goal: str) -> str:
-    return "rank_score"
+    return "preset_objective_score"
 
 
 def _auto_metric_text(metrics: dict | None, goal: str) -> str:

@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 from datetime import datetime
+from ..dsp.phase_ir_metrics import format_pre_energy_metric_note
 from ..dsp.smoothing import apply_smoothing_std, psychoacoustic_smoothing
 from ..dsp.quality_metrics import _mag_error_db, _rms
 from ..dsp.target_match import target_match_from_stats as _target_match_from_stats_ssot
@@ -386,10 +387,12 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
             return None
 
     def _pre_metric_info(st):
-        suspect = bool(st.get("pre_energy_metric_suspect", False))
+        valid = bool(st.get("pre_energy_metric_valid", not bool(st.get("pre_energy_metric_suspect", False))))
+        suspect = bool(not valid)
+        reason_code = str(st.get("pre_energy_metric_reason_code", "") or "").strip()
         note = str(st.get("pre_energy_metric_note", "") or "").strip()
         if suspect and not note:
-            note = "pre/post < 1e-10 (likely zeroed or split issue)"
+            note = format_pre_energy_metric_note(valid=False, reason_code=reason_code)
         return suspect, note
 
     def _active_axes(st):

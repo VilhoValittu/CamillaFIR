@@ -15,6 +15,7 @@ from pywebio.output import (
 )
 from pywebio.pin import pin
 
+from ..io.auto_mode.rank_score import attach_official_rank_score, official_rank_score
 from ..resources.i8n.camillafir_i18n import t
 from . import app as _app
 from . import camillafir_plot as plots
@@ -542,7 +543,7 @@ def _render_results(
         auto_enabled = bool(mode_u == "AUTO" or data.get("camillafir_automatic_mode", False))
         auto_meta = data.get("_auto_mode_meta", None)
         if auto_enabled and isinstance(auto_meta, dict):
-            bm = dict(auto_meta.get("best_metrics", {}) or {})
+            bm = attach_official_rank_score(auto_meta.get("best_metrics", {}))
             top = list(auto_meta.get("top", []) or [])
             tc_meta = dict(data.get("_auto_target_curve_meta", {}) or {})
             trials_ok = int(auto_meta.get("trials_ok", 0) or 0)
@@ -567,7 +568,7 @@ def _render_results(
                 x = _af(v, float("nan"))
                 return f"{x:.3f}" if x == x else "n/a"
 
-            rank_sc = _af(bm.get("rank_score", 0.0), 0.0)
+            rank_sc = _af(official_rank_score(bm), 0.0)
             avg_sc = _af(bm.get("avg_score", 0.0), 0.0)
             dsp_pen = _af(bm.get("dsp_penalty", 0.0), 0.0)
             exc_pen = _af(bm.get("exc_penalty", 0.0), 0.0)
@@ -606,13 +607,13 @@ def _render_results(
                 exc_text = f"{exc_seed:.1f} Hz"
 
             auto_rows = [
-                ["Goal / basis", f"{str(auto_meta.get('auto_goal', 'balanced') or 'balanced')} / {str(auto_meta.get('selection_basis', 'rank_score') or 'rank_score')}"],
+                ["Goal / basis", f"{str(auto_meta.get('auto_goal', 'balanced') or 'balanced')} / preset_objective_score"],
                 ["Trials", f"{trials_ok}/{trials_total}"],
                 ["Search grid", f"{search_fs} Hz / {search_taps} taps"],
                 ["Target curve", tc_selected],
                 ["Target selection", tc_method],
                 ["Excursion protection", exc_text],
-                ["Rank score (primary)", f"{rank_sc:.3f}/100"],
+                ["Best rank score", f"{rank_sc:.3f}/100"],
                 ["Average acoustic score", f"{avg_sc:.3f}"],
                 ["Pre/post energy ratio (max)", f"{prepost:.4f}" if prepost == prepost else "n/a"],
                 ["Mode ripple", f"{mode_ripple:.3f} dB" if mode_ripple == mode_ripple else "n/a"],
@@ -676,17 +677,17 @@ def _render_results(
                 tc_eval_sorted = sorted(
                     list(tc_eval),
                     key=lambda it: (
-                        -_af(dict((it or {}).get("best_metrics", {}) or {}).get("rank_score", 0.0), 0.0),
+                        -_af(official_rank_score(dict((it or {}).get("best_metrics", {}) or {})), 0.0),
                         -_af((it or {}).get("avg_rank_score", 0.0), 0.0),
                         _af((it or {}).get("fit_rms_db", 1e9), 1e9),
                     ),
                 )
                 for idx, it in enumerate(tc_eval_sorted[:3], start=1):
-                    bm_tc = dict((it or {}).get("best_metrics", {}) or {})
+                    bm_tc = attach_official_rank_score((it or {}).get("best_metrics", {}))
                     tc_rows.append([
                         f"{idx}",
                         str((it or {}).get("hc_mode", "n/a") or "n/a"),
-                        f"{_af(bm_tc.get('rank_score', 0.0), 0.0):.3f}",
+                        f"{_af(official_rank_score(bm_tc), 0.0):.3f}",
                         f"{_af((it or {}).get('avg_rank_score', 0.0), 0.0):.3f}",
                         _f3((it or {}).get('fit_rms_db', float('nan'))),
                         _f3((it or {}).get('preselect_score', float('nan'))),
@@ -723,7 +724,7 @@ def _render_results(
                 )
 
             if top:
-                rank_best = max((_af(dict(it.get("metrics", {}) or {}).get("rank_score", 0.0), 0.0) for it in top), default=rank_sc)
+                rank_best = max((_af(official_rank_score(dict(it.get("metrics", {}) or {})), 0.0) for it in top), default=rank_sc)
                 if rank_best > (rank_sc + 1e-6):
                     put_info(
                         "Note: Top-5 below is rank-ordered. Final winner may differ when Pareto tie-break "
@@ -742,14 +743,14 @@ def _render_results(
                     "DSP pen",
                 ]]
                 for idx, item in enumerate(top[:5], start=1):
-                    m = dict(item.get("metrics", {}) or {})
+                    m = attach_official_rank_score(item.get("metrics", {}))
                     prepost_t = _af(m.get("ir_pre_post_energy_ratio_max", float("nan")), float("nan"))
                     mode_t = _af(m.get("mode_ripple_db", float("nan")), float("nan"))
                     rms_t = _af(m.get("realized_rms_20_200_db", float("nan")), float("nan"))
                     top_rows.append([
                         f"{idx}",
                         f"{_ai(m.get('trial', 0), 0)}",
-                        f"{_af(m.get('rank_score', 0.0), 0.0):.3f}",
+                        f"{_af(official_rank_score(m), 0.0):.3f}",
                         f"{_af(m.get('avg_score', 0.0), 0.0):.3f}",
                         f"{prepost_t:.4f}" if prepost_t == prepost_t else "n/a",
                         f"{mode_t:.3f}" if mode_t == mode_t else "n/a",

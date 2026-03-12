@@ -15,6 +15,11 @@ from ..app_paths import program_version_token, safe_filters_dir
 from ..config.camillafir_convolver_configs import generate_hlc_config, generate_raspberry_yaml
 from ..config.results import FilterResult
 from ..dsp.smoothing import AFDW_BW_MAX_OCT, AFDW_BW_MIN_OCT
+from ..io.auto_mode.rank_score import (
+    attach_official_rank_score,
+    compute_run_ranking_score_components,
+    official_rank_score,
+)
 logger = logging.getLogger("CamillaFIR")
 
 TEST_MODE = 1
@@ -122,12 +127,11 @@ def _export_winner_rank_score(data: dict | None) -> float:
 
     try:
         auto_meta = dict((data or {}).get("_auto_mode_meta", {}) or {})
-        best_metrics = dict(auto_meta.get("best_metrics", {}) or {})
+        best_metrics = attach_official_rank_score(auto_meta.get("best_metrics", {}))
     except Exception:
         return float("nan")
 
-    rank_score = _safe_float(best_metrics.get("rank_score", float("nan")), float("nan"))
-    return float(rank_score)
+    return float(official_rank_score(best_metrics))
 
 
 def _camilladsp_yaml_name(
@@ -281,15 +285,25 @@ def _score_export_result(result: FilterResult) -> dict:
     boost_pen = 1.5 * max(0.0, net_boost_max - 1.0)
     event_pen = 0.5 * float(reflections_n)
     lr_pen = 0.25 * lr_delta
-    rank_score = max(0.0, min(100.0, avg_score - boost_pen - event_pen - lr_pen - float(dsp_penalty)))
+    run_score = compute_run_ranking_score_components(
+        avg_score=avg_score,
+        boost_penalty=boost_pen,
+        event_penalty=event_pen,
+        lr_delta_penalty=lr_pen,
+        dsp_penalty=dsp_penalty,
+    )
 
     return {
         "fs": int(getattr(result, "fs", 0) or 0),
-        "rank_score": float(rank_score),
+        "run_ranking_score": float(run_score.get("run_ranking_score", 0.0)),
+        "run_ranking_score_components": dict(run_score.get("run_ranking_score_components", {}) or {}),
         "avg_score": float(avg_score),
         "lr_delta_score": float(lr_delta),
         "max_net_boost_db": float(net_boost_max),
         "events_total": int(reflections_n),
+        "boost_penalty": float(boost_pen),
+        "event_penalty": float(event_pen),
+        "lr_delta_penalty": float(lr_pen),
         "dsp_penalty": float(dsp_penalty),
     }
 
@@ -298,7 +312,7 @@ def _build_export_ranking(results: list[FilterResult]) -> dict:
     entries = sorted(
         entries,
         key=lambda e: (
-            -_safe_float(e.get("rank_score"), 0.0),
+            -_safe_float(e.get("run_ranking_score"), 0.0),
             -_safe_float(e.get("avg_score"), 0.0),
             _safe_float(e.get("max_net_boost_db"), 0.0),
             _safe_float(e.get("events_total"), 0.0),
@@ -328,21 +342,22 @@ def _append_export_ranking(summary_content: str, fs_v: int, ranking_context: dic
         return summary_content
 
     best_fs = ctx.get("best_fs", None)
-    summary_content += "\n=== AUTO RANKING (RUN COMPARISON) ===\n"
+    summary_content += "\n=== RUN RANKING (SAMPLE-RATE COMPARISON) ===\n"
     summary_content += (
-        "Method: rank_score = avg_acoustic_score - boost_penalty - event_penalty - L/R_delta_penalty - dsp_penalty\n"
+        "Method: run_ranking_score = avg_acoustic_score - boost_penalty - event_penalty - L/R_delta_penalty - dsp_penalty\n"
     )
     summary_content += (
         "Penalties: boost=1.5*dB over +1dB net boost max, event=0.5/event, L/R delta=0.25/score-point, dsp=quality-derived\n"
     )
     summary_content += (
         f"Current run: {int(fs_v)} Hz | rank #{int(cur.get('rank', 0))}/{len(entries)} | "
-        f"rank_score={_safe_float(cur.get('rank_score'), 0.0):.3f}/100\n"
+        f"run_ranking_score={_safe_float(cur.get('run_ranking_score'), 0.0):.3f}/100\n"
     )
     if best_fs is not None:
         summary_content += f"Recommended run: {int(best_fs)} Hz\n"
+    summary_content += "Note: Run ranking score compares sample-rate outputs and is separate from automatic-mode Best rank score.\n"
     summary_content += (
-        f"{'Rank':<6}{'FS (Hz)':<10}{'RankScore':<12}{'AvgScore':<10}{'DSPpen':<9}"
+        f"{'Rank':<6}{'FS (Hz)':<10}{'RunScore':<12}{'AvgScore':<10}{'DSPpen':<9}"
         f"{'MaxNetBoost':<13}{'Events':<8}{'L/R Delta':<10}\n"
     )
     summary_content += "-" * 78 + "\n"
@@ -350,7 +365,7 @@ def _append_export_ranking(summary_content: str, fs_v: int, ranking_context: dic
         summary_content += (
             f"#{int(e.get('rank', 0)):<5}"
             f"{int(e.get('fs', 0)):<10}"
-            f"{_safe_float(e.get('rank_score'), 0.0):<12.3f}"
+            f"{_safe_float(e.get('run_ranking_score'), 0.0):<12.3f}"
             f"{_safe_float(e.get('avg_score'), 0.0):<10.3f}"
             f"{_safe_float(e.get('dsp_penalty'), 0.0):<9.2f}"
             f"{_safe_float(e.get('max_net_boost_db'), 0.0):<13.2f}"
@@ -409,9 +424,10 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
         try:
             auto_meta = data.get("_auto_mode_meta", None)
             if bool(data.get("camillafir_automatic_mode", False)) and isinstance(auto_meta, dict):
-                bm = dict(auto_meta.get("best_metrics", {}) or {})
+                bm = attach_official_rank_score(auto_meta.get("best_metrics", {}))
                 bp = dict(auto_meta.get("best_preset", {}) or {})
                 tc = dict(data.get("_auto_target_curve_meta", {}) or {})
+                best_rank = official_rank_score(bm)
                 summary_content += "\n=== CAMILLAFIR AUTOMATIC MODE ===\n"
                 summary_content += (
                     f"Trials: {int(auto_meta.get('trials_ok', 0))}/{int(auto_meta.get('trials_total', 0))} "
@@ -442,15 +458,15 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
                                 + "\n"
                             )
                         for i, row in enumerate(ev[:3], start=1):
-                            bm_t = dict(row.get("best_metrics", {}) or {})
+                            bm_t = attach_official_rank_score(row.get("best_metrics", {}))
                             summary_content += (
                                 f"Target #{i}: {str(row.get('hc_mode', 'n/a'))} "
-                                f"(best_rank={float(bm_t.get('rank_score', 0.0)):.3f}, "
+                                f"(best_rank={official_rank_score(bm_t):.3f}, "
                                 f"avg_rank={float(row.get('avg_rank_score', 0.0)):.3f}, "
                                 f"ok={int(row.get('trials_ok', 0))}/{int(row.get('trials_total', 0))})\n"
                             )
                 summary_content += (
-                    f"Best rank score: {float(bm.get('rank_score', 0.0)):.3f}/100 "
+                    f"Best rank score: {best_rank:.3f}/100 "
                     f"(avg={float(bm.get('avg_score', 0.0)):.3f}, "
                     f"dsp_pen={float(bm.get('dsp_penalty', 0.0)):.2f}, "
                     f"exc_pen={float(bm.get('exc_penalty', 0.0)):.2f}, "

@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass, field
 
+from .rank_score import attach_official_rank_score
 from .scoring_ranking import _auto_build_winner_explanation
 
 logger = logging.getLogger("CamillaFIR")
@@ -34,7 +35,7 @@ def _auto_set_search_winner(
     phase_label: str | None = None,
     target_name: str | None = None,
 ) -> dict:
-    search_state.best_metrics = dict(metrics or {})
+    search_state.best_metrics = attach_official_rank_score(metrics)
     search_state.best_preset = dict(preset or {})
     explanation = _auto_build_winner_explanation(
         search_state.best_metrics,

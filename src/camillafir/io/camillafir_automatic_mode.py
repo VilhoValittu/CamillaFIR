@@ -52,6 +52,11 @@ from .auto_mode.candidate_generation import (
     _suggest_auto_mode_candidate_optuna,
 )
 from .auto_mode.filter_priors import get_auto_mode_filter_seed_preset
+from .auto_mode.rank_score import (
+    OFFICIAL_RANK_SCORE_CONTEXT,
+    attach_official_rank_score,
+    compute_rank_score_components,
+)
 from .auto_mode.scoring_ranking import (
     _auto_adaptive_shrink_factor,
     _auto_apply_goal_tiebreak_metrics,
@@ -3884,17 +3889,21 @@ def _auto_score_result(
         b = float(_auto_safe_float(AUTO_MODE_RANK_SCORE_BIAS, 0.0))
         return float(np.clip(float(g) * float(v) + float(b), 0.0, 100.0))
 
-    rank_raw = float(
-        avg_score
-        - boost_pen
-        - event_pen
-        - lr_pen
-        - dsp_penalty
-        - exc_penalty
-        - phase_limit_penalty
+    base_rank_components = compute_rank_score_components(
+        avg_score=avg_score,
+        boost_penalty=boost_pen,
+        event_penalty=event_pen,
+        lr_delta_penalty=lr_pen,
+        dsp_penalty=dsp_penalty,
+        exc_penalty=exc_penalty,
+        phase_limit_penalty=phase_limit_penalty,
+        gain=_auto_safe_float(AUTO_MODE_RANK_SCORE_GAIN, 1.0),
+        bias=_auto_safe_float(AUTO_MODE_RANK_SCORE_BIAS, 0.0),
+        context=OFFICIAL_RANK_SCORE_CONTEXT,
     )
-    rank_score_base = float(_rank_scale(rank_raw))
-    rank_score = float(_rank_scale(rank_raw))
+    rank_raw = float(base_rank_components.get("rank_score_raw", 0.0))
+    rank_score_base = float(base_rank_components.get("rank_score", 0.0))
+    rank_score = float(rank_score_base)
     focus_ripple_l = None
     focus_ripple_r = None
     flo = _auto_safe_float(focus_lo_hz, float("nan"))
@@ -4040,6 +4049,20 @@ def _auto_score_result(
     if mode_penalty > 0.0:
         rank_raw = float(rank_raw - float(mode_penalty))
         rank_score = float(_rank_scale(rank_raw))
+    rank_components = compute_rank_score_components(
+        avg_score=avg_score,
+        boost_penalty=boost_pen,
+        event_penalty=event_pen,
+        lr_delta_penalty=lr_pen,
+        dsp_penalty=dsp_penalty,
+        exc_penalty=exc_penalty,
+        mode_penalty=mode_penalty,
+        phase_limit_penalty=phase_limit_penalty,
+        gain=_auto_safe_float(AUTO_MODE_RANK_SCORE_GAIN, 1.0),
+        bias=_auto_safe_float(AUTO_MODE_RANK_SCORE_BIAS, 0.0),
+        context=OFFICIAL_RANK_SCORE_CONTEXT,
+    )
+    rank_score = float(rank_components.get("rank_score", rank_score))
     realized_keys = (
         "post_to_ir_staged_shape_delta_rms_20_200_db",
         "post_to_ir_shape_delta_rms_20_200_db",
@@ -4095,9 +4118,11 @@ def _auto_score_result(
     if pre_post_vals:
         pre_post_max = float(max(pre_post_vals))
 
-    return {
+    metrics_out = {
         "rank_score": float(rank_score),
         "rank_score_base": float(rank_score_base),
+        "rank_score_official": float(rank_score),
+        "rank_score_components": dict(rank_components),
         "avg_score": float(avg_score),
         "focus_ripple_db": float(focus_ripple or 0.0),
         "mode_hz": float(mode_hz) if np.isfinite(mode_hz) else float("nan"),
@@ -4117,12 +4142,14 @@ def _auto_score_result(
         "ripple_rms": float(ripple_raw) if np.isfinite(ripple_raw) else float("nan"),
         "lr_delta_score": float(lr_delta),
         "max_net_boost_db": float(net_boost_max),
+        "boost_penalty": float(boost_pen),
         "events_total": int(events_total),
         "events_severity": float(events_severity),
         "events_severity_raw": float(events_severity_raw),
         "events_severity_l": float(events_severity_l),
         "events_severity_r": float(events_severity_r),
         "event_penalty": float(event_pen),
+        "lr_delta_penalty": float(lr_pen),
         "dsp_penalty": float(dsp_penalty),
         "dsp_penalty_raw": float(dsp_penalty_raw),
         "dsp_penalty_l": float(dsp_pen_l),
@@ -4147,6 +4174,7 @@ def _auto_score_result(
         "exc_dbg_l": dict(exc_dbg_l),
         "exc_dbg_r": dict(exc_dbg_r),
     }
+    return attach_official_rank_score(metrics_out, components=rank_components)
 
 
 def _estimate_auto_mag_c_min_hz(
@@ -5256,7 +5284,7 @@ def _run_auto_mode_search_impl(
                 include_response_arrays=True,
                 summarize=True,
             )
-            best_metrics = dict(best_metrics_recalc or best_metrics or {})
+            best_metrics = attach_official_rank_score(best_metrics_recalc or best_metrics)
             best_preset = dict(best_data or best_preset or {})
             if bool(str(optimizer_backend) == "optuna" and optuna_mod is not None):
                 raw_scope = "phase1"
@@ -5298,10 +5326,18 @@ def _run_auto_mode_search_impl(
                 best_metrics=dict(best_metrics or {}),
                 best_hc_mode=str(cache_base_data.get("hc_mode", "") or "").strip() or None,
             )
+            winner_rank = float(
+                _auto_safe_float(best_metrics.get("rank_score_official", best_metrics.get("rank_score", float("nan"))), float("nan"))
+            )
+            winner_components = dict(best_metrics.get("rank_score_components", {}) or {})
             return {
                 "best_result": best_result,
                 "best_metrics": dict(best_metrics or {}),
                 "best_preset": dict(best_preset or {}),
+                "winner": {
+                    "rank_score_official": float(winner_rank) if np.isfinite(winner_rank) else float("nan"),
+                    "rank_score_components": dict(winner_components),
+                },
                 "winner_explanation": {
                     "summary": (
                         "Loaded exact cached preset and ran extra cache-refine micro-trials."
@@ -6515,10 +6551,21 @@ def _run_auto_mode_search_impl(
         except Exception:
             pass
 
+    winner_rank = float(
+        _auto_safe_float(
+            search_state.best_metrics.get("rank_score_official", search_state.best_metrics.get("rank_score", float("nan"))),
+            float("nan"),
+        )
+    )
+    winner_components = dict(search_state.best_metrics.get("rank_score_components", {}) or {})
     return {
         "best_result": search_state.best_result,
         "best_metrics": dict(search_state.best_metrics),
         "best_preset": dict(cached_best_preset or {}),
+        "winner": {
+            "rank_score_official": float(winner_rank) if np.isfinite(winner_rank) else float("nan"),
+            "rank_score_components": dict(winner_components),
+        },
         "winner_explanation": dict(search_state.winner_explanation or {}),
         "optimizer_backend": str(optimizer_backend or "builtin"),
         "best_auto_exc_freq_hz": float(best_auto_exc_hz) if np.isfinite(best_auto_exc_hz) else float("nan"),
