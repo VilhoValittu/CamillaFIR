@@ -1,11 +1,17 @@
 # CamillaFIR by Vilho Valittu
 
-## v3.5.9
+## v3.6.0
 
 Stable release - feedback welcome: camillafir.py@gmail.com
 
 CamillaFIR generates high-resolution FIR room-correction filters from REW exports
 (magnitude + phase) and WAV/IR measurements.
+
+## v3.6.0 Highlights - AUTO mode HPF control and reporting
+
+- **Optional HPF in AUTO mode:** HPF enable, frequency, and slope can now be set in automatic mode instead of being forced off.
+- **Safer HPF auto-fit:** response-fit HPF is only auto-applied when HPF is enabled; otherwise CamillaFIR reports the estimate as a suggestion.
+- **More stable stereo-linked leveling:** shared target-shift handling is now aligned between left and right channels.
 
 ## v3.5.5 Highlights - smarter automatic-mode reuse
 
@@ -237,8 +243,8 @@ The next automatic-mode run will recreate it automatically.
 ### Automatic mode workflow (quick start)
 
 1. Select filter type.
-2. Select sample rate and taps.
-3. Select target curve if you want use your own. CamillaFIR will automaticly select best for your room if no selection.
+2. Select sample rate, taps, and optional HPF settings.
+3. Select target curve if you want to use your own. CamillaFIR will automatically select the best match for your room if none is chosen.
 4. Press `START`.
 
 CamillaFIR runs automatic preset search and exports filters using the best found settings.
@@ -416,7 +422,7 @@ pip install -r requirements-linux.txt
 
 - FIR filters exported as WAV (32-bit float)
 - Optional CamillaDSP YAML
-- Summary report (`Summary.txt`)
+- Summary report (`Summary.txt`) with effective settings and automatic-mode runtime metadata
 - Multi-rate export (44.1/48/88.2/96/176.4/192 kHz)
 
 Output ZIP files are saved by default to `Documents/CamillaFIR/filters/<version>/`.

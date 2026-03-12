@@ -4,6 +4,23 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.6.0] - 2026-03-12
+
+### Automatic mode
+- AUTO mode now keeps the user's HPF selection available instead of forcing HPF off.
+- Response-fit HPF is only auto-applied when the user has explicitly enabled HPF; otherwise the estimated HPF is reported as a suggestion without changing the run.
+
+### DSP / Stereo link
+- Stabilized stereo-linked target-shift sharing between left and right channels so linked leveling stays more consistent across channels.
+
+### Export
+- Added runtime version details (`Python`, `numpy`, `scipy`, `optuna`) to the automatic-mode summary export.
+
+### UI & Docs
+- Updated automatic-mode help text to mention the optional HPF selection workflow.
+
+---
+
 ## [3.5.9] - 2026-03-12
 
 ### Packaging
