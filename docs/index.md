@@ -84,35 +84,35 @@ Learn more about how CamillaFIR works and how it compares to other DSP methods:
 
 ## What CamillaFIR does
 
-- [cite_start]Converts measurement data (for example REW exports) into **FIR correction filters** 
-- [cite_start]Produces **convolution-ready** output files (WAV FIR + companion config files) 
-- [cite_start]Helps you avoid common pitfalls like excessive boost and unstable corrections 
-- [cite_start]Includes tools/plots to inspect results (magnitude, phase, IR) 
+- Converts measurement data (for example REW exports) into **FIR correction filters**
+- Produces **convolution-ready** output files (WAV FIR + companion config files)
+- Helps you avoid common pitfalls like excessive boost and unstable corrections
+- Includes tools/plots to inspect results (magnitude, phase, IR)
 
 ---
 
 ## Quick links
 
-- [cite_start]**Releases (Downloads):** https://github.com/VilhoValittu/CamillaFIR/releases 
-- [cite_start]**Repository:** https://github.com/VilhoValittu/CamillaFIR 
-- [cite_start]**Support / Ko-fi:** https://ko-fi.com/camillafir 
+- **Releases (Downloads):** https://github.com/VilhoValittu/CamillaFIR/releases
+- **Repository:** https://github.com/VilhoValittu/CamillaFIR
+- **Support / Ko-fi:** https://ko-fi.com/camillafir
 
 ---
 
 ## Typical workflow
 
-1. [cite_start]Measure your speakers / room with **REW** (load your microphone calibration file first) 
-2. [cite_start]Export measurements (for TXT include magnitude + phase; for WAV use `Mono`, `float32`, `Normalise`, `Place t=0 (256)`) 
-3. [cite_start]Generate correction filters with **CamillaFIR** 
-4. [cite_start]Load the resulting FIR WAV into **CamillaDSP / Roon / Equalizer APO** 
-5. [cite_start]Verify the result (measurement + listening) 
+1. Measure your speakers / room with **REW** (load your microphone calibration file first)
+2. Export measurements (for TXT include magnitude + phase; for WAV use `Mono`, `float32`, `Normalise`, `Place t=0 (256)`)
+3. Generate correction filters with **CamillaFIR**
+4. Load the resulting FIR WAV into **CamillaDSP / Roon / Equalizer APO**
+5. Verify the result (measurement + listening)
 
 ---
 
 ## Get started
 
 Go to the **latest release** and download the build for your OS:  
-[cite_start]https://github.com/VilhoValittu/CamillaFIR/releases 
+https://github.com/VilhoValittu/CamillaFIR/releases
 
 ### Disclaimer
-[cite_start]AI was used to translate this document from Finnish to English.
+AI was used to translate this document from Finnish to English.
