@@ -4,6 +4,16 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.5.9] - 2026-03-12
+
+### Packaging
+- Added Optuna submodule collection to the standalone, Linux, and macOS PyInstaller spec files so packaged builds include the automatic-mode Optuna backend more reliably.
+
+### Export
+- Added `Optimizer backend` to automatic-mode summary export so saved results now show whether the run used `builtin` or `optuna`.
+
+---
+
 ## [3.5.8] - 2026-03-11
 
 ### Automatic mode
