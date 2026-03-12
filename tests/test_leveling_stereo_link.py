@@ -3,8 +3,12 @@ from types import SimpleNamespace
 import numpy as np
 
 from camillafir.config.models import FilterConfig
-from camillafir.dsp.camillafir_dsp import generate_filter
-from camillafir.dsp.camillafir_leveling import compute_leveling, find_stable_level_window
+from camillafir.dsp.camillafir_dsp import generate_filter, generate_filter_pair
+from camillafir.dsp.camillafir_leveling import (
+    compute_leveling,
+    find_shared_stereo_level_window,
+    find_stable_level_window,
+)
 
 
 def test_stereo_link_produces_identical_offset(lr_measurements):
@@ -156,3 +160,83 @@ def test_find_stable_level_window_prefers_consistent_offset_window():
 
     assert w_start > 900.0
     assert w_end > 1800.0
+
+
+def test_find_shared_stereo_level_window_prefers_common_compromise():
+    freq = np.linspace(500.0, 2000.0, 2001, dtype=float)
+    target = np.zeros_like(freq)
+
+    left = np.zeros_like(freq)
+    left[freq >= 1000.0] = 2.0 * np.sin((freq[freq >= 1000.0] - 1000.0) / 1000.0 * 12.0 * np.pi)
+
+    right = np.zeros_like(freq)
+    right[freq <= 1000.0] = 2.0 * np.sin((freq[freq <= 1000.0] - 500.0) / 500.0 * 12.0 * np.pi)
+
+    left_window = find_stable_level_window(
+        freq,
+        left,
+        target,
+        500.0,
+        2000.0,
+        window_size_octaves=1.0,
+        hpf_freq=0.0,
+    )
+    right_window = find_stable_level_window(
+        freq,
+        right,
+        target,
+        500.0,
+        2000.0,
+        window_size_octaves=1.0,
+        hpf_freq=0.0,
+    )
+    shared_window = find_shared_stereo_level_window(
+        freq,
+        left,
+        target,
+        freq,
+        right,
+        target,
+        500.0,
+        2000.0,
+        window_size_octaves=1.0,
+        hpf_freq=0.0,
+    )
+
+    assert left_window[0] < 600.0
+    assert right_window[0] > 900.0
+    assert 650.0 < shared_window[0] < 900.0
+    assert 1200.0 < shared_window[1] < 1700.0
+
+
+def test_stereo_link_shared_anchors_to_quieter_channel_without_boost():
+    freq = np.linspace(20.0, 20000.0, 2048, dtype=float)
+    phase = np.zeros_like(freq)
+    left = np.zeros_like(freq)
+    right = np.full_like(freq, 6.0)
+
+    cfg = FilterConfig(
+        fs=44100,
+        num_taps=65536,
+        filter_type_str="Linear Phase",
+        stereo_link=True,
+        stereo_link_strategy="shared",
+        mag_c_min=20.0,
+        mag_c_max=20000.0,
+    )
+
+    _, st_left, _, st_right = generate_filter_pair(freq, left, phase, freq, right, phase, cfg)
+
+    assert st_left.get("stereo_link_level_anchor_channel") == "left"
+    assert st_right.get("stereo_link_level_anchor_channel") == "left"
+    assert abs(float(st_left.get("target_shift_db", 0.0) or 0.0)) < 1e-6
+    assert abs(float(st_right.get("target_shift_db", 0.0) or 0.0)) < 1e-6
+
+    freq_axis = np.asarray(st_left.get("freq_axis", []), dtype=float)
+    filt_left = np.asarray(st_left.get("predicted_filter_mags", st_left.get("filter_mags", [])), dtype=float)
+    filt_right = np.asarray(st_right.get("predicted_filter_mags", st_right.get("filter_mags", [])), dtype=float)
+    mask = (freq_axis >= 200.0) & (freq_axis <= 400.0)
+
+    assert np.any(mask)
+    assert abs(float(np.median(filt_left[mask]))) < 0.5
+    assert float(np.median(filt_right[mask])) < -4.5

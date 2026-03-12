@@ -15,8 +15,9 @@ from ..dsp.smoothing import apply_smoothing_std, psychoacoustic_smoothing
 from ..dsp.quality_metrics import _mag_error_db, _rms
 from ..dsp.target_match import target_match_from_stats as _target_match_from_stats_ssot
 from ..resources.i8n.camillafir_i18n import t
-PHASE_SMOOTH_OCT = 5.5
-GD_SMOOTH_OCT    = 3.0
+PHASE_SMOOTH_OCT = 0.1
+GD_SMOOTH_OCT    = 0.1
+GD_SMOOTH_SIGMA  = 0.1
 logger = logging.getLogger("CamillaFIR")
 
 
@@ -89,13 +90,121 @@ def smooth_complex(freqs, spec, oct_frac=1.0):
     imag_s, _ = apply_smoothing_std(freqs, imag_parts, np.zeros_like(freqs), oct_frac)
     return real_s + 1j * imag_s
 
-def calculate_clean_gd(freqs, complex_resp):
+def calculate_clean_gd(freqs, complex_resp, *, sigma: float = GD_SMOOTH_SIGMA):
     """Laskee: calculate clean gd."""
     phase_rad = np.unwrap(np.angle(complex_resp))
     df = np.gradient(freqs) + 1e-12
     gd_ms = -np.gradient(phase_rad) / (2 * np.pi * df) * 1000.0
     gd_ms = np.nan_to_num(gd_ms, nan=0.0, posinf=0.0, neginf=0.0)
-    return scipy.ndimage.gaussian_filter1d(gd_ms, sigma=8)
+    try:
+        sigma_v = float(sigma)
+    except Exception:
+        sigma_v = float(GD_SMOOTH_SIGMA)
+    if sigma_v > 0.0:
+        gd_ms = scipy.ndimage.gaussian_filter1d(gd_ms, sigma=sigma_v)
+    return gd_ms
+
+def remove_ir_peak_delay(freqs, complex_resp, ir, fs):
+    """Poistaa nayttokuvista FIR:n bulk-viiveen IR-piikin perusteella."""
+    try:
+        f = np.asarray(freqs, dtype=float).reshape(-1)
+        h = np.asarray(complex_resp, dtype=complex).reshape(-1)
+        x = np.asarray(ir, dtype=float).reshape(-1)
+        fs_v = float(fs)
+        if f.size == 0 or h.size != f.size or x.size == 0 or fs_v <= 0.0:
+            return h, 0.0
+        peak_idx = int(np.argmax(np.abs(x)))
+        if peak_idx <= 0:
+            return h, 0.0
+        delay_s = float(peak_idx) / fs_v
+        rot = np.exp(1j * 2.0 * np.pi * f * delay_s)
+        return h * rot, delay_s * 1000.0
+    except Exception:
+        return np.asarray(complex_resp, dtype=complex).reshape(-1), 0.0
+
+def _filter_focus_band(freqs, filt_db, *, delta_db: float = 0.75) -> tuple[float, float] | None:
+    """Arvioi suotimen aktiivisen taajuusalueen display-skaalausta varten."""
+    try:
+        f = np.asarray(freqs, dtype=float).reshape(-1)
+        g = np.asarray(filt_db, dtype=float).reshape(-1)
+        valid = np.isfinite(f) & np.isfinite(g) & (f > 0.0)
+        if np.count_nonzero(valid) < 16:
+            return None
+        fv = f[valid]
+        gv = g[valid]
+        order = np.argsort(fv, kind="mergesort")
+        fv = fv[order]
+        gv = gv[order]
+        hi_start = int(max(0, round(0.8 * (fv.size - 1))))
+        baseline = float(np.median(gv[hi_start:])) if hi_start < gv.size else float(np.median(gv))
+        active = np.abs(gv - baseline) >= float(max(0.1, delta_db))
+        if np.count_nonzero(active) < 8:
+            return None
+        lo = float(fv[np.where(active)[0][0]])
+        hi = float(fv[np.where(active)[0][-1]])
+        lo = max(float(fv[0]), lo / 1.35)
+        hi = min(float(fv[-1]), hi * 1.6)
+        if hi <= lo:
+            return None
+        return lo, hi
+    except Exception:
+        return None
+
+def _robust_axis_range(
+    freqs,
+    values,
+    *,
+    focus_band: tuple[float, float] | None = None,
+    q_lo: float = 0.03,
+    q_hi: float = 0.97,
+    pad_ratio: float = 0.18,
+    min_span: float = 10.0,
+    max_span: float | None = None,
+    include_zero: bool = False,
+):
+    """Laskee robustin y-akselin alueen kuvaajille."""
+    try:
+        f = np.asarray(freqs, dtype=float).reshape(-1)
+        y = np.asarray(values, dtype=float).reshape(-1)
+        valid = np.isfinite(f) & np.isfinite(y)
+        if focus_band is not None:
+            lo_f, hi_f = focus_band
+            valid &= (f >= float(lo_f)) & (f <= float(hi_f))
+        if np.count_nonzero(valid) < 12:
+            valid = np.isfinite(y)
+        if np.count_nonzero(valid) < 4:
+            return None
+        yy = y[valid]
+        lo = float(np.quantile(yy, float(q_lo)))
+        hi = float(np.quantile(yy, float(q_hi)))
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            lo = float(np.min(yy))
+            hi = float(np.max(yy))
+        if hi <= lo:
+            mid = float(lo)
+            lo = mid - 0.5 * float(min_span)
+            hi = mid + 0.5 * float(min_span)
+        span = float(hi - lo)
+        lo -= span * float(pad_ratio)
+        hi += span * float(pad_ratio)
+        if include_zero:
+            lo = min(lo, 0.0)
+            hi = max(hi, 0.0)
+        span = float(hi - lo)
+        if span < float(min_span):
+            mid = 0.5 * (hi + lo)
+            lo = mid - 0.5 * float(min_span)
+            hi = mid + 0.5 * float(min_span)
+        if include_zero:
+            lo = min(lo, 0.0)
+            hi = max(hi, 0.0)
+        if max_span is not None and (hi - lo) > float(max_span):
+            center = 0.0 if include_zero else 0.5 * (hi + lo)
+            lo = center - 0.5 * float(max_span)
+            hi = center + 0.5 * float(max_span)
+        return [float(lo), float(hi)]
+    except Exception:
+        return None
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     try:
@@ -1224,6 +1333,7 @@ def generate_prediction_plot(
             n_fft = min(n_fft, int(MAX_FFT_SIZE))
         f_lin = scipy.fft.rfftfreq(n_fft, d=1/fs)
         h_filt = scipy.fft.rfft(filt_ir, n=n_fft)
+        h_filt_display, filt_delay_ms = remove_ir_peak_delay(f_lin, h_filt, filt_ir, fs)
         
         avg_t = target_stats.get('eff_target_db', 75) if target_stats else 75
         if target_stats and 'smart_scan_range' in target_stats:
@@ -1291,11 +1401,13 @@ def generate_prediction_plot(
         p_sm_comp = p_sm_export.copy()
         if plot_level_comp_db != 0.0:
             p_sm_comp = p_sm_comp + float(plot_level_comp_db)
-        spec_sm_phase = smooth_complex(f_lin, total_spec, PHASE_SMOOTH_OCT)
-        ph_sm = (np.rad2deg(np.angle(spec_sm_phase)) + 180) % 360 - 180
+        # Phase and GD plots should describe the filter itself, not the
+        # measured speaker+room response after filtering.
+        filt_sm_phase = smooth_complex(f_lin, h_filt_display, PHASE_SMOOTH_OCT)
+        ph_sm = (np.rad2deg(np.angle(filt_sm_phase)) + 180) % 360 - 180
 
-        spec_sm_gd = smooth_complex(f_lin, total_spec, GD_SMOOTH_OCT)
-        gd_sm = calculate_clean_gd(f_lin, spec_sm_gd)
+        filt_sm_gd = smooth_complex(f_lin, h_filt_display, GD_SMOOTH_OCT)
+        gd_sm = calculate_clean_gd(f_lin, filt_sm_gd)
         filt_db = 20 * np.log10(np.abs(h_filt) + 1e-12)
         if plot_level_comp_db != 0.0:
             filt_db = filt_db + float(plot_level_comp_db)
@@ -1317,13 +1429,25 @@ def generate_prediction_plot(
         gd_vis = np.interp(f_vis, f_lin, gd_sm)
         filt_vis_export = np.interp(f_vis, f_lin, filt_db_export)
         filt_vis_comp = np.interp(f_vis, f_lin, filt_db_comp)
+        focus_band = _filter_focus_band(f_vis, filt_vis_comp)
+        gd_range = _robust_axis_range(
+            f_vis,
+            gd_vis,
+            focus_band=focus_band,
+            q_lo=0.02,
+            q_hi=0.98,
+            pad_ratio=0.16,
+            min_span=6.0,
+            max_span=120.0,
+            include_zero=True,
+        )
 
         fig = make_subplots(
             rows=5, cols=1, vertical_spacing=0.045,
             subplot_titles=(
                 "<b>Magnitude & Alignment</b>",
-                "<b>Phase</b>",
-                "<b>Group Delay</b>",
+                "<b>Filter Phase (delay compensated)</b>",
+                "<b>Filter Group Delay (delay compensated)</b>",
                 "<b>Filter (dB)</b>",
                 "<b>A-FDW Effective BW (oct)</b>",
                 
@@ -1480,8 +1604,28 @@ def generate_prediction_plot(
             row=1, col=1
         )
 
-        fig.add_trace(go.Scatter(x=f_vis, y=ph_vis, name="Phase", line=dict(color='orange'), showlegend=False), row=2, col=1)
-        fig.add_trace(go.Scatter(x=f_vis, y=gd_vis, name="Group Delay", line=dict(color='orange'), showlegend=False), row=3, col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=f_vis,
+                y=ph_vis,
+                name="Filter Phase",
+                line=dict(color='orange', width=0.9),
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=f_vis,
+                y=gd_vis,
+                name="Filter Group Delay",
+                line=dict(color='orange', width=0.9),
+                showlegend=False,
+            ),
+            row=3,
+            col=1,
+        )
 
         # ---- Filter panel: show BOTH baked/exported and compensated views (pro-level clarity) ----
         # Exported (baked): what you actually load into DSP (IR FFT).
@@ -1490,7 +1634,7 @@ def generate_prediction_plot(
             go.Scatter(
                 x=f_vis, y=filt_vis_export,
                 name="Filter dB (exported)",
-                line=dict(color='red', width=1.2),
+                line=dict(color='red', width=0.9),
                 showlegend=True,
                 visible=True,
             ),
@@ -1502,7 +1646,7 @@ def generate_prediction_plot(
             go.Scatter(
                 x=f_vis, y=filt_vis_comp,
                 name="Filter dB (compensated)",
-                line=dict(color='red', width=1.2, dash="dot"),
+                line=dict(color='red', width=0.9, dash="dot"),
                 showlegend=True,
                 visible=False,
             ),
@@ -1517,7 +1661,7 @@ def generate_prediction_plot(
                 if np.isfinite(ag_txt) or np.isfinite(ah_txt):
                     fig.add_annotation(
                         x=0.01, y=0.98, xref="paper", yref="paper",
-                        text=f"Auto gain: {ag_txt:+.2f} dB | Headroom: {ah_txt:+.2f} dB",
+                        text=f"Auto gain: {ag_txt:+.2f} dB | Headroom: {ah_txt:+.2f} dB | Filter delay removed: {filt_delay_ms:.2f} ms",
                        showarrow=False,
                         align="left",
                         font=dict(size=12),
@@ -1689,7 +1833,9 @@ def generate_prediction_plot(
 
 
         fig.update_yaxes(range=[avg_t-20, avg_t+30], row=1, col=1)
-        fig.update_yaxes(range=[-180, 180], row=2, col=1)
+        fig.update_yaxes(range=[-90, 90], row=2, col=1)
+        if gd_range is not None:
+            fig.update_yaxes(range=gd_range, row=3, col=1)
         fig.update_yaxes(range=[-30, 12], row=4, col=1)
         if bw_vis is not None and len(bw_vis) > 0:
             bw_lo = max(1.0/96.0, float(np.min(bw_vis)) * 0.9)
@@ -1760,10 +1906,27 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
     """Rakentaa tai generoi: generate combined plot mpl."""
     try:
         n_fft = len(filt_ir); f_lin = scipy.fft.rfftfreq(n_fft, d=1/fs); h_filt = scipy.fft.rfft(filt_ir)
+        h_filt_display, _filt_delay_ms = remove_ir_peak_delay(f_lin, h_filt, filt_ir, fs)
         offset = target_stats.get('offset_db', 0) if target_stats else 0
         avg_t = target_stats.get('eff_target_db', 75) if target_stats else 75
         m_lin = np.interp(f_lin, orig_freqs, orig_mags); p_lin = np.interp(f_lin, orig_freqs, orig_phases)
         total_spec = 10**((m_lin + offset)/20.0) * np.exp(1j * np.deg2rad(p_lin)) * h_filt
+        filt_phase = smooth_complex(f_lin, h_filt_display, PHASE_SMOOTH_OCT)
+        filt_phase_deg = (np.rad2deg(np.angle(filt_phase)) + 180) % 360 - 180
+        filt_gd = calculate_clean_gd(f_lin, smooth_complex(f_lin, h_filt_display, GD_SMOOTH_OCT))
+        filt_db = 20*np.log10(np.abs(h_filt)+1e-12)
+        focus_band = _filter_focus_band(f_lin, filt_db)
+        gd_range = _robust_axis_range(
+            f_lin,
+            filt_gd,
+            focus_band=focus_band,
+            q_lo=0.02,
+            q_hi=0.98,
+            pad_ratio=0.16,
+            min_span=6.0,
+            max_span=120.0,
+            include_zero=True,
+        )
         fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(12, 18))
         ax1.semilogx(orig_freqs, orig_mags + offset, 'b:', alpha=0.3)
         ax1.semilogx(f_lin, psychoacoustic_smoothing(f_lin, 20*np.log10(np.abs(total_spec)+1e-12)), 'orange', linewidth=2)
@@ -1777,8 +1940,12 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
         
         
         ax1.set_ylim(avg_t-15, avg_t+15)
-        ax3.semilogx(f_lin, calculate_clean_gd(f_lin, total_spec), 'orange')
-        ax4.semilogx(f_lin, 20*np.log10(np.abs(h_filt)+1e-12), 'r')
+        ax2.semilogx(f_lin, filt_phase_deg, 'orange', linewidth=0.9)
+        ax2.set_ylim(-90, 90)
+        ax3.semilogx(f_lin, filt_gd, 'orange', linewidth=0.9)
+        if gd_range is not None:
+            ax3.set_ylim(gd_range)
+        ax4.semilogx(f_lin, filt_db, 'r', linewidth=0.9)
         
         for ax in [ax1, ax2, ax3, ax4]: ax.set_xscale('log'); ax.set_xlim(20, 20000); ax.grid(True, which='both', alpha=0.3)
         plt.tight_layout(); buf = io.BytesIO(); fig.savefig(buf, format='png', dpi=120); plt.close(fig); buf.seek(0)

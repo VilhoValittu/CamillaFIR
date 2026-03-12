@@ -340,6 +340,77 @@ def _render_results(
             }
             return str(mapping.get(key, key or "unknown"))
 
+        def _fmt_freq_window(win):
+            try:
+                if isinstance(win, (list, tuple)) and len(win) >= 2:
+                    lo = float(win[0])
+                    hi = float(win[1])
+                    if lo == lo and hi == hi and hi > lo:
+                        return f"{lo:.0f}-{hi:.0f} Hz"
+            except Exception:
+                pass
+            return "n/a"
+
+        def _stereo_link_mode_label(st):
+            try:
+                resolved = str(st.get("stereo_link_mode", "") or "").strip().lower()
+            except Exception:
+                resolved = ""
+            try:
+                requested = str(st.get("stereo_link_requested_mode", "") or "").strip().lower()
+            except Exception:
+                requested = ""
+
+            if not resolved:
+                return "Off" if not bool(data.get("stereo_link", False)) else "On"
+
+            resolved_label = {
+                "shared": "Shared",
+                "hybrid": "Hybrid",
+            }.get(resolved, resolved.title())
+            if requested == "auto":
+                return f"Auto -> {resolved_label}"
+            return resolved_label
+
+        def _shared_window_label(st):
+            try:
+                resolved = str(st.get("stereo_link_mode", "") or "").strip().lower()
+            except Exception:
+                resolved = ""
+            win = st.get("stereo_link_shared_window", None)
+            if resolved == "hybrid":
+                return "Not used (Hybrid)"
+            return _fmt_freq_window(win)
+
+        def _anchor_label(st, other_st):
+            try:
+                anchor = str(st.get("stereo_link_level_anchor_channel", "") or "").strip().lower()
+            except Exception:
+                anchor = ""
+            try:
+                resolved = str(st.get("stereo_link_mode", "") or "").strip().lower()
+            except Exception:
+                resolved = ""
+            if anchor == "left":
+                if resolved in {"shared", "hybrid"}:
+                    return "Left (right attenuated toward left)"
+                return "Left"
+            if anchor == "right":
+                if resolved in {"shared", "hybrid"}:
+                    return "Right (left attenuated toward right)"
+                return "Right"
+            if not bool(data.get("stereo_link", False)):
+                return "-"
+            return "-"
+
+        l_window_used = l_st_f.get("stereo_link_window_used", l_st_f.get("smart_scan_range", [0, 0]))
+        r_window_used = r_st_f.get("stereo_link_window_used", r_st_f.get("smart_scan_range", [0, 0]))
+        l_link_mode = _stereo_link_mode_label(l_st_f)
+        r_link_mode = _stereo_link_mode_label(r_st_f)
+        l_shared_window = _shared_window_label(l_st_f)
+        r_shared_window = _shared_window_label(r_st_f)
+        l_anchor = _anchor_label(l_st_f, r_st_f)
+        r_anchor = _anchor_label(r_st_f, l_st_f)
 
         l_boost_pre, l_auto_gain, l_net_boost = _boost_diag(l_st_f)
         r_boost_pre, r_auto_gain, r_net_boost = _boost_diag(r_st_f)
@@ -390,11 +461,17 @@ def _render_results(
         _put_metric_collapse(
             " Acoustic summary",
             [
+                _metric_row("Stereo Leveling", l_link_mode, r_link_mode),
                 _metric_row("Target Level", f"{l_st_f.get('eff_target_db', 0):.1f} dB", f"{r_st_f.get('eff_target_db', 0):.1f} dB"),
                 _metric_row(
-                    "Smart Scan Range",
-                    f"{l_st_f.get('smart_scan_range', [0, 0])[0]:.0f}-{l_st_f.get('smart_scan_range', [0, 0])[1]:.0f} Hz",
-                    f"{r_st_f.get('smart_scan_range', [0, 0])[0]:.0f}-{r_st_f.get('smart_scan_range', [0, 0])[1]:.0f} Hz",
+                    "Window Used for Leveling",
+                    _fmt_freq_window(l_window_used),
+                    _fmt_freq_window(r_window_used),
+                ),
+                _metric_row(
+                    "Shared Leveling Window",
+                    l_shared_window,
+                    r_shared_window,
                 ),
                 _metric_row(
                     "Leveling Tilt",
@@ -404,6 +481,7 @@ def _render_results(
                     right_compare=_auto_float(r_st_f.get('tilt_slope_db_per_oct', float("nan")), float("nan")),
                 ),
                 _metric_row("Offset to Meas.", f"{l_st_f.get('offset_db', 0):.1f} dB", f"{r_st_f.get('offset_db', 0):.1f} dB"),
+                _metric_row("Stereo Anchor", l_anchor, r_anchor),
                 {"label": "Target Match", "left": _fmt_ai_match(l_ai), "right": _fmt_ai_match(r_ai)},
                 _metric_row("Acoustic Confidence", f"{l_st_f.get('avg_confidence', 0):.1f}%", f"{r_st_f.get('avg_confidence', 0):.1f}%"),
                 {"label": "Acoustic Score", "left": _fmt_ai_score(l_ai), "right": _fmt_ai_score(r_ai)},

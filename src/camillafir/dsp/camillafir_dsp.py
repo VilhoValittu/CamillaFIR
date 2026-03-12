@@ -7,7 +7,7 @@ from camillafir.config.models import FilterConfig
 from .dsp_correction import run_correction_stage
 from .dsp_phase_ir import run_phase_ir_stage
 from .dsp_preprocess import run_preprocess
-from .camillafir_leveling import StereoLinkContext
+from .camillafir_leveling import StereoLinkContext, find_shared_stereo_level_window
 from .dsp_utils import cfg_float_allow_zero as _cfg_float_allow_zero
 from .dsp_utils import safe_range as _safe_range
 
@@ -876,6 +876,86 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
             pass
         return float(default)
 
+    def _shared_window_from_stats(st_l: dict | None, st_r: dict | None):
+        try:
+            if not isinstance(st_l, dict) or not isinstance(st_r, dict):
+                return None
+            freq_l = np.asarray(st_l.get("freq_axis", []) or [], dtype=float)
+            meas_l = np.asarray(st_l.get("measured_mags", []) or [], dtype=float)
+            targ_l = np.asarray(st_l.get("target_mags", []) or [], dtype=float)
+            freq_r = np.asarray(st_r.get("freq_axis", []) or [], dtype=float)
+            meas_r = np.asarray(st_r.get("measured_mags", []) or [], dtype=float)
+            targ_r = np.asarray(st_r.get("target_mags", []) or [], dtype=float)
+            if (
+                freq_l.size < 50
+                or freq_r.size < 50
+                or meas_l.size != freq_l.size
+                or targ_l.size != freq_l.size
+                or meas_r.size != freq_r.size
+                or targ_r.size != freq_r.size
+            ):
+                return None
+            try:
+                hpf_settings = getattr(cfg, "hpf_settings", None)
+                hpf_freq = float(hpf_settings.get("freq", 0.0)) if hpf_settings else 0.0
+            except Exception:
+                hpf_freq = 0.0
+            win = find_shared_stereo_level_window(
+                freq_l,
+                meas_l,
+                targ_l,
+                freq_r,
+                meas_r,
+                targ_r,
+                float(lvl_min),
+                float(lvl_max),
+                window_size_octaves=1.0,
+                hpf_freq=float(hpf_freq),
+                tilt_comp=bool(getattr(cfg, "lvl_tilt_comp", True)),
+                tilt_max_db_per_oct=float(getattr(cfg, "lvl_tilt_max_db_per_oct", 2.0) or 2.0),
+                perceptual_weighting=bool(getattr(cfg, "lvl_perceptual_weighting", False)),
+                perceptual_strength=float(getattr(cfg, "lvl_perceptual_strength", 0.12) or 0.12),
+                perceptual_min_hz=float(getattr(cfg, "lvl_perceptual_min_hz", 250.0) or 250.0),
+                perceptual_max_hz=float(getattr(cfg, "lvl_perceptual_max_hz", 4000.0) or 4000.0),
+                perceptual_tie_only=bool(getattr(cfg, "lvl_perceptual_tie_only", True)),
+            )
+            return _safe_range(win, lvl_min, lvl_max)
+        except Exception:
+            return None
+
+    def _pick_quieter_anchor():
+        left = {
+            "channel": "left",
+            "offset_db": _as_stat_float(l_st1, "offset_db", np.nan),
+            "target_level_db": _as_stat_float(l_st1, "eff_target_db", np.nan),
+            "target_shift_db": _as_stat_float(l_st1, "target_shift_db", np.nan),
+            "meas_level_db_window": _as_stat_float(l_st1, "meas_level_db_window", np.nan),
+        }
+        right = {
+            "channel": "right",
+            "offset_db": _as_stat_float(r_st1, "offset_db", np.nan),
+            "target_level_db": _as_stat_float(r_st1, "eff_target_db", np.nan),
+            "target_shift_db": _as_stat_float(r_st1, "target_shift_db", np.nan),
+            "meas_level_db_window": _as_stat_float(r_st1, "meas_level_db_window", np.nan),
+        }
+
+        def _anchor_key(candidate):
+            shift = candidate["target_shift_db"]
+            meas = candidate["meas_level_db_window"]
+            target = candidate["target_level_db"]
+            if np.isfinite(shift):
+                return (0, float(shift))
+            if np.isfinite(meas):
+                return (1, float(meas))
+            if np.isfinite(target):
+                return (2, float(target))
+            return (3, float("inf"))
+
+        candidates = [c for c in (left, right) if _anchor_key(c)[0] < 3]
+        if not candidates:
+            return None
+        return min(candidates, key=_anchor_key)
+
     lvl_min = float(getattr(cfg, "lvl_min", 200.0) or 200.0)
     lvl_max = float(getattr(cfg, "lvl_max", 3000.0) or 3000.0)
 
@@ -887,19 +967,28 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
         win_l = _safe_range((l_st1 or {}).get("smart_scan_range"), lvl_min, lvl_max)
         win_r = _safe_range((r_st1 or {}).get("smart_scan_range"), lvl_min, lvl_max)
 
-    win_shared = list(win_l)
+    shared_win_from_scan = _shared_window_from_stats(l_st1, r_st1) if "Manual" not in mode else None
+    win_shared = list(shared_win_from_scan) if shared_win_from_scan is not None else list(win_l)
+    if not (win_shared[1] > win_shared[0]):
+        win_shared = list(win_l)
     if not (win_shared[1] > win_shared[0]):
         win_shared = list(win_r)
     if not (win_shared[1] > win_shared[0]):
         win_shared = [lvl_min, lvl_max]
 
+    anchor = _pick_quieter_anchor()
     off_l = float((l_st1 or {}).get("offset_db", 0.0) or 0.0)
     off_r = float((r_st1 or {}).get("offset_db", 0.0) or 0.0)
-    off_shared = 0.5 * (off_l + off_r)
+    if anchor is not None and np.isfinite(float(anchor["offset_db"])):
+        off_shared = float(anchor["offset_db"])
+    else:
+        off_shared = min(float(off_l), float(off_r))
     tgt_l = _as_stat_float(l_st1, "eff_target_db", np.nan)
     tgt_r = _as_stat_float(r_st1, "eff_target_db", np.nan)
-    if np.isfinite(tgt_l) and np.isfinite(tgt_r):
-        target_shared = 0.5 * (float(tgt_l) + float(tgt_r))
+    if anchor is not None and np.isfinite(float(anchor["target_level_db"])):
+        target_shared = float(anchor["target_level_db"])
+    elif np.isfinite(tgt_l) and np.isfinite(tgt_r):
+        target_shared = min(float(tgt_l), float(tgt_r))
     elif np.isfinite(tgt_l):
         target_shared = float(tgt_l)
     elif np.isfinite(tgt_r):
@@ -908,8 +997,10 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
         target_shared = None
     tshift_l = _as_stat_float(l_st1, "target_shift_db", np.nan)
     tshift_r = _as_stat_float(r_st1, "target_shift_db", np.nan)
-    if np.isfinite(tshift_l) and np.isfinite(tshift_r):
-        target_shift_shared = 0.5 * (float(tshift_l) + float(tshift_r))
+    if anchor is not None and np.isfinite(float(anchor["target_shift_db"])):
+        target_shift_shared = float(anchor["target_shift_db"])
+    elif np.isfinite(tshift_l) and np.isfinite(tshift_r):
+        target_shift_shared = min(float(tshift_l), float(tshift_r))
     elif np.isfinite(tshift_l):
         target_shift_shared = float(tshift_l)
     elif np.isfinite(tshift_r):
@@ -1003,6 +1094,8 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
             l_st2["stereo_link_guard_tilt_diff_db_per_oct"] = float(tilt_diff)
             l_st2["stereo_link_guard_tilt_abs_max_db_per_oct"] = float(tilt_abs_max)
             l_st2["stereo_link_shared_offset_db"] = float(off_shared)
+            if anchor is not None:
+                l_st2["stereo_link_level_anchor_channel"] = str(anchor["channel"])
             if target_shared is not None and np.isfinite(float(target_shared)):
                 l_st2["stereo_link_shared_target_level_db"] = float(target_shared)
             if target_shift_shared is not None and np.isfinite(float(target_shift_shared)):
@@ -1022,6 +1115,8 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
             r_st2["stereo_link_guard_tilt_diff_db_per_oct"] = float(tilt_diff)
             r_st2["stereo_link_guard_tilt_abs_max_db_per_oct"] = float(tilt_abs_max)
             r_st2["stereo_link_shared_offset_db"] = float(off_shared)
+            if anchor is not None:
+                r_st2["stereo_link_level_anchor_channel"] = str(anchor["channel"])
             if target_shared is not None and np.isfinite(float(target_shared)):
                 r_st2["stereo_link_shared_target_level_db"] = float(target_shared)
             if target_shift_shared is not None and np.isfinite(float(target_shift_shared)):

@@ -6,6 +6,7 @@ import numpy as np
 __all__ = [
     "StereoLinkContext",
     "find_stable_level_window",
+    "find_shared_stereo_level_window",
     "compute_leveling",
 ]
 
@@ -28,6 +29,31 @@ def _to_float(x, default: float) -> float:
     if not np.isfinite(v):
         return float(default)
     return float(v)
+
+
+def _to_bool(x, default: bool) -> bool:
+    """Sisainen apufunktio: to bool."""
+    try:
+        if isinstance(x, (bool, np.bool_)):
+            return bool(x)
+        if x is None:
+            return bool(default)
+        if isinstance(x, str):
+            s = x.strip().lower()
+            if s in {"1", "true", "yes", "on", "y"}:
+                return True
+            if s in {"0", "false", "no", "off", "n", ""}:
+                return False
+            return bool(default)
+        if isinstance(x, (int, float, np.integer, np.floating)):
+            v = float(x)
+            if not np.isfinite(v):
+                return bool(default)
+            return bool(v != 0.0)
+        return bool(x)
+    except Exception:
+        return bool(default)
+
 
 def _remember_leveling_error(cfg, stage: str, exc: Exception | None = None) -> None:
     try:
@@ -343,6 +369,321 @@ def _tilt_fit_offset_and_slope_db_per_oct(
             return 0.0, 0.0
 
 
+def _hz_to_erb_number(freq_hz):
+    try:
+        f = np.asarray(freq_hz, dtype=float)
+        f = np.clip(f, 0.0, None)
+        erb = 21.4 * np.log10(1.0 + 4.37e-3 * f)
+        if np.ndim(erb) == 0:
+            return float(erb)
+        return erb
+    except Exception:
+        try:
+            f = max(float(freq_hz), 0.0)
+            return float(21.4 * np.log10(1.0 + 4.37e-3 * f))
+        except Exception:
+            return 0.0
+
+
+def _perceptual_importance_weights(
+    freq_axis,
+    *,
+    min_hz=250.0,
+    max_hz=4000.0,
+    min_weight=0.60,
+    max_weight=1.35,
+    bass_floor_weight=0.85,
+):
+    try:
+        f = np.asarray(freq_axis, dtype=float).reshape(-1)
+        if f.size == 0:
+            return np.asarray([], dtype=float)
+
+        min_hz = _to_float(min_hz, 250.0)
+        max_hz = _to_float(max_hz, 4000.0)
+        min_weight = _to_float(min_weight, 0.60)
+        max_weight = _to_float(max_weight, 1.35)
+        bass_floor_weight = _to_float(bass_floor_weight, 0.85)
+
+        if min_hz <= 0.0:
+            min_hz = 250.0
+        if max_hz <= min_hz:
+            min_hz, max_hz = 250.0, 4000.0
+        if max_weight < min_weight:
+            max_weight = min_weight
+
+        weights = np.full(f.shape, float(min_weight), dtype=float)
+        valid = np.isfinite(f) & (f > 0.0)
+        if not np.any(valid):
+            return weights
+
+        erb = np.asarray(_hz_to_erb_number(f[valid]), dtype=float)
+        erb_lo = float(_hz_to_erb_number(min_hz))
+        erb_hi = float(_hz_to_erb_number(max_hz))
+        erb_span = max(float(erb_hi - erb_lo), 1e-6)
+        erb_mid = 0.5 * (erb_lo + erb_hi)
+
+        shape_sigma = max(0.34 * erb_span, 1e-6)
+        gate_sigma = max(0.10 * erb_span, 1e-6)
+
+        mid_shape = np.exp(-0.5 * ((erb - erb_mid) / shape_sigma) ** 2)
+        lo_gate = 1.0 / (1.0 + np.exp(-(erb - erb_lo) / gate_sigma))
+        hi_gate = 1.0 / (1.0 + np.exp((erb - erb_hi) / gate_sigma))
+        band_gate = lo_gate * hi_gate
+
+        w_valid = min_weight + (max_weight - min_weight) * mid_shape * band_gate
+
+        low_mask = f[valid] < min_hz
+        if np.any(low_mask):
+            w_valid[low_mask] = np.maximum(w_valid[low_mask], float(bass_floor_weight))
+
+        w_lo = min(min_weight, max_weight, bass_floor_weight)
+        w_hi = max(min_weight, max_weight, bass_floor_weight)
+        weights[valid] = np.clip(w_valid, w_lo, w_hi)
+        return weights
+    except Exception:
+        try:
+            f = np.asarray(freq_axis, dtype=float).reshape(-1)
+            return np.ones_like(f, dtype=float)
+        except Exception:
+            return np.asarray([], dtype=float)
+
+
+def _weighted_centered_rms(values, weights):
+    try:
+        y = np.asarray(values, dtype=float).reshape(-1)
+        w = np.asarray(weights, dtype=float).reshape(-1)
+        if y.size == 0 or w.size != y.size:
+            return float("inf")
+
+        valid = np.isfinite(y) & np.isfinite(w) & (w > 0.0)
+        if not np.any(valid):
+            return float("inf")
+
+        y = y[valid]
+        w = w[valid]
+        w_sum = float(np.sum(w))
+        if (not np.isfinite(w_sum)) or (w_sum <= 1e-12):
+            return float("inf")
+
+        y_mean = float(np.sum(w * y) / w_sum)
+        resid = y - y_mean
+        return float(np.sqrt(np.sum(w * resid * resid) / w_sum))
+    except Exception:
+        return float("inf")
+
+
+def _perceptual_shape_score(
+    freq_axis,
+    measured_db,
+    target_db,
+    *,
+    tilt_comp=True,
+    tilt_max_db_per_oct=2.0,
+    min_hz=250.0,
+    max_hz=4000.0,
+):
+    # This is a lightweight perceptual-weighting surrogate, not ANSI S3.4 loudness.
+    try:
+        f = np.asarray(freq_axis, dtype=float).reshape(-1)
+        m = np.asarray(measured_db, dtype=float).reshape(-1)
+        t = np.asarray(target_db, dtype=float).reshape(-1)
+        if f.size < 12 or m.size != f.size or t.size != f.size:
+            return float("inf")
+
+        valid = np.isfinite(f) & np.isfinite(m) & np.isfinite(t) & (f > 0.0)
+        if int(np.count_nonzero(valid)) < 12:
+            return float("inf")
+
+        f = f[valid]
+        m = m[valid]
+        t = t[valid]
+        f, (m, t) = _resample_log_axis(f, m, t)
+        if f.size < 12 or m.size != f.size or t.size != f.size:
+            return float("inf")
+
+        diff = np.asarray(m - t, dtype=float)
+        if tilt_comp:
+            off, slope = _tilt_fit_offset_and_slope_db_per_oct(
+                f,
+                diff,
+                max_db_per_oct=float(tilt_max_db_per_oct),
+            )
+        else:
+            off = _log_median(f, diff)
+            slope = 0.0
+
+        x = np.log2(np.clip(f, 1e-9, None))
+        xc = x - float(np.median(x))
+        resid = diff - float(off) - (float(slope) * xc)
+
+        weights = _perceptual_importance_weights(
+            f,
+            min_hz=min_hz,
+            max_hz=max_hz,
+        )
+        return _weighted_centered_rms(resid, weights)
+    except Exception:
+        return float("inf")
+
+
+def _prepare_level_window_search(
+    freq_axis: np.ndarray,
+    magnitudes: np.ndarray,
+    target_mags: np.ndarray | None,
+    *,
+    f_min: float,
+    f_max: float,
+    hpf_freq: float,
+):
+    try:
+        freq_arr = np.asarray(freq_axis, dtype=float).reshape(-1)
+        mag_arr = np.asarray(magnitudes, dtype=float).reshape(-1)
+        if freq_arr.size != mag_arr.size or freq_arr.size == 0:
+            return None
+
+        safe_f_min = max(float(f_min), float(hpf_freq) * 1.5)
+        if safe_f_min >= float(f_max) * 0.8:
+            safe_f_min = float(f_min)
+
+        mask = (
+            np.isfinite(freq_arr)
+            & np.isfinite(mag_arr)
+            & (freq_arr >= float(safe_f_min))
+            & (freq_arr <= float(f_max))
+        )
+
+        target_search = None
+        if target_mags is not None:
+            try:
+                target_arr = np.asarray(target_mags, dtype=float).reshape(-1)
+                if target_arr.size == freq_arr.size:
+                    mask &= np.isfinite(target_arr)
+                    target_search = target_arr
+            except Exception:
+                target_search = None
+
+        if int(np.count_nonzero(mask)) < 50:
+            return None
+
+        out = {
+            "freq": freq_arr[mask],
+            "magnitudes": mag_arr[mask],
+            "safe_f_min": float(safe_f_min),
+            "f_max": float(f_max),
+        }
+        if target_search is not None:
+            out["target"] = np.asarray(target_search[mask], dtype=float)
+        else:
+            out["target"] = None
+        return out
+    except Exception:
+        return None
+
+
+def _evaluate_level_window_candidate(
+    freq_axis: np.ndarray,
+    magnitudes: np.ndarray,
+    target_mags: np.ndarray | None,
+    *,
+    tilt_comp: bool,
+    tilt_max_db_per_oct: float,
+    perceptual_weighting: bool,
+    perceptual_strength: float,
+    perceptual_min_hz: float,
+    perceptual_max_hz: float,
+    perceptual_tie_only: bool,
+):
+    try:
+        f_w = np.asarray(freq_axis, dtype=float).reshape(-1)
+        m_w = np.asarray(magnitudes, dtype=float).reshape(-1)
+        if f_w.size < 20 or m_w.size != f_w.size:
+            return None
+
+        if target_mags is not None:
+            t_w = np.asarray(target_mags, dtype=float).reshape(-1)
+            if t_w.size != f_w.size:
+                return None
+            f_eval, (y, t_eval) = _resample_log_axis(f_w, m_w, t_w)
+        else:
+            f_eval, (y,) = _resample_log_axis(f_w, m_w)
+            t_eval = None
+
+        if f_eval.size < 20 or y.size < 20:
+            return None
+
+        x = np.log2(np.clip(f_eval, 1e-9, None))
+        x0 = float(np.median(x))
+        xc = x - x0
+        y_med = float(np.median(y))
+        denom = float(np.dot(xc, xc))
+        if denom > 1e-12:
+            slope = float(np.dot(xc, (y - y_med)) / denom)
+            residual = y - (slope * xc)
+        else:
+            residual = y
+
+        std = _lower_tail_robust_std_db(residual, clip_below_db=6.0)
+        weight = 1.0 + 0.05 * abs(np.log10(max(float(f_eval[0]), 1.0) / 1000.0))
+        score = float(std * weight)
+
+        target_rms = float("inf")
+        offset_spread = float("inf")
+        tilt_abs = float("inf")
+        perceptual_rms = float("inf")
+        try:
+            if t_eval is not None and t_eval.size == y.size:
+                offset_spread, target_rms, tilt_abs = _window_offset_consistency_score(
+                    f_eval,
+                    y,
+                    t_eval,
+                    tilt_comp=bool(tilt_comp),
+                    tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+                )
+                if perceptual_weighting:
+                    perceptual_rms = _perceptual_shape_score(
+                        f_eval,
+                        y,
+                        t_eval,
+                        tilt_comp=bool(tilt_comp),
+                        tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+                        min_hz=float(perceptual_min_hz),
+                        max_hz=float(perceptual_max_hz),
+                    )
+            else:
+                offset_spread, _shape_rms, tilt_abs = _window_offset_consistency_score(
+                    f_eval,
+                    y,
+                    None,
+                    tilt_comp=bool(tilt_comp),
+                    tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+                )
+        except Exception:
+            target_rms = float("inf")
+            offset_spread = float("inf")
+            tilt_abs = float("inf")
+            perceptual_rms = float("inf")
+
+        if np.isfinite(offset_spread):
+            score += 0.85 * float(offset_spread)
+        if np.isfinite(target_rms):
+            score += 0.20 * float(target_rms)
+        if np.isfinite(tilt_abs):
+            score += 0.08 * float(tilt_abs)
+        if (not perceptual_tie_only) and np.isfinite(perceptual_rms):
+            score += float(perceptual_strength) * float(perceptual_rms)
+
+        return {
+            "score": float(score),
+            "target_rms": float(target_rms),
+            "offset_spread": float(offset_spread),
+            "tilt_abs": float(tilt_abs),
+            "perceptual_rms": float(perceptual_rms),
+        }
+    except Exception:
+        return None
+
+
 def find_stable_level_window(
     freq_axis: np.ndarray,
     magnitudes: np.ndarray,
@@ -353,6 +694,11 @@ def find_stable_level_window(
     hpf_freq: float = 0.0,
     tilt_comp: bool = True,
     tilt_max_db_per_oct: float = 2.0,
+    perceptual_weighting: bool = False,
+    perceptual_strength: float = 0.12,
+    perceptual_min_hz: float = 250.0,
+    perceptual_max_hz: float = 4000.0,
+    perceptual_tie_only: bool = True,
 ) -> Tuple[float, float]:
 
     try:
@@ -360,30 +706,35 @@ def find_stable_level_window(
         f_max = _to_float(f_max, 0.0)
         hpf_freq = _to_float(hpf_freq, 0.0)
         window_size_octaves = _to_float(window_size_octaves, 1.0)
+        perceptual_weighting = _to_bool(perceptual_weighting, False)
+        perceptual_strength = max(0.0, _to_float(perceptual_strength, 0.12))
+        perceptual_min_hz = _to_float(perceptual_min_hz, 250.0)
+        perceptual_max_hz = _to_float(perceptual_max_hz, 4000.0)
+        perceptual_tie_only = _to_bool(perceptual_tie_only, True)
 
         if f_min <= 0 or f_max <= 0 or f_min >= f_max:
             return float(f_min), float(f_max)
 
-        safe_f_min = max(float(f_min), float(hpf_freq) * 1.5)
-        if safe_f_min >= float(f_max) * 0.8:
-            safe_f_min = float(f_min)
-
-        mask = (freq_axis >= safe_f_min) & (freq_axis <= float(f_max))
-        f_search = freq_axis[mask]
-        m_search = np.asarray(magnitudes, dtype=float)[mask]
-        try:
-            t_arr = np.asarray(target_mags, dtype=float)
-            t_search = t_arr[mask] if t_arr.shape == np.asarray(freq_axis).shape else None
-        except Exception:
-            t_search = None
-
-        if f_search.size < 50:
+        prepared = _prepare_level_window_search(
+            freq_axis,
+            magnitudes,
+            target_mags,
+            f_min=float(f_min),
+            f_max=float(f_max),
+            hpf_freq=float(hpf_freq),
+        )
+        if prepared is None:
             return float(f_min), float(f_max)
+        f_search = np.asarray(prepared["freq"], dtype=float)
+        m_search = np.asarray(prepared["magnitudes"], dtype=float)
+        t_search = prepared.get("target", None)
+        safe_f_min = float(prepared["safe_f_min"])
 
         best_score = float("inf")
         best_target_rms = float("inf")
         best_offset_spread = float("inf")
         best_tilt_abs = float("inf")
+        best_perceptual_rms = float("inf")
         res_min, res_max = float(safe_f_min), float(f_max)
         tie_eps_rel = 0.05
 
@@ -396,64 +747,27 @@ def find_stable_level_window(
             w_mask = (f_search >= w_start) & (f_search <= w_end)
             n_w = int(np.count_nonzero(w_mask))
             if n_w >= 20:
-                f_w = f_search[w_mask]
-                m_w = m_search[w_mask]
-                if t_search is not None:
-                    f_eval, (y, t_w) = _resample_log_axis(f_w, m_w, np.asarray(t_search[w_mask], dtype=float))
-                else:
-                    f_eval, (y,) = _resample_log_axis(f_w, m_w)
-                    t_w = None
-                if f_eval.size < 20 or y.size < 20:
+                metrics = _evaluate_level_window_candidate(
+                    f_search[w_mask],
+                    m_search[w_mask],
+                    None if t_search is None else np.asarray(t_search[w_mask], dtype=float),
+                    tilt_comp=bool(tilt_comp),
+                    tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+                    perceptual_weighting=bool(perceptual_weighting),
+                    perceptual_strength=float(perceptual_strength),
+                    perceptual_min_hz=float(perceptual_min_hz),
+                    perceptual_max_hz=float(perceptual_max_hz),
+                    perceptual_tie_only=bool(perceptual_tie_only),
+                )
+                if metrics is None:
                     current_f *= step
                     continue
 
-                x = np.log2(np.clip(f_eval, 1e-9, None))
-                x0 = float(np.median(x))
-                xc = x - x0
-                y_med = float(np.median(y))
-                denom = float(np.dot(xc, xc))
-                if denom > 1e-12:
-                    slope = float(np.dot(xc, (y - y_med)) / denom)
-                    residual = y - (slope * xc)
-                else:
-                    residual = y
-
-                std = _lower_tail_robust_std_db(residual, clip_below_db=6.0)
-
-                weight = 1.0 + 0.05 * abs(np.log10(max(w_start, 1.0) / 1000.0))
-                score = std * weight
-
-                target_rms = float("inf")
-                offset_spread = float("inf")
-                tilt_abs = float("inf")
-                try:
-                    if t_w is not None and t_w.size == y.size:
-                        offset_spread, target_rms, tilt_abs = _window_offset_consistency_score(
-                            f_eval,
-                            y,
-                            t_w,
-                            tilt_comp=bool(tilt_comp),
-                            tilt_max_db_per_oct=float(tilt_max_db_per_oct),
-                        )
-                    else:
-                        offset_spread, _shape_rms, tilt_abs = _window_offset_consistency_score(
-                            f_eval,
-                            y,
-                            None,
-                            tilt_comp=bool(tilt_comp),
-                            tilt_max_db_per_oct=float(tilt_max_db_per_oct),
-                        )
-                except Exception:
-                    target_rms = float("inf")
-                    offset_spread = float("inf")
-                    tilt_abs = float("inf")
-
-                if np.isfinite(offset_spread):
-                    score += 0.85 * float(offset_spread)
-                if np.isfinite(target_rms):
-                    score += 0.20 * float(target_rms)
-                if np.isfinite(tilt_abs):
-                    score += 0.08 * float(tilt_abs)
+                score = float(metrics["score"])
+                target_rms = float(metrics["target_rms"])
+                offset_spread = float(metrics["offset_spread"])
+                tilt_abs = float(metrics["tilt_abs"])
+                perceptual_rms = float(metrics["perceptual_rms"])
 
                 better_stability = score < (best_score * (1.0 - tie_eps_rel))
                 near_tie = (score <= (best_score * (1.0 + tie_eps_rel)))
@@ -465,7 +779,15 @@ def find_stable_level_window(
                             (target_rms < best_target_rms)
                             or (
                                 target_rms <= (best_target_rms + 1e-6)
-                                and tilt_abs < best_tilt_abs
+                                and (
+                                    (tilt_abs < best_tilt_abs)
+                                    or (
+                                        tilt_abs <= (best_tilt_abs + 1e-6)
+                                        and perceptual_weighting
+                                        and np.isfinite(perceptual_rms)
+                                        and (perceptual_rms < best_perceptual_rms)
+                                    )
+                                )
                             )
                         )
                     )
@@ -476,6 +798,7 @@ def find_stable_level_window(
                     best_target_rms = target_rms
                     best_offset_spread = offset_spread
                     best_tilt_abs = tilt_abs
+                    best_perceptual_rms = perceptual_rms
                     res_min, res_max = float(w_start), float(w_end)
 
             current_f *= step
@@ -485,6 +808,171 @@ def find_stable_level_window(
 
         return float(res_min), float(res_max)
 
+    except Exception:
+        return float(f_min), float(f_max)
+
+
+def find_shared_stereo_level_window(
+    freq_axis_l: np.ndarray,
+    magnitudes_l: np.ndarray,
+    target_mags_l: np.ndarray,
+    freq_axis_r: np.ndarray,
+    magnitudes_r: np.ndarray,
+    target_mags_r: np.ndarray,
+    f_min: float,
+    f_max: float,
+    window_size_octaves: float = 1.0,
+    hpf_freq: float = 0.0,
+    tilt_comp: bool = True,
+    tilt_max_db_per_oct: float = 2.0,
+    perceptual_weighting: bool = False,
+    perceptual_strength: float = 0.12,
+    perceptual_min_hz: float = 250.0,
+    perceptual_max_hz: float = 4000.0,
+    perceptual_tie_only: bool = True,
+) -> Tuple[float, float]:
+
+    try:
+        f_min = _to_float(f_min, 0.0)
+        f_max = _to_float(f_max, 0.0)
+        hpf_freq = _to_float(hpf_freq, 0.0)
+        window_size_octaves = _to_float(window_size_octaves, 1.0)
+        perceptual_weighting = _to_bool(perceptual_weighting, False)
+        perceptual_strength = max(0.0, _to_float(perceptual_strength, 0.12))
+        perceptual_min_hz = _to_float(perceptual_min_hz, 250.0)
+        perceptual_max_hz = _to_float(perceptual_max_hz, 4000.0)
+        perceptual_tie_only = _to_bool(perceptual_tie_only, True)
+
+        if f_min <= 0 or f_max <= 0 or f_min >= f_max:
+            return float(f_min), float(f_max)
+
+        prep_l = _prepare_level_window_search(
+            freq_axis_l,
+            magnitudes_l,
+            target_mags_l,
+            f_min=float(f_min),
+            f_max=float(f_max),
+            hpf_freq=float(hpf_freq),
+        )
+        prep_r = _prepare_level_window_search(
+            freq_axis_r,
+            magnitudes_r,
+            target_mags_r,
+            f_min=float(f_min),
+            f_max=float(f_max),
+            hpf_freq=float(hpf_freq),
+        )
+        if prep_l is None or prep_r is None:
+            return float(f_min), float(f_max)
+
+        safe_f_min = max(float(prep_l["safe_f_min"]), float(prep_r["safe_f_min"]))
+        safe_f_max = min(float(prep_l["f_max"]), float(prep_r["f_max"]))
+        if safe_f_min <= 0.0 or safe_f_max <= safe_f_min:
+            return float(f_min), float(f_max)
+
+        f_l = np.asarray(prep_l["freq"], dtype=float)
+        m_l = np.asarray(prep_l["magnitudes"], dtype=float)
+        t_l = prep_l.get("target", None)
+        f_r = np.asarray(prep_r["freq"], dtype=float)
+        m_r = np.asarray(prep_r["magnitudes"], dtype=float)
+        t_r = prep_r.get("target", None)
+
+        best_primary = float("inf")
+        best_secondary = float("inf")
+        best_offset_spread = float("inf")
+        best_target_rms = float("inf")
+        best_tilt_abs = float("inf")
+        best_perceptual_rms = float("inf")
+        res_min, res_max = float(safe_f_min), float(safe_f_max)
+        tie_eps_rel = 0.05
+
+        current_f = float(safe_f_min)
+        step = 2 ** (1 / 24.0)
+        while current_f * (2 ** float(window_size_octaves)) <= float(safe_f_max):
+            w_start = current_f
+            w_end = current_f * (2 ** float(window_size_octaves))
+            mask_l = (f_l >= w_start) & (f_l <= w_end)
+            mask_r = (f_r >= w_start) & (f_r <= w_end)
+            if int(np.count_nonzero(mask_l)) >= 20 and int(np.count_nonzero(mask_r)) >= 20:
+                metrics_l = _evaluate_level_window_candidate(
+                    f_l[mask_l],
+                    m_l[mask_l],
+                    None if t_l is None else np.asarray(t_l[mask_l], dtype=float),
+                    tilt_comp=bool(tilt_comp),
+                    tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+                    perceptual_weighting=bool(perceptual_weighting),
+                    perceptual_strength=float(perceptual_strength),
+                    perceptual_min_hz=float(perceptual_min_hz),
+                    perceptual_max_hz=float(perceptual_max_hz),
+                    perceptual_tie_only=bool(perceptual_tie_only),
+                )
+                metrics_r = _evaluate_level_window_candidate(
+                    f_r[mask_r],
+                    m_r[mask_r],
+                    None if t_r is None else np.asarray(t_r[mask_r], dtype=float),
+                    tilt_comp=bool(tilt_comp),
+                    tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+                    perceptual_weighting=bool(perceptual_weighting),
+                    perceptual_strength=float(perceptual_strength),
+                    perceptual_min_hz=float(perceptual_min_hz),
+                    perceptual_max_hz=float(perceptual_max_hz),
+                    perceptual_tie_only=bool(perceptual_tie_only),
+                )
+                if metrics_l is not None and metrics_r is not None:
+                    score_l = float(metrics_l["score"])
+                    score_r = float(metrics_r["score"])
+                    primary = max(score_l, score_r)
+                    secondary = 0.5 * (score_l + score_r)
+                    offset_spread = max(float(metrics_l["offset_spread"]), float(metrics_r["offset_spread"]))
+                    target_rms = max(float(metrics_l["target_rms"]), float(metrics_r["target_rms"]))
+                    tilt_abs = max(float(metrics_l["tilt_abs"]), float(metrics_r["tilt_abs"]))
+                    perceptual_rms = max(float(metrics_l["perceptual_rms"]), float(metrics_r["perceptual_rms"]))
+
+                    better_stability = primary < (best_primary * (1.0 - tie_eps_rel))
+                    near_tie = primary <= (best_primary * (1.0 + tie_eps_rel))
+                    better_tie_break = near_tie and (
+                        (secondary < best_secondary)
+                        or (
+                            secondary <= (best_secondary + 1e-6)
+                            and (
+                                (offset_spread < best_offset_spread)
+                                or (
+                                    offset_spread <= (best_offset_spread + 1e-6)
+                                    and (
+                                        (target_rms < best_target_rms)
+                                        or (
+                                            target_rms <= (best_target_rms + 1e-6)
+                                            and (
+                                                (tilt_abs < best_tilt_abs)
+                                                or (
+                                                    tilt_abs <= (best_tilt_abs + 1e-6)
+                                                    and perceptual_weighting
+                                                    and np.isfinite(perceptual_rms)
+                                                    and (perceptual_rms < best_perceptual_rms)
+                                                )
+                                            )
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    )
+
+                    if better_stability or better_tie_break:
+                        best_primary = float(primary)
+                        best_secondary = float(secondary)
+                        best_offset_spread = float(offset_spread)
+                        best_target_rms = float(target_rms)
+                        best_tilt_abs = float(tilt_abs)
+                        best_perceptual_rms = float(perceptual_rms)
+                        res_min, res_max = float(w_start), float(w_end)
+
+            current_f *= step
+
+        if not np.isfinite(best_primary):
+            return float(f_min), float(f_max)
+
+        return float(res_min), float(res_max)
     except Exception:
         return float(f_min), float(f_max)
 
@@ -503,6 +991,7 @@ def compute_leveling(
     meas_level_db_window = 0.0
     target_level_db_window = 0.0
     offset_method = "Unknown"
+    perceptual_error_rms = None
 
     manual_target_db = _to_float(getattr(cfg, "lvl_manual_db", 0.0), 0.0)
 
@@ -516,6 +1005,17 @@ def compute_leveling(
     is_manual = ("Manual" in mode)
     tilt_comp = bool(getattr(cfg, "lvl_tilt_comp", True))
     tilt_max_db_per_oct = _to_float(getattr(cfg, "lvl_tilt_max_db_per_oct", 2.0), 2.0)
+    # Default behavior stays unchanged unless these opt-in perceptual flags are enabled.
+    lvl_perceptual_weighting = _to_bool(getattr(cfg, "lvl_perceptual_weighting", False), False)
+    lvl_perceptual_strength = max(
+        0.0,
+        _to_float(getattr(cfg, "lvl_perceptual_strength", 0.12), 0.12),
+    )
+    lvl_perceptual_min_hz = _to_float(getattr(cfg, "lvl_perceptual_min_hz", 250.0), 250.0)
+    lvl_perceptual_max_hz = _to_float(getattr(cfg, "lvl_perceptual_max_hz", 4000.0), 4000.0)
+    lvl_perceptual_tie_only = _to_bool(getattr(cfg, "lvl_perceptual_tie_only", True), True)
+    if lvl_perceptual_min_hz <= 0.0 or lvl_perceptual_max_hz <= lvl_perceptual_min_hz:
+        lvl_perceptual_min_hz, lvl_perceptual_max_hz = 250.0, 4000.0
 
     try:
         setattr(cfg, "_lvl_last_error", None)
@@ -526,6 +1026,63 @@ def compute_leveling(
         setattr(cfg, "_lvl_tilt_slope_db_per_oct", None)
     except Exception:
         pass
+
+    try:
+        setattr(cfg, "_lvl_perceptual_enabled", bool(lvl_perceptual_weighting))
+    except Exception:
+        pass
+    try:
+        setattr(cfg, "_lvl_perceptual_strength", float(lvl_perceptual_strength))
+    except Exception:
+        pass
+    try:
+        setattr(
+            cfg,
+            "_lvl_perceptual_band_hz",
+            (float(lvl_perceptual_min_hz), float(lvl_perceptual_max_hz)),
+        )
+    except Exception:
+        pass
+    try:
+        setattr(cfg, "_lvl_perceptual_error_rms", None)
+    except Exception:
+        pass
+    try:
+        setattr(cfg, "_lvl_window_debug", None)
+    except Exception:
+        pass
+
+    def _store_window_debug(ss_min_value, ss_max_value, offset_method_value, perceptual_value):
+        try:
+            setattr(cfg, "_lvl_perceptual_error_rms", perceptual_value)
+        except Exception:
+            pass
+        try:
+            tilt_slope_value = getattr(cfg, "_lvl_tilt_slope_db_per_oct", None)
+        except Exception:
+            tilt_slope_value = None
+        try:
+            setattr(
+                cfg,
+                "_lvl_window_debug",
+                {
+                    "ss_min": float(ss_min_value),
+                    "ss_max": float(ss_max_value),
+                    "offset_method": str(offset_method_value),
+                    "tilt_slope_db_per_oct": tilt_slope_value,
+                    "perceptual_error_rms": perceptual_value,
+                    "perceptual_enabled": bool(lvl_perceptual_weighting),
+                },
+            )
+        except Exception:
+            pass
+
+    try:
+        target_arr = np.asarray(target_mags, dtype=float)
+        if target_arr.shape != np.asarray(freq_axis).shape:
+            target_arr = None
+    except Exception:
+        target_arr = None
 
     forced_window = getattr(cfg, "lvl_force_window", None)
     forced_offset = getattr(cfg, "lvl_force_offset_db", None)
@@ -599,6 +1156,22 @@ def compute_leveling(
                     calc_offset_db = 0.0
                     offset_method = "ForcedWindowNoMask"
 
+            # Debug-only perceptual metric; main offset selection remains unchanged.
+            if bool(lvl_perceptual_weighting) and np.count_nonzero(mask) >= 20 and target_arr is not None:
+                perceptual_error_rms = _perceptual_shape_score(
+                    freq_axis[mask],
+                    m_anal[mask],
+                    target_arr[mask],
+                    tilt_comp=bool(tilt_comp),
+                    tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+                    min_hz=float(lvl_perceptual_min_hz),
+                    max_hz=float(lvl_perceptual_max_hz),
+                )
+                if not np.isfinite(float(perceptual_error_rms)):
+                    perceptual_error_rms = None
+            else:
+                perceptual_error_rms = None
+
             if is_manual:
                 target_level_db = float(manual_target_db)
             else:
@@ -609,6 +1182,8 @@ def compute_leveling(
 
             if not np.isfinite(calc_offset_db):
                 calc_offset_db = 0.0
+
+            _store_window_debug(ss_min, ss_max, offset_method, perceptual_error_rms)
 
             return (
                 float(target_level_db),
@@ -635,10 +1210,27 @@ def compute_leveling(
             calc_offset_db = 0.0
             offset_method = "ManualNoMask"
 
+        if bool(lvl_perceptual_weighting) and np.count_nonzero(mask) >= 20 and target_arr is not None:
+            perceptual_error_rms = _perceptual_shape_score(
+                freq_axis[mask],
+                m_anal[mask],
+                target_arr[mask],
+                tilt_comp=bool(tilt_comp),
+                tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+                min_hz=float(lvl_perceptual_min_hz),
+                max_hz=float(lvl_perceptual_max_hz),
+            )
+            if not np.isfinite(float(perceptual_error_rms)):
+                perceptual_error_rms = None
+        else:
+            perceptual_error_rms = None
+
         target_level_db = float(manual_target_db)
 
         if not np.isfinite(calc_offset_db):
             calc_offset_db = 0.0
+
+        _store_window_debug(s_min, s_max, offset_method, perceptual_error_rms)
 
         return (
             float(target_level_db),
@@ -669,6 +1261,11 @@ def compute_leveling(
         hpf_freq=float(hpf_freq),
         tilt_comp=bool(tilt_comp),
         tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+        perceptual_weighting=bool(lvl_perceptual_weighting),
+        perceptual_strength=float(lvl_perceptual_strength),
+        perceptual_min_hz=float(lvl_perceptual_min_hz),
+        perceptual_max_hz=float(lvl_perceptual_max_hz),
+        perceptual_tie_only=bool(lvl_perceptual_tie_only),
     )
 
     ss_min = _to_float(ss_min, s_min)
@@ -716,6 +1313,22 @@ def compute_leveling(
         target_level_db_window = 0.0
         offset_method = "SmartScanNoMask"
 
+    # Final perceptual debug metric uses only the selected window and never replaces offset math.
+    if bool(lvl_perceptual_weighting) and np.count_nonzero(mask) >= 20 and target_arr is not None:
+        perceptual_error_rms = _perceptual_shape_score(
+            freq_axis[mask],
+            m_anal[mask],
+            target_arr[mask],
+            tilt_comp=bool(tilt_comp),
+            tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+            min_hz=float(lvl_perceptual_min_hz),
+            max_hz=float(lvl_perceptual_max_hz),
+        )
+        if not np.isfinite(float(perceptual_error_rms)):
+            perceptual_error_rms = None
+    else:
+        perceptual_error_rms = None
+
     if is_manual:
         target_level_db = float(manual_target_db)
     else:
@@ -727,6 +1340,7 @@ def compute_leveling(
     if not np.isfinite(calc_offset_db):
         calc_offset_db = 0.0
 
+    _store_window_debug(ss_min, ss_max, offset_method, perceptual_error_rms)
 
     return (
         float(target_level_db),
