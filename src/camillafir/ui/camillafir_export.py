@@ -332,6 +332,9 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
                     f"Trials: {int(auto_meta.get('trials_ok', 0))}/{int(auto_meta.get('trials_total', 0))} "
                     f"(search grid: {int(auto_meta.get('search_fs', 0))} Hz, {int(auto_meta.get('search_taps', 0))} taps)\n"
                 )
+                optimizer_backend = str(auto_meta.get("optimizer_backend", "") or "").strip()
+                if optimizer_backend:
+                    summary_content += f"Optimizer backend: {optimizer_backend}\n"
                 summary_content += _auto_search_space_summary(data) + "\n"
                 if tc:
                     tc_method = str(tc.get("selection_method", "fit_rms"))

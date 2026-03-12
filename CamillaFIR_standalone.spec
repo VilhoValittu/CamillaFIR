@@ -6,7 +6,7 @@
 # Entry point: src/camillafir/__main__.py
 # Data: i18n + plotly.js (UI assets)
 
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
@@ -28,6 +28,7 @@ hiddenimports = [
     "pywebio.session",
     "pywebio.io_ctrl",
 ]
+hiddenimports += collect_submodules("optuna")
 
 # Include PyWebIO static assets if present (kept minimal by package)
 datas += collect_data_files("pywebio")

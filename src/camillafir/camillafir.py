@@ -952,6 +952,7 @@ def process_run():
                     "enabled": True,
                     "auto_goal": str(sel_goal),
                     "selection_basis": str(sel_basis),
+                    "optimizer_backend": str(auto_res.get("optimizer_backend", "builtin") or "builtin"),
                     "trials_total": int(auto_res.get("trials_total", AUTO_MODE_TRIALS)),
                     "trials_ok": int(auto_res.get("trials_ok", 0)),
                     "trials_phase1_total": int(auto_res.get("trials_phase1_total", AUTO_MODE_TRIALS)),

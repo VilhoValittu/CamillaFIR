@@ -6487,6 +6487,7 @@ def _run_auto_mode_search_impl(
         "best_metrics": dict(search_state.best_metrics),
         "best_preset": dict(cached_best_preset or {}),
         "winner_explanation": dict(search_state.winner_explanation or {}),
+        "optimizer_backend": str(optimizer_backend or "builtin"),
         "best_auto_exc_freq_hz": float(best_auto_exc_hz) if np.isfinite(best_auto_exc_hz) else float("nan"),
         "auto_goal": str(goal),
         "selection_basis": str(rank_basis),

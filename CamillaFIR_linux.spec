@@ -6,7 +6,7 @@
 # Entry point: src/camillafir/__main__.py
 # Data: i18n + plotly.js (UI assets)
 
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
 
@@ -30,6 +30,7 @@ hiddenimports = [
     # Static ZIP dashboard generation uses Matplotlib Agg backend.
     "matplotlib.backends.backend_agg",
 ]
+hiddenimports += collect_submodules("optuna")
 
 # Include PyWebIO static assets if present (kept minimal by package)
 datas += collect_data_files("pywebio")
