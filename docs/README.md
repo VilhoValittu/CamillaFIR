@@ -9,7 +9,7 @@ CamillaFIR generates high-resolution FIR room-correction filters from REW export
 
 ## v3.6.0 Highlights - AUTO mode HPF control and reporting
 
-- **Optional HPF in AUTO mode:** HPF enable, frequency, and slope can now be set in automatic mode instead of being forced off.
+- **Optional HPF in AUTO mode:** HPF enable, frequency, and slope can now be set in automatic mode instead of being forced on.
 - **Safer HPF auto-fit:** response-fit HPF is only auto-applied when HPF is enabled; otherwise CamillaFIR reports the estimate as a suggestion.
 - **More stable stereo-linked leveling:** shared target-shift handling is now aligned between left and right channels.
 
