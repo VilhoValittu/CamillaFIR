@@ -4,6 +4,20 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.6.1] - 2026-03-12
+
+### Versioning & Export
+- Centralized program version resolution in `src/camillafir/version.py` so UI/build version text stays consistent across runtime, packaging, and export paths.
+- Added program version and automatic-mode winner rank to exported ZIP/YAML filenames and CamillaDSP YAML titles for easier result identification.
+- Included automatic-mode winner rank in the chosen-target/export metadata shown after the run.
+
+### DSP / Leveling
+- Reworked leveling window evaluation to use log-balanced medians and more robust window scoring, improving stable offset selection when narrow nulls or drifting sub-window offsets are present.
+- Added extra guards so `trans_width=None` no longer breaks the correction fade stage.
+
+### Config
+- Normalized persisted `config.json` filter type names back to canonical UI labels such as `Asymmetric`, fixing legacy/internal `asym` naming leakage in saved configs.
+
 ## [3.6.0] - 2026-03-12
 
 ### Automatic mode

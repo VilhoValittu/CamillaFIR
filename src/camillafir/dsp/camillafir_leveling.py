@@ -39,6 +39,213 @@ def _remember_leveling_error(cfg, stage: str, exc: Exception | None = None) -> N
     except Exception:
         return
 
+
+def _resample_log_axis(
+    freq_axis: np.ndarray,
+    *series: np.ndarray,
+    points_per_octave: float = 48.0,
+    min_points: int = 32,
+):
+    try:
+        f = np.asarray(freq_axis, dtype=float).reshape(-1)
+        if f.size == 0:
+            return f, tuple(np.asarray(s, dtype=float).reshape(-1)[:0] for s in series)
+
+        mask = np.isfinite(f) & (f > 0.0)
+        prepared = []
+        for s in series:
+            v = np.asarray(s, dtype=float).reshape(-1)
+            if v.size != f.size:
+                return f[:0], tuple(np.asarray(v[:0], dtype=float) for v in prepared)
+            prepared.append(v)
+            mask &= np.isfinite(v)
+
+        f = f[mask]
+        prepared = [v[mask] for v in prepared]
+        if f.size == 0:
+            return f, tuple(v for v in prepared)
+
+        order = np.argsort(f, kind="mergesort")
+        f = f[order]
+        prepared = [v[order] for v in prepared]
+
+        if f.size > 1:
+            uniq = np.concatenate(([True], np.diff(f) > 0.0))
+            f = f[uniq]
+            prepared = [v[uniq] for v in prepared]
+
+        if f.size < 2:
+            return f, tuple(prepared)
+
+        f_lo = float(f[0])
+        f_hi = float(f[-1])
+        if (not np.isfinite(f_lo)) or (not np.isfinite(f_hi)) or (f_hi <= f_lo):
+            return f, tuple(prepared)
+
+        octaves = float(np.log2(f_hi / f_lo))
+        if not np.isfinite(octaves) or octaves <= 0.0:
+            return f, tuple(prepared)
+
+        ppo = float(points_per_octave)
+        if (not np.isfinite(ppo)) or (ppo <= 0.0):
+            ppo = 48.0
+        n_points = max(int(np.ceil(octaves * ppo)) + 1, int(min_points))
+        f_log = np.geomspace(f_lo, f_hi, n_points)
+        prepared_log = [np.interp(f_log, f, v) for v in prepared]
+        return f_log, tuple(prepared_log)
+    except Exception:
+        f = np.asarray(freq_axis, dtype=float).reshape(-1)
+        prepared = tuple(np.asarray(s, dtype=float).reshape(-1) for s in series)
+        return f, prepared
+
+
+def _log_median(freq_axis: np.ndarray, values: np.ndarray) -> float:
+    try:
+        _f_log, (v_log,) = _resample_log_axis(freq_axis, values)
+        if v_log.size == 0:
+            return 0.0
+        return float(np.median(v_log))
+    except Exception:
+        try:
+            return float(np.median(values))
+        except Exception:
+            return 0.0
+
+
+def _lower_tail_robust_std_db(values: np.ndarray, *, clip_below_db: float = 6.0) -> float:
+    try:
+        y = np.asarray(values, dtype=float)
+        y = y[np.isfinite(y)]
+        if y.size == 0:
+            return 0.0
+
+        med = float(np.median(y))
+        clip_below_db = _to_float(clip_below_db, 6.0)
+        if clip_below_db > 0.0:
+            keep = y >= (med - float(clip_below_db))
+            if np.count_nonzero(keep) >= max(12, int(np.ceil(y.size * 0.4))):
+                y = y[keep]
+
+        center = float(np.median(y))
+        mad = float(np.median(np.abs(y - center)))
+        robust = 1.4826 * mad
+        if np.isfinite(robust) and robust > 1e-9:
+            return float(robust)
+        return float(np.std(y))
+    except Exception:
+        try:
+            return float(np.std(values))
+        except Exception:
+            return 0.0
+
+
+def _centered_rms(values: np.ndarray) -> float:
+    try:
+        y = np.asarray(values, dtype=float)
+        y = y[np.isfinite(y)]
+        if y.size == 0:
+            return float("inf")
+        y = y - float(np.median(y))
+        return float(np.sqrt(np.mean(y * y)))
+    except Exception:
+        return float("inf")
+
+
+def _window_offset_consistency_score(
+    freq_axis: np.ndarray,
+    measured_db: np.ndarray,
+    target_db: np.ndarray | None,
+    *,
+    tilt_comp: bool = True,
+    tilt_max_db_per_oct: float = 2.0,
+) -> tuple[float, float, float]:
+    """
+    Arvioi kuinka luotettava level-offset on ikkunan sisalla.
+
+    Palauttaa kolmen metriikan tuplen:
+    1) offset-spread (dB) eri alajaksojen valilla
+    2) shape RMS targetiin nahden (offset/tilt poistettuna)
+    3) absoluuttinen tilt (dB/okt)
+    """
+    try:
+        f = np.asarray(freq_axis, dtype=float).reshape(-1)
+        m = np.asarray(measured_db, dtype=float).reshape(-1)
+        if target_db is None:
+            t = np.zeros_like(m, dtype=float)
+        else:
+            t = np.asarray(target_db, dtype=float).reshape(-1)
+        if f.size < 24 or m.size != f.size or t.size != f.size:
+            return float("inf"), float("inf"), float("inf")
+
+        valid = np.isfinite(f) & np.isfinite(m) & np.isfinite(t) & (f > 0.0)
+        if int(np.count_nonzero(valid)) < 24:
+            return float("inf"), float("inf"), float("inf")
+
+        f = f[valid]
+        diff = np.asarray(m[valid] - t[valid], dtype=float)
+        if f.size < 24:
+            return float("inf"), float("inf"), float("inf")
+
+        if tilt_comp:
+            off_full, slope_full = _tilt_fit_offset_and_slope_db_per_oct(
+                f,
+                diff,
+                max_db_per_oct=float(tilt_max_db_per_oct),
+            )
+        else:
+            off_full = _log_median(f, diff)
+            slope_full = 0.0
+
+        x = np.log2(np.clip(f, 1e-9, None))
+        xc = x - float(np.median(x))
+        shape_resid = diff - float(off_full) - (float(slope_full) * xc)
+        shape_rms = _centered_rms(shape_resid)
+
+        parts: list[tuple[float, float]] = []
+        n = int(f.size)
+        half = n // 2
+        if half >= 12:
+            parts.append((0.0, 0.5))
+            parts.append((0.5, 1.0))
+
+        third = n // 3
+        if third >= 10:
+            parts.append((0.0, 2.0 / 3.0))
+            parts.append((1.0 / 3.0, 1.0))
+
+        parts.append((0.2, 0.8))
+
+        offsets = [float(off_full)]
+        for start_frac, end_frac in parts:
+            i0 = int(np.floor(float(start_frac) * n))
+            i1 = int(np.ceil(float(end_frac) * n))
+            i0 = max(0, min(i0, n - 1))
+            i1 = max(i0 + 1, min(i1, n))
+            if (i1 - i0) < 10:
+                continue
+            f_sub = f[i0:i1]
+            d_sub = diff[i0:i1]
+            if tilt_comp:
+                off_sub, _ = _tilt_fit_offset_and_slope_db_per_oct(
+                    f_sub,
+                    d_sub,
+                    max_db_per_oct=float(tilt_max_db_per_oct),
+                )
+            else:
+                off_sub = _log_median(f_sub, d_sub)
+            if np.isfinite(off_sub):
+                offsets.append(float(off_sub))
+
+        if len(offsets) >= 3:
+            offset_spread = float(np.std(np.asarray(offsets, dtype=float)))
+        else:
+            offset_spread = 0.0
+
+        return float(offset_spread), float(shape_rms), float(abs(slope_full))
+    except Exception:
+        return float("inf"), float("inf"), float("inf")
+
+
 def _tilt_aware_offset_db(
     freq_axis: np.ndarray,
     diff_db: np.ndarray,
@@ -47,15 +254,8 @@ def _tilt_aware_offset_db(
 ) -> float:
 
     try:
-        f = np.asarray(freq_axis, dtype=float)
-        y = np.asarray(diff_db, dtype=float)
+        f, (y,) = _resample_log_axis(freq_axis, diff_db)
         if f.size != y.size or f.size < 20:
-            return float(np.median(y)) if y.size else 0.0
-
-        mask = np.isfinite(f) & np.isfinite(y) & (f > 0.0)
-        f = f[mask]
-        y = y[mask]
-        if f.size < 20:
             return float(np.median(y)) if y.size else 0.0
 
         x = np.log2(f)
@@ -102,16 +302,8 @@ def _tilt_fit_offset_and_slope_db_per_oct(
 ):
     """Sisainen apufunktio: tilt fit offset and slope db per oct."""
     try:
-        f = np.asarray(freq_axis, dtype=float)
-        y = np.asarray(diff_db, dtype=float)
+        f, (y,) = _resample_log_axis(freq_axis, diff_db)
         if f.size != y.size or f.size < 20:
-            off = float(np.median(y)) if y.size else 0.0
-            return off, 0.0
-
-        mask = np.isfinite(f) & np.isfinite(y) & (f > 0.0)
-        f = f[mask]
-        y = y[mask]
-        if f.size < 20:
             off = float(np.median(y)) if y.size else 0.0
             return off, 0.0
 
@@ -159,6 +351,8 @@ def find_stable_level_window(
     f_max: float,
     window_size_octaves: float = 1.0,
     hpf_freq: float = 0.0,
+    tilt_comp: bool = True,
+    tilt_max_db_per_oct: float = 2.0,
 ) -> Tuple[float, float]:
 
     try:
@@ -188,6 +382,8 @@ def find_stable_level_window(
 
         best_score = float("inf")
         best_target_rms = float("inf")
+        best_offset_spread = float("inf")
+        best_tilt_abs = float("inf")
         res_min, res_max = float(safe_f_min), float(f_max)
         tie_eps_rel = 0.05
 
@@ -202,11 +398,18 @@ def find_stable_level_window(
             if n_w >= 20:
                 f_w = f_search[w_mask]
                 m_w = m_search[w_mask]
+                if t_search is not None:
+                    f_eval, (y, t_w) = _resample_log_axis(f_w, m_w, np.asarray(t_search[w_mask], dtype=float))
+                else:
+                    f_eval, (y,) = _resample_log_axis(f_w, m_w)
+                    t_w = None
+                if f_eval.size < 20 or y.size < 20:
+                    current_f *= step
+                    continue
 
-                x = np.log2(np.clip(f_w, 1e-9, None))
+                x = np.log2(np.clip(f_eval, 1e-9, None))
                 x0 = float(np.median(x))
                 xc = x - x0
-                y = np.asarray(m_w, dtype=float)
                 y_med = float(np.median(y))
                 denom = float(np.dot(xc, xc))
                 if denom > 1e-12:
@@ -215,30 +418,64 @@ def find_stable_level_window(
                 else:
                     residual = y
 
-                std = float(np.std(residual))
+                std = _lower_tail_robust_std_db(residual, clip_below_db=6.0)
 
                 weight = 1.0 + 0.05 * abs(np.log10(max(w_start, 1.0) / 1000.0))
                 score = std * weight
 
                 target_rms = float("inf")
+                offset_spread = float("inf")
+                tilt_abs = float("inf")
                 try:
-                    if t_search is not None:
-                        t_w = np.asarray(t_search[w_mask], dtype=float)
-                        if t_w.size == y.size:
-                            d = np.asarray(y, dtype=float) - t_w
-                            # Compare shape-match, not absolute level.
-                            d_center = d - float(np.median(d))
-                            target_rms = float(np.sqrt(np.mean(d_center * d_center)))
+                    if t_w is not None and t_w.size == y.size:
+                        offset_spread, target_rms, tilt_abs = _window_offset_consistency_score(
+                            f_eval,
+                            y,
+                            t_w,
+                            tilt_comp=bool(tilt_comp),
+                            tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+                        )
+                    else:
+                        offset_spread, _shape_rms, tilt_abs = _window_offset_consistency_score(
+                            f_eval,
+                            y,
+                            None,
+                            tilt_comp=bool(tilt_comp),
+                            tilt_max_db_per_oct=float(tilt_max_db_per_oct),
+                        )
                 except Exception:
                     target_rms = float("inf")
+                    offset_spread = float("inf")
+                    tilt_abs = float("inf")
+
+                if np.isfinite(offset_spread):
+                    score += 0.85 * float(offset_spread)
+                if np.isfinite(target_rms):
+                    score += 0.20 * float(target_rms)
+                if np.isfinite(tilt_abs):
+                    score += 0.08 * float(tilt_abs)
 
                 better_stability = score < (best_score * (1.0 - tie_eps_rel))
                 near_tie = (score <= (best_score * (1.0 + tie_eps_rel)))
-                better_tie_break = near_tie and (target_rms < best_target_rms)
+                better_tie_break = near_tie and (
+                    (offset_spread < best_offset_spread)
+                    or (
+                        offset_spread <= (best_offset_spread + 1e-6)
+                        and (
+                            (target_rms < best_target_rms)
+                            or (
+                                target_rms <= (best_target_rms + 1e-6)
+                                and tilt_abs < best_tilt_abs
+                            )
+                        )
+                    )
+                )
 
                 if better_stability or better_tie_break:
                     best_score = score
                     best_target_rms = target_rms
+                    best_offset_spread = offset_spread
+                    best_tilt_abs = tilt_abs
                     res_min, res_max = float(w_start), float(w_end)
 
             current_f *= step
@@ -321,8 +558,8 @@ def compute_leveling(
 
             mask = (freq_axis >= ss_min) & (freq_axis <= ss_max)
             if np.any(mask):
-                meas_level_db_window = float(np.median(m_anal[mask]))
-                target_level_db_window = float(np.median(target_mags[mask]))
+                meas_level_db_window = _log_median(freq_axis[mask], m_anal[mask])
+                target_level_db_window = _log_median(freq_axis[mask], target_mags[mask])
             else:
                 meas_level_db_window = 0.0
                 target_level_db_window = 0.0
@@ -356,7 +593,7 @@ def compute_leveling(
                             pass
                         offset_method = "ForcedWindowTiltMedian"
                     else:
-                        calc_offset_db = float(np.median(diff))
+                        calc_offset_db = _log_median(freq_axis[mask], diff)
                         offset_method = "ForcedWindowMedian"
                 else:
                     calc_offset_db = 0.0
@@ -390,9 +627,9 @@ def compute_leveling(
         mask = (freq_axis >= s_min) & (freq_axis <= s_max)
 
         if np.any(mask):
-            meas_level_db_window = float(np.median(m_anal[mask]))
-            target_level_db_window = float(np.median(target_mags[mask]))
-            calc_offset_db = float(np.median(m_anal[mask] - target_mags[mask]))
+            meas_level_db_window = _log_median(freq_axis[mask], m_anal[mask])
+            target_level_db_window = _log_median(freq_axis[mask], target_mags[mask])
+            calc_offset_db = _log_median(freq_axis[mask], (m_anal[mask] - target_mags[mask]))
             offset_method = "ManualMedian"
         else:
             calc_offset_db = 0.0
@@ -430,6 +667,8 @@ def compute_leveling(
         s_max,
         window_size_octaves=1.0,
         hpf_freq=float(hpf_freq),
+        tilt_comp=bool(tilt_comp),
+        tilt_max_db_per_oct=float(tilt_max_db_per_oct),
     )
 
     ss_min = _to_float(ss_min, s_min)
@@ -454,8 +693,8 @@ def compute_leveling(
         mask = (freq_axis >= ss_min) & (freq_axis <= ss_max)
 
     if np.any(mask):
-        meas_level_db_window = float(np.median(m_anal[mask]))
-        target_level_db_window = float(np.median(target_mags[mask]))
+        meas_level_db_window = _log_median(freq_axis[mask], m_anal[mask])
+        target_level_db_window = _log_median(freq_axis[mask], target_mags[mask])
         diff = (m_anal[mask] - target_mags[mask])
         if tilt_comp:
             calc_offset_db, tilt_slope = _tilt_fit_offset_and_slope_db_per_oct(
@@ -469,7 +708,7 @@ def compute_leveling(
                 pass
             offset_method = "SmartScanTiltMedian"
         else:
-            calc_offset_db = float(np.median(diff))
+            calc_offset_db = _log_median(freq_axis[mask], diff)
             offset_method = "SmartScanMedian"
     else:
         calc_offset_db = 0.0

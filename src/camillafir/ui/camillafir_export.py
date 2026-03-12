@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import zipfile
+import math
 from typing import Any
 
 import scipy.io.wavfile
@@ -92,6 +93,59 @@ def _runtime_versions_text() -> str:
         f"optuna {_module_runtime_version('optuna')}",
     ]
     return "Runtime: " + " | ".join(parts)
+
+
+def _export_version_tag(data: dict | None, *, program_version: str | None = None) -> str:
+    raw_version = program_version
+    if raw_version is None:
+        try:
+            raw_version = str((data or {}).get("program_version", "") or "").strip()
+        except Exception:
+            raw_version = ""
+    return str(program_version_token(raw_version, default="v0"))
+
+
+def _export_winner_rank_tag(data: dict | None) -> str:
+    rank_score = _export_winner_rank_score(data)
+    if not math.isfinite(rank_score):
+        return ""
+    return f"rank{rank_score:.3f}"
+
+
+def _export_winner_rank_score(data: dict | None) -> float:
+    try:
+        auto_used = bool((data or {}).get("camillafir_automatic_mode", False))
+    except Exception:
+        auto_used = False
+    if not auto_used:
+        return float("nan")
+
+    try:
+        auto_meta = dict((data or {}).get("_auto_mode_meta", {}) or {})
+        best_metrics = dict(auto_meta.get("best_metrics", {}) or {})
+    except Exception:
+        return float("nan")
+
+    rank_score = _safe_float(best_metrics.get("rank_score", float("nan")), float("nan"))
+    return float(rank_score)
+
+
+def _camilladsp_yaml_name(
+    *,
+    data: dict | None,
+    ft_short: str,
+    irw_tag: str,
+    fs_v: int | None = None,
+) -> str:
+    parts = ["camilladsp", str(ft_short)]
+    if fs_v is not None:
+        parts.append(f"{int(fs_v)}Hz")
+    parts.append(str(irw_tag))
+    parts.append(_export_version_tag(data))
+    rank_tag = _export_winner_rank_tag(data)
+    if rank_tag:
+        parts.append(rank_tag)
+    return "_".join(parts) + ".yml"
 
 def _collect_reflections(st: dict | None) -> list:
     st = st or {}
@@ -824,8 +878,13 @@ def _write_fs_outputs(
             master_gain_db=0.0,
             irw_tag=irw_tag,
             target_curve_tag=target_curve_tag,
+            program_version=str(data.get("program_version", "") or "").strip(),
+            winner_rank_score=_export_winner_rank_score(data),
         )
-        zf.writestr(f"camilladsp_{ft_short}_{fs_v}Hz_{irw_tag}.yml", yaml_content)
+        zf.writestr(
+            _camilladsp_yaml_name(data=data, ft_short=ft_short, irw_tag=irw_tag, fs_v=int(fs_v)),
+            yaml_content,
+        )
 
 
 def build_export_zip(
@@ -909,8 +968,13 @@ def build_export_zip(
                 master_gain_db=0.0,
                 irw_tag=irw_tag,
                 target_curve_tag=target_curve_tag,
+                program_version=str(data.get("program_version", "") or "").strip(),
+                winner_rank_score=_export_winner_rank_score(data),
             )
-            zf.writestr(f"camilladsp_{ft_short}_{irw_tag}.yml", yaml_content)
+            zf.writestr(
+                _camilladsp_yaml_name(data=data, ft_short=ft_short, irw_tag=irw_tag),
+                yaml_content,
+            )
 
     return zip_buffer, ui_dashboards, perf
 
@@ -918,6 +982,7 @@ def build_export_zip(
 def save_export_bundle(
     zip_buffer: io.BytesIO,
     *,
+    data: dict | None = None,
     ft_short: str,
     irw_tag: str,
     target_curve_tag: str,
@@ -925,10 +990,15 @@ def save_export_bundle(
     output_dir: str | None = None,
     program_version: str | None = None,
 ) -> tuple[str, str, str]:
-    ver_tag = program_version_token(program_version, default="v0")
+    ver_tag = _export_version_tag(data, program_version=program_version)
+    rank_tag = _export_winner_rank_tag(data)
     filters_dir = safe_filters_dir(output_dir, program_version=program_version)
     logger.info(f"Export filters directory: {filters_dir}")
-    fname = f"CamillaFIR_{ft_short}_{irw_tag}_{target_curve_tag}_{ver_tag}_{ts}.zip"
+    parts = ["CamillaFIR", str(ft_short), str(irw_tag), str(target_curve_tag), str(ver_tag)]
+    if rank_tag:
+        parts.append(rank_tag)
+    parts.append(str(ts))
+    fname = "_".join(parts) + ".zip"
     out_path = os.path.join(filters_dir, fname)
 
     try:

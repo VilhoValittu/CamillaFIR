@@ -165,6 +165,9 @@ _AUTO_CACHE_VERSION_MISMATCH_LOGGED = False
 AUTO_MODE_OPTUNA_STORAGE_FILENAME = "camillafir_auto_mode_optuna_journal.log"
 AUTO_MODE_OPTUNA_DUPLICATE_MAX_ATTEMPTS = 24
 AUTO_MODE_OPTUNA_USER_ATTR_OUT = "camillafir_out"
+AUTO_MODE_PRESET_TRANSIENT_KEYS = frozenset({
+    "program_version",
+})
 
 
 AUTO_MODE_PHASE1_PLATEAU_ROUNDS = 5
@@ -4667,6 +4670,8 @@ def _run_auto_mode_search_impl(
         best_metrics: dict | None = None,
     ) -> dict:
         out = dict(preset or {})
+        for key in AUTO_MODE_PRESET_TRANSIENT_KEYS:
+            out.pop(str(key), None)
         auto_exc_hz = _auto_safe_float(
             out.get(
                 "_auto_exc_freq_hz",

@@ -77,6 +77,7 @@ from pywebio.pin import pin # noqa: E402
 from .config.camillafir_config import save_config   # noqa: E402
 from .resources.i8n.camillafir_i18n import t    # noqa: E402
 from .ui.camillafir_housecurve import load_house_curve  # noqa: E402
+from .version import VERSION as APP_VERSION  # noqa: E402
 from camillafir.io.measurements_loader import load_measurements_lr  # noqa: E402
 from camillafir.io.measurements_txt import parse_measurements_from_path # noqa: E402
 from .ui.system_health import (# noqa: E402
@@ -150,7 +151,7 @@ try:
 except Exception:
     pass
 
-VERSION = "v.3.6.0"
+VERSION = APP_VERSION
 PROGRAM_NAME = "CamillaFIR"
 MAX_SAFE_BOOST = 8.0
 FORCE_SINGLE_PLOT_FS_HZ = 48000
@@ -509,6 +510,10 @@ def process_run():
         mixed_hz = _auto_safe_float(run_data.get("mixed_freq", float("nan")), float("nan"))
         mixed_txt = f"{mixed_hz:.1f} Hz" if np.isfinite(mixed_hz) else "n/a"
 
+        best_metrics = dict(run_data.get("best_metrics", {}) or {})
+        rank_score = _auto_safe_float(best_metrics.get("rank_score", float("nan")), float("nan"))
+        rank_txt = f", winner rank {rank_score:.3f}/100" if np.isfinite(rank_score) else ""
+
         detail_txt = ""
         if ft_short in ("Linear", "Asymmetric"):
             detail_txt = f", phase limit {phase_txt}"
@@ -517,7 +522,7 @@ def process_run():
 
         return (
             "Chosen (Automatic mode): "
-            f"target {target_name}, HPF {hpf_txt}, -6 dB {f6_txt}{detail_txt}"
+            f"target {target_name}, HPF {hpf_txt}, -6 dB {f6_txt}{detail_txt}{rank_txt}"
         )
 
     data = collect_ui_data(pin)
@@ -868,7 +873,7 @@ def process_run():
     ft_short = filter_type_short(data['filter_type'])
     l_st_f, r_st_f, l_imp_f, r_imp_f = None, None, None, None
     ui_dashboards = {}
-    logger.warning(
+    logger.info(
         f"EXPORT IR (UI): shape={data.get('ir_export_window_shape')}, "
         f"alpha={data.get('ir_export_tukey_alpha')}"
     )
@@ -939,6 +944,7 @@ def process_run():
                 best_metrics = dict(auto_res.get("best_metrics", {}) or {})
                 if best_preset:
                     data.update(best_preset)
+                    data["program_version"] = VERSION
                     measurements["ui_data"] = data
                 best_auto_exc_hz = _auto_safe_float(
                     auto_res.get(
@@ -1089,6 +1095,7 @@ def process_run():
 
     fname, saved_filters_dir, _save_msg = save_export_bundle(
         zip_buffer,
+        data=data,
         ft_short=ft_short,
         irw_tag=irw_tag,
         target_curve_tag=target_curve_tag,

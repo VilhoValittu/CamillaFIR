@@ -3,6 +3,20 @@ def _tc_segment(target_curve_tag: str | None) -> str:
     return f"_{tag}" if tag else ""
 
 
+def _title_suffix(program_version: str | None = None, winner_rank_score: float | None = None) -> str:
+    parts: list[str] = []
+    ver = str(program_version or "").strip()
+    if ver:
+        parts.append(ver)
+    try:
+        rank = float(winner_rank_score) if winner_rank_score is not None else float("nan")
+    except Exception:
+        rank = float("nan")
+    if rank == rank and abs(rank) != float("inf"):
+        parts.append(f"rank {rank:.3f}")
+    return "" if not parts else " " + " ".join(parts)
+
+
 def generate_raspberry_yaml(
     fs,
     ft_short,
@@ -10,10 +24,13 @@ def generate_raspberry_yaml(
     master_gain_db=0.0,
     irw_tag: str = "auto",
     target_curve_tag: str = "",
+    program_version: str | None = None,
+    winner_rank_score: float | None = None,
 ):
     import textwrap
 
     tc = _tc_segment(target_curve_tag)
+    title_meta = _title_suffix(program_version=program_version, winner_rank_score=winner_rank_score)
     l_wav = f'../coeffs/L_{ft_short}_$samplerate$Hz{tc}_{file_ts}_{irw_tag}.wav'
     r_wav = f'../coeffs/R_{ft_short}_$samplerate$Hz{tc}_{file_ts}_{irw_tag}.wav'
 
@@ -86,7 +103,7 @@ def generate_raspberry_yaml(
         names: [mastergain, ir_right]
 
     processors: null
-    title: {ft_short} Window {irw_tag}{tc} {file_ts}
+    title: {ft_short} Window {irw_tag}{tc} {file_ts} {title_meta}
     """).strip()
 
 

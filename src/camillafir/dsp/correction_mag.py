@@ -1873,9 +1873,25 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
     except Exception:
         pass
 
-    f_start = max(cfg.mag_c_max - cfg.trans_width, cfg.mag_c_min)
-    f_mask = (freq_axis > f_start) & (freq_axis <= cfg.mag_c_max)
-    fade_len = cfg.mag_c_max - f_start
+    try:
+        mag_c_min_fade = float(getattr(cfg, "mag_c_min", 0.0))
+    except Exception:
+        mag_c_min_fade = 0.0
+    try:
+        mag_c_max_fade = float(getattr(cfg, "mag_c_max", 0.0))
+    except Exception:
+        mag_c_max_fade = 0.0
+    tw_raw = getattr(cfg, "trans_width", 100.0)
+    try:
+        trans_width_fade = 100.0 if tw_raw is None else float(tw_raw)
+    except Exception:
+        trans_width_fade = 100.0
+    if not np.isfinite(trans_width_fade):
+        trans_width_fade = 100.0
+
+    f_start = max(mag_c_max_fade - trans_width_fade, mag_c_min_fade)
+    f_mask = (freq_axis > f_start) & (freq_axis <= mag_c_max_fade)
+    fade_len = mag_c_max_fade - f_start
     if np.any(f_mask) and fade_len > 0:
         x = (freq_axis[f_mask] - f_start) / fade_len
         w = _cosine_fade_out_01(x)
@@ -1884,7 +1900,7 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
             if isinstance(st, dict):
                 st["mag_transition_fade_applied"] = True
                 try:
-                    band = (freq_axis >= (cfg.mag_c_max - cfg.trans_width)) & (freq_axis <= cfg.mag_c_max)
+                    band = (freq_axis >= (mag_c_max_fade - trans_width_fade)) & (freq_axis <= mag_c_max_fade)
                     if np.count_nonzero(band) >= 8:
                         g = np.asarray(gain_db, dtype=float)
                         f = np.asarray(freq_axis, dtype=float)

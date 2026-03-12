@@ -766,7 +766,7 @@ def build_filter_config(
         hpf_settings=hpf,
         house_freqs=hc_f,
         house_mags=hc_m,
-        trans_width=data.get("trans_width", 100.0),
+        trans_width=float(_as_float_allow_zero(data.get("trans_width", None), 100.0)),
         bass_first_ai=bool(data.get("bass_first_ai", False)),
         bass_first_mode_max_hz=float(data.get("bass_first_mode_max_hz", 200.0) or 200.0),
         conf_pull_floor=float(_as_float_allow_zero(data.get("conf_pull_floor", None), 0.05)),

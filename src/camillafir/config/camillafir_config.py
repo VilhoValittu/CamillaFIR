@@ -4,6 +4,24 @@ import os
 CONFIG_FILE = "config.json"
 
 
+def _normalize_filter_type(value) -> str:
+    """Normalize persisted filter type names to the UI/program canonical labels."""
+    try:
+        ft = str(value or "").strip()
+    except Exception:
+        ft = ""
+    ft_l = ft.lower()
+    if "asym" in ft_l:
+        return "Asymmetric"
+    if "mixed" in ft_l:
+        return "Mixed"
+    if "minimum" in ft_l or "minphase" in ft_l or ft_l == "min":
+        return "Minimum"
+    if "linear" in ft_l:
+        return "Linear"
+    return "Asymmetric"
+
+
 def load_config() -> dict:
     default_conf = {
         "fmt": "WAV",
@@ -161,6 +179,13 @@ def load_config() -> dict:
             except Exception:
                 pass
 
+            try:
+                saved["filter_type"] = _normalize_filter_type(
+                    saved.get("filter_type", default_conf.get("filter_type"))
+                )
+            except Exception:
+                saved["filter_type"] = str(default_conf.get("filter_type", "Asymmetric"))
+
             default_conf.update(saved)
         except Exception:
             pass
@@ -195,6 +220,9 @@ def save_config(data: dict) -> None:
                 and v is not None
             )
         }
+        clean_data["filter_type"] = _normalize_filter_type(
+            clean_data.get("filter_type", "Asymmetric")
+        )
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(clean_data, f, indent=4)
     except Exception:

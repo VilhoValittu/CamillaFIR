@@ -26,6 +26,25 @@ def test_generate_filter_smoke(lr_measurements):
     assert "offset_db" in st
 
 
+def test_generate_filter_smoke_trans_width_none_does_not_crash(lr_measurements):
+    (f, m, p), _ = lr_measurements
+
+    cfg = FilterConfig(
+        fs=48000,
+        num_taps=32768,
+        filter_type_str="Linear Phase",
+        stereo_link=False,
+    )
+    cfg.trans_width = None
+
+    imp, st = generate_filter(f, m, p, cfg)
+
+    assert imp is not None
+    assert len(imp) > 0
+    assert isinstance(st, dict)
+    assert "filter_mags" in st
+
+
 def _sample_tdc_inputs():
     freq_axis = np.linspace(0.0, 500.0, 2001, dtype=float)
     target_mags = np.zeros_like(freq_axis, dtype=float)
