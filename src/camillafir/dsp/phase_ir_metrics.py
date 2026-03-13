@@ -11,18 +11,29 @@ _PRE_ENERGY_WINDOW_MS = 10.0
 _PRE_ENERGY_MIN_WINDOW_MS = 0.75
 
 
-def _metric_reason_text(reason_code: str | None) -> str:
+def format_pre_energy_status(reason_code: str | None, debug: bool = False) -> str:
     reason = str(reason_code or "").strip().lower()
     mapping = {
         "empty_ir": "n/a (empty IR)",
-        "not_applicable_phase_mode": "n/a (not meaningful for asymmetric/minimum-phase IR)",
-        "insufficient_pre_window": "n/a (insufficient pre-window energy)",
-        "insufficient_post_window": "n/a (insufficient post-window energy)",
-        "near_zero_total_energy": "n/a (IR energy too small for pre/post metric)",
-        "near_zero_post_energy": "n/a (insufficient post-window energy)",
-        "anchor_near_boundary": "n/a (anchor too close to boundary after alignment)",
-        "split_ir_structure": "n/a (IR structure does not support a stable pre/post split)",
+        "not_applicable_phase_mode": "n/a (not applicable for this phase mode)",
+        "insufficient_pre_window": "n/a (insufficient pre-window)",
+        "insufficient_post_window": "n/a (insufficient post-window)",
+        "near_zero_total_energy": "n/a (IR energy too low for this metric)",
+        "near_zero_post_energy": "n/a (insufficient post energy)",
+        "anchor_near_boundary": "n/a (not reliable after alignment)",
+        "split_ir_structure": "n/a (not meaningful for this IR shape)",
     }
+    if bool(debug):
+        mapping = {
+            "empty_ir": "n/a (empty IR)",
+            "not_applicable_phase_mode": "n/a (not applicable for this phase mode; asymmetric/minimum-phase IR)",
+            "insufficient_pre_window": "n/a (insufficient pre-window after alignment)",
+            "insufficient_post_window": "n/a (insufficient post-window after alignment)",
+            "near_zero_total_energy": "n/a (IR energy too low for pre/post metric)",
+            "near_zero_post_energy": "n/a (post energy too low for reliable ratio)",
+            "anchor_near_boundary": "n/a (anchor too close to boundary after alignment)",
+            "split_ir_structure": "n/a (IR structure does not support a stable pre/post split)",
+        }
     return str(mapping.get(reason, "n/a"))
 
 
@@ -33,7 +44,7 @@ def format_pre_energy_metric_note(
 ) -> str:
     if bool(valid):
         return "ok"
-    return _metric_reason_text(reason_code)
+    return format_pre_energy_status(reason_code, debug=False)
 
 
 def compute_pre_post_energy_metrics(

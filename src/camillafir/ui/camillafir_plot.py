@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 from datetime import datetime
-from ..dsp.phase_ir_metrics import format_pre_energy_metric_note
+from ..dsp.phase_ir_metrics import format_pre_energy_status
 from ..dsp.smoothing import apply_smoothing_std, psychoacoustic_smoothing
 from ..dsp.quality_metrics import _mag_error_db, _rms
 from ..dsp.target_match import target_match_from_stats as _target_match_from_stats_ssot
@@ -20,6 +20,37 @@ PHASE_SMOOTH_OCT = 0.1
 GD_SMOOTH_OCT    = 0.1
 GD_SMOOTH_SIGMA  = 0.1
 logger = logging.getLogger("CamillaFIR")
+
+
+def format_band_rt60_summary(bands, *, picks=None):
+    if not bands:
+        return "-"
+    pick_list = [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0] if picks is None else list(picks)
+    normalized = []
+    if isinstance(bands, dict):
+        items = list(bands.items())
+    else:
+        items = list(bands or [])
+    for key, value in items:
+        try:
+            freq = float(key)
+            rt60 = float(value)
+        except Exception:
+            continue
+        if np.isfinite(freq) and np.isfinite(rt60):
+            normalized.append((float(freq), float(rt60)))
+    if not normalized:
+        return "-"
+    seen = set()
+    out = []
+    for pick in pick_list:
+        freq, rt60 = min(normalized, key=lambda item: abs(float(item[0]) - float(pick)))
+        label = f"{float(freq):.0f}Hz"
+        if label in seen:
+            continue
+        seen.add(label)
+        out.append(f"{label}:{float(rt60):.2f}s")
+    return " | ".join(out) if out else "-"
 
 
 def _float_allow_zero(v, default: float) -> float:
@@ -280,6 +311,7 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
     settings = settings or {}
     l_stats = l_stats or {}
     r_stats = r_stats or {}
+    debug_report = bool(settings.get("quality_report_debug", False))
 
     def _safe_float(v):
         try:
@@ -386,13 +418,11 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
         except Exception:
             return None
 
-    def _pre_metric_info(st):
+    def _pre_metric_info(st, *, debug_report=False):
         valid = bool(st.get("pre_energy_metric_valid", not bool(st.get("pre_energy_metric_suspect", False))))
         suspect = bool(not valid)
         reason_code = str(st.get("pre_energy_metric_reason_code", "") or "").strip()
-        note = str(st.get("pre_energy_metric_note", "") or "").strip()
-        if suspect and not note:
-            note = format_pre_energy_metric_note(valid=False, reason_code=reason_code)
+        note = "ok" if not suspect else format_pre_energy_status(reason_code, debug=debug_report)
         return suspect, note
 
     def _active_axes(st):
@@ -571,7 +601,7 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
             pre_db = _pre_ringing_db(st)
             out["pre_ringing_db"] = pre_db
             out["ir_pre_post_ratio"] = _pre_post_ratio(st, pre_db)
-            out["pre_metric_suspect"], out["pre_metric_note"] = _pre_metric_info(st)
+            out["pre_metric_suspect"], out["pre_metric_note"] = _pre_metric_info(st, debug_report=debug_report)
             return out
 
         cmin = _safe_float(st.get("mag_c_min", settings.get("mag_c_min", 20.0)))
@@ -699,7 +729,7 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
         pre_db = _pre_ringing_db(st)
         out["pre_ringing_db"] = pre_db
         out["ir_pre_post_ratio"] = _pre_post_ratio(st, pre_db)
-        out["pre_metric_suspect"], out["pre_metric_note"] = _pre_metric_info(st)
+        out["pre_metric_suspect"], out["pre_metric_note"] = _pre_metric_info(st, debug_report=debug_report)
         try:
             dmax = _safe_float(out.get("bass_adaptive_delta_max_20_200", None))
             emax = _safe_float(out.get("pred_mag_error_max_20_200", None))
@@ -733,7 +763,6 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
 
     lq = _collect(l_stats)
     rq = _collect(r_stats)
-    debug_report = bool(settings.get("quality_report_debug", False)) # Raportin laatu-debug
     def _fmt_onoff(v):
         return "ON" if bool(v) else "OFF"
     def _fmt_src(v):
@@ -936,23 +965,7 @@ def format_summary_content(settings, l_stats, r_stats):
         return f"{side}: ON | BW min/mean/max = {float(mn):.4f}/{float(me):.4f}/{float(mx):.4f} oct"
 
     def _fmt_bands(bands):
-        if not bands:
-            return "-"
-        picks = [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0]
-        keys = [float(k) for k in bands.keys()]
-        out = []
-        for p in picks:
-            k = min(keys, key=lambda x: abs(x - p))
-            if k in bands:
-                val = bands[k]
-            elif str(k) in bands:
-                val = bands[str(k)]
-            else:
-                kk = min(bands.keys(), key=lambda x: abs(float(x) - p))
-                val = bands[kk]
-                k = float(kk)
-            out.append(f"{k:.0f}Hz:{float(val):.2f}s")
-        return " | ".join(out) if out else "-"
+        return format_band_rt60_summary(bands)
 
     def _worst_event(st: dict) -> str:
         refs = st.get("reflections", []) or []

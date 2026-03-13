@@ -5,6 +5,7 @@ import numpy as np
 from camillafir.dsp.phase_ir_metrics import (
     compute_pre_post_energy_metrics,
     format_pre_energy_metric_note,
+    format_pre_energy_status,
     _summarize_ir_metrics,
 )
 from camillafir.ui import camillafir_plot as plots
@@ -48,6 +49,11 @@ def test_compute_pre_post_energy_metrics_minimum_phase_returns_clean_na():
     assert format_pre_energy_metric_note(valid=False, reason_code=out["reason_code"]).startswith("n/a (")
 
 
+def test_pre_energy_status_formatter_uses_clean_normal_text_and_debug_detail():
+    assert format_pre_energy_status("anchor_near_boundary", debug=False) == "n/a (not reliable after alignment)"
+    assert format_pre_energy_status("anchor_near_boundary", debug=True) == "n/a (anchor too close to boundary after alignment)"
+
+
 def test_summarize_ir_metrics_anchor_near_boundary_avoids_bug_text():
     ir = np.zeros(256, dtype=float)
     ir[6] = 1.0
@@ -87,6 +93,8 @@ def test_dsp_quality_report_uses_clean_pre_energy_reason_text():
 
     block = "\n".join(plots.format_dsp_quality_report_block({}, st, st))
 
+    assert "Pre-ringing dB:          L n/a | R n/a" in block
+    assert "IR pre/post energy ratio: L n/a | R n/a" in block
     assert "Pre-energy metric sanity:" in block
-    assert "anchor too close to boundary after alignment" in block
+    assert "not reliable after alignment" in block
     assert "likely zeroed or split issue" not in block
