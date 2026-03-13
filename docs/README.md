@@ -65,7 +65,8 @@ the low-frequency region.
 
 ## Which filter type should I use?
 
-CamillaFIR automatic mode was tested with identical measurements and target curve using four filter types.
+CamillaFIR automatic mode was tested with identical measurements and target curve
+using four filter types.
 
 Selection is based on **Best rank score**, which evaluates:
 
@@ -75,41 +76,68 @@ Selection is based on **Best rank score**, which evaluates:
 - acoustic events
 - stereo consistency (L/R delta)
 
-### Results
+## Current automatic-mode snapshot (v3.6.1)
 
-| Filter type | Best rank score |
-|---|---|
-| **Asymmetric** | **90.46** |
-| Linear | 90.23 |
-| Mixed | 88.27 |
-| Minimum | 78.91 |
+The current README benchmark is based on four **v3.6.1** summary exports generated
+from the **same measurement set** and the same target curve (**Harman8**).
 
-- Based on real life measurements and version 3.5.0 results
+Common conditions in these comparison runs:
+
+- **AUTO** mode
+- **44.1 kHz / 65536 taps**
+- **HPF OFF**
+
+All four runs also reported the same dominant room issue:
+
+- **Left:** resonance at **113 Hz**
+- **Right:** resonance at **108 Hz**
+
+This is not meant to claim that one phase type always wins in every room.
+It shows what the current optimiser does on one real-world dataset with identical
+conditions.
+
+### Current v3.6.1 results
+
+| Rank | Filter type | Best rank score | Avg acoustic score | Run ranking score | Target match (L / R) | Notes |
+|---|---|---:|---:|---:|---|---|
+| 1 | **Asymmetric** | **91.264** | **84.582** | **69.505** | **94.4% / 95.1%** | Best overall balance in this test; top score with zero net boost penalty and very low ripple. |
+| 2 | **Minimum** | **91.226** | **84.581** | 68.980 | **94.4% / 95.1%** | Much stronger than older README numbers suggested; nearly tied with Asymmetric on this dataset. |
+| 3 | Linear | 91.114 | 84.432 | 69.350 | 94.1% / 94.8% | Still very competitive, but slightly lower target match and slightly higher ripple in this comparison. |
+| 4 | Mixed | 91.065 | 84.515 | 69.327 | 94.3% / 94.9% | Excellent GD-gradient control and explicit pre-ringing reporting, but slightly higher DSP penalty overall here. |
+
+- Based on one real-life **v3.6.1** measurement set with identical room data and target curve.
+- The score spread is small, which means all four phase modes can produce good results in the current automatic mode.
 
 ### Recommendation
 
-**Most users should choose: Asymmetric**
+**Most users should still choose: Asymmetric**
 
-It provides:
+It remains the best default because it delivered the highest overall score in
+this comparison while keeping the usual CamillaFIR strengths:
 
-- near-linear phase accuracy
+- near-linear correction behaviour
 - excellent target matching
-- minimal DSP artifacts
+- low ripple
 - practical latency
 
 ### Alternative choices
 
+**Minimum phase**
+
+A very strong option in the current version. On this dataset it was nearly tied
+with Asymmetric, so it should no longer be described as a distant last-place
+fallback.
+
 **Linear phase**
 
-Use if maximum phase linearity is required and latency is not an issue.
+Use if maximum linear-phase behaviour is required and latency is not an issue.
+It remains close to the top on the current benchmark.
 
 **Mixed phase**
 
-Good low-latency option with robust behaviour, but slightly higher DSP penalty.
-
-**Minimum phase**
-
-Generally not recommended for automatic mode results due to higher DSP penalties.
+Use when you specifically want mixed-phase behaviour with very smooth
+GD-gradient handling and visible pre-ringing metrics. It scored slightly lower
+overall here, but the difference is small.
 
 ## Why Asymmetric Filters Exist
 
@@ -181,8 +209,8 @@ Other filter types still have their place:
 |---|---|
 | **Asymmetric** | Best overall balance (recommended default) |
 | **Linear phase** | Maximum phase accuracy and latency is irrelevant |
-| **Mixed phase** | Low-latency real-time playback |
-| **Minimum phase** | Compatibility or special DSP workflows |
+| **Mixed phase** | Low-latency playback with very smooth GD-gradient behaviour |
+| **Minimum phase** | Low-latency causal correction; now also a competitive auto-mode option |
 
 ### In short
 
