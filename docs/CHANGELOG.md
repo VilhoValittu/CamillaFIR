@@ -4,6 +4,27 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.6.2] - 2026-03-13
+
+### DSP / Stereo link
+- Improved stereo-linked leveling with a shared window search and quieter-channel anchoring so linked offset selection stays more stable between channels.
+- Exposed stereo leveling window and anchor details in the UI for easier inspection of linked leveling behavior.
+
+### Plots
+- Updated delay-compensated filter plots to remove IR peak delay from displayed phase/group-delay views and improved the scaling of those plots for clearer reading.
+
+### Automatic mode / Reporting
+- Unified automatic-mode winner score reporting around a single official winner score so summary/export/UI no longer show conflicting `rank_score` values for the same run.
+- Added structured winner score component metadata for reporting while keeping the existing optimizer selection behavior unchanged.
+- Hardened pre-energy metric handling so unreliable cases remain explicitly unavailable instead of looking like internal calculation failures.
+- Polished summary wording for unavailable pre-energy metrics and cleaned up duplicate RT60 band entries in report output.
+
+### Tests
+- Extended stereo-linked leveling tests.
+- Added coverage for winner score reporting consistency, pre-energy summary formatting, and RT60 band deduplication in reports.
+
+---
+
 ## [3.6.1] - 2026-03-12
 
 ### Versioning & Export
