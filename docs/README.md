@@ -255,19 +255,6 @@ To reset the cache, delete the active cache file shown in Results (`Paths -> Aut
 
 The next automatic-mode run will recreate it automatically.
 
-## v3.4.0 Highlights - CamillaFIR automatic mode
-
-### NEW: CamillaFIR automatic mode (default)
-
-- Added a full automatic optimization mode directly into the main Mode selector:
-  - `CamillaFIR automatic mode`
-  - `Basic`
-  - `Advanced`
-- `CamillaFIR automatic mode` is now the default startup mode.
-- Automatic mode runs a multi-trial preset search (100 trials), scores each candidate, and applies the best-ranked preset before final export.
-- Ranking combines acoustic quality and DSP quality behavior (including penalty terms), not only a single metric.
-
-
 ### Automatic mode workflow (quick start)
 
 1. Select filter type.
@@ -276,20 +263,6 @@ The next automatic-mode run will recreate it automatically.
 4. Press `START`.
 
 CamillaFIR runs automatic preset search and exports filters using the best found settings.
-
-## Inspiration
-
-This program was inspired by OCA (https://www.youtube.com/@ocaudiophile).
-Originally, it was just a small phase-correction code snippet I wrote during the COVID-19 lockdowns.
-OCA's videos motivated me to develop the program further.
-
-## v3.3.0 Highlights
-
-- WAV input parsing is aligned to a deterministic TXT-baseline policy for more consistent WAV vs TXT behavior.
-- Added WAV-only ripple cleanup near the correction upper edge and final FIR post-polish.
-- Added stricter System Health checks for missing/incomplete L/R measurement sources.
-- Added run timing visibility in UI (read, DSP, ZIP/PNG, render, total).
-- Summary export now includes program version (`Version: v.3.3.0`).
 
 ---
 
@@ -471,6 +444,12 @@ Workarounds:
 - Use Chrome, Edge, or Firefox
 - Close extra Vivaldi tabs/extensions
 - Re-run process in another browser if needed
+
+## Inspiration
+
+This program was inspired by OCA (https://www.youtube.com/@ocaudiophile).
+Originally, it was just a small phase-correction code snippet I wrote during the COVID-19 lockdowns.
+OCA's videos motivated me to develop the program further.
 
 ## Documentation
 
