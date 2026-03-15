@@ -436,6 +436,46 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
                 optimizer_backend = str(auto_meta.get("optimizer_backend", "") or "").strip()
                 if optimizer_backend:
                     summary_content += f"Optimizer backend: {optimizer_backend}\n"
+                phase_limit_polish = dict(auto_meta.get("phase_limit_winner_polish", {}) or {})
+                if bool(phase_limit_polish.get("applicable", False)):
+                    polish_start = _safe_float(phase_limit_polish.get("start_phase_limit_hz", float("nan")), float("nan"))
+                    polish_final = _safe_float(phase_limit_polish.get("final_phase_limit_hz", float("nan")), float("nan"))
+                    polish_rank_before = _safe_float(phase_limit_polish.get("rank_before", float("nan")), float("nan"))
+                    polish_rank_after = _safe_float(phase_limit_polish.get("rank_after", float("nan")), float("nan"))
+                    polish_tested = [float(v) for v in list(phase_limit_polish.get("tested_phase_limits_hz", []) or [])]
+                    polish_tested_txt = ", ".join([f"{float(v):.1f}" for v in polish_tested]) if polish_tested else "n/a"
+                    if bool(phase_limit_polish.get("applied", False)):
+                        summary_content += (
+                            f"Phase-limit winner polish: applied "
+                            f"({float(polish_start):.1f} -> {float(polish_final):.1f} Hz, "
+                            f"rank {float(polish_rank_before):.3f} -> {float(polish_rank_after):.3f}, "
+                            f"tested [{polish_tested_txt}] Hz)\n"
+                        )
+                    else:
+                        summary_content += (
+                            f"Phase-limit winner polish: tested, no change "
+                            f"(kept {float(polish_final):.1f} Hz, tested [{polish_tested_txt}] Hz)\n"
+                        )
+                mag_c_min_polish = dict(auto_meta.get("mag_c_min_winner_polish", {}) or {})
+                if bool(mag_c_min_polish.get("applicable", False)):
+                    polish_start = _safe_float(mag_c_min_polish.get("start_mag_c_min_hz", float("nan")), float("nan"))
+                    polish_final = _safe_float(mag_c_min_polish.get("final_mag_c_min_hz", float("nan")), float("nan"))
+                    polish_rank_before = _safe_float(mag_c_min_polish.get("rank_before", float("nan")), float("nan"))
+                    polish_rank_after = _safe_float(mag_c_min_polish.get("rank_after", float("nan")), float("nan"))
+                    polish_tested = [float(v) for v in list(mag_c_min_polish.get("tested_mag_c_min_hz", []) or [])]
+                    polish_tested_txt = ", ".join([f"{float(v):.1f}" for v in polish_tested]) if polish_tested else "n/a"
+                    if bool(mag_c_min_polish.get("applied", False)):
+                        summary_content += (
+                            f"Mag-c-min winner polish: applied "
+                            f"({float(polish_start):.1f} -> {float(polish_final):.1f} Hz, "
+                            f"rank {float(polish_rank_before):.3f} -> {float(polish_rank_after):.3f}, "
+                            f"tested [{polish_tested_txt}] Hz)\n"
+                        )
+                    else:
+                        summary_content += (
+                            f"Mag-c-min winner polish: tested, no change "
+                            f"(kept {float(polish_final):.1f} Hz, tested [{polish_tested_txt}] Hz)\n"
+                        )
                 summary_content += _runtime_versions_text() + "\n"
                 summary_content += _auto_search_space_summary(data) + "\n"
                 if tc:
@@ -500,9 +540,8 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
                 elif seed_ok:
                     summary_content += f"Excursion protection (AUTO): seed {float(exc_seed_hz):.1f} Hz\n"
                 if bp:
+                    filter_type = str(bp.get("filter_type", data.get("filter_type", "")) or "").strip().lower()
                     keys = [
-                        "mixed_freq",
-                        "phase_limit",
                         "fdw_cycles",
                         "tdc_strength",
                         "tdc_max_reduction_db",
@@ -520,6 +559,10 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
                         "conf_pull_max_hz",
                         "low_bass_cut_hz",
                     ]
+                    if filter_type == "mixed":
+                        keys.insert(0, "mixed_freq")
+                    elif filter_type in ("linear", "asym", "asymmetric"):
+                        keys.insert(0, "phase_limit")
                     picked = [f"{k}={bp[k]}" for k in keys if k in bp]
                     if picked:
                         summary_content += "Best preset: " + ", ".join(picked) + "\n"

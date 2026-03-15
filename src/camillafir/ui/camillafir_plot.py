@@ -114,6 +114,79 @@ def _plotly_js_path() -> str | None:
     return p if os.path.isfile(p) else None
 
 
+def _confidence_bad_segments(
+    freqs,
+    conf_mask,
+    *,
+    thr: float = 0.35,
+    min_width_hz: float = 30.0,
+    min_gap_hz: float = 35.0,
+    max_segments: int = 24,
+):
+    try:
+        f = np.asarray(freqs, dtype=float)
+        c = np.asarray(conf_mask, dtype=float)
+    except Exception:
+        return []
+    if f.size != c.size or f.size < 8:
+        return []
+
+    valid = np.isfinite(f) & np.isfinite(c) & (f > 0.0)
+    if np.count_nonzero(valid) < 8:
+        return []
+    f = f[valid]
+    c = c[valid]
+    bad = np.asarray(c < float(thr), dtype=bool)
+    if not np.any(bad):
+        return []
+
+    raw = []
+    in_seg = False
+    seg_start = None
+    for fx, is_bad in zip(f, bad):
+        if is_bad and not in_seg:
+            in_seg = True
+            seg_start = float(fx)
+        elif (not is_bad) and in_seg:
+            in_seg = False
+            seg_end = float(fx)
+            if seg_start is not None and seg_end > seg_start:
+                raw.append((float(seg_start), float(seg_end)))
+    if in_seg and seg_start is not None and float(f[-1]) > float(seg_start):
+        raw.append((float(seg_start), float(f[-1])))
+
+    if not raw:
+        return []
+
+    merged = []
+    for start, end in raw:
+        if not merged:
+            merged.append([float(start), float(end)])
+            continue
+        prev = merged[-1]
+        if float(start - prev[1]) <= float(min_gap_hz):
+            prev[1] = max(float(prev[1]), float(end))
+        else:
+            merged.append([float(start), float(end)])
+
+    kept = [
+        (float(start), float(end))
+        for start, end in merged
+        if float(end - start) >= float(min_width_hz)
+    ]
+    if not kept:
+        kept = [(float(start), float(end)) for start, end in merged]
+
+    if len(kept) > int(max_segments):
+        kept = sorted(
+            kept,
+            key=lambda seg: (-(float(seg[1]) - float(seg[0])), float(seg[0])),
+        )[: int(max_segments)]
+        kept = sorted(kept, key=lambda seg: float(seg[0]))
+
+    return kept
+
+
 def smooth_complex(freqs, spec, oct_frac=1.0):
     """Kasittelee signaalia tai dataa: smooth complex."""
     real_parts = np.nan_to_num(np.real(spec))
@@ -1537,36 +1610,14 @@ def generate_prediction_plot(
             fig.add_trace(go.Scatter(x=c_freqs, y=conf_line, name='Confidence', 
                                      line=dict(color='magenta', width=1), opacity=0.3, hoverinfo='skip'), row=1, col=1)
             try:
-                thr = 0.35
-                bad = np.asarray(c_mask, dtype=float) < float(thr)
-                if bad.size == c_freqs.size and bad.size > 8:
-                    in_seg = False
-                    seg_start = None
-                    for fx, is_bad in zip(c_freqs, bad):
-                        if is_bad and not in_seg:
-                            in_seg = True
-                            seg_start = float(fx)
-                        elif (not is_bad) and in_seg:
-                            in_seg = False
-                            seg_end = float(fx)
-                            if seg_start is not None and seg_end > seg_start:
-                                fig.add_shape(
-                                    type="rect", xref="x", yref="y",
-                                    x0=seg_start, x1=seg_end,
-                                    y0=avg_t-40, y1=avg_t+60,
-                                    fillcolor="rgba(255, 0, 0, 0.06)", layer="below", line_width=0,
-                                    row=1, col=1
-                                )
-                    if in_seg and seg_start is not None:
-                        seg_end = float(c_freqs[-1])
-                        if seg_end > seg_start:
-                            fig.add_shape(
-                                type="rect", xref="x", yref="y",
-                                x0=seg_start, x1=seg_end,
-                                y0=avg_t-40, y1=avg_t+60,
-                                fillcolor="rgba(255, 0, 0, 0.06)", layer="below", line_width=0,
-                                row=1, col=1
-                            )
+                for seg_start, seg_end in _confidence_bad_segments(c_freqs, c_mask, thr=0.35):
+                    fig.add_shape(
+                        type="rect", xref="x", yref="y",
+                        x0=float(seg_start), x1=float(seg_end),
+                        y0=avg_t-40, y1=avg_t+60,
+                        fillcolor="rgba(255, 0, 0, 0.06)", layer="below", line_width=0,
+                        row=1, col=1
+                    )
             except Exception:
                 pass
 
@@ -1878,7 +1929,10 @@ def generate_prediction_plot(
             else:
                 js_mode = "cdn"
         else:
-            js_mode = True
+            if _plotly_js_path():
+                js_mode = "assets/plotly.min.js"
+            else:
+                js_mode = "cdn"
 
         config = {
             "responsive": True,

@@ -942,10 +942,11 @@ def process_run():
             )
             if isinstance(auto_res, dict):
                 best_preset = dict(auto_res.get("best_preset", {}) or {})
+                best_applied_preset = dict(auto_res.get("best_applied_preset", best_preset) or {})
                 best_metrics = attach_official_rank_score(auto_res.get("best_metrics", {}))
                 winner_meta = dict(auto_res.get("winner", {}) or {})
-                if best_preset:
-                    data.update(best_preset)
+                if best_applied_preset:
+                    data.update(best_applied_preset)
                     data["program_version"] = VERSION
                     measurements["ui_data"] = data
                 best_auto_exc_hz = _auto_safe_float(
@@ -1004,6 +1005,8 @@ def process_run():
                     ),
                     "best_metrics": best_metrics,
                     "best_preset": best_preset,
+                    "phase_limit_winner_polish": dict(auto_res.get("phase_limit_winner_polish", {}) or {}),
+                    "mag_c_min_winner_polish": dict(auto_res.get("mag_c_min_winner_polish", {}) or {}),
                     "winner": {
                         "rank_score_official": float(
                             _auto_safe_float(

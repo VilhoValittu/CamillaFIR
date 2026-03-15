@@ -211,6 +211,14 @@ AUTO_MODE_REFINE_TIEBREAK_RANK_EPS = 0.20
 AUTO_MODE_REFINE_TIEBREAK_RIPPLE_EPS = 0.02
 AUTO_MODE_REFINE_MODE_SOFT_K = 0.25
 AUTO_MODE_REFINE_MODE_BOOST_GUARD_MIN_RIPPLE_GAIN_DB = 0.06
+AUTO_MODE_RESIDUAL_TIEBREAK_ENABLED = True
+AUTO_MODE_RESIDUAL_TIEBREAK_TOP_K = 3
+AUTO_MODE_RESIDUAL_TIEBREAK_RANK_EPS = 0.35
+AUTO_MODE_PHASE_LIMIT_WINNER_POLISH_ENABLED = True
+AUTO_MODE_PHASE_LIMIT_WINNER_POLISH_OFFSETS_HZ = (-20.0, -10.0, 10.0, 20.0)
+AUTO_MODE_MAG_C_MIN_WINNER_POLISH_ENABLED = True
+AUTO_MODE_MAG_C_MIN_WINNER_POLISH_STEP_HZ = 1.0
+AUTO_MODE_MAG_C_MIN_WINNER_POLISH_MAX_DOWN_HZ = 15.0
 
 # --- Trial parallelism ---
 # 0 workers in UI/config => auto (cpu_count), 1 => sequential.
@@ -4732,12 +4740,13 @@ def _run_auto_mode_search_impl(
         *,
         include_response_arrays: bool,
         summarize: bool,
+        base_data_override: dict | None = None,
     ) -> tuple[object, dict, dict]:
         ready_preset = _cache_ready_preset(
             preset,
             best_metrics=exact_cached_metrics if isinstance(exact_cached_metrics, dict) else None,
         )
-        final_data = dict(cache_base_data or {})
+        final_data = dict(base_data_override or cache_base_data or {})
         final_data.update(dict(ready_preset or {}))
         if str(filter_key) in ("linear", "asym"):
             final_data["phase_limit"] = round(
@@ -4786,6 +4795,506 @@ def _run_auto_mode_search_impl(
             base_data=final_data,
         )
         return result, dict(metrics or {}), dict(final_data or {})
+
+    def _preset_signature_ignoring_residual(preset: dict | None) -> str:
+        base_preset = dict(preset or {})
+        base_preset.pop("enable_residual_pass", None)
+        try:
+            payload = json.dumps(
+                _auto_optuna_jsonable(_cache_ready_preset(base_preset)),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except Exception:
+            payload = str(sorted(base_preset.items()))
+        return str(payload)
+
+    def _maybe_apply_residual_tiebreak(
+        *,
+        best_preset: dict | None,
+        best_metrics: dict | None,
+        candidate_items: list[dict] | None,
+        base_data_ref: dict | None,
+        phase_label: str,
+    ) -> tuple[dict, dict, bool]:
+        cur_best_preset = dict(best_preset or {})
+        cur_best_metrics = dict(best_metrics or {})
+        if not bool(AUTO_MODE_RESIDUAL_TIEBREAK_ENABLED):
+            return cur_best_preset, cur_best_metrics, False
+        if not isinstance(cur_best_metrics, dict) or not cur_best_metrics:
+            return cur_best_preset, cur_best_metrics, False
+        if bool(cur_best_preset.get("enable_residual_pass", False)):
+            return cur_best_preset, cur_best_metrics, False
+
+        top_k = int(max(1, _auto_safe_int(AUTO_MODE_RESIDUAL_TIEBREAK_TOP_K, 3)))
+        rank_eps = float(max(0.0, _auto_safe_float(AUTO_MODE_RESIDUAL_TIEBREAK_RANK_EPS, 0.35)))
+        best_rank = _auto_safe_float(cur_best_metrics.get("rank_score"), float("nan"))
+        seen: set[str] = set()
+        shortlist: list[dict] = []
+
+        def _maybe_add_candidate(preset: dict | None, metrics: dict | None, *, source: str) -> None:
+            if len(shortlist) >= int(top_k):
+                return
+            p = _cache_ready_preset(
+                dict(preset or {}),
+                best_metrics=dict(metrics or {}),
+            )
+            if bool(p.get("enable_residual_pass", False)):
+                return
+            sig = _preset_signature_ignoring_residual(p)
+            if sig in seen:
+                return
+            rank_v = _auto_safe_float(dict(metrics or {}).get("rank_score"), float("nan"))
+            if np.isfinite(best_rank) and np.isfinite(rank_v):
+                if float(best_rank - rank_v) > float(rank_eps):
+                    return
+            seen.add(sig)
+            shortlist.append(
+                {
+                    "preset": dict(p or {}),
+                    "metrics": dict(metrics or {}),
+                    "source": str(source),
+                }
+            )
+
+        _maybe_add_candidate(cur_best_preset, cur_best_metrics, source="current_best")
+        ranked_items = sorted(
+            [dict(it or {}) for it in list(candidate_items or []) if isinstance(it, dict)],
+            key=lambda it: _auto_rank_key(dict(it.get("metrics", {}) or {})),
+        )
+        for item in ranked_items:
+            _maybe_add_candidate(
+                dict(item.get("preset", {}) or {}),
+                dict(item.get("metrics", {}) or {}),
+                source=str(item.get("phase", item.get("source", "candidate")) or "candidate"),
+            )
+
+        if not shortlist:
+            return cur_best_preset, cur_best_metrics, False
+
+        improved = False
+        logger.info(
+            "Automatic mode residual tie-break: testing %d finalist preset(s) within %.2f rank window.",
+            int(len(shortlist)),
+            float(rank_eps),
+        )
+        for idx, item in enumerate(shortlist, start=1):
+            cand_base = dict(item.get("preset", {}) or {})
+            cand_test = dict(cand_base or {})
+            cand_test["enable_residual_pass"] = True
+            try:
+                _residual_result, residual_metrics, _residual_data = _materialize_preset_result(
+                    cand_test,
+                    include_response_arrays=False,
+                    summarize=False,
+                    base_data_override=base_data_ref,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Automatic mode residual tie-break failed for finalist %d/%d (%s): %s",
+                    int(idx),
+                    int(len(shortlist)),
+                    str(item.get("source", "candidate")),
+                    f"{type(exc).__name__}: {exc}",
+                )
+                continue
+
+            residual_metrics = dict(residual_metrics or {})
+            better, reason = _auto_is_better_refine(
+                residual_metrics,
+                cur_best_metrics,
+                goal,
+                return_reason=True,
+            )
+            base_rank = _auto_safe_float(dict(item.get("metrics", {}) or {}).get("rank_score"), float("nan"))
+            new_rank = _auto_safe_float(residual_metrics.get("rank_score"), float("nan"))
+            logger.info(
+                "Automatic mode residual tie-break finalist %d/%d (%s): base_rank=%.3f -> residual_rank=%.3f, decision=%s (%s)",
+                int(idx),
+                int(len(shortlist)),
+                str(item.get("source", "candidate")),
+                float(base_rank) if np.isfinite(base_rank) else float("nan"),
+                float(new_rank) if np.isfinite(new_rank) else float("nan"),
+                "accept" if bool(better) else "reject",
+                str(reason),
+            )
+            if not bool(better):
+                continue
+
+            prev_best = dict(cur_best_metrics or {})
+            cur_best_metrics = dict(residual_metrics or {})
+            cur_best_preset = _cache_ready_preset(cand_test, best_metrics=cur_best_metrics)
+            improved = True
+            logger.info(
+                "Automatic mode residual tie-break accepted finalist %d/%d: rank %.3f -> %.3f, avg %.3f -> %.3f",
+                int(idx),
+                int(len(shortlist)),
+                _auto_safe_float(prev_best.get("rank_score"), 0.0),
+                _auto_safe_float(cur_best_metrics.get("rank_score"), 0.0),
+                _auto_safe_float(prev_best.get("avg_score"), 0.0),
+                _auto_safe_float(cur_best_metrics.get("avg_score"), 0.0),
+            )
+            if callable(status_cb):
+                status_cb(
+                    "CamillaFIR automatic mode: residual tie-break improved "
+                    f"(rank {_auto_safe_float(cur_best_metrics.get('rank_score'), 0.0):.3f}, "
+                    f"avg {_auto_safe_float(cur_best_metrics.get('avg_score'), 0.0):.3f})"
+                )
+
+        return cur_best_preset, cur_best_metrics, bool(improved)
+
+    def _maybe_apply_phase_limit_winner_polish(
+        *,
+        best_preset: dict | None,
+        best_metrics: dict | None,
+        base_data_ref: dict | None,
+        phase_label: str,
+    ) -> tuple[dict, dict, bool, dict]:
+        cur_best_preset = dict(best_preset or {})
+        cur_best_metrics = dict(best_metrics or {})
+        phase_limit_meta = {
+            "enabled": bool(AUTO_MODE_PHASE_LIMIT_WINNER_POLISH_ENABLED),
+            "applicable": bool(str(filter_key) in ("linear", "asym")),
+            "phase_label": str(phase_label),
+            "tested_phase_limits_hz": [],
+            "accepted_phase_limits_hz": [],
+            "tested_count": 0,
+            "applied": False,
+            "start_phase_limit_hz": float("nan"),
+            "final_phase_limit_hz": float("nan"),
+            "rank_before": float("nan"),
+            "rank_after": float("nan"),
+            "avg_before": float("nan"),
+            "avg_after": float("nan"),
+        }
+        if not bool(AUTO_MODE_PHASE_LIMIT_WINNER_POLISH_ENABLED):
+            return cur_best_preset, cur_best_metrics, False, phase_limit_meta
+        if str(filter_key) not in ("linear", "asym"):
+            return cur_best_preset, cur_best_metrics, False, phase_limit_meta
+        if not isinstance(cur_best_metrics, dict) or not cur_best_metrics:
+            return cur_best_preset, cur_best_metrics, False, phase_limit_meta
+
+        phase_limit_base = _auto_safe_float(
+            cur_best_preset.get(
+                "phase_limit",
+                dict(base_data_ref or {}).get("phase_limit", float("nan")),
+            ),
+            float("nan"),
+        )
+        if not np.isfinite(phase_limit_base):
+            return cur_best_preset, cur_best_metrics, False, phase_limit_meta
+        initial_phase_limit = round(
+            float(
+                _auto_phase_limit_clip(
+                    phase_limit_base,
+                    default=400.0,
+                )
+            ),
+            1,
+        )
+        phase_limit_meta["start_phase_limit_hz"] = float(initial_phase_limit)
+        phase_limit_meta["rank_before"] = float(_auto_safe_float(cur_best_metrics.get("rank_score"), float("nan")))
+        phase_limit_meta["avg_before"] = float(_auto_safe_float(cur_best_metrics.get("avg_score"), float("nan")))
+
+        tested_phase_limits: set[float] = {
+            float(initial_phase_limit)
+        }
+        candidate_phase_limits: list[float] = []
+        for delta_hz in AUTO_MODE_PHASE_LIMIT_WINNER_POLISH_OFFSETS_HZ:
+            cand_phase_limit = round(
+                float(
+                    _auto_phase_limit_clip(
+                        float(phase_limit_base) + float(_auto_safe_float(delta_hz, 0.0)),
+                        default=400.0,
+                    )
+                ),
+                1,
+            )
+            if cand_phase_limit in tested_phase_limits:
+                continue
+            tested_phase_limits.add(cand_phase_limit)
+            candidate_phase_limits.append(float(cand_phase_limit))
+
+        phase_limit_meta["tested_phase_limits_hz"] = [float(v) for v in candidate_phase_limits]
+        phase_limit_meta["tested_count"] = int(len(candidate_phase_limits))
+        if not candidate_phase_limits:
+            phase_limit_meta["final_phase_limit_hz"] = float(initial_phase_limit)
+            phase_limit_meta["rank_after"] = float(_auto_safe_float(cur_best_metrics.get("rank_score"), float("nan")))
+            phase_limit_meta["avg_after"] = float(_auto_safe_float(cur_best_metrics.get("avg_score"), float("nan")))
+            return cur_best_preset, cur_best_metrics, False, phase_limit_meta
+
+        improved = False
+        logger.info(
+            "Automatic mode %s: testing %d phase_limit winner-polish candidate(s) around %.1f Hz.",
+            str(phase_label),
+            int(len(candidate_phase_limits)),
+            float(initial_phase_limit),
+        )
+        for idx, cand_phase_limit in enumerate(candidate_phase_limits, start=1):
+            cand_test = dict(cur_best_preset or {})
+            cand_test["phase_limit"] = float(cand_phase_limit)
+            try:
+                _phase_result, phase_metrics, _phase_data = _materialize_preset_result(
+                    cand_test,
+                    include_response_arrays=False,
+                    summarize=False,
+                    base_data_override=base_data_ref,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Automatic mode %s failed for candidate %d/%d (phase_limit=%.1f Hz): %s",
+                    str(phase_label),
+                    int(idx),
+                    int(len(candidate_phase_limits)),
+                    float(cand_phase_limit),
+                    f"{type(exc).__name__}: {exc}",
+                )
+                continue
+
+            phase_metrics = dict(phase_metrics or {})
+            better, reason = _auto_is_better_refine(
+                phase_metrics,
+                cur_best_metrics,
+                goal,
+                return_reason=True,
+            )
+            logger.info(
+                "Automatic mode %s candidate %d/%d: phase_limit=%.1f Hz, rank=%.3f, decision=%s (%s)",
+                str(phase_label),
+                int(idx),
+                int(len(candidate_phase_limits)),
+                float(cand_phase_limit),
+                _auto_safe_float(phase_metrics.get("rank_score"), 0.0),
+                "accept" if bool(better) else "reject",
+                str(reason),
+            )
+            if not bool(better):
+                continue
+
+            prev_best = dict(cur_best_metrics or {})
+            cur_best_metrics = dict(phase_metrics or {})
+            cur_best_preset = _cache_ready_preset(cand_test, best_metrics=cur_best_metrics)
+            improved = True
+            cast_accepted = list(phase_limit_meta.get("accepted_phase_limits_hz", []) or [])
+            cast_accepted.append(float(cand_phase_limit))
+            phase_limit_meta["accepted_phase_limits_hz"] = cast_accepted
+            logger.info(
+                "Automatic mode %s accepted candidate %d/%d: phase_limit %.1f -> %.1f Hz, rank %.3f -> %.3f, avg %.3f -> %.3f",
+                str(phase_label),
+                int(idx),
+                int(len(candidate_phase_limits)),
+                float(phase_limit_base),
+                float(cand_phase_limit),
+                _auto_safe_float(prev_best.get("rank_score"), 0.0),
+                _auto_safe_float(cur_best_metrics.get("rank_score"), 0.0),
+                _auto_safe_float(prev_best.get("avg_score"), 0.0),
+                _auto_safe_float(cur_best_metrics.get("avg_score"), 0.0),
+            )
+            phase_limit_base = float(cand_phase_limit)
+            if callable(status_cb):
+                status_cb(
+                    "CamillaFIR automatic mode: phase_limit winner polish improved "
+                    f"(phase_limit {float(cand_phase_limit):.1f} Hz, "
+                    f"rank {_auto_safe_float(cur_best_metrics.get('rank_score'), 0.0):.3f}, "
+                    f"avg {_auto_safe_float(cur_best_metrics.get('avg_score'), 0.0):.3f})"
+                )
+
+        phase_limit_meta["applied"] = bool(improved)
+        phase_limit_meta["final_phase_limit_hz"] = float(
+            round(
+                float(
+                    _auto_phase_limit_clip(
+                        cur_best_preset.get(
+                            "phase_limit",
+                            dict(base_data_ref or {}).get("phase_limit", 400.0),
+                        ),
+                        default=400.0,
+                    )
+                ),
+                1,
+            )
+        )
+        phase_limit_meta["rank_after"] = float(_auto_safe_float(cur_best_metrics.get("rank_score"), float("nan")))
+        phase_limit_meta["avg_after"] = float(_auto_safe_float(cur_best_metrics.get("avg_score"), float("nan")))
+        return cur_best_preset, cur_best_metrics, bool(improved), dict(phase_limit_meta or {})
+
+    def _maybe_apply_mag_c_min_winner_polish(
+        *,
+        best_preset: dict | None,
+        best_metrics: dict | None,
+        base_data_ref: dict | None,
+        phase_label: str,
+    ) -> tuple[dict, dict, bool, dict]:
+        cur_best_preset = dict(best_preset or {})
+        cur_best_metrics = dict(best_metrics or {})
+        mag_c_min_meta = {
+            "enabled": bool(AUTO_MODE_MAG_C_MIN_WINNER_POLISH_ENABLED),
+            "applicable": True,
+            "phase_label": str(phase_label),
+            "tested_mag_c_min_hz": [],
+            "accepted_mag_c_min_hz": [],
+            "tested_count": 0,
+            "applied": False,
+            "start_mag_c_min_hz": float("nan"),
+            "final_mag_c_min_hz": float("nan"),
+            "rank_before": float("nan"),
+            "rank_after": float("nan"),
+            "avg_before": float("nan"),
+            "avg_after": float("nan"),
+        }
+        if not bool(AUTO_MODE_MAG_C_MIN_WINNER_POLISH_ENABLED):
+            return cur_best_preset, cur_best_metrics, False, mag_c_min_meta
+        if not isinstance(cur_best_metrics, dict) or not cur_best_metrics:
+            return cur_best_preset, cur_best_metrics, False, mag_c_min_meta
+
+        mag_c_min_base = _auto_safe_float(
+            cur_best_preset.get(
+                "mag_c_min",
+                dict(base_data_ref or {}).get("mag_c_min", float("nan")),
+            ),
+            float("nan"),
+        )
+        if not np.isfinite(mag_c_min_base):
+            return cur_best_preset, cur_best_metrics, False, mag_c_min_meta
+        initial_mag_c_min = round(
+            float(
+                np.clip(
+                    float(mag_c_min_base),
+                    float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
+                    float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
+                )
+            ),
+            1,
+        )
+        mag_c_min_meta["start_mag_c_min_hz"] = float(initial_mag_c_min)
+        mag_c_min_meta["rank_before"] = float(_auto_safe_float(cur_best_metrics.get("rank_score"), float("nan")))
+        mag_c_min_meta["avg_before"] = float(_auto_safe_float(cur_best_metrics.get("avg_score"), float("nan")))
+
+        step_hz = max(0.1, float(_auto_safe_float(AUTO_MODE_MAG_C_MIN_WINNER_POLISH_STEP_HZ, 1.0)))
+        max_down_hz = max(0.0, float(_auto_safe_float(AUTO_MODE_MAG_C_MIN_WINNER_POLISH_MAX_DOWN_HZ, 15.0)))
+        min_mag_c_min = max(float(AUTO_MODE_MAG_C_MIN_MIN_HZ), float(initial_mag_c_min - max_down_hz))
+        candidate_mag_c_mins: list[float] = []
+        tested_mag_c_mins: set[float] = {float(initial_mag_c_min)}
+        cand_value = float(initial_mag_c_min - step_hz)
+        while cand_value >= (float(min_mag_c_min) - 1e-9):
+            cand_mag_c_min = round(
+                float(
+                    np.clip(
+                        cand_value,
+                        float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
+                        float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
+                    )
+                ),
+                1,
+            )
+            if cand_mag_c_min not in tested_mag_c_mins:
+                tested_mag_c_mins.add(cand_mag_c_min)
+                candidate_mag_c_mins.append(float(cand_mag_c_min))
+            cand_value -= float(step_hz)
+
+        mag_c_min_meta["tested_mag_c_min_hz"] = [float(v) for v in candidate_mag_c_mins]
+        mag_c_min_meta["tested_count"] = int(len(candidate_mag_c_mins))
+        if not candidate_mag_c_mins:
+            mag_c_min_meta["final_mag_c_min_hz"] = float(initial_mag_c_min)
+            mag_c_min_meta["rank_after"] = float(_auto_safe_float(cur_best_metrics.get("rank_score"), float("nan")))
+            mag_c_min_meta["avg_after"] = float(_auto_safe_float(cur_best_metrics.get("avg_score"), float("nan")))
+            return cur_best_preset, cur_best_metrics, False, mag_c_min_meta
+
+        improved = False
+        logger.info(
+            "Automatic mode %s: testing %d mag_c_min winner-polish candidate(s) downward from %.1f Hz.",
+            str(phase_label),
+            int(len(candidate_mag_c_mins)),
+            float(initial_mag_c_min),
+        )
+        for idx, cand_mag_c_min in enumerate(candidate_mag_c_mins, start=1):
+            cand_test = dict(cur_best_preset or {})
+            cand_test["mag_c_min"] = float(cand_mag_c_min)
+            try:
+                _mag_c_min_result, mag_c_min_metrics, _mag_c_min_data = _materialize_preset_result(
+                    cand_test,
+                    include_response_arrays=False,
+                    summarize=False,
+                    base_data_override=base_data_ref,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Automatic mode %s failed for candidate %d/%d (mag_c_min=%.1f Hz): %s",
+                    str(phase_label),
+                    int(idx),
+                    int(len(candidate_mag_c_mins)),
+                    float(cand_mag_c_min),
+                    f"{type(exc).__name__}: {exc}",
+                )
+                continue
+
+            mag_c_min_metrics = dict(mag_c_min_metrics or {})
+            better, reason = _auto_is_better_refine(
+                mag_c_min_metrics,
+                cur_best_metrics,
+                goal,
+                return_reason=True,
+            )
+            logger.info(
+                "Automatic mode %s candidate %d/%d: mag_c_min=%.1f Hz, rank=%.3f, decision=%s (%s)",
+                str(phase_label),
+                int(idx),
+                int(len(candidate_mag_c_mins)),
+                float(cand_mag_c_min),
+                _auto_safe_float(mag_c_min_metrics.get("rank_score"), 0.0),
+                "accept" if bool(better) else "reject",
+                str(reason),
+            )
+            if not bool(better):
+                continue
+
+            prev_best = dict(cur_best_metrics or {})
+            cur_best_metrics = dict(mag_c_min_metrics or {})
+            cur_best_preset = _cache_ready_preset(cand_test, best_metrics=cur_best_metrics)
+            improved = True
+            accepted_vals = list(mag_c_min_meta.get("accepted_mag_c_min_hz", []) or [])
+            accepted_vals.append(float(cand_mag_c_min))
+            mag_c_min_meta["accepted_mag_c_min_hz"] = accepted_vals
+            logger.info(
+                "Automatic mode %s accepted candidate %d/%d: mag_c_min %.1f -> %.1f Hz, rank %.3f -> %.3f, avg %.3f -> %.3f",
+                str(phase_label),
+                int(idx),
+                int(len(candidate_mag_c_mins)),
+                float(mag_c_min_base),
+                float(cand_mag_c_min),
+                _auto_safe_float(prev_best.get("rank_score"), 0.0),
+                _auto_safe_float(cur_best_metrics.get("rank_score"), 0.0),
+                _auto_safe_float(prev_best.get("avg_score"), 0.0),
+                _auto_safe_float(cur_best_metrics.get("avg_score"), 0.0),
+            )
+            mag_c_min_base = float(cand_mag_c_min)
+            if callable(status_cb):
+                status_cb(
+                    "CamillaFIR automatic mode: mag_c_min winner polish improved "
+                    f"(mag_c_min {float(mag_c_min_base):.1f} -> {float(cand_mag_c_min):.1f} Hz, "
+                    f"rank {_auto_safe_float(prev_best.get('rank_score'), 0.0):.3f} -> {_auto_safe_float(cur_best_metrics.get('rank_score'), 0.0):.3f}, "
+                    f"avg {_auto_safe_float(prev_best.get('avg_score'), 0.0):.3f} -> {_auto_safe_float(cur_best_metrics.get('avg_score'), 0.0):.3f})"
+                )
+
+        mag_c_min_meta["applied"] = bool(improved)
+        mag_c_min_meta["final_mag_c_min_hz"] = float(
+            round(
+                float(
+                    np.clip(
+                        cur_best_preset.get(
+                            "mag_c_min",
+                            dict(base_data_ref or {}).get("mag_c_min", 25.0),
+                        ),
+                        float(AUTO_MODE_MAG_C_MIN_MIN_HZ),
+                        float(AUTO_MODE_MAG_C_MIN_MAX_HZ),
+                    )
+                ),
+                1,
+            )
+        )
+        mag_c_min_meta["rank_after"] = float(_auto_safe_float(cur_best_metrics.get("rank_score"), float("nan")))
+        mag_c_min_meta["avg_after"] = float(_auto_safe_float(cur_best_metrics.get("avg_score"), float("nan")))
+        return cur_best_preset, cur_best_metrics, bool(improved), dict(mag_c_min_meta or {})
 
     def _save_cached_best(
         *,
@@ -5279,13 +5788,46 @@ def _run_auto_mode_search_impl(
                     f"stop {str(stop_reason)})"
                 )
 
+            best_preset, best_metrics, residual_cache_improved = _maybe_apply_residual_tiebreak(
+                best_preset=best_preset,
+                best_metrics=best_metrics,
+                candidate_items=None,
+                base_data_ref=cache_base_data,
+                phase_label="cache residual tie-break",
+            )
+            if bool(residual_cache_improved):
+                improved_any = True
+                improved_count_total += 1
+
+            best_preset, best_metrics, phase_limit_cache_improved, phase_limit_cache_meta = _maybe_apply_phase_limit_winner_polish(
+                best_preset=best_preset,
+                best_metrics=best_metrics,
+                base_data_ref=cache_base_data,
+                phase_label="cache phase_limit winner polish",
+            )
+            if bool(phase_limit_cache_improved):
+                improved_any = True
+                improved_count_total += 1
+
+            best_preset, best_metrics, mag_c_min_cache_improved, mag_c_min_cache_meta = _maybe_apply_mag_c_min_winner_polish(
+                best_preset=best_preset,
+                best_metrics=best_metrics,
+                base_data_ref=cache_base_data,
+                phase_label="cache mag_c_min winner polish",
+            )
+            if bool(mag_c_min_cache_improved):
+                improved_any = True
+                improved_count_total += 1
+
             best_result, best_metrics_recalc, best_data = _materialize_preset_result(
                 best_preset,
                 include_response_arrays=True,
                 summarize=True,
+                base_data_override=cache_base_data,
             )
             best_metrics = attach_official_rank_score(best_metrics_recalc or best_metrics)
-            best_preset = dict(best_data or best_preset or {})
+            best_applied_preset = dict(best_data or best_preset or {})
+            best_cache_preset = _cache_ready_preset(best_preset, best_metrics=best_metrics)
             if bool(str(optimizer_backend) == "optuna" and optuna_mod is not None):
                 raw_scope = "phase1"
                 scope_eff = _auto_optuna_effective_scope(cache_base_data, raw_scope, phase_kind="phase1")
@@ -5318,11 +5860,11 @@ def _run_auto_mode_search_impl(
                     },
                 )
             cached_best_auto_exc_hz = _auto_safe_float(
-                best_data.get("_auto_exc_freq_hz", best_data.get("best_auto_exc_freq_hz", float("nan"))),
+                best_applied_preset.get("_auto_exc_freq_hz", best_applied_preset.get("best_auto_exc_freq_hz", float("nan"))),
                 float("nan"),
             )
             _save_cached_best(
-                best_preset=dict(best_preset or {}),
+                best_preset=dict(best_cache_preset or {}),
                 best_metrics=dict(best_metrics or {}),
                 best_hc_mode=str(cache_base_data.get("hc_mode", "") or "").strip() or None,
             )
@@ -5333,7 +5875,8 @@ def _run_auto_mode_search_impl(
             return {
                 "best_result": best_result,
                 "best_metrics": dict(best_metrics or {}),
-                "best_preset": dict(best_preset or {}),
+                "best_preset": dict(best_cache_preset or {}),
+                "best_applied_preset": dict(best_applied_preset or {}),
                 "winner": {
                     "rank_score_official": float(winner_rank) if np.isfinite(winner_rank) else float("nan"),
                     "rank_score_components": dict(winner_components),
@@ -5354,6 +5897,9 @@ def _run_auto_mode_search_impl(
                     if np.isfinite(cached_best_auto_exc_hz)
                     else float("nan")
                 ),
+                "phase_limit_winner_polish": dict(phase_limit_cache_meta or {}),
+                "mag_c_min_winner_polish": dict(mag_c_min_cache_meta or {}),
+                "optimizer_backend": str(optimizer_backend or "builtin"),
                 "auto_goal": str(goal),
                 "selection_basis": str(rank_basis),
                 "top": [],
@@ -6442,6 +6988,59 @@ def _run_auto_mode_search_impl(
     if search_state.best_metrics is None or not isinstance(search_state.best_preset, dict):
         return None
 
+    residual_candidate_items = list(search_state.phase2_pool or search_state.scored or [])
+    residual_best_preset, residual_best_metrics, residual_improved = _maybe_apply_residual_tiebreak(
+        best_preset=search_state.best_preset,
+        best_metrics=search_state.best_metrics,
+        candidate_items=residual_candidate_items,
+        base_data_ref=search_base_data,
+        phase_label="residual tie-break",
+    )
+    if bool(residual_improved):
+        prev_best = dict(search_state.best_metrics or {})
+        _auto_set_search_winner(
+            search_state,
+            residual_best_metrics,
+            residual_best_preset,
+            prev_metrics=prev_best,
+            phase_label="residual tie-break",
+            target_name=winner_target_name,
+        )
+
+    polished_best_preset, polished_best_metrics, phase_limit_polish_improved, phase_limit_polish_meta = _maybe_apply_phase_limit_winner_polish(
+        best_preset=search_state.best_preset,
+        best_metrics=search_state.best_metrics,
+        base_data_ref=search_base_data,
+        phase_label="phase_limit winner polish",
+    )
+    if bool(phase_limit_polish_improved):
+        prev_best = dict(search_state.best_metrics or {})
+        _auto_set_search_winner(
+            search_state,
+            polished_best_metrics,
+            polished_best_preset,
+            prev_metrics=prev_best,
+            phase_label="phase_limit winner polish",
+            target_name=winner_target_name,
+        )
+
+    mag_c_min_best_preset, mag_c_min_best_metrics, mag_c_min_polish_improved, mag_c_min_polish_meta = _maybe_apply_mag_c_min_winner_polish(
+        best_preset=search_state.best_preset,
+        best_metrics=search_state.best_metrics,
+        base_data_ref=search_base_data,
+        phase_label="mag_c_min winner polish",
+    )
+    if bool(mag_c_min_polish_improved):
+        prev_best = dict(search_state.best_metrics or {})
+        _auto_set_search_winner(
+            search_state,
+            mag_c_min_best_metrics,
+            mag_c_min_best_preset,
+            prev_metrics=prev_best,
+            phase_label="mag_c_min winner polish",
+            target_name=winner_target_name,
+        )
+
     # Materialize full output only once for the final winner.
     try:
         final_best_preset = dict(search_state.best_preset or {})
@@ -6503,7 +7102,7 @@ def _run_auto_mode_search_impl(
             ),
             base_data=final_data,
         )
-        search_state.best_preset = dict(final_best_preset or {})
+        search_state.best_preset = dict(final_data or final_best_preset or {})
     except Exception as exc:
         logger.warning(
             "Automatic mode final materialization failed: "
@@ -6534,8 +7133,9 @@ def _run_auto_mode_search_impl(
                 float(_auto_safe_float(cfg.exc_max_hz, AUTO_MODE_EXC_MAX_HZ)),
             )
         )
+    materialized_best_preset = dict(search_state.best_preset or {})
     cached_best_preset = _cache_ready_preset(
-        search_state.best_preset,
+        final_best_preset if 'final_best_preset' in locals() else materialized_best_preset,
         best_metrics=search_state.best_metrics,
     )
 
@@ -6562,11 +7162,14 @@ def _run_auto_mode_search_impl(
         "best_result": search_state.best_result,
         "best_metrics": dict(search_state.best_metrics),
         "best_preset": dict(cached_best_preset or {}),
+        "best_applied_preset": dict(materialized_best_preset or {}),
         "winner": {
             "rank_score_official": float(winner_rank) if np.isfinite(winner_rank) else float("nan"),
             "rank_score_components": dict(winner_components),
         },
         "winner_explanation": dict(search_state.winner_explanation or {}),
+        "phase_limit_winner_polish": dict(phase_limit_polish_meta or {}),
+        "mag_c_min_winner_polish": dict(mag_c_min_polish_meta or {}),
         "optimizer_backend": str(optimizer_backend or "builtin"),
         "best_auto_exc_freq_hz": float(best_auto_exc_hz) if np.isfinite(best_auto_exc_hz) else float("nan"),
         "auto_goal": str(goal),

@@ -635,9 +635,10 @@ def _render_results(
             best_preset = dict(auto_meta.get("best_preset", {}) or {})
             preset_rows = []
             if best_preset:
-                if "mixed_freq" in best_preset:
+                filter_type = str(best_preset.get("filter_type", data.get("filter_type", "")) or "").strip().lower()
+                if filter_type == "mixed" and "mixed_freq" in best_preset:
                     preset_rows.append(["Mixed split", f"{_af(best_preset.get('mixed_freq'), 0.0):.1f} Hz"])
-                if "phase_limit" in best_preset:
+                if filter_type in ("linear", "asym", "asymmetric") and "phase_limit" in best_preset:
                     preset_rows.append(["Phase limit", f"{_af(best_preset.get('phase_limit'), 0.0):.1f} Hz"])
                 if "fdw_cycles" in best_preset:
                     preset_rows.append(["FDW", f"{_af(best_preset.get('fdw_cycles'), 0.0):.1f}"])
