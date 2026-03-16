@@ -4,6 +4,25 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.6.3] - 2026-03-16
+
+### Automatic mode
+- Added a residual-pass tie-break stage for near-top finalists so AUTO mode can re-check close winners with residual processing before locking the final preset.
+- Added winner-polish passes for `phase_limit` and `mag_c_min`, allowing the selected winner to be fine-tuned after the main search when that improves the final ranking.
+- Separated cache-ready winner preset data from the fully applied/materialized preset so final UI/export metadata reflects the actual applied winning settings.
+
+### Reporting & UI
+- Added phase-limit and `mag_c_min` winner-polish details to the automatic-mode summary export.
+- Updated automatic-mode best-preset reporting in UI/export so `mixed_freq` is shown only for mixed filters and `phase_limit` only for linear/asymmetric filters.
+- Routed final AUTO results through the materialized applied preset so winner details stay consistent across results, summary export, and saved metadata.
+
+### Plots & Docs
+- Improved prediction-plot low-confidence highlighting by merging short gaps and filtering noisy confidence segments before drawing shaded regions.
+- Prefer the bundled local Plotly asset when available, falling back to CDN only when needed.
+- Cleaned up README structure by removing outdated version-highlight sections and moving the inspiration section to the documentation area.
+
+---
+
 ## [3.6.2] - 2026-03-13
 
 ### DSP / Stereo link

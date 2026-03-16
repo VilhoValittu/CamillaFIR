@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v3.6.2
+## v3.6.3
 
 Stable release - feedback welcome: camillafir.py@gmail.com
 
