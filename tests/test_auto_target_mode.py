@@ -312,7 +312,8 @@ def test_auto_mode_search_uses_exact_signature_cache_without_trials(monkeypatch)
     assert dict(result.get("best_preset", {}) or {}).get("_auto_exc_freq_hz") == 31.5
     assert dict(result.get("best_preset", {}) or {}).get("exc_freq") == 31.5
     assert result.get("best_auto_exc_freq_hz") == 31.5
-    assert int(trial_counter["n"]) == 21
+    assert int(dict(result.get("phase_limit_winner_polish", {}) or {}).get("tested_count", -1)) == 4
+    assert int(trial_counter["n"]) == 26
     assert bool(result.get("phase2_plateau_hit", False)) is True
 
 
