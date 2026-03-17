@@ -264,6 +264,49 @@ The next automatic-mode run will recreate it automatically.
 
 CamillaFIR runs automatic preset search and exports filters using the best found settings.
 
+### Automatic mode performance note (Windows)
+
+On some systems, **AUTO** mode can run noticeably faster on Linux than on
+Windows even when both are used on the same machine.
+
+This usually does **not** mean that the DSP result is different. The most common
+reason is that AUTO mode uses parallel trial evaluation while NumPy/BLAS may
+also use its own internal threading. On Windows, this combination can cause
+higher scheduling overhead than on Linux.
+
+Typical symptoms:
+
+- Manual or single-run processing feels normal, but **AUTO** mode is much slower on Windows
+- CPU usage looks very high, but total wall-clock time is still worse than on Linux
+- Reducing worker count improves speed instead of making it worse
+
+Recommended fixes on Windows:
+
+- Set `auto_mode_workers` to a small fixed value such as `2`, `3`, or `4` instead of `0`
+- Limit BLAS/OpenMP threading to `1` when testing AUTO mode speed
+- If you use the packaged Windows release, start it from PowerShell with:
+
+```powershell
+$env:CAMILLAFIR_AUTO_MODE_WORKERS="4"
+$env:OMP_NUM_THREADS="1"
+$env:OPENBLAS_NUM_THREADS="1"
+$env:MKL_NUM_THREADS="1"
+.\CamillaFIR.exe
+```
+
+- If `4` workers is not optimal on your machine, test `2` and `3` as well
+- If Microsoft Defender is heavily scanning `%APPDATA%` or the extracted release
+  folder, performance can also degrade during cache/journal file access
+
+If you prefer a persistent setting, edit `config.json` and set:
+
+```json
+"auto_mode_workers": 4
+```
+
+This issue mainly affects **AUTO** mode because it evaluates many candidate
+trials in parallel. It is usually much less visible in non-AUTO runs.
+
 ---
 
 ## Download
