@@ -333,7 +333,7 @@ def build_filter_section(*, t, get_val, fs_opts, taps_opts, on_mode_apply_defaul
     if bool(get_val("camillafir_automatic_mode", False)):
         mode_value = "AUTO"
     auto_goal_value = str(get_val("auto_goal", "balanced") or "balanced").strip().lower()
-    if auto_goal_value not in ("room-safe", "balanced", "low-ripple", "flat"):
+    if auto_goal_value not in ("room-safe", "balanced", "low-ripple", "flat", "subwoofers"):
         auto_goal_value = "balanced"
     auto_target_mode_value = str(get_val("auto_target_mode", "auto") or "auto").strip().lower()
     if auto_target_mode_value not in ("auto", "selected"):
@@ -370,6 +370,7 @@ def build_filter_section(*, t, get_val, fs_opts, taps_opts, on_mode_apply_defaul
             options=[
                 {"label": t("auto_goal_balanced"), "value": "balanced"},
                 {"label": t("auto_goal_room_safe"), "value": "room-safe"},
+                {"label": t("auto_goal_subwoofers"), "value": "subwoofers"},
                 {"label": t("auto_goal_low_ripple"), "value": "low-ripple"},
                 {"label": t("auto_goal_flat"), "value": "flat"},
             ],

@@ -7,6 +7,7 @@ from pywebio.pin import pin, pin_update, put_checkbox, put_input, put_select
 
 from ..resources.i8n.camillafir_i18n import t
 from ..io.auto_mode.filter_priors import get_auto_mode_filter_auto_defaults
+from ..io.auto_mode.shared import _auto_goal_forced_level_window
 from .camillafir_modes import MODE_DEFAULTS, MODE_CLAMPS
 from .camillafir_utils import scale_taps_with_fs
 from .system_health import (
@@ -1568,10 +1569,14 @@ def update_target_preview_ui(_=None):
             app_mode = str(_p("mode", "BASIC") or "BASIC").strip().upper()
         except Exception:
             app_mode = "BASIC"
+        auto_goal = str(_p("auto_goal", "balanced") or "balanced").strip().lower()
+        forced_level_window = _auto_goal_forced_level_window(auto_goal) if app_mode == "AUTO" else None
 
         lvl_mode = str(_p("lvl_mode", "Auto") or "Auto")
         if app_mode in ("BASIC", "AUTO"):
             lvl_mode = "Auto"
+        if forced_level_window is not None:
+            lvl_min, lvl_max = float(forced_level_window[0]), float(forced_level_window[1])
 
         is_manual_level = ("manual" in lvl_mode.strip().lower())
         lvl_mode_label = t("lvl_mode_manual") if is_manual_level else t("lvl_mode_auto")

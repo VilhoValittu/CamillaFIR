@@ -8,6 +8,7 @@ from .shared import (
     AUTO_MODE_GOAL_FLAT,
     AUTO_MODE_GOAL_LOW_RIPPLE,
     AUTO_MODE_GOAL_ROOM_SAFE,
+    AUTO_MODE_GOAL_SUBWOOFERS,
     AUTO_MODE_HYBRID_MIXED_FREQ_SOFT_DEN_HZ,
     AUTO_MODE_HYBRID_MIXED_FREQ_SOFT_MAX_HZ,
     AUTO_MODE_PHASE2_HARD_GATE_FALLBACK_TO_RANK,
@@ -468,6 +469,7 @@ def _auto_goal_uses_local_refine(goal: str | None) -> bool:
             AUTO_MODE_GOAL_DEFAULT,
             AUTO_MODE_GOAL_ROOM_SAFE,
             AUTO_MODE_GOAL_LOW_RIPPLE,
+            AUTO_MODE_GOAL_SUBWOOFERS,
         )
     )
 

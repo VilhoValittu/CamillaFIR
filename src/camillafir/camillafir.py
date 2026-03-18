@@ -20,7 +20,7 @@ def _auto_thread_budget() -> tuple[int, int]:
     except Exception:
         cores = 1
     cores = max(1, int(cores))
-    use = max(1, int((cores * 10) // 10))
+    use = max(1, int((cores * 1) // 2))
     return int(use), int(cores)
 
 
@@ -126,6 +126,7 @@ from .io.camillafir_automatic_mode import (  # noqa: E402
     _run_auto_mode_search,
 )
 from .io.auto_mode.rank_score import attach_official_rank_score, official_rank_score  # noqa: E402
+from .io.auto_mode.shared import _auto_goal_forced_level_window  # noqa: E402
 
 _CONSOLE_LOG_LEVEL = _resolve_console_log_level()
 
@@ -595,6 +596,10 @@ def process_run():
         auto_mode_preview = False
     auto_goal = _auto_goal_norm(str(data.get("auto_goal", "balanced") or "balanced"))
     data["auto_goal"] = str(auto_goal)
+    forced_level_window = _auto_goal_forced_level_window(auto_goal) if auto_mode_preview else None
+    if forced_level_window is not None:
+        data["lvl_min"] = float(forced_level_window[0])
+        data["lvl_max"] = float(forced_level_window[1])
     auto_basis = "preset_objective_score"
     logger.info(f"Automatic mode goal: {auto_goal} (basis: {auto_basis})")
     if auto_mode_preview:
@@ -606,6 +611,12 @@ def process_run():
             "CamillaFIR automatic mode: init "
             f"(goal {auto_goal}, basis {auto_basis}, filter {ft}, taps {int(taps_base)})"
         )
+        if forced_level_window is not None:
+            _status(
+                "CamillaFIR automatic mode: forced Smart Scan range "
+                f"{float(forced_level_window[0]):.0f}-{float(forced_level_window[1]):.0f} Hz "
+                f"(goal {auto_goal})"
+            )
     if auto_mode_preview:
         try:
             est_mag_c_min = _estimate_auto_mag_c_min_hz(
@@ -920,7 +931,7 @@ def process_run():
             )
             _f6_txt = f", -6 dB point {_f6_hz:.1f} Hz" if np.isfinite(_f6_hz) else ""
             _phase2_hint = int(AUTO_MODE_REFINE_TRIALS)
-            if bool(AUTO_MODE_LOCAL_REFINE_ENABLED) and str(auto_goal) in ("balanced", "room-safe", "low-ripple"):
+            if bool(AUTO_MODE_LOCAL_REFINE_ENABLED) and str(auto_goal) in ("balanced", "room-safe", "low-ripple", "subwoofers"):
                 _phase2_hint = int(AUTO_MODE_LOCAL_REFINE_TOP_K * AUTO_MODE_LOCAL_REFINE_TRIALS_PER_TOP)
             _status(
                 f"CamillaFIR automatic mode: preset search init "

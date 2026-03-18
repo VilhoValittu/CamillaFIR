@@ -273,6 +273,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
         _refresh_ir_window_controls()
 
     pin_on_change("hc_mode", onchange=lambda _: update_target_preview_ui())
+    pin_on_change("auto_goal", onchange=lambda _: update_target_preview_ui())
     pin_on_change("auto_target_mode", onchange=lambda _: (update_target_preview_ui(), update_auto_mode_controls_ui()))
     pin_on_change("hc_custom_file", onchange=lambda _: update_target_preview_ui())
     pin_on_change("mag_c_min", onchange=lambda _: update_target_preview_ui())

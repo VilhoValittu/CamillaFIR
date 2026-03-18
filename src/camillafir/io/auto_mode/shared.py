@@ -13,8 +13,11 @@ AUTO_MODE_GOAL_DEFAULT = "balanced"
 AUTO_MODE_GOAL_ROOM_SAFE = "room-safe"
 AUTO_MODE_GOAL_LOW_RIPPLE = "low-ripple"
 AUTO_MODE_GOAL_FLAT = "flat"
+AUTO_MODE_GOAL_SUBWOOFERS = "subwoofers"
 AUTO_MODE_GOAL_ACOUSTIC = "acoustic"
 AUTO_MODE_GOAL_HYBRID = "hybrid"
+AUTO_MODE_SUBWOOFERS_LEVEL_MIN_HZ = 20.0
+AUTO_MODE_SUBWOOFERS_LEVEL_MAX_HZ = 200.0
 AUTO_MODE_CACHE_ENABLED = True
 AUTO_MODE_CACHE_MAX_ITEMS = 64
 AUTO_MODE_CACHE_FILENAME = "camillafir_auto_mode_cache.json"
@@ -204,6 +207,8 @@ def _auto_goal_norm(goal: str | None) -> str:
         "roomsafe": AUTO_MODE_GOAL_ROOM_SAFE,
         "low_ripple": AUTO_MODE_GOAL_LOW_RIPPLE,
         "lowripple": AUTO_MODE_GOAL_LOW_RIPPLE,
+        "subwoofer": AUTO_MODE_GOAL_SUBWOOFERS,
+        "subs": AUTO_MODE_GOAL_SUBWOOFERS,
     }
     goal_norm = str(goal_aliases.get(goal_norm, goal_norm))
     if goal_norm not in (
@@ -211,9 +216,19 @@ def _auto_goal_norm(goal: str | None) -> str:
         AUTO_MODE_GOAL_ROOM_SAFE,
         AUTO_MODE_GOAL_LOW_RIPPLE,
         AUTO_MODE_GOAL_FLAT,
+        AUTO_MODE_GOAL_SUBWOOFERS,
     ):
         goal_norm = AUTO_MODE_GOAL_DEFAULT
     return str(goal_norm)
+
+
+def _auto_goal_forced_level_window(goal: str | None) -> tuple[float, float] | None:
+    if _auto_goal_norm(goal) == AUTO_MODE_GOAL_SUBWOOFERS:
+        return (
+            float(AUTO_MODE_SUBWOOFERS_LEVEL_MIN_HZ),
+            float(AUTO_MODE_SUBWOOFERS_LEVEL_MAX_HZ),
+        )
+    return None
 
 
 def _auto_builtin_target_name(hc_mode: str | None) -> str | None:
@@ -633,6 +648,7 @@ class AutoModeConfig:
             AUTO_MODE_GOAL_DEFAULT,
             AUTO_MODE_GOAL_ROOM_SAFE,
             AUTO_MODE_GOAL_LOW_RIPPLE,
+            AUTO_MODE_GOAL_SUBWOOFERS,
             AUTO_MODE_GOAL_ACOUSTIC,
             AUTO_MODE_GOAL_HYBRID,
         ):
