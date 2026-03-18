@@ -1,11 +1,17 @@
 # CamillaFIR by Vilho Valittu
 
-## v3.6.3
+## v3.6.4
 
 Stable release - feedback welcome: camillafir.py@gmail.com
 
 CamillaFIR generates high-resolution FIR room-correction filters from REW exports
 (magnitude + phase) and WAV/IR measurements.
+
+## v3.6.4 Highlights - AUTO mode subwoofers goal
+
+- **New AUTO goal: `subwoofers`:** optimized for subwoofer-focused runs while staying in the normal automatic-mode search flow.
+- **Forced Smart Scan range:** the `subwoofers` goal always uses a `20-200 Hz` leveling/search window.
+- **Consistent preview/reporting:** the forced bass-only Smart Scan window is now reflected more clearly in the UI/docs flow.
 
 ## v3.6.0 Highlights - AUTO mode HPF control and reporting
 
@@ -54,6 +60,7 @@ on the listening preference and room characteristics.
 | **room-safe** | Conservative variant that prioritises stability and avoids aggressive boosts in difficult room regions. | Difficult rooms where safety/stability is the priority. |
 | **low-ripple** | Minimises ripple around dominant room modes and keeps the LF region smoother. | Rooms with strong bass resonances. |
 | **balanced** | Compromise between flat response, ripple control and boost limits. | Recommended default for most rooms. |
+| **subwoofers** | Subwoofer-focused AUTO goal that forces Smart Scan to `20-200 Hz` while otherwise using the normal automatic-mode optimisation flow. | Sub-only measurements, bass integration work, low-frequency optimisation. |
 
 Automatic mode internally evaluates multiple candidate filters and selects
 the one that best matches the chosen goal while respecting stability and

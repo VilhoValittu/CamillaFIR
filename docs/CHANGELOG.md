@@ -4,6 +4,20 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.6.4] - 2026-03-18
+
+### Automatic mode
+- Added a new automatic-mode goal `subwoofers`.
+- `subwoofers` behaves like the other AUTO goals, but forces the Smart Scan leveling range to `20-200 Hz`.
+- Kept `subwoofers` in the local-refine flow so the new goal still uses the normal automatic-mode search/refinement path.
+
+### UI & Docs
+- Added the `subwoofers` goal into the automatic-mode goal selector.
+- Updated automatic-mode preview/reporting so the forced `20-200 Hz` Smart Scan window is reflected consistently.
+- Refreshed docs version references for the `3.6.4` release and documented the new `subwoofers` goal in the README.
+
+---
+
 ## [3.6.3] - 2026-03-16
 
 ### Automatic mode
