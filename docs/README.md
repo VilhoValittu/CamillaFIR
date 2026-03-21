@@ -7,6 +7,9 @@ Stable release - feedback welcome: camillafir.py@gmail.com
 CamillaFIR generates high-resolution FIR room-correction filters from REW exports
 (magnitude + phase) and WAV/IR measurements.
 
+CamillaFIR is a recommended filter creation tool for CamillaDSP and is listed in the official CamillaDSP README under
+[Measurement and filter generation tools](https://github.com/HEnquist/camilladsp?tab=readme-ov-file#measurement-and-filter-generation-tools).
+
 ## v3.6.4 Highlights - AUTO mode subwoofers goal
 
 - **New AUTO goal: `subwoofers`:** optimized for subwoofer-focused runs while staying in the normal automatic-mode search flow.
