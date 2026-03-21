@@ -69,6 +69,9 @@ CamillaFIR is an **automatic FIR filter maker / generator** that turns **REW mea
 - **Roon (Convolution)**
 - **Equalizer APO** (and similar convolution engines)
 
+CamillaFIR is listed in the official CamillaDSP README under
+[Measurement and filter generation tools](https://github.com/HEnquist/camilladsp?tab=readme-ov-file#measurement-and-filter-generation-tools), as a recommended tool for measurement-based filter generation.
+
 ---
 
 ## Technical Documentation & Guides
