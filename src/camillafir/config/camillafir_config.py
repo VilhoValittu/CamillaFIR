@@ -217,6 +217,7 @@ def save_config(data: dict) -> None:
             k: v for k, v in (data or {}).items()
             if (
                 not str(k).startswith("file_")
+                and str(k) != "auto_mode_compat_version"
                 and v is not None
             )
         }

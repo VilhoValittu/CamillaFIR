@@ -13,7 +13,7 @@ import numpy as np
 from ..dsp import camillafir_dsp as dsp
 from ..dsp.target_match import target_match_from_stats
 from ..engine import build_config, run_pipeline, summarize_run
-from ..app_paths import camillafir_data_dir
+from ..app_paths import camillafir_data_dir, program_version_token
 from ..ui import camillafir_plot as plots
 from ..ui.camillafir_housecurve import get_house_curve_by_name
 from .auto_mode.cache_signature import (
@@ -32,8 +32,8 @@ from .auto_mode.cache_signature import (
     _auto_cache_put_last_used_best,
     _auto_cache_put_target_for_measurements,
     _auto_cache_save,
+    _auto_compat_version,
     _auto_measurement_signature,
-    _auto_program_version,
     _auto_seed_from_signature,
     _auto_signature,
     get_auto_mode_cache_path,
@@ -106,6 +106,7 @@ from .auto_mode.target_preselection import (
 )
 from .auto_mode.shared import (
     AutoModeConfig,
+    AUTO_MODE_COMPAT_VERSION,
     AUTO_MODE_LOW_BASS_MAX_HZ,
     AUTO_MODE_LOW_BASS_MIN_HZ,
     AUTO_MODE_MAG_C_MIN_MAX_HZ,
@@ -172,6 +173,7 @@ AUTO_MODE_OPTUNA_DUPLICATE_MAX_ATTEMPTS = 24
 AUTO_MODE_OPTUNA_USER_ATTR_OUT = "camillafir_out"
 AUTO_MODE_PRESET_TRANSIENT_KEYS = frozenset({
     "program_version",
+    "auto_mode_compat_version",
 })
 
 
@@ -369,11 +371,20 @@ def _auto_optuna_module_ready(optuna_mod) -> bool:
     )
 
 
-def _auto_optuna_storage_path() -> str:
+def _auto_optuna_storage_filename(*, compat_version: str | None = None) -> str:
+    token = str(program_version_token(compat_version, default="") or "").strip()
+    if not token:
+        return str(AUTO_MODE_OPTUNA_STORAGE_FILENAME)
+    stem, ext = os.path.splitext(str(AUTO_MODE_OPTUNA_STORAGE_FILENAME))
+    return f"{stem}_{token}{ext or '.log'}"
+
+
+def _auto_optuna_storage_path(*, compat_version: str | None = None) -> str:
+    filename = _auto_optuna_storage_filename(compat_version=compat_version)
     preferred_base = os.fspath(camillafir_data_dir())
-    preferred_path = os.path.join(preferred_base, AUTO_MODE_OPTUNA_STORAGE_FILENAME)
+    preferred_path = os.path.join(preferred_base, filename)
     legacy_base = os.path.join(os.path.expanduser("~"), ".camillafir")
-    legacy_path = os.path.join(legacy_base, AUTO_MODE_OPTUNA_STORAGE_FILENAME)
+    legacy_path = os.path.join(legacy_base, filename)
 
     try:
         os.makedirs(preferred_base, exist_ok=True)
@@ -382,6 +393,38 @@ def _auto_optuna_storage_path() -> str:
             os.makedirs(legacy_base, exist_ok=True)
         except Exception:
             pass
+        return legacy_path
+    try:
+        source_candidates = [legacy_path]
+        if str(filename) != str(AUTO_MODE_OPTUNA_STORAGE_FILENAME):
+            source_candidates.extend(
+                (
+                    os.path.join(preferred_base, AUTO_MODE_OPTUNA_STORAGE_FILENAME),
+                    os.path.join(legacy_base, AUTO_MODE_OPTUNA_STORAGE_FILENAME),
+                )
+            )
+        source_path = next(
+            (
+                path
+                for path in source_candidates
+                if path != preferred_path and os.path.isfile(path)
+            ),
+            None,
+        )
+        if (not os.path.isfile(preferred_path)) and source_path:
+            try:
+                os.replace(source_path, preferred_path)
+            except Exception:
+                with open(source_path, "rb") as src_f:
+                    payload = src_f.read()
+                with open(preferred_path, "wb") as dst_f:
+                    dst_f.write(payload)
+                try:
+                    os.remove(source_path)
+                except Exception:
+                    pass
+            logger.info(f"Automatic mode Optuna storage migrated to: {preferred_path}")
+    except Exception:
         return legacy_path
     return preferred_path
 
@@ -401,7 +444,9 @@ def _auto_optuna_create_storage(optuna_mod, *, base_data: dict | None):
     storages_mod = getattr(optuna_mod, "storages", None)
     if storages_mod is None:
         return None
-    path = _auto_optuna_storage_path()
+    path = _auto_optuna_storage_path(
+        compat_version=_auto_compat_version(base_data),
+    )
     candidates = [
         (
             getattr(getattr(storages_mod, "journal", None), "JournalStorage", None),
@@ -2342,7 +2387,7 @@ def _auto_select_target_curve_with_trials(
 ) -> dict | None:
     goal = _auto_goal(base_data)
     cfg = AutoModeConfig.from_base_data(base_data)
-    program_version = _auto_program_version(base_data)
+    compat_version = _auto_compat_version(base_data)
     filter_key = _auto_filter_cache_key(base_data)
     rank_basis = _auto_goal_basis_text(goal)
     optimizer_backend = _auto_optimizer_backend(
@@ -2461,7 +2506,7 @@ def _auto_select_target_curve_with_trials(
             measurements,
             goal=goal,
             filter_key=filter_key,
-            program_version=program_version,
+            compat_version=compat_version,
         )
     except Exception:
         cached_target_entry = None
@@ -2504,7 +2549,7 @@ def _auto_select_target_curve_with_trials(
             cached_hc = _auto_cache_get_best_target(
                 sig_target,
                 filter_key=filter_key,
-                program_version=program_version,
+                compat_version=compat_version,
             )
             cached_hc = _auto_builtin_target_name(cached_hc)
             if _cache_target_valid(cached_hc):
@@ -2512,7 +2557,7 @@ def _auto_select_target_curve_with_trials(
                 cached_target_preset = _auto_cache_get_best(
                     sig_target,
                     filter_key=filter_key,
-                    program_version=program_version,
+                    compat_version=compat_version,
                 ) or {}
                 cached_target_source = "cache_signature"
                 logger.info(
@@ -4685,7 +4730,7 @@ def _run_auto_mode_search_impl(
     search_base_data = dict(base_data or {})
     cfg = AutoModeConfig.from_base_data(search_base_data)
     n_trials_eff = int(max(1, _auto_safe_int(n_trials, cfg.trials)))
-    program_version = _auto_program_version(search_base_data)
+    compat_version = _auto_compat_version(search_base_data)
     goal = _auto_goal(search_base_data)
     filter_key = _auto_filter_cache_key(search_base_data)
     rank_basis = _auto_goal_basis_text(goal)
@@ -5334,7 +5379,7 @@ def _run_auto_mode_search_impl(
             measurement_sig=measurement_sig,
             goal=goal,
             filter_key=filter_key,
-            program_version=program_version,
+            compat_version=compat_version,
         )
         _auto_cache_put_best(
             sig_target,
@@ -5344,7 +5389,7 @@ def _run_auto_mode_search_impl(
             measurement_sig=measurement_sig,
             goal=goal,
             filter_key=filter_key,
-            program_version=program_version,
+            compat_version=compat_version,
         )
         _auto_cache_put_target_for_measurements(
             measurements=measurements,
@@ -5353,7 +5398,7 @@ def _run_auto_mode_search_impl(
             best_metrics=dict(best_metrics or {}),
             goal=goal,
             filter_key=filter_key,
-            program_version=program_version,
+            compat_version=compat_version,
         )
         _auto_cache_put_last_used_best(
             best_preset=dict(best_preset or {}),
@@ -5362,7 +5407,7 @@ def _run_auto_mode_search_impl(
             measurement_sig=measurement_sig,
             goal=goal,
             filter_key=filter_key,
-            program_version=program_version,
+            compat_version=compat_version,
         )
 
     exact_cached_preset = {}
@@ -5394,12 +5439,12 @@ def _run_auto_mode_search_impl(
             exact_cached_entry = _auto_cache_get_entry(
                 exact_cache_sig,
                 filter_key=filter_key,
-                program_version=program_version,
+                compat_version=compat_version,
             ) or {}
             exact_cached_preset = _auto_cache_get_best(
                 exact_cache_sig,
                 filter_key=filter_key,
-                program_version=program_version,
+                compat_version=compat_version,
             ) or {}
             exact_cached_metrics = dict((exact_cached_entry or {}).get("best_metrics", {}) or {})
         except Exception:
@@ -5956,7 +6001,7 @@ def _run_auto_mode_search_impl(
             cached = _auto_cache_get_best(
                 sig,
                 filter_key=filter_key,
-                program_version=program_version,
+                compat_version=compat_version,
             )
             cache_seed_source = "signature"
             if not (isinstance(cached, dict) and cached):
@@ -5964,7 +6009,7 @@ def _run_auto_mode_search_impl(
                 cached_entry = _auto_cache_get_last_used_best(
                     goal=goal,
                     filter_key=filter_key,
-                    program_version=program_version,
+                    compat_version=compat_version,
                 )
                 cached = dict((cached_entry or {}).get("best_preset", {}) or {})
             if isinstance(cached, dict) and cached:

@@ -6,12 +6,13 @@ import time
 
 import numpy as np
 
-from ...app_paths import camillafir_data_dir
+from ...app_paths import camillafir_data_dir, program_version_token
 from .shared import (
     AUTO_MODE_CACHE_ENABLED,
     AUTO_MODE_CACHE_FILTER_KEYS,
     AUTO_MODE_CACHE_FILENAME,
     AUTO_MODE_CACHE_MAX_ITEMS,
+    AUTO_MODE_COMPAT_VERSION,
     AUTO_MODE_GOAL_DEFAULT,
     _auto_builtin_target_name,
     _auto_filter_cache_key,
@@ -22,11 +23,25 @@ from .shared import (
     logger,
 )
 
-def _auto_cache_path() -> str:
+def _auto_cache_compat_token(compat_version: str | None = None) -> str:
+    token = str(program_version_token(compat_version, default="") or "").strip()
+    return str(token)
+
+
+def _auto_cache_filename(*, compat_version: str | None = None) -> str:
+    token = _auto_cache_compat_token(compat_version)
+    if not token:
+        return str(AUTO_MODE_CACHE_FILENAME)
+    stem, ext = os.path.splitext(str(AUTO_MODE_CACHE_FILENAME))
+    return f"{stem}_{token}{ext or '.json'}"
+
+
+def _auto_cache_path(*, compat_version: str | None = None) -> str:
+    filename = _auto_cache_filename(compat_version=compat_version)
     preferred_base = os.fspath(camillafir_data_dir())
-    preferred_path = os.path.join(preferred_base, AUTO_MODE_CACHE_FILENAME)
+    preferred_path = os.path.join(preferred_base, filename)
     legacy_base = os.path.join(os.path.expanduser("~"), ".camillafir")
-    legacy_path = os.path.join(legacy_base, AUTO_MODE_CACHE_FILENAME)
+    legacy_path = os.path.join(legacy_base, filename)
 
     try:
         os.makedirs(preferred_base, exist_ok=True)
@@ -38,11 +53,34 @@ def _auto_cache_path() -> str:
         return legacy_path
 
     try:
-        if (not os.path.isfile(preferred_path)) and os.path.isfile(legacy_path):
-            with open(legacy_path, "rb") as src_f:
-                payload = src_f.read()
-            with open(preferred_path, "wb") as dst_f:
-                dst_f.write(payload)
+        source_candidates = [legacy_path]
+        if str(filename) != str(AUTO_MODE_CACHE_FILENAME):
+            source_candidates.extend(
+                (
+                    os.path.join(preferred_base, AUTO_MODE_CACHE_FILENAME),
+                    os.path.join(legacy_base, AUTO_MODE_CACHE_FILENAME),
+                )
+            )
+        source_path = next(
+            (
+                path
+                for path in source_candidates
+                if path != preferred_path and os.path.isfile(path)
+            ),
+            None,
+        )
+        if (not os.path.isfile(preferred_path)) and source_path:
+            try:
+                os.replace(source_path, preferred_path)
+            except Exception:
+                with open(source_path, "rb") as src_f:
+                    payload = src_f.read()
+                with open(preferred_path, "wb") as dst_f:
+                    dst_f.write(payload)
+                try:
+                    os.remove(source_path)
+                except Exception:
+                    pass
             logger.info(f"Automatic mode cache migrated to: {preferred_path}")
     except Exception:
         return legacy_path
@@ -50,15 +88,19 @@ def _auto_cache_path() -> str:
     return preferred_path
 
 
-def get_auto_mode_cache_path() -> str:
-    return _auto_cache_path()
+def get_auto_mode_cache_path(*, compat_version: str | None = None) -> str:
+    return _auto_cache_path(compat_version=compat_version)
 
 
-def _auto_program_version(base_data: dict | None) -> str:
+def _auto_compat_version(base_data: dict | None) -> str:
     try:
-        return str((base_data or {}).get("program_version", "") or "").strip()
+        raw = str(
+            (base_data or {}).get("auto_mode_compat_version", AUTO_MODE_COMPAT_VERSION)
+            or AUTO_MODE_COMPAT_VERSION
+        ).strip()
     except Exception:
-        return ""
+        raw = str(AUTO_MODE_COMPAT_VERSION)
+    return str(raw or AUTO_MODE_COMPAT_VERSION)
 
 
 def _auto_cache_bucket_template() -> dict:
@@ -69,16 +111,16 @@ def _auto_cache_bucket_template() -> dict:
     }
 
 
-def _auto_cache_empty(*, program_version: str | None = None) -> dict:
+def _auto_cache_empty(*, compat_version: str | None = None) -> dict:
     out = {
         "v": 3,
         "items": {},
         "target_by_measurement": {},
         "by_filter": {},
     }
-    ver = str(program_version or "").strip()
+    ver = str(compat_version or AUTO_MODE_COMPAT_VERSION).strip()
     if ver:
-        out["program_version"] = str(ver)
+        out["auto_mode_compat_version"] = str(ver)
     for k in AUTO_MODE_CACHE_FILTER_KEYS:
         out["by_filter"][str(k)] = _auto_cache_bucket_template()
     return out
@@ -214,26 +256,29 @@ def _auto_apply_seed(seed: int) -> None:
         pass
 
 
-def _auto_cache_load(*, program_version: str | None = None) -> dict:
-    path = _auto_cache_path()
+def _auto_cache_load(*, compat_version: str | None = None) -> dict:
+    path = _auto_cache_path(compat_version=compat_version)
     try:
         with open(path, "r", encoding="utf-8") as f:
             obj = json.load(f)
         if not isinstance(obj, dict):
             obj = {}
-        expected_ver = str(program_version or "").strip()
-        if expected_ver and not str(obj.get("program_version", "") or "").strip():
-            obj["program_version"] = str(expected_ver)
+        expected_ver = str(compat_version or AUTO_MODE_COMPAT_VERSION).strip()
+        actual_ver = str(obj.get("auto_mode_compat_version", "") or "").strip()
+        if expected_ver and actual_ver and actual_ver != expected_ver:
+            return _auto_cache_empty(compat_version=expected_ver)
+        if expected_ver and not actual_ver:
+            obj["auto_mode_compat_version"] = str(expected_ver)
         return obj
     except Exception:
-        expected_ver = str(program_version or "").strip()
+        expected_ver = str(compat_version or AUTO_MODE_COMPAT_VERSION).strip()
         if expected_ver:
-            return _auto_cache_empty(program_version=expected_ver)
+            return _auto_cache_empty(compat_version=expected_ver)
         return {}
 
 
-def _auto_cache_save(cache: dict, *, program_version: str | None = None) -> None:
-    path = _auto_cache_path()
+def _auto_cache_save(cache: dict, *, compat_version: str | None = None) -> None:
+    path = _auto_cache_path(compat_version=compat_version)
     try:
         cache_obj = dict(cache or {})
         try:
@@ -254,9 +299,13 @@ def _auto_cache_save(cache: dict, *, program_version: str | None = None) -> None
                 if not isinstance(by_filter[k].get("last_used_best", {}), dict):
                     by_filter[k]["last_used_best"] = {}
         cache_obj["by_filter"] = by_filter
-        ver = str(program_version or cache_obj.get("program_version", "") or "").strip()
+        ver = str(
+            compat_version
+            or cache_obj.get("auto_mode_compat_version", "")
+            or AUTO_MODE_COMPAT_VERSION
+        ).strip()
         if ver:
-            cache_obj["program_version"] = str(ver)
+            cache_obj["auto_mode_compat_version"] = str(ver)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(cache_obj, f, indent=2, sort_keys=True)
@@ -269,11 +318,11 @@ def _auto_cache_get_entry(
     sig: str,
     *,
     filter_key: str | None = None,
-    program_version: str | None = None,
+    compat_version: str | None = None,
 ) -> dict | None:
     if not sig:
         return None
-    cache = _auto_cache_load(program_version=program_version)
+    cache = _auto_cache_load(compat_version=compat_version)
     bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=False)
     bucket_items = {}
     if isinstance(bucket, dict):
@@ -297,9 +346,9 @@ def _auto_cache_get_best(
     sig: str,
     *,
     filter_key: str | None = None,
-    program_version: str | None = None,
+    compat_version: str | None = None,
 ) -> dict | None:
-    entry = _auto_cache_get_entry(sig, filter_key=filter_key, program_version=program_version)
+    entry = _auto_cache_get_entry(sig, filter_key=filter_key, compat_version=compat_version)
     if not isinstance(entry, dict):
         return None
     best = entry.get("best_preset", {})
@@ -310,9 +359,9 @@ def _auto_cache_get_best_target(
     sig: str,
     *,
     filter_key: str | None = None,
-    program_version: str | None = None,
+    compat_version: str | None = None,
 ) -> str | None:
-    entry = _auto_cache_get_entry(sig, filter_key=filter_key, program_version=program_version)
+    entry = _auto_cache_get_entry(sig, filter_key=filter_key, compat_version=compat_version)
     if not isinstance(entry, dict):
         return None
     hc = str(entry.get("best_target_curve", entry.get("best_hc_mode", "")) or "").strip()
@@ -324,13 +373,13 @@ def _auto_cache_get_target_for_measurements(
     *,
     goal: str = AUTO_MODE_GOAL_DEFAULT,
     filter_key: str | None = None,
-    program_version: str | None = None,
+    compat_version: str | None = None,
 ) -> dict | None:
     goal_norm = _auto_goal_norm(goal)
     msig = _auto_measurement_signature(measurements or {})
     if not msig:
         return None
-    cache = _auto_cache_load(program_version=program_version)
+    cache = _auto_cache_load(compat_version=compat_version)
 
     bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=False)
     target_map = {}
@@ -398,7 +447,7 @@ def _auto_cache_put_target_for_measurements(
     best_metrics: dict | None = None,
     goal: str = AUTO_MODE_GOAL_DEFAULT,
     filter_key: str | None = None,
-    program_version: str | None = None,
+    compat_version: str | None = None,
 ) -> None:
     hc_val = str(best_hc_mode or "").strip()
     if not hc_val:
@@ -406,7 +455,7 @@ def _auto_cache_put_target_for_measurements(
     msig = _auto_measurement_signature(measurements or {})
     if not msig:
         return
-    cache = _auto_cache_load(program_version=program_version)
+    cache = _auto_cache_load(compat_version=compat_version)
     bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=True)
     if not isinstance(bucket, dict):
         return
@@ -438,7 +487,7 @@ def _auto_cache_put_target_for_measurements(
         pass
     bucket["target_by_measurement"] = target_map
     cache["v"] = 3
-    _auto_cache_save(cache, program_version=program_version)
+    _auto_cache_save(cache, compat_version=compat_version)
 
 
 def _auto_cache_put_best(
@@ -450,7 +499,7 @@ def _auto_cache_put_best(
     measurement_sig: str | None = None,
     goal: str = AUTO_MODE_GOAL_DEFAULT,
     filter_key: str | None = None,
-    program_version: str | None = None,
+    compat_version: str | None = None,
 ) -> None:
     if not isinstance(best_preset, dict) or not best_preset:
         return
@@ -458,7 +507,7 @@ def _auto_cache_put_best(
     if not sig:
         return
     goal_norm = _auto_goal_norm(goal)
-    cache = _auto_cache_load(program_version=program_version)
+    cache = _auto_cache_load(compat_version=compat_version)
     bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=True)
     if not isinstance(bucket, dict):
         return
@@ -493,17 +542,17 @@ def _auto_cache_put_best(
         pass
     bucket["items"] = items
     cache["v"] = 3
-    _auto_cache_save(cache, program_version=program_version)
+    _auto_cache_save(cache, compat_version=compat_version)
 
 
 def _auto_cache_get_last_used_best(
     *,
     goal: str = AUTO_MODE_GOAL_DEFAULT,
     filter_key: str | None = None,
-    program_version: str | None = None,
+    compat_version: str | None = None,
 ) -> dict | None:
     goal_norm = _auto_goal_norm(goal)
-    cache = _auto_cache_load(program_version=program_version)
+    cache = _auto_cache_load(compat_version=compat_version)
     bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=False)
     last_map = {}
     if isinstance(bucket, dict):
@@ -531,12 +580,12 @@ def _auto_cache_put_last_used_best(
     measurement_sig: str | None = None,
     goal: str = AUTO_MODE_GOAL_DEFAULT,
     filter_key: str | None = None,
-    program_version: str | None = None,
+    compat_version: str | None = None,
 ) -> None:
     if not isinstance(best_preset, dict) or not best_preset:
         return
     goal_norm = _auto_goal_norm(goal)
-    cache = _auto_cache_load(program_version=program_version)
+    cache = _auto_cache_load(compat_version=compat_version)
     bucket = _auto_cache_bucket(cache, filter_key=filter_key, create=True)
     if not isinstance(bucket, dict):
         return
@@ -561,4 +610,4 @@ def _auto_cache_put_last_used_best(
     last_map[str(goal_norm)] = entry
     bucket["last_used_best"] = last_map
     cache["v"] = 3
-    _auto_cache_save(cache, program_version=program_version)
+    _auto_cache_save(cache, compat_version=compat_version)

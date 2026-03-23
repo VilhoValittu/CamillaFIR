@@ -4,6 +4,23 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.6.5] - 2026-03-23
+
+### Automatic mode / Persistence
+- Added a dedicated AUTO-mode compatibility version so persistent cache and Optuna study data can be separated from the main program version when persistence compatibility changes.
+- Updated automatic-mode cache and Optuna storage paths to use compatibility-version specific filenames when needed, with automatic migration from legacy/unversioned files.
+- Hardened AUTO-mode persistence loading so incompatible stored data is ignored safely instead of being mixed into a newer compatibility format.
+
+### UI & Config
+- Kept AUTO-mode compatibility metadata transient at runtime so it is not written into normal user config files.
+- Locked AUTO-mode TDC and A-FDW controls more safely in the UI to prevent unsupported preset/control combinations during automatic runs.
+- Continued the START-button layout cleanup by keeping the action in its own clearer section.
+
+### Docs
+- Updated documentation version references for the `3.6.5` release.
+
+---
+
 ## [3.6.4] - 2026-03-18
 
 ### Automatic mode

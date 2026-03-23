@@ -101,6 +101,7 @@ from .dsp.target_match import target_match_from_stats  # noqa: E402
 from .ui.camillafir_ui import _render_results # noqa: E402
 from .ui.camillafir_utils import scale_taps_with_fs  # noqa: E402
 from .io.camillafir_automatic_mode import (  # noqa: E402
+    AUTO_MODE_COMPAT_VERSION,
     AUTO_MODE_EXC_FROM_F6_ADD_HZ,
     AUTO_MODE_EXC_MAX_HZ,
     AUTO_MODE_EXC_MIN_HZ,
@@ -536,6 +537,7 @@ def process_run():
     data["bass_smooth_w_gamma"] = 2.40
     data["bass_smooth_w_max"] = 0.45
     data["program_version"] = VERSION
+    data["auto_mode_compat_version"] = AUTO_MODE_COMPAT_VERSION
 
     try:
         mode = str(data.get("mode") or "BASIC").strip().upper()
@@ -959,6 +961,7 @@ def process_run():
                 if best_applied_preset:
                     data.update(best_applied_preset)
                     data["program_version"] = VERSION
+                    data["auto_mode_compat_version"] = AUTO_MODE_COMPAT_VERSION
                     measurements["ui_data"] = data
                 best_auto_exc_hz = _auto_safe_float(
                     auto_res.get(
@@ -1138,12 +1141,28 @@ def process_run():
         mode_u = "BASIC"
     if bool(mode_u == "AUTO" or data.get("camillafir_automatic_mode", False)):
         try:
-            auto_cache_path = str(get_auto_mode_cache_path())
+            auto_cache_path = str(
+                get_auto_mode_cache_path(
+                    compat_version=str(
+                        data.get("auto_mode_compat_version", AUTO_MODE_COMPAT_VERSION)
+                        or AUTO_MODE_COMPAT_VERSION
+                    ),
+                )
+            )
         except Exception:
             auto_cache_path = None
         try:
             if bool(data.get("auto_mode_optuna_persistent_study", True)):
-                optuna_storage_path = str(_auto_optuna_storage_path())
+                optuna_storage_path = str(
+                    _auto_optuna_storage_path(
+                        compat_version=str(
+                            data.get("auto_mode_compat_version", AUTO_MODE_COMPAT_VERSION)
+                            or AUTO_MODE_COMPAT_VERSION
+                        ),
+                    )
+                )
+            else:
+                optuna_storage_path = None
         except Exception:
             optuna_storage_path = None
 

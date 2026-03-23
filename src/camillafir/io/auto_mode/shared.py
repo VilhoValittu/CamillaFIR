@@ -20,6 +20,8 @@ AUTO_MODE_SUBWOOFERS_LEVEL_MIN_HZ = 20.0
 AUTO_MODE_SUBWOOFERS_LEVEL_MAX_HZ = 200.0
 AUTO_MODE_CACHE_ENABLED = True
 AUTO_MODE_CACHE_MAX_ITEMS = 64
+# Bump only when AUTO mode cache/Optuna persistence compatibility changes.
+AUTO_MODE_COMPAT_VERSION = "am1"
 AUTO_MODE_CACHE_FILENAME = "camillafir_auto_mode_cache.json"
 AUTO_MODE_CACHE_FILTER_KEYS = ("linear", "mixed", "minimum", "asym")
 AUTO_MODE_PHASE1_PLATEAU_ROUNDS = 5
