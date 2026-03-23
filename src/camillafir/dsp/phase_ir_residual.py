@@ -12,11 +12,13 @@ if __package__ in (None, ""):
     if _src_root_s not in sys.path:
         sys.path.insert(0, _src_root_s)
     from camillafir.dsp.camillafir_analysis import _sigma_bins_from_hz
+    from camillafir.dsp.gain_policy import build_low_frequency_guard_mask, clamp_gain_curve, resolve_gain_policy
     from camillafir.dsp.phase_ir_types import ResidualTelemetry
     from camillafir.dsp.phase_ir_utils import _cosine_fade_out_01, _smoothstep01
     from camillafir.dsp.smoothing import smooth_gain_fractional_octave
 else:
     from .camillafir_analysis import _sigma_bins_from_hz
+    from .gain_policy import build_low_frequency_guard_mask, clamp_gain_curve, resolve_gain_policy
     from .phase_ir_types import ResidualTelemetry
     from .phase_ir_utils import _cosine_fade_out_01, _smoothstep01
     from .smoothing import smooth_gain_fractional_octave
@@ -121,7 +123,8 @@ def apply_residual_pass_if_enabled(
             gain_db = np.asarray(gain_db, dtype=float).copy()
             mask_c = np.asarray(mask_c, dtype=bool)
             if gain_db.shape != freq_axis.shape or mask_c.shape != gain_db.shape:
-                return gain_db
+                return gain_db, residual_telemetry
+            gain_policy = resolve_gain_policy(cfg, cfg_float_allow_zero_fn=_cfg_float_allow_zero)
             measured_aligned = (m_anal - calc_offset_db)
             pred0 = measured_aligned + gain_db
             resid0 = (target_mags - pred0)
@@ -182,28 +185,7 @@ def apply_residual_pass_if_enabled(
                 max_delta_db = 1.25
             residual_delta = np.clip(residual_delta, -float(max_delta_db), float(max_delta_db))
 
-            low_guard_mask = np.zeros_like(mask_c, dtype=bool)
-            try:
-                low_cut_enable = bool(getattr(cfg, "low_bass_cut_enable", True))
-            except Exception:
-                low_cut_enable = True
-            try:
-                low_hz = float(_cfg_float_allow_zero(cfg, "low_bass_cut_hz", 0.0) or 0.0)
-            except Exception:
-                low_hz = 0.0
-            if low_cut_enable and np.isfinite(low_hz) and low_hz > 0.0:
-                low_guard_mask |= (freq_axis > 0.0) & (freq_axis <= float(low_hz))
-
-            try:
-                exc_on = bool(getattr(cfg, "exc_prot", False))
-            except Exception:
-                exc_on = False
-            try:
-                exc_f = float(getattr(cfg, "exc_freq", 0.0) or 0.0)
-            except Exception:
-                exc_f = 0.0
-            if exc_on and np.isfinite(exc_f) and exc_f > 0.0:
-                low_guard_mask |= (freq_axis > 0.0) & (freq_axis <= float(exc_f * 1.41))
+            low_guard_mask = build_low_frequency_guard_mask(freq_axis, gain_policy)
 
             apply_mask = mask_c & (band_w > 0.0)
             low_guard_apply_mask = apply_mask & low_guard_mask
@@ -221,16 +203,8 @@ def apply_residual_pass_if_enabled(
                     gain_before[low_guard_apply_mask],
                 )
 
-            try:
-                max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
-            except Exception:
-                max_cut_db = 15.0
-            try:
-                max_boost_db = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
-            except Exception:
-                max_boost_db = 0.0
             if np.any(mask_c):
-                gain_db[mask_c] = np.clip(gain_db[mask_c], -float(max_cut_db), float(max_boost_db))
+                gain_db = clamp_gain_curve(gain_db, policy=gain_policy, mask=mask_c)
 
             residual_telemetry = ResidualTelemetry(
                 residual_pass_enabled=True,

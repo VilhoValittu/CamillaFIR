@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 
+from .gain_policy import clamp_gain_curve, resolve_gain_policy
 from .limits import limit_slope_per_octave, limit_slope_per_octave_asym, soft_clip_gain
 from .smoothing import smooth_gain_fractional_octave
 
@@ -68,35 +69,13 @@ def _apply_hard_boost_cut_clamp(
     annetaan taajuuspistekohtaisena vektorina, boostin ylaraja voidaan
     nostaa/laskea paikallisesti valitussa `mask`-alueessa.
     """
-    out = np.asarray(corr_mag_db, dtype=float).copy()
-    max_boost = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
-    cap = None
-    try:
-        if boost_cap_db is not None:
-            cap = np.asarray(boost_cap_db, dtype=float)
-            if cap.shape != out.shape:
-                cap = None
-    except Exception:
-        cap = None
-
-    if cap is None:
-        out = np.minimum(out, max_boost)
-    else:
-        m = np.ones_like(out, dtype=bool)
-        try:
-            if mask is not None:
-                mm = np.asarray(mask, dtype=bool)
-                if mm.shape == out.shape:
-                    m = mm
-        except Exception:
-            m = np.ones_like(out, dtype=bool)
-        if np.any(m):
-            out[m] = np.minimum(out[m], cap[m])
-        if np.any(~m):
-            out[~m] = np.minimum(out[~m], max_boost)
-
-    out = np.maximum(out, -float(max_cut_db))
-    return out
+    policy = resolve_gain_policy(cfg)
+    return clamp_gain_curve(
+        corr_mag_db,
+        policy=policy,
+        boost_cap_db=boost_cap_db,
+        mask=mask,
+    )
 
 
 def _blend_masked_fractional_octave(

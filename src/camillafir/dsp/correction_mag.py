@@ -16,6 +16,7 @@ from .correction_types import (
     _MagPostProcessOutputs,
     _MagRawStageOutputs,
 )
+from .gain_policy import apply_cuts_only_guard, build_low_frequency_guard_mask, resolve_gain_policy
 from .mag_limits import (
     _apply_hard_boost_cut_clamp,
     _apply_max_boost_cut,
@@ -1008,21 +1009,17 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
     hard_over_cut = 0.0
     clamp_dominance_level = "NONE"
 
-    low_cut_enable = True
-    try:
-        low_cut_enable = bool(getattr(cfg, "low_bass_cut_enable", True))
-    except Exception:
-        low_cut_enable = True
-    low_hz = _cfg_float_allow_zero(cfg, "low_bass_cut_hz", 0.0)
-    try:
-        low_cut_strength = float(getattr(cfg, "low_bass_cut_strength", 0.0) or 0.0)
-    except Exception:
-        low_cut_strength = 0.0
-    if not np.isfinite(low_cut_strength):
-        low_cut_strength = 0.0
-    low_cut_strength = float(np.clip(low_cut_strength, 0.0, 1.0))
+    gain_policy = resolve_gain_policy(cfg, cfg_float_allow_zero_fn=_cfg_float_allow_zero)
+    low_cut_enable = bool(gain_policy.low_cut_enable)
+    low_hz = float(gain_policy.low_cut_hz)
+    low_cut_strength = float(gain_policy.low_cut_strength)
     low_cut_floor_ref = None
-    low_mask = mask_c & (freq_axis > 0) & (freq_axis <= low_hz)
+    low_mask = mask_c & build_low_frequency_guard_mask(
+        freq_axis,
+        gain_policy,
+        include_low_cut=True,
+        include_exc_soft=False,
+    )
     if low_cut_enable and np.any(low_mask):
         low_cut = np.minimum(gain_apply[low_mask], 0.0)
         if low_cut_strength > 0.0:
@@ -1045,8 +1042,8 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
     except Exception:
         pass
 
-    max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
-    max_boost_db_base = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
+    max_cut_db = float(gain_policy.max_cut_db)
+    max_boost_db_base = float(gain_policy.max_boost_db)
     boost_cap_db = np.full_like(gain_db, float(max_boost_db_base), dtype=float)
     bass_boost_cap_mask = np.zeros_like(mask_c, dtype=bool)
     bass_boost_cap_enabled = False
@@ -1146,8 +1143,8 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
             f"(strength={float(bass_boost_post_restore_strength):.2f}), "
             f"max_cut_db={float(max_cut_db):.2f} dB, "
             f"low_bass_cut_hz={float(low_hz):.1f} Hz, "
-            f"exc_prot={'ON' if bool(getattr(cfg,'exc_prot',False)) else 'OFF'}, "
-            f"exc_freq={float(getattr(cfg,'exc_freq',0.0) or 0.0):.1f} Hz, "
+            f"exc_prot={'ON' if bool(gain_policy.exc_prot) else 'OFF'}, "
+            f"exc_freq={float(gain_policy.exc_freq):.1f} Hz, "
             f"do_normalize={'ON' if bool(getattr(cfg,'do_normalize',False)) else 'OFF'}, "
             f"global_gain_db={float(getattr(cfg,'global_gain_db',0.0) or 0.0):.2f} dB, "
             f"max_slope_db_per_oct={float(getattr(cfg,'max_slope_db_per_oct',0.0) or 0.0):.1f}"
@@ -1168,9 +1165,8 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
         cut_cand_peak = float(np.min(_cand[mask_c])) if np.any(mask_c) else 0.0
         n_boost_cand = int(np.sum(cand_boost_mask))
         n_boost_cand_low = int(np.sum((_cand > 1e-6) & mask_c & (freq_axis <= low_hz)))
-        if bool(getattr(cfg, "exc_prot", False)):
-            exc_f = float(getattr(cfg, "exc_freq", 0.0) or 0.0)
-            n_boost_cand_exc = int(np.sum((_cand > 1e-6) & mask_c & (freq_axis < exc_f)))
+        if bool(gain_policy.exc_prot):
+            n_boost_cand_exc = int(np.sum((_cand > 1e-6) & mask_c & (freq_axis < float(gain_policy.exc_freq))))
         else:
             n_boost_cand_exc = 0
     except Exception:
@@ -1316,15 +1312,15 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
     except Exception:
         pass
 
-    if cfg.exc_prot:
-        f_start = cfg.exc_freq
-        f_end = cfg.exc_freq * 1.41
+    if gain_policy.exc_prot:
+        f_start = float(gain_policy.exc_freq)
+        f_end = float(gain_policy.exc_soft_hz)
         prot_mask = freq_axis < f_start
         gain_db[prot_mask] = np.minimum(gain_db[prot_mask], 0.0)
         trans_mask = (freq_axis >= f_start) & (freq_axis <= f_end)
         if np.any(trans_mask):
             fade = (freq_axis[trans_mask] - f_start) / (f_end - f_start)
-            allowed_boost = fade * cfg.max_boost_db
+            allowed_boost = fade * float(max_boost_db_base)
             gain_db[trans_mask] = np.minimum(gain_db[trans_mask], allowed_boost)
         logger.info(f"Exc Prot: Full protection < {f_start}Hz, Soft fade up to {f_end:.1f}Hz.")
 
@@ -1544,32 +1540,21 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
     # Final hard reapply: low-bass cuts-only policy must survive all smoothing/clamps.
     try:
         if bool(low_cut_enable) and np.isfinite(float(low_hz)) and float(low_hz) > 0.0:
-            low_mask_final = mask_c & (freq_axis > 0.0) & (freq_axis <= float(low_hz))
-            if np.any(low_mask_final):
-                _pre_lf = np.asarray(gain_db, dtype=float).copy()
-                gain_db[low_mask_final] = np.minimum(gain_db[low_mask_final], 0.0)
-                lf_floor_reapplied_bins = 0
-                try:
-                    if (
-                        low_cut_strength > 0.0
-                        and isinstance(low_cut_floor_ref, np.ndarray)
-                        and low_cut_floor_ref.shape == gain_db.shape
-                    ):
-                        floor_vals = np.asarray(low_cut_floor_ref[low_mask_final], dtype=float)
-                        valid_floor = np.isfinite(floor_vals)
-                        if np.any(valid_floor):
-                            cur = np.asarray(gain_db[low_mask_final], dtype=float)
-                            cur_before = cur.copy()
-                            cur[valid_floor] = np.minimum(cur[valid_floor], floor_vals[valid_floor])
-                            gain_db[low_mask_final] = cur
-                            lf_floor_reapplied_bins = int(
-                                np.count_nonzero(cur_before[valid_floor] > (cur[valid_floor] + 1e-9))
-                            )
-                except Exception:
-                    lf_floor_reapplied_bins = 0
-                lf_boost_clamped_bins = int(
-                    np.count_nonzero((_pre_lf[low_mask_final] > 1e-9) & (gain_db[low_mask_final] <= 1e-9))
+            low_mask_final = build_low_frequency_guard_mask(
+                freq_axis,
+                gain_policy,
+                include_low_cut=True,
+                include_exc_soft=False,
+            )
+            if np.any(mask_c & low_mask_final):
+                gain_db, lf_guard_meta = apply_cuts_only_guard(
+                    gain_db,
+                    mask=mask_c,
+                    guard_mask=low_mask_final,
+                    floor_ref=(low_cut_floor_ref if low_cut_strength > 0.0 else None),
                 )
+                lf_boost_clamped_bins = int(lf_guard_meta.get("boost_clamped_bins", 0) or 0)
+                lf_floor_reapplied_bins = int(lf_guard_meta.get("floor_reapplied_bins", 0) or 0)
                 if lf_boost_clamped_bins > 0 or lf_floor_reapplied_bins > 0:
                     logger.info(
                         "Low-bass hard lock reapply: "
@@ -1579,7 +1564,7 @@ def _apply_post_limits_and_metrics(inputs: _MagPostProcessInputs) -> _MagPostPro
                 try:
                     if isinstance(st, dict):
                         st["low_bass_hard_reapply_hz"] = float(low_hz)
-                        st["low_bass_hard_reapply_bins"] = int(np.count_nonzero(low_mask_final))
+                        st["low_bass_hard_reapply_bins"] = int(lf_guard_meta.get("guard_bins", 0) or 0)
                         st["low_bass_hard_reapply_clamped_bins"] = int(lf_boost_clamped_bins)
                         st["low_bass_hard_reapply_floor_bins"] = int(lf_floor_reapplied_bins)
                 except Exception:
