@@ -59,6 +59,12 @@ def on_start_click():
         import time
 
         try:
+            from . import app as _app
+            _app.activate_run_tab()
+        except Exception:
+            pass
+
+        try:
             with use_scope("results", clear=True):
                 pass
         except Exception:

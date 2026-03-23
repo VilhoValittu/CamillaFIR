@@ -817,7 +817,38 @@ def build_results_section(*, t, get_val, slope_opts):
     ]
 
 
-def build_tabs(*, t, get_val, max_safe_boost: float, on_mode_apply_defaults, on_afdw_preset):
+def build_run_section(*, t, on_start_click):
+    return [
+        put_markdown(f"### {t('tab_run')}"),
+        put_html(
+            "<div style='opacity:0.75; font-size:13px; margin-top:-6px;'>"
+            f"{t('tab_run_help')}"
+            "</div>"
+        ),
+        put_markdown("---"),
+        put_button("START", onclick=on_start_click).style(
+            """
+            width: 100%;
+            margin-top: 10px;
+            padding: 15px;
+            font-size: 24px;
+            font-weight: 900;
+            letter-spacing: 3px;
+
+            background-color: transparent;
+            border: none;
+            color: #ffffff;
+
+            transition: 0.3s;
+            cursor: pointer;
+        """
+        ),
+        put_scope("status_area"),
+        put_scope("results"),
+    ]
+
+
+def build_tabs(*, t, get_val, max_safe_boost: float, on_mode_apply_defaults, on_afdw_preset, on_start_click):
     hc_opts = [
         {"label": t("hc_harman"), "value": "Harman6"},
         {"label": t("hc_harman8"), "value": "Harman8"},
@@ -846,6 +877,7 @@ def build_tabs(*, t, get_val, max_safe_boost: float, on_mode_apply_defaults, on_
     tab_adv = build_advanced_section(t=t, get_val=get_val, slope_opts=slope_opts, on_afdw_preset=on_afdw_preset)
     tab_window_tdc = build_export_section(t=t, get_val=get_val, on_afdw_preset=on_afdw_preset)
     tab_xo = build_results_section(t=t, get_val=get_val, slope_opts=slope_opts)
+    tab_run = build_run_section(t=t, on_start_click=on_start_click)
 
     put_tabs(
         [
@@ -855,5 +887,6 @@ def build_tabs(*, t, get_val, max_safe_boost: float, on_mode_apply_defaults, on_
             {"title": t("tab_adv"), "content": tab_adv},
             {"title": t("tab_window_tdc"), "content": tab_window_tdc},
             {"title": t("tab_xo"), "content": tab_xo},
+            {"title": t("tab_run"), "content": tab_run},
         ]
     )

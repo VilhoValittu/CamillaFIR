@@ -4,7 +4,7 @@ import json
 import re
 
 from pywebio import config
-from pywebio.output import put_button, put_html, put_markdown, put_scope, use_scope
+from pywebio.output import put_html, use_scope
 from pywebio.session import set_env
 
 from ..config.camillafir_config import load_config
@@ -154,6 +154,37 @@ def get_run_wall_clock_text(default: str = "") -> str:
     except Exception:
         v = ""
     return v or str(default or "")
+
+
+def activate_tab(tab_title: str) -> None:
+    try:
+        from pywebio.session import run_js
+    except Exception:
+        run_js = None
+
+    if not callable(run_js):
+        return
+
+    try:
+        run_js(
+            """
+            const wanted = String(title || '').trim();
+            if (!wanted) return;
+            const links = Array.from(document.querySelectorAll('.nav-tabs .nav-link'));
+            const match = links.find((el) => (el.textContent || '').trim() === wanted);
+            if (match) {
+              match.click();
+              match.scrollIntoView({behavior: 'smooth', block: 'nearest', inline: 'nearest'});
+            }
+            """,
+            title=str(tab_title or ""),
+        )
+    except Exception:
+        return
+
+
+def activate_run_tab() -> None:
+    activate_tab(t("tab_run"))
 
 
 def _normalize_auto_selected_text(msg) -> str:
@@ -396,27 +427,7 @@ def main():
         max_safe_boost=float(MAX_SAFE_BOOST),
         on_mode_apply_defaults=callbacks.on_mode_apply_defaults,
         on_afdw_preset=callbacks.on_afdw_preset,
+        on_start_click=callbacks.on_start_click,
     )
 
     callbacks.register_callbacks(t=t, get_val=get_val)
-
-    put_markdown("---")
-    put_button("🚀 START", onclick=callbacks.on_start_click).style(
-        """
-        width: 100%;
-        margin-top: 30px;
-        padding: 15px;
-        font-size: 24px;
-        font-weight: 900;
-        letter-spacing: 3px;
-
-        background-color: transparent;
-        border: none;
-        color: #ffffff;
-
-        transition: 0.3s;
-        cursor: pointer;
-    """
-    )
-    put_scope("status_area")
-    put_scope("results")
