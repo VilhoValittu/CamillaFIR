@@ -6,7 +6,11 @@ import numpy as np
 
 from .camillafir_analysis import calculate_rt60, calculate_rt60_bands
 from .camillafir_leveling import compute_leveling
-from .correction_types import _BaselineContext
+from .correction_types import (
+    BaselineComparisonTelemetry,
+    BaselineNativeTelemetry,
+    _BaselineContext,
+)
 from .limits import build_slope_limit_envelope
 from .phase import get_min_phase_impulse
 from .tdc import apply_smart_tdc
@@ -315,50 +319,56 @@ def _prepare_correction_baseline(
                         ) = compute_leveling(cfg, f, m_anal, target_mags, stereo_link_ctx=stereo_link_ctx)
     except Exception:
         target_shift_db = 0.0
+    native_telemetry: BaselineNativeTelemetry | None = None
     try:
-        if isinstance(st, dict):
-            st["analysis_mode"] = "native"
-            st["freq_axis"] = np.asarray(freq_axis, dtype=float).tolist()
-            m_src = np.asarray(m_anal, dtype=float)
-            if is_psy and (m_plot_db is not None):
-                mp = np.asarray(m_plot_db, dtype=float)
-                if mp.size == m_src.size:
-                    m_src = mp
-            measured_aligned = m_src - float(calc_offset_db)
-            target_aligned = np.asarray(target_mags, dtype=float) - float(target_level_db)
-            st["measured_mags"] = measured_aligned.tolist()
-            st["target_mags"] = target_aligned.tolist()
-            try:
-                max_slope = float(getattr(cfg, "max_slope_db_per_oct", 0.0) or 0.0)
-                max_slope_boost = float(getattr(cfg, "max_slope_boost_db_per_oct", 0.0) or 0.0)
-                max_slope_cut = float(getattr(cfg, "max_slope_cut_db_per_oct", 0.0) or 0.0)
-                if max_slope_boost <= 0.0:
-                    max_slope_boost = max_slope
-                if max_slope_cut <= 0.0:
-                    max_slope_cut = max_slope
-                env_lo, env_hi, env_pivot = build_slope_limit_envelope(
-                    np.asarray(freq_axis, dtype=float),
-                    target_aligned,
-                    mag_c_min=float(getattr(cfg, "mag_c_min", 0.0) or 0.0),
-                    mag_c_max=float(getattr(cfg, "mag_c_max", 0.0) or 0.0),
-                    max_slope_boost_db_per_oct=float(max_slope_boost),
-                    max_slope_cut_db_per_oct=float(max_slope_cut),
-                )
-                if env_lo is not None and env_hi is not None:
-                    st["target_env_lo"] = np.asarray(env_lo, dtype=float).tolist()
-                    st["target_env_hi"] = np.asarray(env_hi, dtype=float).tolist()
-                    st["target_env_pivot_hz"] = float(env_pivot) if env_pivot is not None else None
-            except Exception:
-                pass
-            st["target_shift_db"] = float(target_shift_db)
-            st["eff_target_db"] = float(target_level_db)
-            st["target_level_db_window"] = float(target_level_db_window)
-            st["meas_level_db_window"] = float(meas_level_db_window)
-            st["offset_db"] = float(calc_offset_db)
-            st["offset_method"] = str(offset_method)
-            st["smart_scan_range"] = [float(s_min), float(s_max)]
+        m_src = np.asarray(m_anal, dtype=float)
+        if is_psy and (m_plot_db is not None):
+            mp = np.asarray(m_plot_db, dtype=float)
+            if mp.size == m_src.size:
+                m_src = mp
+        measured_aligned = m_src - float(calc_offset_db)
+        target_aligned = np.asarray(target_mags, dtype=float) - float(target_level_db)
+        env_lo = env_hi = None
+        env_pivot = None
+        try:
+            max_slope = float(getattr(cfg, "max_slope_db_per_oct", 0.0) or 0.0)
+            max_slope_boost = float(getattr(cfg, "max_slope_boost_db_per_oct", 0.0) or 0.0)
+            max_slope_cut = float(getattr(cfg, "max_slope_cut_db_per_oct", 0.0) or 0.0)
+            if max_slope_boost <= 0.0:
+                max_slope_boost = max_slope
+            if max_slope_cut <= 0.0:
+                max_slope_cut = max_slope
+            env_lo, env_hi, env_pivot = build_slope_limit_envelope(
+                np.asarray(freq_axis, dtype=float),
+                target_aligned,
+                mag_c_min=float(getattr(cfg, "mag_c_min", 0.0) or 0.0),
+                mag_c_max=float(getattr(cfg, "mag_c_max", 0.0) or 0.0),
+                max_slope_boost_db_per_oct=float(max_slope_boost),
+                max_slope_cut_db_per_oct=float(max_slope_cut),
+            )
+        except Exception:
+            env_lo = env_hi = None
+            env_pivot = None
+        native_telemetry = BaselineNativeTelemetry(
+            analysis_mode="native",
+            freq_axis=np.asarray(freq_axis, dtype=float),
+            measured_mags=np.asarray(measured_aligned, dtype=float),
+            target_mags=np.asarray(target_aligned, dtype=float),
+            target_env_lo=None if env_lo is None else np.asarray(env_lo, dtype=float),
+            target_env_hi=None if env_hi is None else np.asarray(env_hi, dtype=float),
+            target_env_pivot_hz=float(env_pivot) if env_pivot is not None else None,
+            target_shift_db=float(target_shift_db),
+            eff_target_db=float(target_level_db),
+            target_level_db_window=float(target_level_db_window),
+            meas_level_db_window=float(meas_level_db_window),
+            offset_db=float(calc_offset_db),
+            offset_method=str(offset_method),
+            smart_scan_range=(float(s_min), float(s_max)),
+        )
     except Exception:
-        pass
+        native_telemetry = None
+
+    comparison_telemetry: BaselineComparisonTelemetry | None = None
     try:
         if isinstance(cmp, dict) and analysis_mode == "comparison":
             freq_cmp = np.asarray(cmp.get("cmp_freq_axis", []) or [], dtype=float)
@@ -375,23 +385,21 @@ def _prepare_correction_baseline(
                     s_min_cmp,
                     s_max_cmp,
                 ) = compute_leveling(cfg, freq_cmp, m_cmp_raw, target_cmp, stereo_link_ctx=stereo_link_ctx)
-                meas_cmp_final = m_cmp_raw - calc_offset_db_cmp
-                filt_cmp = np.interp(freq_cmp, freq_axis, gain_db)
-                cmp["analysis_mode"] = "comparison"
-                cmp["cmp_target_mags"] = target_cmp.tolist()
-                cmp["cmp_measured_mags"] = meas_cmp_final.tolist()
-                cmp["cmp_filter_mags"] = filt_cmp.tolist()
-                cmp["cmp_filter_mags"] = filt_cmp.tolist()
-                cmp["cmp_eff_target_db"] = float(target_level_db_cmp)
-                cmp["cmp_offset_db"] = float(calc_offset_db_cmp)
-                cmp["cmp_measured_mags"] = (m_cmp_raw - calc_offset_db_cmp).tolist()
-                cmp["cmp_smart_scan_range"] = [float(s_min_cmp), float(s_max_cmp)]
-                cmp["cmp_meas_level_db_window"] = float(meas_level_db_window_cmp)
-                cmp["cmp_target_level_db_window"] = float(target_level_db_window_cmp)
-                cmp["cmp_offset_method"] = str(offset_method_cmp)
-                cmp["cmp_target_shift_db"] = float(target_shift_db)
+                comparison_telemetry = BaselineComparisonTelemetry(
+                    analysis_mode="comparison",
+                    target_mags=np.asarray(target_cmp, dtype=float),
+                    measured_mags=np.asarray(m_cmp_raw - calc_offset_db_cmp, dtype=float),
+                    filter_mags=np.asarray(filt_cmp, dtype=float),
+                    eff_target_db=float(target_level_db_cmp),
+                    offset_db=float(calc_offset_db_cmp),
+                    smart_scan_range=(float(s_min_cmp), float(s_max_cmp)),
+                    meas_level_db_window=float(meas_level_db_window_cmp),
+                    target_level_db_window=float(target_level_db_window_cmp),
+                    offset_method=str(offset_method_cmp),
+                    target_shift_db=float(target_shift_db),
+                )
     except Exception:
-        pass
+        comparison_telemetry = None
 
     return _BaselineContext(
         m_interp=np.asarray(m_interp_for_rt, dtype=float),
@@ -412,4 +420,6 @@ def _prepare_correction_baseline(
         cmp=cmp,
         analysis_mode=str(analysis_mode),
         gain_db=np.asarray(gain_db, dtype=float),
+        native_telemetry=native_telemetry,
+        comparison_telemetry=comparison_telemetry,
     )

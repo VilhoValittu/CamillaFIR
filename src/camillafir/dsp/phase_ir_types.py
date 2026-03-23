@@ -45,6 +45,7 @@ class PhaseIROutputs:
     auto_headroom_db: float
     current_peak_gain: float
     final_gain_total: np.ndarray
+    residual_telemetry: "ResidualTelemetry | None" = None
 
     def to_legacy_dict(self) -> dict[str, Any]:
         return {
@@ -56,3 +57,47 @@ class PhaseIROutputs:
             "current_peak_gain": float(self.current_peak_gain),
             "final_gain_total": np.asarray(self.final_gain_total, dtype=float),
         }
+
+
+@dataclass
+class ResidualTelemetry:
+    """Typed residual-pass telemetria stats-sovitusta varten."""
+
+    residual_pass_enabled: bool
+    residual_strength: float
+    residual_smoothing_mult: float
+    residual_conf_power: float
+    residual_max_delta_db: float
+    residual_band_min_hz: float
+    residual_band_max_hz: float
+    residual_band_edge_hz: float
+    residual_band_bins: int
+    residual_lf_guard_bins: int
+    residual_lf_boost_blocked_bins: int
+    residual_right_transition_fade_skipped: bool
+
+
+def apply_residual_telemetry_to_stats(
+    *,
+    st: Any,
+    telemetry: ResidualTelemetry | None,
+) -> None:
+    """Sovittaa typed residual-telemetrian vanhaan stats-sanakirjaan."""
+
+    if not isinstance(st, dict) or telemetry is None:
+        return
+
+    st["residual_pass_enabled"] = bool(telemetry.residual_pass_enabled)
+    st["residual_strength"] = float(telemetry.residual_strength)
+    st["residual_smoothing_mult"] = float(telemetry.residual_smoothing_mult)
+    st["residual_conf_power"] = float(telemetry.residual_conf_power)
+    st["residual_max_delta_db"] = float(telemetry.residual_max_delta_db)
+    st["residual_band_min_hz"] = float(telemetry.residual_band_min_hz)
+    st["residual_band_max_hz"] = float(telemetry.residual_band_max_hz)
+    st["residual_band_edge_hz"] = float(telemetry.residual_band_edge_hz)
+    st["residual_band_bins"] = int(telemetry.residual_band_bins)
+    st["residual_lf_guard_bins"] = int(telemetry.residual_lf_guard_bins)
+    st["residual_lf_boost_blocked_bins"] = int(telemetry.residual_lf_boost_blocked_bins)
+    st["residual_right_transition_fade_skipped"] = bool(
+        telemetry.residual_right_transition_fade_skipped
+    )

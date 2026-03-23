@@ -25,9 +25,14 @@ def _cfg_float_allow_zero(cfg, name: str, default: float) -> float:
     return float(x)
 
 
-def _run_residual(cfg: SimpleNamespace, gain_db: np.ndarray, target_mags: np.ndarray, freq_axis: np.ndarray) -> np.ndarray:
+def _run_residual(
+    cfg: SimpleNamespace,
+    gain_db: np.ndarray,
+    target_mags: np.ndarray,
+    freq_axis: np.ndarray,
+) -> tuple[np.ndarray, object | None]:
     mask_c = np.ones_like(freq_axis, dtype=bool)
-    out = apply_residual_pass_if_enabled(
+    out, telemetry = apply_residual_pass_if_enabled(
         cfg=cfg,
         freq_axis=np.asarray(freq_axis, dtype=float),
         gain_db=np.asarray(gain_db, dtype=float),
@@ -45,7 +50,7 @@ def _run_residual(cfg: SimpleNamespace, gain_db: np.ndarray, target_mags: np.nda
         logger=_NullLogger(),
         cfg_float_allow_zero_fn=_cfg_float_allow_zero,
     )
-    return np.asarray(out, dtype=float)
+    return np.asarray(out, dtype=float), telemetry
 
 
 def test_residual_is_band_limited_with_smoothstep_edges():
@@ -70,10 +75,12 @@ def test_residual_is_band_limited_with_smoothstep_edges():
         max_cut_db=15.0,
     )
 
-    out = _run_residual(cfg, gain_db, target, freq_axis)
+    out, telemetry = _run_residual(cfg, gain_db, target, freq_axis)
 
     assert np.allclose(out[freq_axis < 40.0], 0.0, atol=1e-10, rtol=0.0)
     assert np.allclose(out[freq_axis > 140.0], 0.0, atol=1e-10, rtol=0.0)
+    assert telemetry is not None
+    assert bool(getattr(telemetry, "residual_pass_enabled")) is True
 
     left_edge = out[int(np.argmin(np.abs(freq_axis - 44.0)))]
     center = out[int(np.argmin(np.abs(freq_axis - 90.0)))]
@@ -104,10 +111,12 @@ def test_residual_cannot_increase_lf_boost_below_low_bass_cut():
         max_cut_db=15.0,
     )
 
-    out = _run_residual(cfg, gain_db, target, freq_axis)
+    out, telemetry = _run_residual(cfg, gain_db, target, freq_axis)
     m = freq_axis <= 40.0
     assert np.any(m)
     assert np.all(out[m] <= gain_db[m] + 1e-10)
+    assert telemetry is not None
+    assert int(getattr(telemetry, "residual_lf_guard_bins")) > 0
 
 
 def test_residual_cannot_increase_lf_boost_near_exc_protection():
@@ -132,8 +141,10 @@ def test_residual_cannot_increase_lf_boost_near_exc_protection():
         max_cut_db=15.0,
     )
 
-    out = _run_residual(cfg, gain_db, target, freq_axis)
+    out, telemetry = _run_residual(cfg, gain_db, target, freq_axis)
     guard_hz = 35.0 * 1.41
     m = freq_axis <= guard_hz
     assert np.any(m)
     assert np.all(out[m] <= gain_db[m] + 1e-10)
+    assert telemetry is not None
+    assert int(getattr(telemetry, "residual_lf_boost_blocked_bins")) >= 0

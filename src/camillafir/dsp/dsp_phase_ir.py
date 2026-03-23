@@ -7,7 +7,11 @@ from .phase_ir_build import build_phase_and_ir
 from .phase_ir_phase import _compute_excess_phase
 from .phase_ir_residual import apply_residual_pass_if_enabled
 from .phase_ir_theoretical import compute_theoretical_phase_and_store_stats
-from .phase_ir_types import PhaseIRInputs, PhaseIROutputs
+from .phase_ir_types import (
+    PhaseIRInputs,
+    PhaseIROutputs,
+    apply_residual_telemetry_to_stats,
+)
 
 __all__ = ("run_phase_ir_stage", "_compute_excess_phase")
 
@@ -136,7 +140,9 @@ def run_phase_ir_stage(
         limit_gd_gradient_ms_per_oct_fn=limit_gd_gradient_ms_per_oct_fn,
         cfg_float_allow_zero_fn=cfg_float_allow_zero_fn,
     )
-    return _run_phase_ir_stage(inputs).to_legacy_dict()
+    outputs = _run_phase_ir_stage(inputs)
+    apply_residual_telemetry_to_stats(st=inputs.st, telemetry=outputs.residual_telemetry)
+    return outputs.to_legacy_dict()
 
 
 def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
@@ -214,7 +220,7 @@ def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
     m_anal_before_residual = m_anal.copy()
     target_mags_before_residual = target_mags.copy()
     mask_c_before_residual = mask_c.copy()
-    gain_db = apply_residual_pass_if_enabled(
+    gain_db, residual_telemetry = apply_residual_pass_if_enabled(
         cfg=cfg,
         freq_axis=freq_axis,
         gain_db=gain_db,
@@ -382,4 +388,5 @@ def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
         auto_headroom_db=float(auto_headroom_db),
         current_peak_gain=float(current_peak_gain),
         final_gain_total=np.asarray(final_gain_total, dtype=float),
+        residual_telemetry=residual_telemetry,
     )

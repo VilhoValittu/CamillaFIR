@@ -12,10 +12,12 @@ if __package__ in (None, ""):
     if _src_root_s not in sys.path:
         sys.path.insert(0, _src_root_s)
     from camillafir.dsp.camillafir_analysis import _sigma_bins_from_hz
+    from camillafir.dsp.phase_ir_types import ResidualTelemetry
     from camillafir.dsp.phase_ir_utils import _cosine_fade_out_01, _smoothstep01
     from camillafir.dsp.smoothing import smooth_gain_fractional_octave
 else:
     from .camillafir_analysis import _sigma_bins_from_hz
+    from .phase_ir_types import ResidualTelemetry
     from .phase_ir_utils import _cosine_fade_out_01, _smoothstep01
     from .smoothing import smooth_gain_fractional_octave
 
@@ -100,18 +102,18 @@ def apply_residual_pass_if_enabled(
     final_g,
     logger,
     cfg_float_allow_zero_fn,
-) -> np.ndarray:
+) -> tuple[np.ndarray, ResidualTelemetry | None]:
     """
     Contract:
       - This stage may only change gain_db.
       - It must not mutate phase-domain or IR-domain arrays.
-      - st updates and logging are allowed.
+      - Telemetry is returned typed and adapted to stats outside this stage.
 
-    Returns updated gain_db (same shape).
-    Side effects: st updates exactly like before.
+    Returns updated gain_db (same shape) and optional residual telemetry.
     """
     _filter_smooth = filter_smooth
     _cfg_float_allow_zero = cfg_float_allow_zero_fn
+    residual_telemetry: ResidualTelemetry | None = None
 
     if bool(getattr(cfg, "enable_residual_pass", False)) and bool(getattr(cfg, "enable_mag_correction", True)):
         try:
@@ -230,23 +232,21 @@ def apply_residual_pass_if_enabled(
             if np.any(mask_c):
                 gain_db[mask_c] = np.clip(gain_db[mask_c], -float(max_cut_db), float(max_boost_db))
 
-            try:
-                if isinstance(st, dict):
-                    st["residual_pass_enabled"] = True
-                    st["residual_strength"] = float(strength)
-                    st["residual_smoothing_mult"] = float(mult)
-                    st["residual_conf_power"] = float(k)
-                    st["residual_max_delta_db"] = float(max_delta_db)
-                    st["residual_band_min_hz"] = float(band_min_hz)
-                    st["residual_band_max_hz"] = float(band_max_hz)
-                    st["residual_band_edge_hz"] = float(band_edge_hz)
-                    st["residual_band_bins"] = int(np.count_nonzero(apply_mask))
-                    st["residual_lf_guard_bins"] = int(np.count_nonzero(low_guard_apply_mask))
-                    st["residual_lf_boost_blocked_bins"] = int(blocked_boost_bins)
-                    st["residual_right_transition_fade_skipped"] = bool(already)
-            except Exception:
-                pass
+            residual_telemetry = ResidualTelemetry(
+                residual_pass_enabled=True,
+                residual_strength=float(strength),
+                residual_smoothing_mult=float(mult),
+                residual_conf_power=float(k),
+                residual_max_delta_db=float(max_delta_db),
+                residual_band_min_hz=float(band_min_hz),
+                residual_band_max_hz=float(band_max_hz),
+                residual_band_edge_hz=float(band_edge_hz),
+                residual_band_bins=int(np.count_nonzero(apply_mask)),
+                residual_lf_guard_bins=int(np.count_nonzero(low_guard_apply_mask)),
+                residual_lf_boost_blocked_bins=int(blocked_boost_bins),
+                residual_right_transition_fade_skipped=bool(already),
+            )
         except Exception:
             pass
 
-    return gain_db
+    return gain_db, residual_telemetry

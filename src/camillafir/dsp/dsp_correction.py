@@ -8,6 +8,7 @@ from .correction_types import (
     CorrectionInputs,
     CorrectionOutputs,
     _MagPipelineInputs,
+    apply_baseline_telemetry_to_stats,
 )
 
 
@@ -132,6 +133,12 @@ def _run_correction_stage(inputs: CorrectionInputs) -> CorrectionOutputs:
     cmp = baseline.cmp
     analysis_mode = baseline.analysis_mode
     gain_db = baseline.gain_db
+    apply_baseline_telemetry_to_stats(
+        st=st,
+        cmp=cmp,
+        native=baseline.native_telemetry,
+        comparison=baseline.comparison_telemetry,
+    )
 
     # Magnitude-korjaus: confidence, regularisointi, smoothing, rajat ja metriikat.
     mag_inputs = _MagPipelineInputs(
