@@ -92,6 +92,16 @@ def get_auto_mode_cache_path(*, compat_version: str | None = None) -> str:
     return _auto_cache_path(compat_version=compat_version)
 
 
+def _auto_cache_resolve_path(*, compat_version: str | None = None) -> str:
+    if compat_version is None:
+        return _auto_cache_path()
+    try:
+        return _auto_cache_path(compat_version=compat_version)
+    except TypeError:
+        # Tests may monkeypatch the path helper with a zero-arg lambda.
+        return _auto_cache_path()
+
+
 def _auto_compat_version(base_data: dict | None) -> str:
     try:
         raw = str(
@@ -111,7 +121,11 @@ def _auto_cache_bucket_template() -> dict:
     }
 
 
-def _auto_cache_empty(*, compat_version: str | None = None) -> dict:
+def _auto_cache_empty(
+    *,
+    compat_version: str | None = None,
+    program_version: str | None = None,
+) -> dict:
     out = {
         "v": 3,
         "items": {},
@@ -121,6 +135,9 @@ def _auto_cache_empty(*, compat_version: str | None = None) -> dict:
     ver = str(compat_version or AUTO_MODE_COMPAT_VERSION).strip()
     if ver:
         out["auto_mode_compat_version"] = str(ver)
+    prog_ver = str(program_version or "").strip()
+    if prog_ver:
+        out["program_version"] = prog_ver
     for k in AUTO_MODE_CACHE_FILTER_KEYS:
         out["by_filter"][str(k)] = _auto_cache_bucket_template()
     return out
@@ -256,8 +273,12 @@ def _auto_apply_seed(seed: int) -> None:
         pass
 
 
-def _auto_cache_load(*, compat_version: str | None = None) -> dict:
-    path = _auto_cache_path(compat_version=compat_version)
+def _auto_cache_load(
+    *,
+    compat_version: str | None = None,
+    program_version: str | None = None,
+) -> dict:
+    path = _auto_cache_resolve_path(compat_version=compat_version)
     try:
         with open(path, "r", encoding="utf-8") as f:
             obj = json.load(f)
@@ -266,19 +287,30 @@ def _auto_cache_load(*, compat_version: str | None = None) -> dict:
         expected_ver = str(compat_version or AUTO_MODE_COMPAT_VERSION).strip()
         actual_ver = str(obj.get("auto_mode_compat_version", "") or "").strip()
         if expected_ver and actual_ver and actual_ver != expected_ver:
-            return _auto_cache_empty(compat_version=expected_ver)
+            return _auto_cache_empty(
+                compat_version=expected_ver,
+                program_version=program_version,
+            )
         if expected_ver and not actual_ver:
             obj["auto_mode_compat_version"] = str(expected_ver)
         return obj
     except Exception:
         expected_ver = str(compat_version or AUTO_MODE_COMPAT_VERSION).strip()
         if expected_ver:
-            return _auto_cache_empty(compat_version=expected_ver)
+            return _auto_cache_empty(
+                compat_version=expected_ver,
+                program_version=program_version,
+            )
         return {}
 
 
-def _auto_cache_save(cache: dict, *, compat_version: str | None = None) -> None:
-    path = _auto_cache_path(compat_version=compat_version)
+def _auto_cache_save(
+    cache: dict,
+    *,
+    compat_version: str | None = None,
+    program_version: str | None = None,
+) -> None:
+    path = _auto_cache_resolve_path(compat_version=compat_version)
     try:
         cache_obj = dict(cache or {})
         try:
@@ -306,6 +338,9 @@ def _auto_cache_save(cache: dict, *, compat_version: str | None = None) -> None:
         ).strip()
         if ver:
             cache_obj["auto_mode_compat_version"] = str(ver)
+        prog_ver = str(program_version or cache_obj.get("program_version", "") or "").strip()
+        if prog_ver:
+            cache_obj["program_version"] = prog_ver
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(cache_obj, f, indent=2, sort_keys=True)
