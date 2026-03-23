@@ -273,6 +273,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
         update_afdw_cycles_ui(pin=pin, get_val=get_val, t=t)
         update_tdc_controls_ui(pin=pin, get_val=get_val, t=t, apply_tdc_preset=apply_tdc_preset)
         update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t)
+        update_auto_mode_controls_ui()
 
     def _on_filter_type_change(_=None):
         update_mixed_freq_ui()
@@ -318,6 +319,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
         onchange=lambda _: (
             update_tdc_controls_ui(pin=pin, get_val=get_val, t=t, apply_tdc_preset=apply_tdc_preset),
             update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t),
+            update_auto_mode_controls_ui(),
         ),
     )
 
@@ -332,6 +334,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
         onchange=lambda _: (
             update_afdw_cycles_ui(pin=pin, get_val=get_val, t=t),
             update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t),
+            update_auto_mode_controls_ui(),
         ),
     )
 

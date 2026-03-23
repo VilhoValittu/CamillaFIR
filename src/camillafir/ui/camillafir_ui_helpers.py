@@ -11,6 +11,7 @@ from ..io.auto_mode.shared import _auto_goal_forced_level_window
 from .camillafir_modes import MODE_DEFAULTS, MODE_CLAMPS
 from .camillafir_utils import scale_taps_with_fs
 from .system_health import (
+    show_toast,
     toast_afdw_preset_applied,
     toast_max_boost_over_cap,
     toast_mode_defaults_applied,
@@ -50,6 +51,38 @@ def _pin_get(name, default=None):
         pass
 
     return default
+
+
+def _is_auto_mode_locked() -> bool:
+    """Palauttaa tosi kun automaattitila lukitsee kontrollit."""
+    try:
+        mode_u = str(_pin_get("mode", "BASIC") or "BASIC").strip().upper()
+    except Exception:
+        mode_u = "BASIC"
+    try:
+        auto_flag = bool(_pin_get("camillafir_automatic_mode", False))
+    except Exception:
+        auto_flag = False
+    return bool(mode_u == "AUTO" or auto_flag)
+
+
+def _render_preset_badges(labels: list[str]) -> None:
+    """Renderoi presetit passiivisina tageina ilman klikkauksia."""
+    try:
+        items = [
+            (
+                "<span style='display:inline-block; margin:0 8px 8px 0; padding:4px 10px; "
+                "border:1px solid rgba(255,255,255,0.18); border-radius:999px; "
+                "background:rgba(255,255,255,0.04); color:#d7dde7; font-size:13px;'>"
+                f"{str(label or '').strip()}</span>"
+            )
+            for label in list(labels or [])
+            if str(label or "").strip()
+        ]
+        if items:
+            put_html("".join(items))
+    except Exception:
+        return
 
 def _warn_max_boost_if_over_cap(_=None):
     """Sisainen apufunktio: warn max boost if over cap."""
@@ -163,6 +196,15 @@ def update_auto_mode_controls_ui(_=None):
         wrap.style.filter = disable ? 'grayscale(1)' : '';
       }}
     }}
+    function setScopeState(scopeId, disable) {{
+      var scope = document.getElementById(scopeId);
+      if (!scope) return;
+      scope.style.opacity = disable ? '0.55' : '';
+      scope.style.filter = disable ? 'grayscale(1)' : '';
+      scope.querySelectorAll('button,input,select,textarea').forEach(function(el) {{
+        el.disabled = disable;
+      }});
+    }}
     ['auto_goal', 'auto_target_mode'].forEach(function(name) {{
       setState(name, {auto_only_disabled});
     }});
@@ -208,6 +250,9 @@ def update_auto_mode_controls_ui(_=None):
       'mixed_freq'
     ].forEach(function(name) {{
       setState(name, {auto_locked_disabled});
+    }});
+    ['afdw_cycles_scope', 'tdc_controls_scope'].forEach(function(scopeId) {{
+      setScopeState(scopeId, {auto_locked_disabled});
     }});
     ['hc_mode', 'hc_custom_file'].forEach(function(name) {{
       setState(name, {house_curve_disabled});
@@ -714,7 +759,30 @@ def update_afdw_cycles_ui(*, pin, get_val, t):
         v = float(get_val("fdw_cycles", 10.0) or 10.0)
 
     with use_scope("afdw_cycles_scope", clear=True):
-        put_html("<div id='afdw_box' style='margin-top:6px'>")
+        preset_labels = [
+            t("afdw_preset_tight"),
+            t("afdw_preset_balanced"),
+            t("afdw_preset_safe"),
+            t("afdw_preset_minimal"),
+        ]
+        if (not enabled) or is_auto_mode:
+            _render_preset_badges(preset_labels)
+        else:
+            put_row(
+                [
+                    put_buttons(
+                        [
+                            {"label": preset_labels[0], "value": "Tight"},
+                            {"label": preset_labels[1], "value": "Balanced"},
+                            {"label": preset_labels[2], "value": "Safe"},
+                            {"label": preset_labels[3], "value": "Minimal"},
+                        ],
+                        onclick=lambda preset: apply_afdw_preset(preset),
+                        small=True,
+                    ),
+                ]
+            )
+        put_html(f"<div style='opacity:0.65; font-size:13px'>{t('afdw_preset_help')}</div>")
         w = put_input(
             "fdw_cycles",
             label=t("fdw"),
@@ -722,21 +790,25 @@ def update_afdw_cycles_ui(*, pin, get_val, t):
             value=v,
             help_text=t("fdw_help"),
         )
-        put_html("</div>")
         if (not enabled) or is_auto_mode:
             w.style("opacity:0.55; pointer-events:none; filter:grayscale(1);")
+            try:
+                disabled_hint = str(t("afdw_disabled_hint") or "").strip()
+            except Exception:
+                disabled_hint = ""
+            if disabled_hint.lower() == "afdw_disabled_hint":
+                disabled_hint = ""
             put_html(
                 f"<div style='margin-top:6px; color:#9aa0a6; font-size:13px;'>"
-                f"{t('afdw_disabled_hint') if 'afdw_disabled_hint' else 'OFF'}"
+                f"{disabled_hint or 'OFF'}"
                 f"</div>"
             )
             put_html(
                 "<script>"
                 "(function(){"
-                "var box=document.getElementById('afdw_box');"
+                "var box=document.getElementById('afdw_cycles_scope');"
                 "if(!box) return;"
                 "box.style.opacity='0.55';"
-                "box.style.pointerEvents='none';"
                 "box.style.filter='grayscale(1)';"
                 "box.querySelectorAll('button,input,select,textarea').forEach(function(el){el.disabled=true;});"
                 "})();"
@@ -774,19 +846,25 @@ def update_tdc_controls_ui(*, pin, get_val, t, apply_tdc_preset):
     slope    = _f("tdc_slope_db_per_oct", 6.0)
 
     with use_scope("tdc_controls_scope", clear=True):
-        w = put_html("<div id='tdc_box' style='margin-top:6px'>")
-
-        put_row([
-            put_buttons(
-                [
-                    {"label": t("tdc_preset_safe"),       "value": "Safe"},
-                    {"label": t("tdc_preset_normal"),     "value": "Normal"},
-                    {"label": t("tdc_preset_aggressive"), "value": "Aggressive"},
-                ],
-                onclick=lambda preset: apply_tdc_preset(preset),
-                small=True,
-            ),
-        ])
+        preset_labels = [
+            t("tdc_preset_safe"),
+            t("tdc_preset_normal"),
+            t("tdc_preset_aggressive"),
+        ]
+        if (not enabled) or is_auto_mode:
+            _render_preset_badges(preset_labels)
+        else:
+            put_row([
+                put_buttons(
+                    [
+                        {"label": preset_labels[0], "value": "Safe"},
+                        {"label": preset_labels[1], "value": "Normal"},
+                        {"label": preset_labels[2], "value": "Aggressive"},
+                    ],
+                    onclick=lambda preset: apply_tdc_preset(preset),
+                    small=True,
+                ),
+            ])
 
         put_html(f"<div style='opacity:0.65; font-size:12px; line-height:1.25; margin-top:6px'>{t('tdc_preset_help')}</div>")
         put_html(f"<div style='opacity:0.70; font-size:12px; line-height:1.25; margin-top:4px'>{t('tdc_summary_hint')}</div>")
@@ -815,16 +893,13 @@ def update_tdc_controls_ui(*, pin, get_val, t, apply_tdc_preset):
             ),
         ])
 
-        put_html("</div>")
-
     if (not enabled) or is_auto_mode:
         put_html(
             "<script>"
             "(function(){"
-            "var box=document.getElementById('tdc_box');"
+            "var box=document.getElementById('tdc_controls_scope');"
             "if(!box) return;"
             "box.style.opacity='0.55';"
-            "box.style.pointerEvents='none';"
             "box.style.filter='grayscale(1)';"
             "box.querySelectorAll('button,input,select,textarea').forEach(function(el){el.disabled=true;});"
             "})();"
@@ -1101,6 +1176,15 @@ def update_lvl_ui(_=None):
 
 
 def apply_tdc_preset(name: str):
+    if _is_auto_mode_locked():
+        show_toast(
+            "TDC preset locked in Automatic mode",
+            color="info",
+            duration=1.8,
+            dedupe_key="tdc_preset_locked_auto",
+        )
+        return
+
     presets = {
         "Safe": {"enable": True, "strength": 35.0, "max_red": 6.0, "slope": 3.0},
         "Normal": {"enable": True, "strength": 50.0, "max_red": 9.0, "slope": 6.0},
@@ -1119,6 +1203,15 @@ def apply_tdc_preset(name: str):
 
 
 def apply_afdw_preset(name: str):
+    if _is_auto_mode_locked():
+        show_toast(
+            "A-FDW preset locked in Automatic mode",
+            color="info",
+            duration=1.8,
+            dedupe_key="afdw_preset_locked_auto",
+        )
+        return
+
     presets = {
         "Tight": {"enable": True, "cycles": 5.0},
         "Balanced": {"enable": True, "cycles": 10.0},

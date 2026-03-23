@@ -753,26 +753,7 @@ def build_export_section(*, t, get_val, on_afdw_preset):
             value=[True] if get_val("enable_afdw", True) else [],
             help_text=t("afdw_help"),
         ),
-        put_row(
-            [
-                put_buttons(
-                    [
-                        {"label": t("afdw_preset_tight"), "value": "Tight"},
-                        {"label": t("afdw_preset_balanced"), "value": "Balanced"},
-                        {"label": t("afdw_preset_safe"), "value": "Safe"},
-                        {"label": t("afdw_preset_minimal"), "value": "Minimal"},
-                    ],
-                    onclick=on_afdw_preset,
-                    small=True,
-                ),
-            ]
-        ),
-        put_html(f"<div style='opacity:0.65; font-size:13px'>{t('afdw_preset_help')}</div>"),
-        put_row(
-            [
-                put_scope("afdw_cycles_scope"),
-            ]
-        ),
+        put_scope("afdw_cycles_scope"),
         put_markdown("---"),
         put_checkbox(
             "enable_tdc",
