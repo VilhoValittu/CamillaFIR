@@ -515,6 +515,8 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
             g_legacy_src = str(st.get("cmp_filter_mags_source", "") or "").strip().lower()
             if m_raw.size < 8 and m_corr.size >= 8:
                 m_raw = np.asarray(m_corr, dtype=float) + float(offset_db)
+            if m_corr.size < 8 and m_raw.size >= 8:
+                m_corr = np.asarray(m_raw, dtype=float) - float(offset_db)
             if g_pred.size < 8 and g_legacy.size >= 8 and g_legacy_src != "ir_fft_final":
                 g_pred = g_legacy
             if g_real.size < 8 and g_legacy.size >= 8 and g_legacy_src == "ir_fft_final":
@@ -523,7 +525,7 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
                 g_pred = g_legacy
             if g_real.size < 8 and g_legacy.size >= 8:
                 g_real = g_legacy
-            return f, m_raw, t, g_pred, g_real, mm, float(offset_db)
+            return f, m_corr, t, g_pred, g_real, mm, float(offset_db)
 
         f = _as_arr(st.get("freq_axis", None))
         t = _as_arr(st.get("target_mags", None))
@@ -539,6 +541,8 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
         g_legacy_src = str(st.get("filter_mags_source", "") or "").strip().lower()
         if m_raw.size < 8 and m_corr.size >= 8:
             m_raw = np.asarray(m_corr, dtype=float) + float(offset_db)
+        if m_corr.size < 8 and m_raw.size >= 8:
+            m_corr = np.asarray(m_raw, dtype=float) - float(offset_db)
         if g_pred.size < 8 and g_legacy.size >= 8 and g_legacy_src != "ir_fft_final":
             g_pred = g_legacy
         if g_real.size < 8 and g_legacy.size >= 8 and g_legacy_src == "ir_fft_final":
@@ -547,7 +551,7 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
             g_pred = g_legacy
         if g_real.size < 8 and g_legacy.size >= 8:
             g_real = g_legacy
-        return f, m_raw, t, g_pred, g_real, mm, float(offset_db)
+        return f, m_corr, t, g_pred, g_real, mm, float(offset_db)
 
     def _phase_limit_hz(st):
         for k in ("phase_limit_hz", "phase_limit"):
@@ -669,8 +673,8 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
             "pre_metric_suspect": False,
             "pre_metric_note": "",
         }
-        f, m_raw, t, g_pred, g_real, mm, offset_db = _active_axes(st)
-        if min(f.size, m_raw.size, t.size, g_pred.size) < 8:
+        f, m_corr, t, g_pred, g_real, mm, offset_db = _active_axes(st)
+        if min(f.size, m_corr.size, t.size, g_pred.size) < 8:
             pre_db = _pre_ringing_db(st)
             out["pre_ringing_db"] = pre_db
             out["ir_pre_post_ratio"] = _pre_post_ratio(st, pre_db)
@@ -684,7 +688,7 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
         if cmax is None or cmax <= cmin:
             cmax = float(np.max(f)) if f.size else (cmin + 1.0)
 
-        def _compute_error_bundle(freqs, measured_raw, target_db, gain_db, mag_mask, *, include_ripple=False):
+        def _compute_error_bundle(freqs, measured_aligned, target_db, gain_db, mag_mask, *, include_ripple=False):
             res = {
                 "rms_magc": None,
                 "max_magc": None,
@@ -695,11 +699,11 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
                 "ripple_rms": None,
                 "valid": None,
             }
-            n_loc = int(min(freqs.size, measured_raw.size, target_db.size, gain_db.size))
+            n_loc = int(min(freqs.size, measured_aligned.size, target_db.size, gain_db.size))
             if n_loc < 8:
                 return res
             f_loc = np.asarray(freqs[:n_loc], dtype=float)
-            m_loc = np.asarray(measured_raw[:n_loc], dtype=float)
+            m_loc = np.asarray(measured_aligned[:n_loc], dtype=float)
             t_loc = np.asarray(target_db[:n_loc], dtype=float)
             g_loc = np.asarray(gain_db[:n_loc], dtype=float)
             if mag_mask.size >= n_loc:
@@ -714,7 +718,7 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
                 & np.isfinite(g_loc)
                 & (f_loc > 0.0)
             )
-            err = _mag_error_db(t_loc, m_loc, g_loc, float(offset_db))
+            err = _mag_error_db(t_loc, m_loc, g_loc)
 
             def _band_stats(lo_hz: float, hi_hz: float):
                 m_band = valid & (f_loc >= float(lo_hz)) & (f_loc <= float(hi_hz))
@@ -769,7 +773,7 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
             res["valid"] = valid
             return res
 
-        pred = _compute_error_bundle(f, m_raw, t, g_pred, mm, include_ripple=True)
+        pred = _compute_error_bundle(f, m_corr, t, g_pred, mm, include_ripple=True)
         out["pred_mag_error_rms"] = pred["rms_magc"]
         out["pred_mag_error_max"] = pred["max_magc"]
         out["pred_mag_error_max_hz"] = pred["max_hz_magc"]
@@ -778,7 +782,7 @@ def format_dsp_quality_report_block(settings, l_stats, r_stats):
         out["pred_mag_error_rms_200_2000"] = pred["rms_200_2000"]
         out["ripple_rms"] = pred["ripple_rms"]
 
-        real = _compute_error_bundle(f, m_raw, t, g_real, mm, include_ripple=False)
+        real = _compute_error_bundle(f, m_corr, t, g_real, mm, include_ripple=False)
         out["real_mag_error_rms"] = real["rms_magc"]
         out["real_mag_error_max"] = real["max_magc"]
         out["real_mag_error_max_hz"] = real["max_hz_magc"]
@@ -940,6 +944,26 @@ def format_summary_content(settings, l_stats, r_stats):
             return f"{float(rng[0]):.0f}-{float(rng[1]):.0f} Hz"
         except Exception:
             return "n/a"
+
+    def _report_offset_db(st: dict) -> float:
+        try:
+            if "cmp_offset_db" in st:
+                return _safe_float(st.get("cmp_offset_db", 0.0), 0.0)
+        except Exception:
+            pass
+        return _safe_float(st.get("offset_db", 0.0), 0.0)
+
+    def _large_offset_warning_line() -> str | None:
+        off_l = abs(_report_offset_db(l_stats))
+        off_r = abs(_report_offset_db(r_stats))
+        max_off = max(off_l, off_r)
+        if max_off < 30.0:
+            return None
+        return (
+            "Warning: Very large leveling offset detected "
+            f"(L {off_l:.2f} dB | R {off_r:.2f} dB). "
+            "Measurement level appears relative/uncalibrated, so absolute-level report lines should be interpreted cautiously."
+        )
 
     def _phase_clamp_line(side: str, st: dict) -> str:
         lim = st.get("phase_corr_clamp_deg", None)
@@ -1232,6 +1256,9 @@ def format_summary_content(settings, l_stats, r_stats):
     lines.append(f"L peak (pre-norm): {_safe_float(l_stats.get('peak_before_norm', 0), 0):.2f} dB")
     lines.append(f"R peak (pre-norm): {_safe_float(r_stats.get('peak_before_norm', 0), 0):.2f} dB")
     lines.append(f"Global offset applied: {_safe_float(l_stats.get('offset_db', 0), 0):.2f} dB")
+    offset_warn = _large_offset_warning_line()
+    if offset_warn:
+        lines.append(offset_warn)
     lines.append(f"Auto gain margin setting: {_safe_float(settings.get('gain', 0.0), 0.0):.2f} dB")
     lines.append(
         f"Applied auto gain: L {_safe_float(l_stats.get('auto_global_gain_db', 0.0), 0.0):.2f} dB | "
