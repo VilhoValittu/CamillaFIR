@@ -11,7 +11,7 @@ if __package__ in (None, ""):
 
 def _auto_thread_budget() -> tuple[int, int]:
     """
-    Valitsee automaattisen thread-budjetin: noin 50 % CPU-ytimista.
+    Valitsee automaattisen thread-budjetin: noin 75 % CPU-ytimista.
 
     Esim. 4 -> 3, 8 -> 6.
     """
@@ -20,7 +20,7 @@ def _auto_thread_budget() -> tuple[int, int]:
     except Exception:
         cores = 1
     cores = max(1, int(cores))
-    use = max(1, int((cores * 1) // 2))
+    use = max(1, int((cores * 4) // 3))
     return int(use), int(cores)
 
 
