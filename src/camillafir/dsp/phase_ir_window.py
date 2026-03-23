@@ -21,7 +21,7 @@ def _apply_ir_window(ir, cfg, st, logger=None) -> np.ndarray:
     win_shape = str(getattr(cfg, "ir_export_window_shape", "hann") or "hann").strip().lower()
     try:
         tukey_alpha = float(getattr(cfg, "ir_export_tukey_alpha", 0.25))
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         tukey_alpha = 0.25
     if not np.isfinite(tukey_alpha):
         tukey_alpha = 0.25
@@ -40,14 +40,14 @@ def _apply_ir_window(ir, cfg, st, logger=None) -> np.ndarray:
     auto_asym_left_ms_after = float(left_ms)
     try:
         auto_asym_left_ratio = float(getattr(cfg, "auto_asym_left_ratio", 0.35) or 0.35)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         auto_asym_left_ratio = 0.35
     if not np.isfinite(auto_asym_left_ratio):
         auto_asym_left_ratio = 0.35
     auto_asym_left_ratio = float(np.clip(auto_asym_left_ratio, 0.0, 1.0))
     try:
         auto_asym_left_max_ms = float(getattr(cfg, "auto_asym_left_max_ms", 25.0) or 25.0)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         auto_asym_left_max_ms = 25.0
     if not np.isfinite(auto_asym_left_max_ms):
         auto_asym_left_max_ms = 25.0
@@ -144,7 +144,7 @@ def _apply_ir_window(ir, cfg, st, logger=None) -> np.ndarray:
     if is_min_filter and win_mode == "off" and n > 16:
         try:
             taper_ms = float(getattr(cfg, "min_off_tail_taper_ms", 2.0) or 2.0)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             taper_ms = 2.0
         if not np.isfinite(taper_ms):
             taper_ms = 2.0
@@ -158,7 +158,7 @@ def _apply_ir_window(ir, cfg, st, logger=None) -> np.ndarray:
                 if isinstance(st, dict):
                     st["min_off_tail_taper_ms"] = float(taper_ms)
                     st["min_off_tail_taper_samples"] = int(taper_n)
-            except Exception:
+            except (TypeError, ValueError):
                 pass
             if logger is not None:
                 logger.info(
@@ -168,7 +168,7 @@ def _apply_ir_window(ir, cfg, st, logger=None) -> np.ndarray:
     if win_shape == "tukey" and tukey_alpha > 0.0 and win_mode != "off":
         try:
             d = float(np.max(np.abs(impulse - impulse_before)))
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError):
             d = 0.0
         if (not math.isfinite(d)) or (d <= 0.0):
             if logger is not None:
@@ -183,7 +183,7 @@ def _apply_ir_window(ir, cfg, st, logger=None) -> np.ndarray:
             if w_sum > 0.0:
                 dc = float(np.sum(impulse) / w_sum)
                 impulse = impulse - (dc * window)
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError):
             pass
 
     try:
@@ -197,7 +197,7 @@ def _apply_ir_window(ir, cfg, st, logger=None) -> np.ndarray:
             st["ir_window_auto_asym_left_ms_after"] = float(auto_asym_left_ms_after)
             st["ir_window_auto_asym_left_ratio"] = float(auto_asym_left_ratio)
             st["ir_window_auto_asym_left_max_ms"] = float(auto_asym_left_max_ms)
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return impulse
 
@@ -208,6 +208,6 @@ def _apply_fdw_if_enabled(ir_win, cfg, st) -> np.ndarray:
         if isinstance(st, dict):
             st["phase_ir_fdw_applied"] = False
             st["phase_ir_fdw_reason"] = "afdw_is_magnitude_stage"
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return out

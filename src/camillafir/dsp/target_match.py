@@ -40,7 +40,7 @@ def match_pct_from_rms(
     """Map RMS error (dB) to target-match percentage."""
     try:
         rms = float(rms_db)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return 0.0
     if not np.isfinite(rms):
         return 0.0
@@ -80,7 +80,7 @@ def target_match_from_stats(
             return None
         try:
             a = np.asarray(v, dtype=float)
-        except Exception:
+        except (TypeError, ValueError):
             return None
         if a.ndim != 1 or a.size == 0:
             return None
@@ -162,7 +162,7 @@ def target_match_from_stats(
             try:
                 fmin = float(rng[0])
                 fmax = float(rng[1])
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 fmin, fmax = float(default_range_hz[0]), float(default_range_hz[1])
         else:
             fmin, fmax = float(default_range_hz[0]), float(default_range_hz[1])

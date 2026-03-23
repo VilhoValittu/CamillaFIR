@@ -44,7 +44,7 @@ def build_bassfirst_masks(freq_axis, m_raw_db, phase_rad_unwrapped, gd_ms, gd_di
             pj_p1 = float(pj_p1) * 2.0
             gd_t0 = float(gd_t0) * 1.2
             gd_t1 = float(gd_t1) * 1.2
-        except Exception:
+        except (TypeError, ValueError):
             pass
 
     prior = _freq_prior(f, f1=mode_f1, f2=mode_f2)
@@ -67,7 +67,7 @@ def build_bassfirst_masks(freq_axis, m_raw_db, phase_rad_unwrapped, gd_ms, gd_di
                 Q = f[pi] / bw_hz if bw_hz > 0 else 0.0
                 q_norm[pi] = _clamp01((Q - q0) / (q1 - q0 + 1e-12))
             q_norm = scipy.ndimage.gaussian_filter1d(q_norm, sigma=6)
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         pass
 
     mode_score = prior * (0.45*gd_norm + 0.35*mag_norm + 0.20*q_norm)
@@ -82,7 +82,7 @@ def build_bassfirst_masks(freq_axis, m_raw_db, phase_rad_unwrapped, gd_ms, gd_di
         _rew_asym = bool(rew_asym)
         try:
             _left_ms = float(left_ms)
-        except Exception:
+        except (TypeError, ValueError):
             _left_ms = 0.0
         if not np.isfinite(_left_ms):
             _left_ms = 0.0
@@ -96,7 +96,7 @@ def build_bassfirst_masks(freq_axis, m_raw_db, phase_rad_unwrapped, gd_ms, gd_di
         mid = (f > f1) & (f < f2)
         taper[mid] = 0.5 - 0.5*np.cos(np.pi * (f[mid] - f1) / (f2 - f1))
         room_mode_mask = room_mode_mask * taper
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         pass
 
     g = np.abs(_log_grad(m, f))

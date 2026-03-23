@@ -37,7 +37,7 @@ def _compute_alignment_target(ir, cfg, st, *, stage: str = "post_window") -> int
             st["ir_anchor_mode"] = str(anchor_mode)
             st["ir_window_mode_requested"] = str(requested_win_mode)
             st["ir_window_mode_effective"] = str(win_mode)
-    except Exception:
+    except (TypeError, ValueError):
         pass
 
     if stage == "pre_window":
@@ -61,7 +61,7 @@ def _compute_alignment_target(ir, cfg, st, *, stage: str = "post_window") -> int
             if isinstance(st, dict):
                 st["min_causal_ms"] = float(min_causal_ms)
                 st["min_causal_target_samples"] = int(target)
-        except Exception:
+        except (TypeError, ValueError):
             pass
         return target
 
@@ -128,6 +128,6 @@ def _shift_ir(
             st[f"{key_prefix}_anchor_before_samples"] = int(anchor_now)
             st[f"{key_prefix}_anchor_after_samples"] = int(anchor_after)
             st[f"{key_prefix}_anchor_mode"] = str(anchor_mode_eff)
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return y, info

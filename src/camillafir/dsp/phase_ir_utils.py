@@ -53,7 +53,7 @@ def _max_abs_group_delay_ms(freqs: np.ndarray, phase_rad: np.ndarray, mask: np.n
         return 0.0
     try:
         return float(np.max(np.abs(gd_ms[sel])))
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return 0.0
 
 
@@ -66,7 +66,7 @@ def _resolve_ir_energy_split(ir: np.ndarray, split: int | None = None) -> int:
         split = int(np.argmax(np.abs(x)))
     try:
         s = int(split)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         s = int(np.argmax(np.abs(x)))
     if n <= 16:
         return int(np.clip(s, 1, max(1, n - 1)))
@@ -118,7 +118,7 @@ def _ms_value(cfg, name_ms: str, name_alias: str, default: float = 0.0) -> float
         v = getattr(cfg, name_alias, default)
     try:
         return float(v or 0.0)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return float(default)
 
 

@@ -56,14 +56,14 @@ def smooth_gain_fractional_octave(freqs, gain_db, filter_smooth, *, mult=1.0):
 
     try:
         fs = float(filter_smooth)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         fs = 12.0
     if not np.isfinite(fs) or fs <= 0.0:
         fs = 12.0
 
     try:
         m = float(mult)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         m = 1.0
     if not np.isfinite(m) or m <= 0.0:
         m = 1.0
@@ -143,7 +143,7 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
                 f"mean={bw_mean:.4f} oct, "
                 f"max={bw_max:.4f} oct @ {f_max_bw:.0f} Hz"
             )
-    except Exception:
+    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
         pass
 
     return out

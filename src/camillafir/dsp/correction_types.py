@@ -12,7 +12,7 @@ def _telemetry_list(value: Any) -> list[Any] | None:
         return None
     try:
         return np.asarray(value).tolist()
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -137,7 +137,7 @@ class CorrectionInputs:
 
 @dataclass
 class CorrectionOutputs:
-    """Korjausvaiheen tuotospaketti. Tama pidetaan viela yhteensopivana vanhan dict-API:n kanssa."""
+    """Korjausvaiheen typed tuotospaketti."""
 
     current_rt60: float
     rt60_bands: dict[str, Any]
@@ -185,57 +185,6 @@ class CorrectionOutputs:
     hard_over_boost: float
     hard_over_cut: float
     clamp_dominance_level: str
-
-    def to_legacy_dict(self) -> dict[str, Any]:
-        """Siltametodi: palauttaa vanhan rakenteen ilman kutsujamuutoksia."""
-        return {
-            "current_rt60": self.current_rt60,
-            "rt60_bands": self.rt60_bands,
-            "band_avg": self.band_avg,
-            "target_mags": self.target_mags,
-            "hpf_f": self.hpf_f,
-            "hpf_order": self.hpf_order,
-            "target_level_db": self.target_level_db,
-            "calc_offset_db": self.calc_offset_db,
-            "meas_level_db_window": self.meas_level_db_window,
-            "target_level_db_window": self.target_level_db_window,
-            "offset_method": self.offset_method,
-            "s_min": self.s_min,
-            "s_max": self.s_max,
-            "target_shift_db": self.target_shift_db,
-            "cmp": self.cmp,
-            "analysis_mode": self.analysis_mode,
-            "gain_db": self.gain_db,
-            "afdw_on": self.afdw_on,
-            "base_sigma": self.base_sigma,
-            "_filter_smooth": self.filter_smooth,
-            "df_mode": self.df_mode,
-            "raw_g": self.raw_g,
-            "final_g": self.final_g,
-            "mask_c": self.mask_c,
-            "stage_probes": self.stage_probes,
-            "use_bassfirst": self.use_bassfirst,
-            "bf_room_mode": self.bf_room_mode,
-            "bf_rel": self.bf_rel,
-            "bf_conf_for_smoothing": self.bf_conf_for_smoothing,
-            "boost_peak_db": self.boost_peak_db,
-            "cut_peak_db": self.cut_peak_db,
-            "n_boost": self.n_boost,
-            "boost_cand_peak": self.boost_cand_peak,
-            "boost_cand_min_hz": self.boost_cand_min_hz,
-            "n_boost_cand": self.n_boost_cand,
-            "n_boost_cand_low": self.n_boost_cand_low,
-            "n_boost_cand_exc": self.n_boost_cand_exc,
-            "softclip_boost_bins": self.softclip_boost_bins,
-            "softclip_cut_bins": self.softclip_cut_bins,
-            "over_boost": self.over_boost,
-            "over_cut": self.over_cut,
-            "hardclamp_boost_bins": self.hardclamp_boost_bins,
-            "hardclamp_cut_bins": self.hardclamp_cut_bins,
-            "hard_over_boost": self.hard_over_boost,
-            "hard_over_cut": self.hard_over_cut,
-            "clamp_dominance_level": self.clamp_dominance_level,
-        }
 
 
 @dataclass

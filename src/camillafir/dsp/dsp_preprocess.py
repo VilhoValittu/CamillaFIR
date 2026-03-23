@@ -27,7 +27,7 @@ def analysis_smoothing_lf_to_hf(
     try:
         m_low, _ = apply_smoothing_std(f, m, dummy, float(low_bw))
         m_high, _ = apply_smoothing_std(f, m, dummy, float(high_bw))
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return np.copy(m)
 
     ff = np.maximum(f, 1.0)
@@ -79,7 +79,7 @@ def run_preprocess(freqs, meas_mags, raw_phases, cfg, *, stereo_link_ctx=None) -
     if is_psy:
         try:
             m_plot_db = psychoacoustic_smoothing(freq_axis, m_interp)
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError):
             m_plot_db = None
 
     complex_meas = 10 ** (m_interp / 20.0) * np.exp(1j * p_rad_interp)
@@ -155,7 +155,7 @@ def run_preprocess(freqs, meas_mags, raw_phases, cfg, *, stereo_link_ctx=None) -
                 and len(cmp["cmp_freq_axis"]) == len(cmp["cmp_confidence_mask"])
             ):
                 analysis_mode = "comparison"
-    except Exception:
+    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError, KeyError):
         cmp = None
         analysis_mode = "native"
 

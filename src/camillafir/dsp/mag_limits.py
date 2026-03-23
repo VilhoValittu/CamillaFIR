@@ -44,7 +44,7 @@ def _apply_slope_limits(
                     max_db_per_oct_boost=float(max_slope_boost),
                     max_db_per_oct_cut=float(max_slope_cut),
                 )
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError, IndexError):
             pass
         out[mask_c] = g2[mask_c]
 

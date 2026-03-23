@@ -58,7 +58,7 @@ def compute_theoretical_phase_and_store_stats(
         else:
             hpf_txt = "off"
         logger.info(f"Phase model: XO={xo_txt} | HPF={hpf_txt}")
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         xo_txt = "n/a"
         hpf_txt = "n/a"
 
@@ -119,7 +119,7 @@ def compute_theoretical_phase_and_store_stats(
             for xo in xo_list:
                 try:
                     fc = float(xo.get("freq", 0.0) or 0.0)
-                except Exception:
+                except (TypeError, ValueError):
                     continue
                 if fc > 0:
                     m = (f >= fc / 4.0) & (f <= fc * 4.0)
@@ -159,7 +159,7 @@ def compute_theoretical_phase_and_store_stats(
                     for fc, m in xo_band_masks:
                         try:
                             idx_win = int(np.argmin(np.abs(f - xo_phi_hz)))
-                        except Exception:
+                        except (TypeError, ValueError):
                             continue
                         if bool(m[idx_win]):
                             candidates.append(fc)
@@ -173,7 +173,7 @@ def compute_theoretical_phase_and_store_stats(
             for i, xo in enumerate(xo_list, start=1):
                 try:
                     fc = float(xo.get("freq", 0.0) or 0.0)
-                except Exception:
+                except (TypeError, ValueError):
                     continue
                 if fc <= 0:
                     continue
@@ -196,14 +196,14 @@ def compute_theoretical_phase_and_store_stats(
             for i, xo in enumerate(xo_list, start=1):
                 try:
                     fc = float(xo.get("freq", 0.0) or 0.0)
-                except Exception:
+                except (TypeError, ValueError):
                     continue
                 if fc <= 0:
                     continue
                 idx_fc = int(np.argmin(np.abs(f - fc)))
                 try:
                     st[f"xo{i}_dgd_ms@fc"] = float(dgd[idx_fc])
-                except Exception:
+                except (TypeError, ValueError):
                     pass
 
             xo_gd, xo_gd_hz = _max_abs_in_mask(dgd, xo_mask)
@@ -221,7 +221,7 @@ def compute_theoretical_phase_and_store_stats(
                             best_fc_gd = float(min([fc for fc, _ in xo_band_masks], key=lambda c: abs(float(c) - float(xo_gd_hz))))
                     if best_fc_gd is not None:
                         st["xo_diff_raw_max_gd_xo_fc_hz"] = float(best_fc_gd)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
 
             hpf_gd, hpf_gd_hz = _max_abs_in_mask(dgd, hpf_mask)
@@ -229,7 +229,7 @@ def compute_theoretical_phase_and_store_stats(
                 st["hpf_diff_raw_max_gd_ms"] = hpf_gd
                 st["hpf_diff_raw_max_gd_hz"] = hpf_gd_hz
 
-    except Exception as e:
+    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError) as e:
         logger.debug("XO raw diff indicator failed: %s", e)
 
     try:
@@ -238,7 +238,7 @@ def compute_theoretical_phase_and_store_stats(
         for fchk in (20.0, 80.0, 200.0, 1000.0, 5000.0):
             idx = int(np.argmin(np.abs(freq_axis - fchk)))
             st[f"theo_xo_deg@{int(fchk)}Hz"] = float(np.rad2deg(theo_xo[idx]))
-    except Exception:
+    except (TypeError, ValueError):
         pass
 
     try:
@@ -260,7 +260,7 @@ def compute_theoretical_phase_and_store_stats(
                 w = np.clip(w, 0.0, 1.0)
 
                 p_rad_interp = (1.0 - w) * p_rad_interp + w * theo_xo
-    except Exception:
+    except (AttributeError, TypeError, ValueError, FloatingPointError):
         pass
 
     if hpf_freq and hpf_slope:

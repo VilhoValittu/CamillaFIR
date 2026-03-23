@@ -15,7 +15,7 @@ def _sigma_bins_from_hz(freq_axis, sigma_hz: float, fallback_bins: float = 3.0) 
         if not np.isfinite(s) or s <= 0:
             return float(fallback_bins)
         return float(max(1.0, s))
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         return float(fallback_bins)
 
 
@@ -29,7 +29,7 @@ def _distance_bins_from_hz(freq_axis, distance_hz: float, fallback_bins: int = 1
             return int(fallback_bins)
         bins = int(round(float(distance_hz) / df))
         return int(max(1, bins))
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         return int(fallback_bins)
 
 
@@ -176,7 +176,7 @@ def calculate_rt60(impulse, fs):
             return round(rt60, 2)
         return 0.0
 
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return 0.0
 
 
@@ -214,5 +214,5 @@ def calculate_rt60_bands(impulse, fs, f_min=31.5, f_max=8000.0, order=4):
             if 0.05 < rt < 5.0:
                 out[float(round(fc, 2))] = float(rt)
         return out
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return {}

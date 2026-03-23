@@ -22,7 +22,7 @@ def apply_smart_tdc(
 
     try:
         strength = float(base_strength)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         strength = 0.0
     if not np.isfinite(strength):
         strength = 0.0
@@ -30,7 +30,7 @@ def apply_smart_tdc(
 
     try:
         max_red = float(max_total_reduction_db)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         max_red = 9.0
     if not np.isfinite(max_red):
         max_red = 9.0
@@ -54,7 +54,7 @@ def apply_smart_tdc(
                 r = r[mask]
                 x = np.log10(np.clip(freq_hz, c.min(), c.max()))
                 return float(np.interp(x, np.log10(c), r))
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError, OverflowError):
             return default
         return default
 
@@ -64,7 +64,7 @@ def apply_smart_tdc(
         try:
             f_res = float(rev.get("freq", np.nan))
             error_ms = float(rev.get("gd_error", rev.get("error_ms", np.nan)))
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if not (np.isfinite(f_res) and np.isfinite(error_ms)):
             continue
@@ -102,7 +102,7 @@ def apply_smart_tdc(
                 tdc_reduction_db,
                 max_db_per_oct=float(max_slope_db_per_oct),
             )
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         logger.debug("TDC slope limiting failed; continuing without it.", exc_info=True)
 
     tdc_reduction_db = np.minimum(tdc_reduction_db, max_red)

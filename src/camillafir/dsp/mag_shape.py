@@ -41,7 +41,7 @@ def _resolve_filter_smooth(cfg: Any) -> float:
     """Lukee filter smooth -asetuksen nykyisella fallback-logiikalla."""
     try:
         value = float(getattr(cfg, "filter_smooth", getattr(cfg, "smoothing_level", 12)) or 12)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         value = 12.0
     if not np.isfinite(value) or value <= 0:
         value = 12.0

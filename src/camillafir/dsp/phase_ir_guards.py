@@ -27,7 +27,7 @@ def _resolve_guard_split_index(x: np.ndarray, cfg, st) -> int:
         ):
             try:
                 v = int(st.get(k))
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             candidates.append(v)
     for idx in candidates:
@@ -49,14 +49,14 @@ def _pre_energy_guard(ir, cfg, st) -> tuple[np.ndarray, dict[str, Any]]:
     x = np.asarray(ir, dtype=float)
     try:
         ratio_max = float(getattr(cfg, "pre_energy_ratio_max", 0.25) or 0.25)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         ratio_max = 0.25
     if not np.isfinite(ratio_max):
         ratio_max = 0.25
     ratio_max = float(max(0.0, ratio_max))
     try:
         strength = float(getattr(cfg, "pre_energy_guard_strength", 0.8) or 0.8)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         strength = 0.8
     if not np.isfinite(strength):
         strength = 0.8
@@ -65,17 +65,17 @@ def _pre_energy_guard(ir, cfg, st) -> tuple[np.ndarray, dict[str, Any]]:
     split_idx = int(_resolve_ir_energy_split(x, split_idx))
     try:
         min_pre_scale = float(getattr(cfg, "pre_energy_guard_min_scale", 0.08) or 0.08)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         min_pre_scale = 0.08
     min_pre_scale = float(np.clip(min_pre_scale, 1e-3, 1.0))
     try:
         taper_floor = float(getattr(cfg, "pre_energy_guard_taper_floor", 0.05) or 0.05)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         taper_floor = 0.05
     taper_floor = float(np.clip(taper_floor, 1e-6, 1.0))
     try:
         taper_power = float(getattr(cfg, "pre_energy_guard_taper_power", 2.0) or 2.0)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         taper_power = 2.0
     taper_power = float(np.clip(taper_power, 1.0, 4.0))
     info = {
@@ -106,7 +106,7 @@ def _pre_energy_guard(ir, cfg, st) -> tuple[np.ndarray, dict[str, Any]]:
                 st["ir_pre_energy_guard_strength"] = float(info["strength"])
                 st["ir_pre_energy_guard_split_samples"] = int(info["split_samples"])
                 st["ir_pre_energy_guard_reason"] = str(info["reason"])
-        except Exception:
+        except (TypeError, ValueError):
             pass
 
     if not info["enabled"]:
@@ -115,7 +115,7 @@ def _pre_energy_guard(ir, cfg, st) -> tuple[np.ndarray, dict[str, Any]]:
         return x, info
     try:
         limit_db = float(getattr(cfg, "max_pre_ringing_db", -35.0) or -35.0)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         limit_db = -35.0
     if not np.isfinite(limit_db):
         info["reason"] = "bad_limit_db"
@@ -189,6 +189,6 @@ def _tdc_postprocess(ir, cfg, st) -> np.ndarray:
     try:
         if isinstance(st, dict):
             st["tdc_postprocess_applied"] = False
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return out

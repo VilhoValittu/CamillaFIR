@@ -82,7 +82,7 @@ def _log_stage_stats(
                 d_rms = float(np.sqrt(np.mean(dv * dv)))
                 msg += f" | Delta_max={d_abs_max:.3f} dB, Delta_rms={d_rms:.3f} dB"
         logger.info(msg)
-    except Exception:
+    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
         pass
 
 
@@ -107,7 +107,7 @@ def _record_stage_probe(
             auto_headroom_db=0.0,
             logger_obj=logger,
         )
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         pass
 
 
@@ -145,5 +145,5 @@ def _band_delta_metrics(
         f_band = f[m]
         max_hz = float(f_band[idx]) if f_band.size else None
         return float(np.sqrt(np.mean(d * d))), float(np.max(ad)), max_hz
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return 0.0, 0.0, None

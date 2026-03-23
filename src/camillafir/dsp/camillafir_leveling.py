@@ -24,7 +24,7 @@ def _to_float(x, default: float) -> float:
     """Sisainen apufunktio: to float."""
     try:
         v = float(x)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return float(default)
     if not np.isfinite(v):
         return float(default)
@@ -51,7 +51,7 @@ def _to_bool(x, default: bool) -> bool:
                 return bool(default)
             return bool(v != 0.0)
         return bool(x)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return bool(default)
 
 
@@ -62,7 +62,14 @@ def _remember_leveling_error(cfg, stage: str, exc: Exception | None = None) -> N
         else:
             msg = f"{stage}:{type(exc).__name__}"
         setattr(cfg, "_lvl_last_error", msg)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
+        return
+
+
+def _safe_setattr(cfg, name: str, value) -> None:
+    try:
+        setattr(cfg, name, value)
+    except (AttributeError, TypeError, ValueError):
         return
 
 
@@ -119,7 +126,7 @@ def _resample_log_axis(
         f_log = np.geomspace(f_lo, f_hi, n_points)
         prepared_log = [np.interp(f_log, f, v) for v in prepared]
         return f_log, tuple(prepared_log)
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, OverflowError):
         f = np.asarray(freq_axis, dtype=float).reshape(-1)
         prepared = tuple(np.asarray(s, dtype=float).reshape(-1) for s in series)
         return f, prepared
@@ -131,10 +138,10 @@ def _log_median(freq_axis: np.ndarray, values: np.ndarray) -> float:
         if v_log.size == 0:
             return 0.0
         return float(np.median(v_log))
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         try:
             return float(np.median(values))
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError):
             return 0.0
 
 
@@ -158,10 +165,10 @@ def _lower_tail_robust_std_db(values: np.ndarray, *, clip_below_db: float = 6.0)
         if np.isfinite(robust) and robust > 1e-9:
             return float(robust)
         return float(np.std(y))
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         try:
             return float(np.std(values))
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError):
             return 0.0
 
 
@@ -173,7 +180,7 @@ def _centered_rms(values: np.ndarray) -> float:
             return float("inf")
         y = y - float(np.median(y))
         return float(np.sqrt(np.mean(y * y)))
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         return float("inf")
 
 
@@ -268,7 +275,7 @@ def _window_offset_consistency_score(
             offset_spread = 0.0
 
         return float(offset_spread), float(shape_rms), float(abs(slope_full))
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return float("inf"), float("inf"), float("inf")
 
 
@@ -312,10 +319,10 @@ def _tilt_aware_offset_db(
         if not np.isfinite(offset):
             offset = float(np.median(y)) if y.size else 0.0
         return float(offset)
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         try:
             return float(np.median(diff_db))
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError):
             return 0.0
         
 
@@ -362,10 +369,10 @@ def _tilt_fit_offset_and_slope_db_per_oct(
             off = float(np.median(y))
 
         return off, slope
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         try:
             return float(np.median(diff_db)), 0.0
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError):
             return 0.0, 0.0
 
 
@@ -377,11 +384,11 @@ def _hz_to_erb_number(freq_hz):
         if np.ndim(erb) == 0:
             return float(erb)
         return erb
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, OverflowError):
         try:
             f = max(float(freq_hz), 0.0)
             return float(21.4 * np.log10(1.0 + 4.37e-3 * f))
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError, OverflowError):
             return 0.0
 
 
@@ -441,11 +448,11 @@ def _perceptual_importance_weights(
         w_hi = max(min_weight, max_weight, bass_floor_weight)
         weights[valid] = np.clip(w_valid, w_lo, w_hi)
         return weights
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, OverflowError):
         try:
             f = np.asarray(freq_axis, dtype=float).reshape(-1)
             return np.ones_like(f, dtype=float)
-        except Exception:
+        except (TypeError, ValueError):
             return np.asarray([], dtype=float)
 
 
@@ -469,7 +476,7 @@ def _weighted_centered_rms(values, weights):
         y_mean = float(np.sum(w * y) / w_sum)
         resid = y - y_mean
         return float(np.sqrt(np.sum(w * resid * resid) / w_sum))
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         return float("inf")
 
 
@@ -523,7 +530,7 @@ def _perceptual_shape_score(
             max_hz=max_hz,
         )
         return _weighted_centered_rms(resid, weights)
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return float("inf")
 
 
@@ -560,7 +567,7 @@ def _prepare_level_window_search(
                 if target_arr.size == freq_arr.size:
                     mask &= np.isfinite(target_arr)
                     target_search = target_arr
-            except Exception:
+            except (TypeError, ValueError):
                 target_search = None
 
         if int(np.count_nonzero(mask)) < 50:
@@ -577,7 +584,7 @@ def _prepare_level_window_search(
         else:
             out["target"] = None
         return out
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return None
 
 
@@ -658,7 +665,7 @@ def _evaluate_level_window_candidate(
                     tilt_comp=bool(tilt_comp),
                     tilt_max_db_per_oct=float(tilt_max_db_per_oct),
                 )
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError, IndexError):
             target_rms = float("inf")
             offset_spread = float("inf")
             tilt_abs = float("inf")
@@ -680,7 +687,7 @@ def _evaluate_level_window_candidate(
             "tilt_abs": float(tilt_abs),
             "perceptual_rms": float(perceptual_rms),
         }
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return None
 
 
@@ -808,7 +815,7 @@ def find_stable_level_window(
 
         return float(res_min), float(res_max)
 
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return float(f_min), float(f_max)
 
 
@@ -973,7 +980,7 @@ def find_shared_stereo_level_window(
             return float(f_min), float(f_max)
 
         return float(res_min), float(res_max)
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return float(f_min), float(f_max)
 
 
@@ -1017,71 +1024,42 @@ def compute_leveling(
     if lvl_perceptual_min_hz <= 0.0 or lvl_perceptual_max_hz <= lvl_perceptual_min_hz:
         lvl_perceptual_min_hz, lvl_perceptual_max_hz = 250.0, 4000.0
 
-    try:
-        setattr(cfg, "_lvl_last_error", None)
-    except Exception:
-        pass
-
-    try:
-        setattr(cfg, "_lvl_tilt_slope_db_per_oct", None)
-    except Exception:
-        pass
-
-    try:
-        setattr(cfg, "_lvl_perceptual_enabled", bool(lvl_perceptual_weighting))
-    except Exception:
-        pass
-    try:
-        setattr(cfg, "_lvl_perceptual_strength", float(lvl_perceptual_strength))
-    except Exception:
-        pass
-    try:
-        setattr(
-            cfg,
-            "_lvl_perceptual_band_hz",
-            (float(lvl_perceptual_min_hz), float(lvl_perceptual_max_hz)),
-        )
-    except Exception:
-        pass
-    try:
-        setattr(cfg, "_lvl_perceptual_error_rms", None)
-    except Exception:
-        pass
-    try:
-        setattr(cfg, "_lvl_window_debug", None)
-    except Exception:
-        pass
+    _safe_setattr(cfg, "_lvl_last_error", None)
+    _safe_setattr(cfg, "_lvl_tilt_slope_db_per_oct", None)
+    _safe_setattr(cfg, "_lvl_perceptual_enabled", bool(lvl_perceptual_weighting))
+    _safe_setattr(cfg, "_lvl_perceptual_strength", float(lvl_perceptual_strength))
+    _safe_setattr(
+        cfg,
+        "_lvl_perceptual_band_hz",
+        (float(lvl_perceptual_min_hz), float(lvl_perceptual_max_hz)),
+    )
+    _safe_setattr(cfg, "_lvl_perceptual_error_rms", None)
+    _safe_setattr(cfg, "_lvl_window_debug", None)
 
     def _store_window_debug(ss_min_value, ss_max_value, offset_method_value, perceptual_value):
-        try:
-            setattr(cfg, "_lvl_perceptual_error_rms", perceptual_value)
-        except Exception:
-            pass
+        _safe_setattr(cfg, "_lvl_perceptual_error_rms", perceptual_value)
         try:
             tilt_slope_value = getattr(cfg, "_lvl_tilt_slope_db_per_oct", None)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             tilt_slope_value = None
-        try:
-            setattr(
-                cfg,
-                "_lvl_window_debug",
-                {
-                    "ss_min": float(ss_min_value),
-                    "ss_max": float(ss_max_value),
-                    "offset_method": str(offset_method_value),
-                    "tilt_slope_db_per_oct": tilt_slope_value,
-                    "perceptual_error_rms": perceptual_value,
-                    "perceptual_enabled": bool(lvl_perceptual_weighting),
-                },
-            )
-        except Exception:
-            pass
+        _safe_setattr(
+            cfg,
+            "_lvl_window_debug",
+            {
+                "ss_min": float(ss_min_value),
+                "ss_max": float(ss_max_value),
+                "offset_method": str(offset_method_value),
+                "tilt_slope_db_per_oct": tilt_slope_value,
+                "perceptual_error_rms": perceptual_value,
+                "perceptual_enabled": bool(lvl_perceptual_weighting),
+            },
+        )
 
     try:
         target_arr = np.asarray(target_mags, dtype=float)
         if target_arr.shape != np.asarray(freq_axis).shape:
             target_arr = None
-    except Exception:
+    except (TypeError, ValueError):
         target_arr = None
 
     forced_window = getattr(cfg, "lvl_force_window", None)
@@ -1095,7 +1073,7 @@ def compute_leveling(
                 forced_offset = stereo_link_ctx.forced_offset_db
             if stereo_link_ctx.shared_target_level_db is not None:
                 shared_target_level_db = float(stereo_link_ctx.shared_target_level_db)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
     if shared_target_level_db is not None and (not np.isfinite(float(shared_target_level_db))):
         shared_target_level_db = None
@@ -1132,8 +1110,8 @@ def compute_leveling(
                             (m_anal[mask] - target_mags[mask]),
                             max_db_per_oct=float(tilt_max_db_per_oct),
                         )
-                        setattr(cfg, "_lvl_tilt_slope_db_per_oct", float(_slope))
-                except Exception:
+                        _safe_setattr(cfg, "_lvl_tilt_slope_db_per_oct", float(_slope))
+                except (TypeError, ValueError, FloatingPointError, IndexError):
                     pass
             else:
                 if np.any(mask):
@@ -1144,10 +1122,7 @@ def compute_leveling(
                             diff,
                             max_db_per_oct=float(tilt_max_db_per_oct),
                         )
-                        try:
-                            setattr(cfg, "_lvl_tilt_slope_db_per_oct", float(tilt_slope))
-                        except Exception:
-                            pass
+                        _safe_setattr(cfg, "_lvl_tilt_slope_db_per_oct", float(tilt_slope))
                         offset_method = "ForcedWindowTiltMedian"
                     else:
                         calc_offset_db = _log_median(freq_axis[mask], diff)
@@ -1194,7 +1169,7 @@ def compute_leveling(
                 float(ss_min),
                 float(ss_max),
             )
-        except Exception as exc:
+        except (TypeError, ValueError, FloatingPointError, ZeroDivisionError) as exc:
             _remember_leveling_error(cfg, "forced_window", exc)
 
 
@@ -1247,7 +1222,7 @@ def compute_leveling(
     if hpf_settings:
         try:
             hpf_freq = _to_float(hpf_settings.get("freq", 0.0), 0.0)
-        except Exception as exc:
+        except (AttributeError, TypeError, ValueError) as exc:
             _remember_leveling_error(cfg, "hpf_settings", exc)
             hpf_freq = 0.0
 
@@ -1301,7 +1276,7 @@ def compute_leveling(
             )
             try:
                 setattr(cfg, "_lvl_tilt_slope_db_per_oct", float(tilt_slope))
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
             offset_method = "SmartScanTiltMedian"
         else:

@@ -36,7 +36,7 @@ class PhaseIRInputs:
 
 @dataclass
 class PhaseIROutputs:
-    """Phase/IR-vaiheen tuotospaketti; yhteensopiva vanhan dict-API:n kanssa."""
+    """Phase/IR-vaiheen typed tuotospaketti."""
 
     impulse: np.ndarray
     gain_db: np.ndarray
@@ -46,17 +46,6 @@ class PhaseIROutputs:
     current_peak_gain: float
     final_gain_total: np.ndarray
     residual_telemetry: "ResidualTelemetry | None" = None
-
-    def to_legacy_dict(self) -> dict[str, Any]:
-        return {
-            "impulse": self.impulse,
-            "gain_db": self.gain_db,
-            "auto_global_gain_db": float(self.auto_global_gain_db),
-            "gain_margin_db": float(self.gain_margin_db),
-            "auto_headroom_db": float(self.auto_headroom_db),
-            "current_peak_gain": float(self.current_peak_gain),
-            "final_gain_total": np.asarray(self.final_gain_total, dtype=float),
-        }
 
 
 @dataclass

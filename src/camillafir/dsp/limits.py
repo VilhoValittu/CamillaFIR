@@ -146,7 +146,7 @@ def build_slope_limit_envelope(
     try:
         cmin = float(mag_c_min or 0.0)
         cmax = float(mag_c_max or 0.0)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         cmin, cmax = 0.0, 0.0
     if not (np.isfinite(cmin) and np.isfinite(cmax) and cmin > 0 and cmax > cmin):
         return None, None, None

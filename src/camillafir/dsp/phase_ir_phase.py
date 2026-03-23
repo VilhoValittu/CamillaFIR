@@ -71,7 +71,7 @@ def _apply_mixed_excess_mask(freq_axis, excess, cfg, st) -> np.ndarray:
             st["mixed_phase_strength"] = float(strength)
             st["mixed_phase_full_correction_hz"] = float(full_hz)
             st["mixed_phase_no_correction_hz"] = float(none_hz)
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return x * w
 
@@ -83,7 +83,7 @@ def _linear_excess_weight(freq_axis: np.ndarray, phase_lim_hz: float) -> np.ndar
         return w
     try:
         f_lim = float(phase_lim_hz)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         f_lim = 0.0
     if (not np.isfinite(f_lim)) or (f_lim <= 20.0):
         return w
@@ -123,14 +123,14 @@ def _smooth_linear_boundary(freq_axis: np.ndarray, extra_phase: np.ndarray, phas
         return x
     try:
         f_lim = float(phase_lim_hz)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         f_lim = 0.0
     if (not np.isfinite(f_lim)) or (f_lim <= 30.0):
         return x
 
     try:
         sigma_bins = float(getattr(cfg, "phase_boundary_smooth_sigma_bins", 1.2) or 1.2)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         sigma_bins = 1.2
     if not np.isfinite(sigma_bins):
         sigma_bins = 1.2
@@ -153,7 +153,7 @@ def _smooth_linear_boundary(freq_axis: np.ndarray, extra_phase: np.ndarray, phas
             st["phase_boundary_smooth_sigma_bins"] = float(sigma_bins)
             st["phase_boundary_smooth_start_hz"] = float(f_start)
             st["phase_boundary_smooth_end_hz"] = float(f_end)
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return out
 
@@ -165,20 +165,20 @@ def _enforce_linear_tail_decay(freq_axis: np.ndarray, extra_phase: np.ndarray, p
         return x
     try:
         f_lim = float(phase_lim_hz)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         f_lim = 0.0
     if (not np.isfinite(f_lim)) or (f_lim <= 30.0):
         return x
     try:
         enabled = bool(getattr(cfg, "phase_tail_monotonic_enable", True))
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         enabled = True
     if not enabled:
         return x
 
     try:
         f_start_ratio = float(getattr(cfg, "phase_tail_start_ratio", 0.72) or 0.72)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         f_start_ratio = 0.72
     if not np.isfinite(f_start_ratio):
         f_start_ratio = 0.72
@@ -191,14 +191,14 @@ def _enforce_linear_tail_decay(freq_axis: np.ndarray, extra_phase: np.ndarray, p
 
     try:
         sigma_abs = float(getattr(cfg, "phase_tail_abs_smooth_sigma_bins", 2.5) or 2.5)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         sigma_abs = 2.5
     if not np.isfinite(sigma_abs):
         sigma_abs = 2.5
     sigma_abs = float(np.clip(sigma_abs, 0.0, 8.0))
     try:
         cosine_strength = float(getattr(cfg, "phase_tail_cosine_strength", 0.85) or 0.85)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         cosine_strength = 0.85
     if not np.isfinite(cosine_strength):
         cosine_strength = 0.85
@@ -245,7 +245,7 @@ def _enforce_linear_tail_decay(freq_axis: np.ndarray, extra_phase: np.ndarray, p
             st["phase_tail_monotonic_sigma_abs_bins"] = float(sigma_abs)
             st["phase_tail_monotonic_start_ratio"] = float(f_start_ratio)
             st["phase_tail_cosine_strength"] = float(cosine_strength)
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return out
 
@@ -257,14 +257,14 @@ def _linear_to_minphase_blend_mask(freq_axis: np.ndarray, phase_lim_hz: float, c
         return m
     try:
         f_end = float(phase_lim_hz)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         f_end = 0.0
     if (not np.isfinite(f_end)) or (f_end <= 20.0):
         return m
 
     try:
         start_ratio = float(getattr(cfg, "linear_phase_blend_start_ratio", 0.65) or 0.65)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         start_ratio = 0.65
     if not np.isfinite(start_ratio):
         start_ratio = 0.65
@@ -283,7 +283,7 @@ def _linear_to_minphase_blend_mask(freq_axis: np.ndarray, phase_lim_hz: float, c
             st["linear_phase_blend_start_hz"] = float(f_start)
             st["linear_phase_blend_end_hz"] = float(f_end)
             st["linear_phase_blend_start_ratio"] = float(start_ratio)
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return m
 
@@ -354,7 +354,7 @@ def _gd_grad_metrics(
         out["at_hz"] = float(ff[idx]) if ff.size else None
         out["phase_wrapped"] = False
         return out
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError, IndexError):
         return out
 
 
@@ -396,7 +396,7 @@ def _gd_grad_limiter(
             )
             or 0.0
         )
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         lim_cfg = 0.0
     if not np.isfinite(lim_cfg):
         lim_cfg = 0.0
@@ -421,7 +421,7 @@ def _gd_grad_limiter(
             info["df_max"] = _before.get("df_max", None)
             info["phase_wrapped"] = bool(_before.get("phase_wrapped", False))
             info["units_note"] = str(_before.get("units_note", info["units_note"]) or info["units_note"])
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError, IndexError):
             info["max_grad_before_ms_per_oct"] = None
             info["max_grad_before_hz"] = None
 
@@ -443,7 +443,7 @@ def _gd_grad_limiter(
                     f_hi = float(np.max(f_arr[np.isfinite(f_arr) & (f_arr > 0.0)]))
                 try:
                     gd_sigma = float(getattr(cfg, "gd_grad_smooth_sigma", 0.8) or 0.8)
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     gd_sigma = 0.8
                 if not np.isfinite(gd_sigma):
                     gd_sigma = 0.8
@@ -459,7 +459,7 @@ def _gd_grad_limiter(
                 )
                 info["applied"] = True
                 info["reason"] = "applied"
-            except Exception:
+            except (TypeError, ValueError, FloatingPointError, IndexError):
                 info["enabled"] = False
                 info["reason"] = "missing data"
 
@@ -472,7 +472,7 @@ def _gd_grad_limiter(
             )
             info["max_grad_after_ms_per_oct"] = float(_after.get("max_ms_per_oct", 0.0) or 0.0)
             info["max_grad_after_hz"] = _after.get("at_hz", None)
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError, IndexError):
             info["max_grad_after_ms_per_oct"] = None
             info["max_grad_after_hz"] = None
     elif info["max_grad_before_ms_per_oct"] is not None:
@@ -498,7 +498,7 @@ def _gd_grad_limiter(
             info["reverted_non_monotonic"] = True
             info["max_grad_after_ms_per_oct"] = float(gb)
             info["max_grad_after_hz"] = info["max_grad_before_hz"]
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         pass
 
     try:
@@ -562,7 +562,7 @@ def _gd_grad_limiter(
                 None if info.get("limit_input", None) is None else float(info["limit_input"])
             )
             st["gd_grad_limiter_reverted_non_monotonic"] = bool(info.get("reverted_non_monotonic", False))
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return out, info
 
@@ -596,7 +596,7 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
         )
         conf_s = scipy.ndimage.gaussian_filter1d(conf_arr, sigma=2)
         conf_s = np.clip(conf_s, 0.0, 1.0)
-    except Exception:
+    except (TypeError, ValueError):
         conf_s = np.ones_like(f, dtype=float)
 
     phase_lim_hz = float(getattr(cfg, "phase_limit", 1000.0))
@@ -605,7 +605,7 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
     try:
         if isinstance(st, dict):
             st["phase_limit_hz"] = float(phase_lim_hz)
-    except Exception:
+    except (TypeError, ValueError):
         pass
 
     try:
@@ -619,7 +619,7 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
             w_hi = np.where(f >= f1, 0.0, w_hi)
         else:
             w_hi = np.ones_like(f, dtype=float)
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         w_hi = np.ones_like(f, dtype=float)
 
     if is_mixed:
@@ -631,7 +631,7 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
 
     try:
         extra_phase *= w_hi
-    except Exception:
+    except (TypeError, ValueError):
         pass
 
     try:
@@ -640,7 +640,7 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
         conf_gain = np.clip(conf_s, 0.0, 1.0) ** conf_power
         conf_gain = conf_floor + (1.0 - conf_floor) * conf_gain
         extra_phase *= conf_gain
-    except Exception:
+    except (TypeError, ValueError):
         pass
 
     try:
@@ -675,7 +675,7 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
         clipped = bool(np.any(np.abs(extra_phase_before) > (limit_rad_arr + 1e-12)))
         try:
             clipped_bins = int(np.sum((np.abs(extra_phase_before) > (limit_rad_arr + 1e-12)) & phase_mask))
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError):
             clipped_bins = int(clipped)
         if clipped:
             msg = (
@@ -704,15 +704,15 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
                 st["phase_corr_clipped"] = bool(clipped)
                 st["phase_corr_clipped_bins"] = int(clipped_bins)
                 st["phase_corr_clamp_msg"] = str(msg)
-        except Exception:
+        except (TypeError, ValueError):
             pass
-    except Exception:
+    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
         pass
 
     if is_mixed:
         try:
             max_excess_delay_ms = float(getattr(cfg, "max_excess_delay_ms", 2.5) or 0.0)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             max_excess_delay_ms = 0.0
         if np.isfinite(max_excess_delay_ms) and max_excess_delay_ms > 0.0:
             try:
@@ -730,15 +730,15 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
                             st["mixed_max_excess_delay_ms"] = float(max_excess_delay_ms)
                             st["mixed_excess_delay_before_ms"] = float(max_gd_ms)
                             st["mixed_excess_delay_scale"] = float(gd_scale)
-                    except Exception:
+                    except (TypeError, ValueError):
                         pass
-            except Exception:
+            except (TypeError, ValueError, FloatingPointError, IndexError):
                 pass
 
     if is_mixed:
         try:
             max_pre_db = float(getattr(cfg, "max_pre_ringing_db", -35.0) or -35.0)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             max_pre_db = -35.0
         if np.isfinite(max_pre_db):
             max_pre_db = float(min(max_pre_db, 0.0))
@@ -783,7 +783,7 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
                     st["mixed_pre_ringing_before_db"] = None if pre_before_db is None else float(pre_before_db)
                     st["mixed_pre_ringing_after_db"] = None if pre_after_db is None else float(pre_after_db)
                     st["mixed_pre_ringing_scale"] = float(guard_scale_total)
-            except Exception:
+            except (TypeError, ValueError):
                 pass
 
         try:
@@ -793,7 +793,7 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
                 if isinstance(st, dict):
                     st["mixed_phase_eff_strength_mean"] = float(np.mean(eff))
                     st["mixed_phase_eff_strength_max"] = float(np.max(eff))
-        except Exception:
+        except (TypeError, ValueError, FloatingPointError):
             pass
 
     extra_phase, gd_lim_info = _gd_grad_limiter(
@@ -832,7 +832,7 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
                 "GD gradient limiter: OFF "
                 f"(reason={gd_reason}, max|dGD/dOct|={float(gd_before or 0.0):.2f} ms/oct)"
             )
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         pass
 
     low_phase = _merge_minphase_and_excess(-theo_xo, extra_phase)

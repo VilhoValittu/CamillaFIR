@@ -6,7 +6,7 @@ import numpy as np
 def _cfg_float(cfg, name: str, default: float) -> float:
     try:
         v = float(getattr(cfg, name, default))
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return float(default)
     if not np.isfinite(v):
         return float(default)
@@ -19,7 +19,7 @@ def _gain_values_for_peak(gain_db: np.ndarray, mask_c: np.ndarray) -> np.ndarray
         m = np.asarray(mask_c, dtype=bool)
         if m.shape == g.shape and np.any(m):
             g = g[m]
-    except Exception:
+    except (TypeError, ValueError):
         pass
     g = g[np.isfinite(g)]
     return np.asarray(g, dtype=float)
@@ -75,7 +75,7 @@ def compute_auto_gain_and_headroom(
             peak_effective_db = float(min(peak_max_db, peak_percentile_db + spike_guard_db))
         if not np.isfinite(peak_effective_db):
             peak_effective_db = float(peak_max_db)
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         peak_max_db = 0.0
         peak_percentile_db = 0.0
         peak_effective_db = 0.0
@@ -87,7 +87,7 @@ def compute_auto_gain_and_headroom(
         gain_margin_db = float(
             getattr(cfg, "auto_gain_margin_db", getattr(cfg, "global_gain_db", 0.0)) or 0.0
         )
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         gain_margin_db = 0.0
     if (not np.isfinite(gain_margin_db)) or (gain_margin_db < 0.0):
         gain_margin_db = 0.0
@@ -107,7 +107,7 @@ def compute_auto_gain_and_headroom(
                     f"min={float(np.min(_vv)):.3f} dB, "
                     f"rms={float(np.sqrt(np.mean(_vv * _vv))):.3f} dB"
                 )
-    except Exception:
+    except (TypeError, ValueError):
         pass
 
     try:
@@ -121,7 +121,7 @@ def compute_auto_gain_and_headroom(
             f"Auto Level: using shared override {auto_global_gain_db:.2f} dB "
             f"(peak_max={peak_max_db:.2f} dB, peak_eff={peak_effective_db:.2f} dB, margin={gain_margin_db:.2f} dB)"
         )
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         auto_global_gain_db = -max(0.0, float(peak_effective_db)) - float(gain_margin_db)
         logger.info(
             f"Auto Level: peak_max={peak_max_db:.2f} dB, "

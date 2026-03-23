@@ -39,11 +39,11 @@ def _residual_band_weight(
 
     try:
         f_min = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         f_min = 0.0
     try:
         f_max = float(getattr(cfg, "mag_c_max", 0.0) or 0.0)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         f_max = 0.0
 
     if (not np.isfinite(f_min)) or (not np.isfinite(f_max)) or (f_max <= f_min):
@@ -60,12 +60,12 @@ def _residual_band_weight(
     edge_hz = 0.0
     try:
         edge_hz = float(getattr(cfg, "residual_band_edge_hz", 0.0) or 0.0)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         edge_hz = 0.0
     if (not np.isfinite(edge_hz)) or edge_hz <= 0.0:
         try:
             edge_hz = float(getattr(cfg, "trans_width", 0.0) or 0.0)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             edge_hz = 0.0
     if (not np.isfinite(edge_hz)) or edge_hz <= 0.0:
         edge_hz = 0.08 * span
@@ -136,7 +136,7 @@ def apply_residual_pass_if_enabled(
             try:
                 if conf_mask is not None:
                     resid[mask_c] *= np.clip(conf_mask[mask_c], 0.0, 1.0) ** k
-            except Exception:
+            except (TypeError, ValueError, IndexError):
                 pass
 
             strength = float(getattr(cfg, "residual_strength", 0.6) or 0.6)
@@ -146,7 +146,7 @@ def apply_residual_pass_if_enabled(
 
             try:
                 _base_sigma = float(base_sigma)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 _base_sigma = float(60 // (_filter_smooth / 12 if _filter_smooth > 0 else 1))
             if (not np.isfinite(_base_sigma)) or _base_sigma <= 0.0:
                 _base_sigma = float(60 // (_filter_smooth / 12 if _filter_smooth > 0 else 1))
@@ -179,7 +179,7 @@ def apply_residual_pass_if_enabled(
 
             try:
                 max_delta_db = float(getattr(cfg, "residual_max_delta_db", 1.25) or 1.25)
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 max_delta_db = 1.25
             if (not np.isfinite(max_delta_db)) or max_delta_db <= 0.0:
                 max_delta_db = 1.25
@@ -220,7 +220,7 @@ def apply_residual_pass_if_enabled(
                 residual_lf_boost_blocked_bins=int(blocked_boost_bins),
                 residual_right_transition_fade_skipped=bool(already),
             )
-        except Exception:
+        except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
             pass
 
     return gain_db, residual_telemetry

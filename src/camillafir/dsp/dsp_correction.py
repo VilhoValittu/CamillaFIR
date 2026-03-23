@@ -41,7 +41,7 @@ def run_correction_stage(
     cfg_float_allow_zero_fn,
     stereo_link_ctx=None,
 ):
-    # Vaihe 1.1: julkinen rajapinta pidetaan ennallaan, mutta data paketoidaan.
+    # Julkinen stage-rajapinta palauttaa typed outputin; legacy-adapteri kuuluu ulommalle kerrokselle.
     inputs = CorrectionInputs(
         cfg=cfg,
         freq_axis=freq_axis,
@@ -64,7 +64,7 @@ def run_correction_stage(
         stage_probe_fn=stage_probe_fn,
         cfg_float_allow_zero_fn=cfg_float_allow_zero_fn,
     )
-    return _run_correction_stage(inputs).to_legacy_dict()
+    return _run_correction_stage(inputs)
 
 
 def _run_correction_stage(inputs: CorrectionInputs) -> CorrectionOutputs:

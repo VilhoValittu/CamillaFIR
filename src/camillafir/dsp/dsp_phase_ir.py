@@ -142,7 +142,7 @@ def run_phase_ir_stage(
     )
     outputs = _run_phase_ir_stage(inputs)
     apply_residual_telemetry_to_stats(st=inputs.st, telemetry=outputs.residual_telemetry)
-    return outputs.to_legacy_dict()
+    return outputs
 
 
 def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
@@ -211,7 +211,7 @@ def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
                     f"order={hpf_order} "
                     f"({hpf_order * 6:.0f} dB/oct)"
                 )
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
 
     gain_db_before_residual = gain_db.copy()

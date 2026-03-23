@@ -24,23 +24,23 @@ def _apply_midband_realized_level_match(
     mag_target = np.asarray(total_mag, dtype=float).reshape(-1)
     try:
         enabled = bool(getattr(cfg, "ir_realized_level_match_enable", True))
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         enabled = True
     try:
         f_lo = float(getattr(cfg, "ir_realized_level_match_mid_lo_hz", 200.0) or 200.0)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         f_lo = 200.0
     try:
         f_hi = float(getattr(cfg, "ir_realized_level_match_mid_hi_hz", 2000.0) or 2000.0)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         f_hi = 2000.0
     try:
         min_abs_db = float(getattr(cfg, "ir_realized_level_match_min_abs_db", 0.25) or 0.25)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         min_abs_db = 0.25
     try:
         max_abs_db = float(getattr(cfg, "ir_realized_level_match_max_abs_db", 3.0) or 3.0)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         max_abs_db = 3.0
 
     if not np.isfinite(f_lo):
@@ -74,7 +74,7 @@ def _apply_midband_realized_level_match(
                 st["ir_realized_level_match_scale"] = (
                     float(scale) if scale is not None and np.isfinite(float(scale)) else 1.0
                 )
-        except Exception:
+        except (TypeError, ValueError):
             pass
 
     if not enabled:
@@ -121,7 +121,7 @@ def _apply_midband_realized_level_match(
         h3 = scipy.fft.rfft(ir, n=n)
         mag3_db = 20.0 * np.log10(np.maximum(np.asarray(np.abs(h3[:n2]), dtype=float), 1e-12))
         delta_after = float(np.median(mag3_db[mid] - target_db[mid]))
-    except Exception:
+    except (TypeError, ValueError, FloatingPointError):
         delta_after = None
 
     _mark("applied", True, delta_db_raw, delta_db_apply, delta_after, scale)
@@ -201,7 +201,7 @@ def build_phase_and_ir(
             if isinstance(st, dict):
                 st["mixed_blend_split_hz"] = float(mixed_split_hz)
                 st["mixed_blend_transition_hz"] = float(mixed_transition_hz)
-        except Exception:
+        except (TypeError, ValueError):
             pass
         h_lin = _build_complex_spectrum(total_mag, low_phase)
         h_min = _build_complex_spectrum(total_mag, min_p)
@@ -249,7 +249,7 @@ def build_phase_and_ir(
     try:
         if isinstance(st, dict):
             st["ir_anchor_mode"] = str(anchor_mode)
-    except Exception:
+    except (TypeError, ValueError):
         pass
     logger.info(f"IR init: type={cfg.filter_type_str}, peak0={int(np.argmax(np.abs(impulse)))}, n={n_fft}")
     
@@ -267,7 +267,7 @@ def build_phase_and_ir(
             if isinstance(st, dict):
                 st["min_off_peak_shift_samples"] = int(pre_info.get("shift_samples", 0))
                 st["min_off_peak_before_samples"] = int(pre_info.get("peak_before_samples", 0))
-        except Exception:
+        except (TypeError, ValueError):
             pass
         logger.info(
             "Minimum OFF causal shift applied: "
@@ -296,7 +296,7 @@ def build_phase_and_ir(
                 st["min_causal_shift"] = int(post_info.get("shift_samples", 0))
                 st["min_causal_peak_after_samples"] = int(post_info.get("peak_after_samples", 0))
                 st["min_causal_anchor_after_samples"] = int(post_info.get("anchor_after_samples", 0))
-    except Exception:
+    except (TypeError, ValueError):
         pass
     if is_mixed and impulse.size > 0 and anchor_mode != "min_causal":
         mixed_forced_peak_ms = 90.0
@@ -305,7 +305,7 @@ def build_phase_and_ir(
                 st["mixed_forced_peak_ms"] = float(mixed_forced_peak_ms)
                 st["mixed_forced_peak_samples"] = int(post_info.get("desired_samples", 0))
                 st["mixed_forced_shift_samples"] = int(post_info.get("shift_samples", 0))
-        except Exception:
+        except (TypeError, ValueError):
             pass
         logger.info(
             f"Mixed forced peak shift applied: peak {int(post_info.get('peak_before_samples', 0))} "

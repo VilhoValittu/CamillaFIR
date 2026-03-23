@@ -14,7 +14,7 @@ def limit_phase_deg(phase_rad, max_deg=45.0):
         return phase_rad
     try:
         max_deg = float(max_deg)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         max_deg = 45.0
     max_rad = np.deg2rad(abs(max_deg))
     return np.clip(phase_rad, -max_rad, max_rad)

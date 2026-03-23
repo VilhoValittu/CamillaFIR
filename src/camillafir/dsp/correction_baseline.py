@@ -45,7 +45,7 @@ def apply_null_guard_target(
     try:
         fmin = float(mag_c_min or 0.0)
         fmax = float(mag_c_max or 0.0)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         fmin, fmax = 0.0, 0.0
     if not (np.isfinite(fmin) and np.isfinite(fmax) and fmax > fmin and fmax > 0):
         # if no band set, do nothing (safer default)
@@ -84,7 +84,7 @@ def apply_null_guard_target(
     # soft mask based on depth
     try:
         d0 = float(depth_db)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         d0 = 12.0
     d0 = float(np.clip(d0, 3.0, 30.0))
 
@@ -100,7 +100,7 @@ def apply_null_guard_target(
 
     try:
         mb = float(max_blend)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         mb = 0.85
     mb = float(np.clip(mb, 0.0, 1.0))
     w2 *= mb
@@ -112,7 +112,7 @@ def apply_null_guard_target(
     # cap total downward relaxation vs original target (avoid over-darkening)
     try:
         cap = float(max_total_relax_db)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         cap = 12.0
     cap = float(np.clip(cap, 0.0, 30.0))
     # do not allow target to drop more than 'cap' dB below original target at any bin
@@ -218,14 +218,14 @@ def _prepare_correction_baseline(
     # ---- Null-guard: make target realistic for deep/narrow cancellations ----
     try:
         ng_enable = bool(getattr(cfg, "enable_null_guard", True))
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         ng_enable = True
 
     if ng_enable:
         try:
             mag_c_min = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
             mag_c_max = float(getattr(cfg, "mag_c_max", 0.0) or 0.0)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             mag_c_min, mag_c_max = 0.0, 0.0
 
         # use analysis magnitude (m_anal) already on freq_axis scale
@@ -259,12 +259,12 @@ def _prepare_correction_baseline(
                 v = float(v)
                 if np.isfinite(v):
                     shared_target_shift_db = float(v)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             shared_target_shift_db = None
     try:
         s_min = float(getattr(cfg, "lvl_min", 500.0) or 500.0)
         s_max = float(getattr(cfg, "lvl_max", 2000.0) or 2000.0)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         s_min, s_max = 500.0, 2000.0
     try:
         (
@@ -282,7 +282,7 @@ def _prepare_correction_baseline(
             np.asarray(target_mags, dtype=float),
             stereo_link_ctx=stereo_link_ctx,
         )
-    except Exception:
+    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
         pass
     target_shift_db = 0.0
     try:
@@ -317,7 +317,7 @@ def _prepare_correction_baseline(
                             s_min,
                             s_max,
                         ) = compute_leveling(cfg, f, m_anal, target_mags, stereo_link_ctx=stereo_link_ctx)
-    except Exception:
+    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
         target_shift_db = 0.0
     native_telemetry: BaselineNativeTelemetry | None = None
     try:
@@ -346,7 +346,7 @@ def _prepare_correction_baseline(
                 max_slope_boost_db_per_oct=float(max_slope_boost),
                 max_slope_cut_db_per_oct=float(max_slope_cut),
             )
-        except Exception:
+        except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
             env_lo = env_hi = None
             env_pivot = None
         native_telemetry = BaselineNativeTelemetry(
@@ -365,7 +365,7 @@ def _prepare_correction_baseline(
             offset_method=str(offset_method),
             smart_scan_range=(float(s_min), float(s_max)),
         )
-    except Exception:
+    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
         native_telemetry = None
 
     comparison_telemetry: BaselineComparisonTelemetry | None = None
@@ -398,7 +398,7 @@ def _prepare_correction_baseline(
                     offset_method=str(offset_method_cmp),
                     target_shift_db=float(target_shift_db),
                 )
-    except Exception:
+    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
         comparison_telemetry = None
 
     return _BaselineContext(

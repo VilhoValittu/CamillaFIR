@@ -191,20 +191,20 @@ def _summarize_ir_metrics(ir_final, cfg, st) -> dict[str, Any]:
     phase_mode = ""
     try:
         fs_hz = getattr(cfg, "fs", None)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         fs_hz = None
     try:
         filter_type = str(getattr(cfg, "filter_type_str", "") or "")
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         filter_type = ""
     try:
         phase_mode = str(getattr(cfg, "ir_anchor_mode", "") or "")
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         phase_mode = ""
     try:
         if isinstance(st, dict):
             split_hint = st.get("ir_energy_split_samples", None)
-    except Exception:
+    except (TypeError, ValueError):
         split_hint = None
 
     if x.size == 0:
@@ -264,6 +264,6 @@ def _summarize_ir_metrics(ir_final, cfg, st) -> dict[str, Any]:
         if isinstance(st, dict):
             for k, v in out.items():
                 st[k] = v
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return out
