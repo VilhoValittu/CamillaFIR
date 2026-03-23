@@ -807,7 +807,7 @@ def build_run_section(*, t, on_start_click):
             "</div>"
         ),
         put_markdown("---"),
-        put_button("START", onclick=on_start_click).style(
+        put_button("▶ START", onclick=on_start_click).style(
             """
             width: 100%;
             margin-top: 10px;
