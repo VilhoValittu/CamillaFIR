@@ -11,7 +11,7 @@ if __package__ in (None, ""):
 
 def _auto_thread_budget() -> tuple[int, int]:
     """
-    Valitsee automaattisen thread-budjetin: noin 90 % CPU-ytimista.
+    Valitsee automaattisen thread-budjetin: noin 50 % CPU-ytimista.
 
     Esim. 4 -> 3, 8 -> 6.
     """
