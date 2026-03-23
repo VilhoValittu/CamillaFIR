@@ -4,15 +4,15 @@
 # Goal: include only required runtime files and modules.
 #
 # Entry point: src/camillafir/__main__.py
-# Data: i18n + plotly.js (UI assets)
-
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+# Data: app resources + custom package hooks
 
 block_cipher = None
 
 datas = [
     # i18n (expected at _MEIPASS/i8n/translations.json)
     ("src/camillafir/resources/i8n/translations.json", "i8n"),
+    # AUTO-mode priors (expected relative to camillafir/resources)
+    ("src/camillafir/resources/auto_mode_filter_priors.json", "camillafir/resources"),
     # plotly.js (expected at _MEIPASS/assets/plotly.min.js)
     ("src/camillafir/resources/plotly/plotly.min.js", "assets"),
     # UI logo (expected at _MEIPASS/camillafir/ui/assets/camillafir_logo.png)
@@ -22,16 +22,13 @@ datas = [
 # PyWebIO loads some components dynamically; keep these minimal hidden imports.
 hiddenimports = [
     "pywebio.platform.tornado_http",
-    "pywebio.platform.tornado_websocket",
     "pywebio.platform.tornado",
     "pywebio.platform",
     "pywebio.session",
     "pywebio.io_ctrl",
+    # AUTO mode imports Optuna dynamically; keep only the modules it needs.
+    "optuna",
 ]
-hiddenimports += collect_submodules("optuna")
-
-# Include PyWebIO static assets if present (kept minimal by package)
-datas += collect_data_files("pywebio")
 
 a = Analysis(
     ["src/camillafir/__main__.py"],
@@ -39,8 +36,11 @@ a = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
-    hookspath=[],
-    hooksconfig={},
+    hookspath=["pyinstaller_hooks"],
+    hooksconfig={
+        # CamillaFIR renders matplotlib only via Agg.
+        "matplotlib": {"backends": ["Agg"]},
+    },
     runtime_hooks=[],
     excludes=[
         "tests",
@@ -48,6 +48,10 @@ a = Analysis(
         ".pytest_cache",
         "matplotlib.tests",
         "scipy.tests",
+        "PyQt5",
+        "PyQt6",
+        "PySide2",
+        "PySide6",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
