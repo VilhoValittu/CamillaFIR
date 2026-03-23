@@ -5,28 +5,36 @@ import logging
 logger = logging.getLogger("CamillaFIR.dsp")
 from camillafir.config.models import FilterConfig
 from .dsp_correction import run_correction_stage
+from .dsp_ops import (
+    _limit_gd_gradient_ms_per_oct as _limit_gd_gradient_ms_per_oct_impl,
+    _stage_probe as _stage_probe_impl,
+    apply_confidence_weighted_target_pull as _apply_confidence_weighted_target_pull_impl,
+    apply_hpf_to_mags as _apply_hpf_to_mags_impl,
+    interpolate_response as _interpolate_response_impl,
+)
 from .dsp_phase_ir import run_phase_ir_stage
 from .dsp_preprocess import run_preprocess
+from .dsp_stats import (
+    apply_afdw_stats as _apply_afdw_stats_impl,
+    apply_boost_blocked_reason as _apply_boost_blocked_reason_impl,
+    apply_clamp_stats as _apply_clamp_stats_impl,
+    apply_lf_guard_stats as _apply_lf_guard_stats_impl,
+    apply_measured_mag_stats as _apply_measured_mag_stats_impl,
+    arr_if_valid_for_stats as _arr_if_valid_for_stats_impl,
+    safe_stage_probes as _safe_stage_probes_impl,
+    safe_stats_update as _safe_stats_update_impl,
+)
 from .camillafir_leveling import StereoLinkContext, find_shared_stereo_level_window
 from .dsp_utils import cfg_float_allow_zero as _cfg_float_allow_zero
 from .dsp_utils import safe_range as _safe_range
 
 
 def _safe_stats_update(stats: dict, extra) -> None:
-    if isinstance(extra, dict) and extra:
-        stats.update(extra)
+    return _safe_stats_update_impl(stats, extra)
 
 
 def _arr_if_valid_for_stats(value, *, expected_size: int | None = None):
-    try:
-        arr = np.asarray(value, dtype=float).reshape(-1)
-    except (TypeError, ValueError):
-        return None
-    if arr.size < 8:
-        return None
-    if expected_size is not None and expected_size >= 8 and arr.size != expected_size:
-        return None
-    return np.asarray(arr, dtype=float)
+    return _arr_if_valid_for_stats_impl(value, expected_size=expected_size)
 
 
 def _apply_measured_mag_stats(
@@ -37,24 +45,13 @@ def _apply_measured_mag_stats(
     m_anal,
     calc_offset_db: float,
 ) -> None:
-    stats["target_mags"] = np.asarray(target_mags, dtype=float).tolist()
-    f_ref = np.asarray(stats.get("freq_axis", freq_axis), dtype=float).reshape(-1)
-    n_ref = int(f_ref.size)
-
-    m_corr_st = _arr_if_valid_for_stats(stats.get("measured_mags", None), expected_size=n_ref)
-    if m_corr_st is None:
-        m_corr = np.asarray(m_anal, dtype=float) - float(calc_offset_db)
-    else:
-        m_corr = np.asarray(m_corr_st, dtype=float)
-
-    m_raw_st = _arr_if_valid_for_stats(stats.get("measured_mags_raw", None), expected_size=n_ref)
-    if m_raw_st is None:
-        m_raw = np.asarray(m_corr, dtype=float) + float(calc_offset_db)
-    else:
-        m_raw = np.asarray(m_raw_st, dtype=float)
-
-    stats["measured_mags"] = np.asarray(m_corr, dtype=float).tolist()
-    stats["measured_mags_raw"] = np.asarray(m_raw, dtype=float).tolist()
+    return _apply_measured_mag_stats_impl(
+        stats,
+        target_mags=target_mags,
+        freq_axis=freq_axis,
+        m_anal=m_anal,
+        calc_offset_db=calc_offset_db,
+    )
 
 
 def _apply_afdw_stats(
@@ -68,40 +65,24 @@ def _apply_afdw_stats(
     afdw_bw_min_hz,
     afdw_bw_max_hz,
 ) -> None:
-    if not bool(afdw_on) or afdw_bw_oct is None:
-        return
-    stats["afdw_bw_oct"] = np.asarray(afdw_bw_oct, dtype=float).tolist()
-    stats["afdw_bw_min_oct"] = float(afdw_bw_min_oct) if afdw_bw_min_oct is not None else None
-    stats["afdw_bw_mean_oct"] = float(afdw_bw_mean_oct) if afdw_bw_mean_oct is not None else None
-    stats["afdw_bw_max_oct"] = float(afdw_bw_max_oct) if afdw_bw_max_oct is not None else None
-    stats["afdw_bw_min_hz"] = float(afdw_bw_min_hz) if afdw_bw_min_hz is not None else None
-    stats["afdw_bw_max_hz"] = float(afdw_bw_max_hz) if afdw_bw_max_hz is not None else None
+    return _apply_afdw_stats_impl(
+        stats,
+        afdw_on=afdw_on,
+        afdw_bw_oct=afdw_bw_oct,
+        afdw_bw_min_oct=afdw_bw_min_oct,
+        afdw_bw_mean_oct=afdw_bw_mean_oct,
+        afdw_bw_max_oct=afdw_bw_max_oct,
+        afdw_bw_min_hz=afdw_bw_min_hz,
+        afdw_bw_max_hz=afdw_bw_max_hz,
+    )
 
 
 def _safe_stage_probes(stage_probes) -> dict:
-    if not isinstance(stage_probes, dict):
-        return {}
-    out: dict = {}
-    for key, value in stage_probes.items():
-        if isinstance(value, dict):
-            out[key] = dict(value)
-    return out
+    return _safe_stage_probes_impl(stage_probes)
 
 
 def _apply_lf_guard_stats(stats: dict, *, cfg, freq_axis, gain_db) -> None:
-    low_hz_cfg = float(stats.get("low_bass_cut_hz", getattr(cfg, "low_bass_cut_hz", 0.0)) or 0.0)
-    exc_on_cfg = bool(stats.get("exc_prot", getattr(cfg, "exc_prot", False)))
-    exc_f_cfg = float(stats.get("exc_freq", getattr(cfg, "exc_freq", 0.0)) or 0.0)
-    lf_guard_hz = 0.0
-    if np.isfinite(low_hz_cfg) and low_hz_cfg > 0.0:
-        lf_guard_hz = max(lf_guard_hz, float(low_hz_cfg))
-    if exc_on_cfg and np.isfinite(exc_f_cfg) and exc_f_cfg > 0.0:
-        lf_guard_hz = max(lf_guard_hz, float(exc_f_cfg * 1.41))
-    lf_mask = (freq_axis > 0.0) & (freq_axis <= lf_guard_hz) if lf_guard_hz > 0.0 else np.zeros_like(freq_axis, dtype=bool)
-    lf_boost_max_db = float(np.max(np.asarray(gain_db, dtype=float)[lf_mask])) if np.any(lf_mask) else 0.0
-    stats["lf_guard_hz"] = float(lf_guard_hz)
-    stats["lf_guard_bins"] = int(np.count_nonzero(lf_mask))
-    stats["lf_boost_max_db"] = float(lf_boost_max_db)
+    return _apply_lf_guard_stats_impl(stats, cfg=cfg, freq_axis=freq_axis, gain_db=gain_db)
 
 
 def _apply_clamp_stats(
@@ -116,62 +97,21 @@ def _apply_clamp_stats(
     hard_over_boost: float,
     hard_over_cut: float,
 ) -> None:
-    stats["softclip_boost_bins"] = int(softclip_boost_bins)
-    stats["softclip_cut_bins"] = int(softclip_cut_bins)
-    stats["softclip_worst_over_boost_db"] = float(over_boost)
-    stats["softclip_worst_over_cut_db"] = float(over_cut)
-    stats["hardclamp_boost_bins"] = int(hardclamp_boost_bins)
-    stats["hardclamp_cut_bins"] = int(hardclamp_cut_bins)
-    stats["hardclamp_worst_over_boost_db"] = float(hard_over_boost)
-    stats["hardclamp_worst_over_cut_db"] = float(hard_over_cut)
-    stats["clamp_summary"] = (
-        f"soft_clip: boost={stats['softclip_boost_bins']} cut={stats['softclip_cut_bins']} "
-        f"(worst_over_boost={stats['softclip_worst_over_boost_db']:.2f} dB, worst_over_cut={stats['softclip_worst_over_cut_db']:.2f} dB); "
-        f"hard_clamp: boost={stats['hardclamp_boost_bins']} cut={stats['hardclamp_cut_bins']} "
-        f"(worst_over_boost={stats['hardclamp_worst_over_boost_db']:.2f} dB, worst_over_cut={stats['hardclamp_worst_over_cut_db']:.2f} dB)"
+    return _apply_clamp_stats_impl(
+        stats,
+        softclip_boost_bins=softclip_boost_bins,
+        softclip_cut_bins=softclip_cut_bins,
+        over_boost=over_boost,
+        over_cut=over_cut,
+        hardclamp_boost_bins=hardclamp_boost_bins,
+        hardclamp_cut_bins=hardclamp_cut_bins,
+        hard_over_boost=hard_over_boost,
+        hard_over_cut=hard_over_cut,
     )
 
 
 def _apply_boost_blocked_reason(stats: dict, *, cfg) -> None:
-    max_boost_db_cfg = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
-    low_hz_cfg = float(getattr(cfg, "low_bass_cut_hz", 40.0) or 40.0)
-    exc_on = bool(getattr(cfg, "exc_prot", False))
-    exc_f_cfg = float(getattr(cfg, "exc_freq", 0.0) or 0.0)
-    do_norm = bool(getattr(cfg, "do_normalize", False))
-    g_global = float(stats.get("auto_global_gain_db", getattr(cfg, "global_gain_db", 0.0)) or 0.0)
-
-    boost_bins_post = int(stats.get("boost_bins", 0) or 0)
-    boost_bins_cand = int(stats.get("boost_candidate_bins", 0) or 0)
-    boost_bins_cand_low = int(stats.get("boost_candidate_bins_lowbass", 0) or 0)
-    boost_bins_cand_exc = int(stats.get("boost_candidate_bins_excprot", 0) or 0)
-
-    boost_peak_post = float(stats.get("boost_peak_db", 0.0) or 0.0)
-    net_boost_peak = boost_peak_post + g_global + float(stats.get("auto_headroom_db", 0.0) or 0.0)
-    stats["net_boost_peak_db"] = float(net_boost_peak)
-
-    reasons = []
-    if max_boost_db_cfg <= 0.0:
-        reasons.append("max_boost_db <= 0 (boost disabled)")
-    if boost_bins_cand == 0 and boost_bins_post == 0:
-        reasons.append("no boost candidates (algorithm produced only cuts in correction band)")
-    if boost_bins_cand > 0 and boost_bins_post == 0:
-        if boost_bins_cand_low == boost_bins_cand and low_hz_cfg > 0:
-            reasons.append(f"all boost candidates were <= low_bass_cut_hz ({low_hz_cfg:.1f} Hz) where cuts-only policy applies")
-        if exc_on and exc_f_cfg > 0 and boost_bins_cand_exc == boost_bins_cand:
-            reasons.append(f"all boost candidates were < exc_freq ({exc_f_cfg:.1f} Hz) while exc_prot is ON")
-        if not reasons:
-            reasons.append("boost candidates existed but were removed by limits/safety clamp (check max_boost_db, slope limits, exc/low-bass policies)")
-    if boost_bins_cand > 0 and boost_bins_post > 0 and boost_bins_post < boost_bins_cand:
-        if boost_bins_cand_low > 0:
-            reasons.append(f"some boost candidates were in low-bass restricted region (<= {low_hz_cfg:.1f} Hz)")
-        if exc_on and boost_bins_cand_exc > 0 and exc_f_cfg > 0:
-            reasons.append(f"some boost candidates were in exc_prot region (< {exc_f_cfg:.1f} Hz)")
-        reasons.append("some boost candidates were reduced by limits/safety clamp")
-    if boost_bins_post > 0 and net_boost_peak <= 0.0:
-        reasons.append(
-            f"net boost peak <= 0.00 dB after global gain/headroom (net_peak={net_boost_peak:.2f} dB, normalize={'ON' if do_norm else 'OFF'})"
-        )
-    stats["boost_blocked_reason"] = "; ".join(dict.fromkeys(reasons)) if reasons else "no blocking detected"
+    return _apply_boost_blocked_reason_impl(stats, cfg=cfg)
 
 
 def apply_confidence_weighted_target_pull(
@@ -187,71 +127,18 @@ def apply_confidence_weighted_target_pull(
     gamma_boost: float = 1.20,
     return_telemetry: bool = False,
 ):
-    """
-    Sekoittaa target-kayraa kohti mitattua kayraa confidence-maskin perusteella.
-
-    Korkea confidence painottaa targetia ja matala confidence painottaa mittausta.
-    Pull voidaan rajata taajuusalueelle `freq_limit_hz` ja painottaa erikseen
-    cut/boost-suuntiin `gamma_cut`- ja `gamma_boost`-parametreilla.
-
-    Kun `return_telemetry=True`, palauttaa myos diagnostiikkadatan:
-    `w_eff`, `pull_mask` ja `pull_strength`.
-    """
-    try:
-        t = np.asarray(target_db, dtype=float)
-        m = np.asarray(measured_db, dtype=float)
-        c = np.asarray(confidence_mask, dtype=float) if confidence_mask is not None else None
-    except (TypeError, ValueError):
-        out = np.asarray(target_db, dtype=float)
-        return (out, None) if return_telemetry else out
-
-    if c is None or t.size < 8 or t.shape != m.shape or t.shape != c.shape:
-        return t
-
-    if conf_ceil <= conf_floor + 1e-9:
-        return t
-    if freq_limit_hz is not None and freq_axis is not None:
-        try:
-            f = np.asarray(freq_axis, dtype=float)
-        except (TypeError, ValueError):
-            f = None
-        if f is not None and f.shape == t.shape:
-            pull_mask = (f > 0.0) & (f <= float(freq_limit_hz))
-        else:
-            pull_mask = None
-    else:
-        pull_mask = None
-
-    c = np.clip(c, conf_floor, conf_ceil)
-    w = (c - conf_floor) / (conf_ceil - conf_floor)
-    w = np.clip(w, 0.0, 1.0)
-
-    # For target-pull, "cut direction" means target is BELOW measured
-    # (i.e. target requests attenuation at that frequency).
-    # Using (t < 0) is wrong here because target SPL is typically positive.
-    is_cut = (t < m) #leikkaus
-
-    gc = float(gamma_cut) if np.isfinite(float(gamma_cut)) and float(gamma_cut) > 0 else 1.0
-    gb = float(gamma_boost) if np.isfinite(float(gamma_boost)) and float(gamma_boost) > 0 else 1.0
-    w_eff = np.where(is_cut, w ** gc, w ** gb)
-    w_eff = np.clip(w_eff, 0.0, 1.0)
-
-    out = (w_eff * t) + ((1.0 - w_eff) * m)
-
-    if pull_mask is not None:
-        out = np.where(pull_mask, out, t)
-    if not return_telemetry:
-        return out
-
-    try:
-        if pull_mask is None:
-            pm = np.ones_like(w_eff, dtype=bool)
-        else:
-            pm = np.asarray(pull_mask, dtype=bool)
-        pull_strength = np.clip(1.0 - w_eff, 0.0, 1.0)
-        return out, {"w_eff": w_eff, "pull_mask": pm, "pull_strength": pull_strength}
-    except (TypeError, ValueError):
-        return out, {"w_eff": w_eff, "pull_mask": None, "pull_strength": None}
+    return _apply_confidence_weighted_target_pull_impl(
+        target_db,
+        measured_db,
+        confidence_mask,
+        conf_floor=conf_floor,
+        conf_ceil=conf_ceil,
+        freq_axis=freq_axis,
+        freq_limit_hz=freq_limit_hz,
+        gamma_cut=gamma_cut,
+        gamma_boost=gamma_boost,
+        return_telemetry=return_telemetry,
+    )
 
 def _limit_gd_gradient_ms_per_oct(
     freq_axis,
@@ -264,158 +151,37 @@ def _limit_gd_gradient_ms_per_oct(
     grad_smooth_sigma=0.8,
     soft_limit=True,
 ):
-    """
-    Rajoittaa ryhmaviiveen gradienttia (ms/oktaavi) valitulla taajuusalueella.
-
-    Menetelma:
-    1) laskee vaiheesta ryhmaviiveen
-    2) laskee ryhmaviiveen gradientin log-taajuusakselilla
-    3) rajaa gradientin pehmeasti (`tanh`) tai kovalla clipilla
-    4) integroi takaisin rajatuksi vaiheeksi
-
-    Tarkoitus on vaimentaa epavakaita bassopiikkeja ilman, etta koko vaihe
-    muokkautuu liikaa.
-    """
-    f = np.asarray(freq_axis, dtype=float)
-    ph = np.asarray(phase_rad, dtype=float)
-    if f.size < 16 or ph.size != f.size:
-        return ph
-
-    m = (np.asarray(mask, dtype=bool) if mask is not None else np.ones_like(f, dtype=bool))
-    m = m & np.isfinite(f) & np.isfinite(ph) & (f > 0.0) & (f >= float(f_min)) & (f <= float(f_max))
-    if not np.any(m):
-        return ph
-
-    idx = np.where(m)[0]
-    i0, i1 = int(idx[0]), int(idx[-1])
-    ff = f[i0:i1 + 1]
-    pp = ph[i0:i1 + 1]
-    if ff.size < 16:
-        return ph
-    if not np.all(np.diff(ff) > 0.0):
-        # Non-monotonic axis can explode derivative math.
-        return ph
-
-    pp_u = np.unwrap(pp)
-
-    # GD in seconds: gd_s = -dphi/d(2*pi*f); convert to ms.
-    omega = 2.0 * np.pi * ff
-    gd_s = -np.gradient(pp_u, omega)
-    gd_ms = np.nan_to_num(gd_s * 1000.0, nan=0.0, posinf=0.0, neginf=0.0)
-
-    log2f = np.log2(np.maximum(ff, 1e-12))
-    lim = float(max(0.1, max_grad_ms_per_oct))
-
-    gd_l = gd_ms.copy()
-    try:
-        sigma = float(grad_smooth_sigma) if float(grad_smooth_sigma) > 0.0 else 0.6
-    except (TypeError, ValueError, OverflowError):
-        sigma = 0.6
-    sigma = float(max(0.25, sigma))
-
-    # Iteratively smooth GD until gradient is under limit (or close).
-    for _ in range(14):
-        gd_grad_now = np.gradient(gd_l, log2f)
-        gd_grad_now = np.nan_to_num(gd_grad_now, nan=0.0, posinf=0.0, neginf=0.0)
-        if gd_grad_now.size == 0:
-            break
-        if float(np.max(np.abs(gd_grad_now))) <= (lim * 1.001):
-            break
-        gd_l = scipy.ndimage.gaussian_filter1d(gd_l, sigma=sigma, mode="nearest")
-        sigma *= 1.25
-
-    gd_grad = np.gradient(gd_l, log2f)
-    gd_grad = np.nan_to_num(gd_grad, nan=0.0, posinf=0.0, neginf=0.0)
-    if soft_limit:
-        gd_grad_l = lim * np.tanh(gd_grad / lim)
-    else:
-        gd_grad_l = np.clip(gd_grad, -lim, lim)
-
-    # Rebuild GD from bounded gradient on log2-frequency axis.
-    gd_new = np.empty_like(gd_l)
-    gd_new[0] = float(gd_l[0])
-    for k in range(1, ff.size):
-        gd_new[k] = gd_new[k - 1] + gd_grad_l[k - 1] * (log2f[k] - log2f[k - 1])
-
-    # Integrate back to phase: dphi/df = -2*pi*gd_s = -2*pi*(gd_ms/1000).
-    dphi_df = -2.0 * np.pi * (gd_new / 1000.0)
-    phi_new = np.empty_like(pp_u)
-    phi_new[0] = float(pp_u[0])
-    dff = np.diff(ff)
-    for k in range(1, ff.size):
-        phi_new[k] = phi_new[k - 1] + 0.5 * (dphi_df[k - 1] + dphi_df[k]) * dff[k - 1]
-
-    out = ph.copy()
-    out[i0:i1 + 1] = np.nan_to_num(phi_new, nan=0.0, posinf=0.0, neginf=0.0)
-    return out
+    return _limit_gd_gradient_ms_per_oct_impl(
+        freq_axis,
+        phase_rad,
+        mask=mask,
+        max_grad_ms_per_oct=max_grad_ms_per_oct,
+        f_min=f_min,
+        f_max=f_max,
+        grad_smooth_sigma=grad_smooth_sigma,
+        soft_limit=soft_limit,
+    )
 
 
 
 def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto_headroom_db=0.0, logger_obj=None):
-    """
-    Kerää kevyet vaihekohtaiset debug-mittarit korjauskayrasta.
+    return _stage_probe_impl(
+        stage_name,
+        freq_axis,
+        arr_db,
+        mask_c,
+        global_gain_db=global_gain_db,
+        auto_headroom_db=auto_headroom_db,
+        logger_obj=logger_obj,
+    )
 
-    Palauttaa sanakirjan, jossa on mm. boost/cut-huiput, boost/cut-binien
-    lukumaara seka nettopiikki global gain + auto headroom huomioiden.
-    Jos logger on annettu, kirjoittaa saman tiedon lokiin.
-    """
-    try:
-        out = {
-            "stage": str(stage_name),
-            "boost_peak_db": 0.0,
-            "cut_peak_db": 0.0,
-            "boost_bins": 0,
-            "cut_bins": 0,
-            "net_boost_peak_db": 0.0
-        }
-        if arr_db is None or mask_c is None or not np.any(mask_c):
-            return out
-        v = np.asarray(arr_db, dtype=float)
-        m = np.asarray(mask_c, dtype=bool)
-        vv = v[m]
-        out["boost_peak_db"] = float(np.max(vv)) if vv.size else 0.0
-        out["cut_peak_db"] = float(np.min(vv)) if vv.size else 0.0
-        out["boost_bins"] = int(np.sum(vv > 1e-6))
-        out["cut_bins"] = int(np.sum(vv < -1e-6))
-        out["net_boost_peak_db"] = float(out["boost_peak_db"] + float(global_gain_db) + float(auto_headroom_db))
-        if logger_obj is not None:
-            logger_obj.info(
-                f"StageProbe[{out['stage']}]: "
-                f"boost_peak={out['boost_peak_db']:.2f} dB, cut_peak={out['cut_peak_db']:.2f} dB, "
-                f"boost_bins={out['boost_bins']}, cut_bins={out['cut_bins']}, "
-                f"net_boost_peak={out['net_boost_peak_db']:.2f} dB"
-            )
-        return out
-    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
-        return {
-            "stage": str(stage_name),
-            "boost_peak_db": 0.0,
-            "cut_peak_db": 0.0,
-            "boost_bins": 0,
-            "cut_bins": 0,
-            "net_boost_peak_db": 0.0
-        }
 
 def apply_hpf_to_mags(freqs, mags, cutoff, order):
-    """
-    Lisaa Butterworth-HPF:n vaimennuksen dB-kayraan.
+    return _apply_hpf_to_mags_impl(freqs, mags, cutoff, order)
 
-    Funktio ei rakenna erillista suodintaikatasossa, vaan laskee taajuuskohtaisen
-    attenuaation analyyttisesti ja summaa sen suoraan `mags`-arvoihin.
-    """
-    if cutoff <= 0 or order <= 0:
-        return mags
-    f = np.asarray(freqs, dtype=float)
-    if f.size > 1 and f[0] == 0.0:
-        f = f.copy()
-        f[0] = f[1] if f[1] > 0 else 1e-6
-    with np.errstate(divide='ignore'):
-        attenuation = -10 * np.log10(1 + (cutoff / (f + 1e-12))**(2 * order))
-    return mags + attenuation
 
 def interpolate_response(input_freqs, input_values, target_freqs):
-    """Interpoloi vasteen lineaarisesti kohde-taajuusakselille."""
-    return np.interp(target_freqs, input_freqs, input_values)
+    return _interpolate_response_impl(input_freqs, input_values, target_freqs)
 
 
 def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig, *, stereo_link_ctx: StereoLinkContext | None = None):
