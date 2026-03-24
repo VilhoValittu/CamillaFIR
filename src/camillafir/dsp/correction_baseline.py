@@ -11,6 +11,7 @@ from .correction_types import (
     BaselineNativeTelemetry,
     _BaselineContext,
 )
+from .dsp_config import CfgReader
 from .limits import build_slope_limit_envelope
 from .phase import get_min_phase_impulse
 from .tdc import apply_smart_tdc
@@ -170,6 +171,7 @@ def _prepare_correction_baseline(
     _cfg_float_allow_zero,
     stereo_link_ctx=None,
 ) -> _BaselineContext:
+    cfg_reader = CfgReader(cfg)
     m_interp_for_rt = _resample_or_interpolate_to_axis(f_in, m_in, freq_axis)
     m_rt_lin = _resample_or_interpolate_to_axis(freq_axis, m_interp_for_rt, np.linspace(0, cfg.fs / 2, 65537))
     rt_ir = get_min_phase_impulse(m_rt_lin, 131072)
@@ -189,11 +191,11 @@ def _prepare_correction_baseline(
     target_mags = _build_target_curve(freq_axis, cfg, interpolate_response)
     target_mags = _apply_target_preview_adjustments(target_mags, cfg)
 
-    if cfg.enable_tdc:
+    if cfg_reader.bool("enable_tdc", False):
         rt60_for_tdc = rt60_bands if rt60_bands else current_rt60
-        tdc_strength = _cfg_float_allow_zero(cfg, "tdc_strength", 50.0)
-        tdc_max_red = _cfg_float_allow_zero(cfg, "tdc_max_reduction_db", 9.0)
-        tdc_slope = _cfg_float_allow_zero(cfg, "tdc_slope_db_per_oct", 0.0)
+        tdc_strength = cfg_reader.float_allow_zero("tdc_strength", 50.0)
+        tdc_max_red = cfg_reader.float_allow_zero("tdc_max_reduction_db", 9.0)
+        tdc_slope = cfg_reader.float_allow_zero("tdc_slope_db_per_oct", 0.0)
         if tdc_strength < 0:
             tdc_strength = 0.0
         if tdc_strength > 100:
@@ -216,18 +218,10 @@ def _prepare_correction_baseline(
             max_slope_db_per_oct=tdc_slope,
         )
     # ---- Null-guard: make target realistic for deep/narrow cancellations ----
-    try:
-        ng_enable = bool(getattr(cfg, "enable_null_guard", True))
-    except (AttributeError, TypeError, ValueError):
-        ng_enable = True
-
+    ng_enable = cfg_reader.bool("enable_null_guard", True)
     if ng_enable:
-        try:
-            mag_c_min = float(getattr(cfg, "mag_c_min", 0.0) or 0.0)
-            mag_c_max = float(getattr(cfg, "mag_c_max", 0.0) or 0.0)
-        except (AttributeError, TypeError, ValueError):
-            mag_c_min, mag_c_max = 0.0, 0.0
-
+        mag_c_min = cfg_reader.float_allow_zero("mag_c_min", 0.0)
+        mag_c_max = cfg_reader.float_allow_zero("mag_c_max", 0.0)
         # use analysis magnitude (m_anal) already on freq_axis scale
         target_mags = apply_null_guard_target(
             np.asarray(freq_axis, dtype=float),
@@ -236,10 +230,10 @@ def _prepare_correction_baseline(
             mag_c_min=mag_c_min,
             mag_c_max=mag_c_max,
             enable=True,
-            depth_db=float(getattr(cfg, "null_guard_depth_db", 12.0) or 12.0),
-            max_blend=float(getattr(cfg, "null_guard_max_blend", 0.85) or 0.85),
-            max_total_relax_db=float(getattr(cfg, "null_guard_max_relax_db", 12.0) or 12.0),
-            smooth_oct=float(getattr(cfg, "null_guard_smooth_oct", 0.18) or 0.18),
+            depth_db=cfg_reader.float("null_guard_depth_db", 12.0),
+            max_blend=cfg_reader.float("null_guard_max_blend", 0.85),
+            max_total_relax_db=cfg_reader.float("null_guard_max_relax_db", 12.0),
+            smooth_oct=cfg_reader.float("null_guard_smooth_oct", 0.18),
         )
     hpf_f = 0.0
     hpf_order = 0
@@ -261,11 +255,8 @@ def _prepare_correction_baseline(
                     shared_target_shift_db = float(v)
         except (AttributeError, TypeError, ValueError):
             shared_target_shift_db = None
-    try:
-        s_min = float(getattr(cfg, "lvl_min", 500.0) or 500.0)
-        s_max = float(getattr(cfg, "lvl_max", 2000.0) or 2000.0)
-    except (AttributeError, TypeError, ValueError):
-        s_min, s_max = 500.0, 2000.0
+    s_min = cfg_reader.float("lvl_min", 500.0)
+    s_max = cfg_reader.float("lvl_max", 2000.0)
     try:
         (
             target_level_db,
@@ -331,9 +322,9 @@ def _prepare_correction_baseline(
         env_lo = env_hi = None
         env_pivot = None
         try:
-            max_slope = float(getattr(cfg, "max_slope_db_per_oct", 0.0) or 0.0)
-            max_slope_boost = float(getattr(cfg, "max_slope_boost_db_per_oct", 0.0) or 0.0)
-            max_slope_cut = float(getattr(cfg, "max_slope_cut_db_per_oct", 0.0) or 0.0)
+            max_slope = cfg_reader.float_allow_zero("max_slope_db_per_oct", 0.0)
+            max_slope_boost = cfg_reader.float_allow_zero("max_slope_boost_db_per_oct", 0.0)
+            max_slope_cut = cfg_reader.float_allow_zero("max_slope_cut_db_per_oct", 0.0)
             if max_slope_boost <= 0.0:
                 max_slope_boost = max_slope
             if max_slope_cut <= 0.0:
@@ -341,8 +332,8 @@ def _prepare_correction_baseline(
             env_lo, env_hi, env_pivot = build_slope_limit_envelope(
                 np.asarray(freq_axis, dtype=float),
                 target_aligned,
-                mag_c_min=float(getattr(cfg, "mag_c_min", 0.0) or 0.0),
-                mag_c_max=float(getattr(cfg, "mag_c_max", 0.0) or 0.0),
+                mag_c_min=cfg_reader.float_allow_zero("mag_c_min", 0.0),
+                mag_c_max=cfg_reader.float_allow_zero("mag_c_max", 0.0),
                 max_slope_boost_db_per_oct=float(max_slope_boost),
                 max_slope_cut_db_per_oct=float(max_slope_cut),
             )

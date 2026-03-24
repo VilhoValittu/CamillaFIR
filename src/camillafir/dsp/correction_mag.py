@@ -16,6 +16,8 @@ from .correction_types import (
     _MagPostProcessOutputs,
     _MagRawStageOutputs,
 )
+from .dsp_config import CfgReader
+from .dsp_telemetry import safe_put_many
 from .gain_policy import apply_cuts_only_guard, build_low_frequency_guard_mask, resolve_gain_policy
 from .mag_limits import (
     _apply_hard_boost_cut_clamp,
@@ -39,7 +41,6 @@ from .mag_stage import (
     run_mag_raw_stage,
 )
 from .mag_telemetry import (
-    _band_delta_metrics,
     _log_stage_stats,
     _record_stage_probe,
     _summarize_correction_metrics,
@@ -68,27 +69,19 @@ def _apply_peak_priority_error_shaping(
       - Soft-limit BOOST requests (positive error) to ~max_boost_db (tanh saturation),
         so deep dips don't dominate the solution when max_boost is small anyway.
     """
-    try:
-        enable = bool(getattr(cfg, "peak_priority_enable", True))
-    except (AttributeError, TypeError, ValueError):
-        enable = True
+    cfg_reader = CfgReader(cfg)
+    enable = cfg_reader.bool("peak_priority_enable", True)
     if not enable:
         return err_db
 
-    try:
-        strength = float(getattr(cfg, "peak_priority_strength", 0.5) or 0.0) #vaikuttaa boostin voimakkuuteen, mitä isompi, sitä miedompi boost
-    except (AttributeError, TypeError, ValueError):
-        strength = 0.5
+    strength = cfg_reader.float_allow_zero("peak_priority_strength", 0.5) #vaikuttaa boostin voimakkuuteen, mitä isompi, sitä miedompi boost
     if not np.isfinite(strength):
         strength = 0.0
     strength = float(np.clip(strength, 0.0, 1.0))
     if strength <= 0.0:
         return err_db
 
-    try:
-        max_boost = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
-    except (AttributeError, TypeError, ValueError):
-        max_boost = 0.0
+    max_boost = cfg_reader.float_allow_zero("max_boost_db", 0.0)
     if not np.isfinite(max_boost) or max_boost <= 0.0:
         return err_db
 
@@ -105,10 +98,7 @@ def _apply_peak_priority_error_shaping(
     e[pos] = (1.0 - strength) * e_pos + strength * e_sat
 
     # Optional (small) cut emphasis if you want even more peak-first behavior.
-    try:
-        cut_emph = float(getattr(cfg, "peak_priority_cut_emphasis", 0.0) or 0.0)
-    except (AttributeError, TypeError, ValueError):
-        cut_emph = 0.0
+    cut_emph = cfg_reader.float_allow_zero("peak_priority_cut_emphasis", 0.0)
     if np.isfinite(cut_emph) and cut_emph > 0.0:
         cut_emph = float(np.clip(cut_emph, 0.0, 2.0))
         neg = m & (e < 0.0)
@@ -148,6 +138,7 @@ def _apply_smoothing(
     conf_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Soveltaa nykyisen valinnan mukaista smoothingia (DF tai fractional octave)."""
+    cfg_reader = CfgReader(cfg)
     if df_mode:
         base_sigma = 60 // (filter_smooth / 12 if filter_smooth > 0 else 1)
         df_ref = 44100.0 / 65536.0
@@ -157,7 +148,7 @@ def _apply_smoothing(
     else:
         smoothed_base = smooth_gain_fractional_octave(freq_axis, err_db, filter_smooth)
 
-    if not bool(getattr(cfg, "bass_smooth_adaptive", False)):
+    if not cfg_reader.bool("bass_smooth_adaptive", False):
         try:
             if isinstance(st, dict):
                 st["bass_adaptive_smoothing_enabled"] = False
@@ -179,36 +170,21 @@ def _apply_smoothing(
             pass
         return smoothed_base
 
-    try:
-        f_bass = float(getattr(cfg, "bass_smooth_hz", 200.0) or 200.0)
-    except (AttributeError, TypeError, ValueError):
-        f_bass = 200.0
+    f_bass = cfg_reader.float("bass_smooth_hz", 200.0)
     if not np.isfinite(f_bass) or f_bass <= 0.0:
         f_bass = 200.0
 
-    try:
-        conf_floor = float(getattr(cfg, "bass_smooth_conf_floor", 0.3) or 0.3)
-    except (AttributeError, TypeError, ValueError):
-        conf_floor = 0.3
+    conf_floor = cfg_reader.float("bass_smooth_conf_floor", 0.3)
     if not np.isfinite(conf_floor) or conf_floor <= 0.0:
         conf_floor = 0.3
 
-    try:
-        sigma_scale = float(getattr(cfg, "bass_smooth_sigma_scale", 1.4) or 1.4)
-    except (AttributeError, TypeError, ValueError):
-        sigma_scale = 1.4
+    sigma_scale = cfg_reader.float("bass_smooth_sigma_scale", 1.4)
     if (not np.isfinite(sigma_scale)) or sigma_scale < 1.0:
         sigma_scale = 1.0
-    try:
-        w_gamma = float(getattr(cfg, "bass_smooth_w_gamma", 2.0) or 2.0)
-    except (AttributeError, TypeError, ValueError):
-        w_gamma = 2.0
+    w_gamma = cfg_reader.float("bass_smooth_w_gamma", 2.0)
     if (not np.isfinite(w_gamma)) or w_gamma <= 0.0:
         w_gamma = 2.0
-    try:
-        w_max = float(getattr(cfg, "bass_smooth_w_max", 0.55) or 0.55)
-    except (AttributeError, TypeError, ValueError):
-        w_max = 0.55
+    w_max = cfg_reader.float("bass_smooth_w_max", 0.55)
     if not np.isfinite(w_max):
         w_max = 0.55
     w_max = float(np.clip(w_max, 0.0, 1.0))
@@ -274,25 +250,34 @@ def _apply_confidence_adaptive_bass_smoothing(
     base = np.asarray(curve_db, dtype=float)
     f = np.asarray(freq_axis, dtype=float)
     stage_key = str(stage_tag or "core").strip().lower()
+    cfg_reader = CfgReader(cfg)
 
     def _mark_disabled() -> np.ndarray:
         try:
             if isinstance(st, dict):
-                st["bass_adaptive_smoothing_enabled"] = False
-                st["bass_adaptive_smoothing_avg_w_20_200"] = 0.0
-                st["bass_adaptive_smoothing_delta_rms_db_20_200"] = 0.0
-                st["bass_adaptive_smoothing_delta_max_db_20_200"] = 0.0
-                st["bass_adaptive_smoothing_delta_max_hz_20_200"] = None
-                st[f"bass_adaptive_smoothing_{stage_key}_enabled"] = False
-                st[f"bass_adaptive_smoothing_{stage_key}_avg_w_20_200"] = 0.0
-                st[f"bass_adaptive_smoothing_{stage_key}_delta_rms_db_20_200"] = 0.0
-                st[f"bass_adaptive_smoothing_{stage_key}_delta_max_db_20_200"] = 0.0
-                st[f"bass_adaptive_smoothing_{stage_key}_delta_max_hz_20_200"] = None
+                safe_put_many(
+                    st,
+                    {
+                        "bass_adaptive_smoothing_enabled": False,
+                        "bass_adaptive_smoothing_avg_w_20_200": 0.0,
+                        "bass_adaptive_smoothing_delta_rms_db_20_200": 0.0,
+                        "bass_adaptive_smoothing_delta_max_db_20_200": 0.0,
+                        "bass_adaptive_smoothing_delta_max_hz_20_200": None,
+                        "bass_adaptive_smoothing_delta_rms_db_20_200_stage_local": 0.0,
+                        "bass_adaptive_smoothing_delta_max_db_20_200_stage_local": 0.0,
+                        "bass_adaptive_smoothing_delta_max_hz_20_200_stage_local": None,
+                        f"bass_adaptive_smoothing_{stage_key}_enabled": False,
+                        f"bass_adaptive_smoothing_{stage_key}_avg_w_20_200": 0.0,
+                        f"bass_adaptive_smoothing_{stage_key}_delta_rms_db_20_200": 0.0,
+                        f"bass_adaptive_smoothing_{stage_key}_delta_max_db_20_200": 0.0,
+                        f"bass_adaptive_smoothing_{stage_key}_delta_max_hz_20_200": None,
+                    },
+                )
         except (TypeError, ValueError):
             pass
         return base
 
-    if not bool(getattr(cfg, "bass_smooth_adaptive", False)):
+    if not cfg_reader.bool("bass_smooth_adaptive", False):
         return _mark_disabled()
 
     try:
@@ -302,36 +287,21 @@ def _apply_confidence_adaptive_bass_smoothing(
     if c is None or c.shape != f.shape:
         return _mark_disabled()
 
-    try:
-        f_bass = float(getattr(cfg, "bass_smooth_hz", 200.0) or 200.0)
-    except (AttributeError, TypeError, ValueError):
-        f_bass = 200.0
+    f_bass = cfg_reader.float("bass_smooth_hz", 200.0)
     if not np.isfinite(f_bass) or f_bass <= 0.0:
         f_bass = 200.0
 
-    try:
-        conf_floor = float(getattr(cfg, "bass_smooth_conf_floor", 0.3) or 0.3)
-    except (AttributeError, TypeError, ValueError):
-        conf_floor = 0.3
+    conf_floor = cfg_reader.float("bass_smooth_conf_floor", 0.3)
     if not np.isfinite(conf_floor) or conf_floor <= 0.0:
         conf_floor = 0.3
 
-    try:
-        sigma_scale = float(getattr(cfg, "bass_smooth_sigma_scale", 1.4) or 1.4)
-    except (AttributeError, TypeError, ValueError):
-        sigma_scale = 1.4
+    sigma_scale = cfg_reader.float("bass_smooth_sigma_scale", 1.4)
     if (not np.isfinite(sigma_scale)) or sigma_scale < 1.0:
         sigma_scale = 1.0
-    try:
-        w_gamma = float(getattr(cfg, "bass_smooth_w_gamma", 2.0) or 2.0)
-    except (AttributeError, TypeError, ValueError):
-        w_gamma = 2.0
+    w_gamma = cfg_reader.float("bass_smooth_w_gamma", 2.0)
     if (not np.isfinite(w_gamma)) or w_gamma <= 0.0:
         w_gamma = 2.0
-    try:
-        w_max = float(getattr(cfg, "bass_smooth_w_max", 0.55) or 0.55)
-    except (AttributeError, TypeError, ValueError):
-        w_max = 0.55
+    w_max = cfg_reader.float("bass_smooth_w_max", 0.55)
     if not np.isfinite(w_max):
         w_max = 0.55
     w_max = float(np.clip(w_max, 0.0, 1.0))
@@ -406,17 +376,25 @@ def _apply_confidence_adaptive_bass_smoothing(
 
     try:
         if isinstance(st, dict):
-            st["bass_adaptive_smoothing_enabled"] = True
-            st["bass_adaptive_smoothing_avg_w_20_200"] = float(w_avg)
-            st["bass_adaptive_smoothing_delta_rms_db_20_200"] = float(d_rms)
-            st["bass_adaptive_smoothing_delta_max_db_20_200"] = float(d_max)
-            st["bass_adaptive_smoothing_delta_max_hz_20_200"] = (float(d_hz) if d_hz is not None else None)
-            st["bass_adaptive_smoothing_sigma_bins"] = float(sigma_bins)
-            st[f"bass_adaptive_smoothing_{stage_key}_enabled"] = True
-            st[f"bass_adaptive_smoothing_{stage_key}_avg_w_20_200"] = float(w_avg)
-            st[f"bass_adaptive_smoothing_{stage_key}_delta_rms_db_20_200"] = float(d_rms)
-            st[f"bass_adaptive_smoothing_{stage_key}_delta_max_db_20_200"] = float(d_max)
-            st[f"bass_adaptive_smoothing_{stage_key}_delta_max_hz_20_200"] = (float(d_hz) if d_hz is not None else None)
+            safe_put_many(
+                st,
+                {
+                    "bass_adaptive_smoothing_enabled": True,
+                    "bass_adaptive_smoothing_avg_w_20_200": float(w_avg),
+                    "bass_adaptive_smoothing_delta_rms_db_20_200": float(d_rms),
+                    "bass_adaptive_smoothing_delta_max_db_20_200": float(d_max),
+                    "bass_adaptive_smoothing_delta_max_hz_20_200": float(d_hz) if d_hz is not None else None,
+                    "bass_adaptive_smoothing_delta_rms_db_20_200_stage_local": float(d_rms),
+                    "bass_adaptive_smoothing_delta_max_db_20_200_stage_local": float(d_max),
+                    "bass_adaptive_smoothing_delta_max_hz_20_200_stage_local": float(d_hz) if d_hz is not None else None,
+                    "bass_adaptive_smoothing_sigma_bins": float(sigma_bins),
+                    f"bass_adaptive_smoothing_{stage_key}_enabled": True,
+                    f"bass_adaptive_smoothing_{stage_key}_avg_w_20_200": float(w_avg),
+                    f"bass_adaptive_smoothing_{stage_key}_delta_rms_db_20_200": float(d_rms),
+                    f"bass_adaptive_smoothing_{stage_key}_delta_max_db_20_200": float(d_max),
+                    f"bass_adaptive_smoothing_{stage_key}_delta_max_hz_20_200": float(d_hz) if d_hz is not None else None,
+                },
+            )
     except (TypeError, ValueError):
         pass
     return out
@@ -468,6 +446,7 @@ def _apply_mid_refit_pre_slope(
 ) -> np.ndarray:
     """Kevyt mid-band match-pass ennen slope-rajoja."""
     out = np.asarray(gain_db, dtype=float).copy()
+    cfg_reader = CfgReader(cfg)
 
     def _write_stats(
         *,
@@ -481,25 +460,29 @@ def _apply_mid_refit_pre_slope(
     ) -> None:
         try:
             if isinstance(st, dict):
-                st["mid_refit_enabled"] = bool(enabled)
-                st["mid_refit_k"] = float(k_used)
-                st["mid_refit_err_rms_before"] = (
-                    float(before_rms) if before_rms is not None and np.isfinite(float(before_rms)) else None
+                before_val = float(before_rms) if before_rms is not None and np.isfinite(float(before_rms)) else None
+                after_val = float(after_rms) if after_rms is not None and np.isfinite(float(after_rms)) else None
+                delta_val = float(delta_rms) if delta_rms is not None and np.isfinite(float(delta_rms)) else None
+                conf_val = float(conf_avg) if conf_avg is not None and np.isfinite(float(conf_avg)) else None
+                safe_put_many(
+                    st,
+                    {
+                        "mid_refit_enabled": bool(enabled),
+                        "mid_refit_k": float(k_used),
+                        "mid_refit_err_rms_before": before_val,
+                        "mid_refit_err_rms_after": after_val,
+                        "mid_refit_delta_rms": delta_val,
+                        "mid_refit_err_rms_before_stage_local": before_val,
+                        "mid_refit_err_rms_after_stage_local": after_val,
+                        "mid_refit_delta_rms_stage_local": delta_val,
+                        "mid_refit_conf_avg_200_2000": conf_val,
+                        "mid_refit_reason": str(reason),
+                    },
                 )
-                st["mid_refit_err_rms_after"] = (
-                    float(after_rms) if after_rms is not None and np.isfinite(float(after_rms)) else None
-                )
-                st["mid_refit_delta_rms"] = (
-                    float(delta_rms) if delta_rms is not None and np.isfinite(float(delta_rms)) else None
-                )
-                st["mid_refit_conf_avg_200_2000"] = (
-                    float(conf_avg) if conf_avg is not None and np.isfinite(float(conf_avg)) else None
-                )
-                st["mid_refit_reason"] = str(reason)
         except (TypeError, ValueError):
             pass
 
-    if not bool(getattr(cfg, "enable_mag_correction", False)):
+    if not cfg_reader.bool("enable_mag_correction", False):
         _write_stats(
             enabled=False,
             k_used=0.0,
@@ -511,10 +494,7 @@ def _apply_mid_refit_pre_slope(
         )
         return out
 
-    try:
-        refit_on = bool(getattr(cfg, "mid_refit_enable", True))
-    except (AttributeError, TypeError, ValueError):
-        refit_on = True
+    refit_on = cfg_reader.bool("mid_refit_enable", True)
     if not refit_on:
         _write_stats(
             enabled=False,
@@ -527,14 +507,8 @@ def _apply_mid_refit_pre_slope(
         )
         return out
 
-    try:
-        mid_lo = float(getattr(cfg, "mid_refit_hz_lo", 200.0) or 200.0)
-    except (AttributeError, TypeError, ValueError):
-        mid_lo = 200.0
-    try:
-        mid_hi = float(getattr(cfg, "mid_refit_hz_hi", 2000.0) or 2000.0)
-    except (AttributeError, TypeError, ValueError):
-        mid_hi = 2000.0
+    mid_lo = cfg_reader.float("mid_refit_hz_lo", 200.0)
+    mid_hi = cfg_reader.float("mid_refit_hz_hi", 2000.0)
     if (not np.isfinite(mid_lo)) or mid_lo < 1.0:
         mid_lo = 200.0
     if (not np.isfinite(mid_hi)) or mid_hi <= (mid_lo + 1.0):
@@ -542,10 +516,7 @@ def _apply_mid_refit_pre_slope(
         if mid_hi <= (mid_lo + 1.0):
             mid_hi = mid_lo + 1.0
 
-    try:
-        k_refit = float(getattr(cfg, "mid_refit_k", 0.45) or 0.45)
-    except (AttributeError, TypeError, ValueError):
-        k_refit = 0.45
+    k_refit = cfg_reader.float("mid_refit_k", 0.45)
     if not np.isfinite(k_refit):
         k_refit = 0.45
     k_refit = float(np.clip(k_refit, 0.0, 1.0))
@@ -561,19 +532,13 @@ def _apply_mid_refit_pre_slope(
         )
         return out
 
-    try:
-        smooth_oct = float(getattr(cfg, "mid_refit_smooth_oct", 0.6) or 0.6)
-    except (AttributeError, TypeError, ValueError):
-        smooth_oct = 0.6
+    smooth_oct = cfg_reader.float("mid_refit_smooth_oct", 0.6)
     if (not np.isfinite(smooth_oct)) or smooth_oct <= 0.0:
         smooth_oct = 0.6
     smooth_oct = float(np.clip(smooth_oct, 1.0 / 192.0, 1.0))
     smooth_value = float(np.clip(1.0 / smooth_oct, 1.0, 192.0))
 
-    try:
-        conf_min_avg = float(getattr(cfg, "mid_refit_conf_min_avg", 0.2) or 0.2)
-    except (AttributeError, TypeError, ValueError):
-        conf_min_avg = 0.2
+    conf_min_avg = cfg_reader.float("mid_refit_conf_min_avg", 0.2)
     if not np.isfinite(conf_min_avg):
         conf_min_avg = 0.2
     conf_min_avg = float(np.clip(conf_min_avg, 0.0, 1.0))
@@ -825,6 +790,11 @@ def _run_mag_correction_pipeline(inputs: _MagPipelineInputs) -> _MagCorrectionCo
                 gain_apply=core.gain_apply,
                 raw_g=raw_g,
                 final_g=final_g,
+                pre_bass_adapt_g=(
+                    None
+                    if core.pre_bass_adapt_g is None
+                    else np.asarray(core.pre_bass_adapt_g, dtype=float)
+                ),
                 raw_safe_ref=core.raw_safe_ref,
                 conf_mask=conf_mask,
                 filter_smooth=_filter_smooth,
@@ -855,88 +825,6 @@ def _run_mag_correction_pipeline(inputs: _MagPipelineInputs) -> _MagCorrectionCo
         hard_over_boost = post.hard_over_boost
         hard_over_cut = post.hard_over_cut
         clamp_dominance_level = post.clamp_dominance_level
-
-        # Bass-adaptive delta metrics should reflect final, exported gain curve.
-        # Current core-stage delta is kept as debug, but report keys are overwritten
-        # with the effective post-limits/post-clamp impact.
-        try:
-            if isinstance(st, dict):
-                d_rms_core = float(st.get("bass_adaptive_smoothing_delta_rms_db_20_200", 0.0) or 0.0)
-                d_max_core = float(st.get("bass_adaptive_smoothing_delta_max_db_20_200", 0.0) or 0.0)
-            else:
-                d_rms_core = 0.0
-                d_max_core = 0.0
-        except (AttributeError, TypeError, ValueError):
-            d_rms_core = 0.0
-            d_max_core = 0.0
-
-        try:
-            pre_bass = np.asarray(core.pre_bass_adapt_g, dtype=float) if core.pre_bass_adapt_g is not None else None
-        except (TypeError, ValueError):
-            pre_bass = None
-
-        try:
-            bass_enabled = bool(st.get("bass_adaptive_smoothing_enabled", False)) if isinstance(st, dict) else False
-        except (AttributeError, TypeError, ValueError):
-            bass_enabled = False
-
-        if bass_enabled and pre_bass is not None and pre_bass.shape == np.asarray(final_g, dtype=float).shape:
-            try:
-                class _NullLogger:
-                    def info(self, *args, **kwargs):
-                        return None
-
-                def _noop_stage_probe(*args, **kwargs):
-                    return {}
-
-                shadow_st: dict[str, Any] = {}
-                gain_apply_shadow, _ = _apply_confidence_logic(pre_bass, freq_axis, cfg, shadow_st, conf_mask)
-                shadow_post = _apply_post_limits_and_metrics(
-                    _MagPostProcessInputs(
-                        cfg=cfg,
-                        freq_axis=freq_axis,
-                        st=shadow_st,
-                        logger=_NullLogger(),
-                        stage_probe=_noop_stage_probe,
-                        cfg_float_allow_zero=_cfg_float_allow_zero,
-                        mask_c=mask_c,
-                        gain_db=np.asarray(core.gain_db, dtype=float).copy(),
-                        gain_apply=np.asarray(gain_apply_shadow, dtype=float),
-                        raw_g=np.asarray(raw_g, dtype=float),
-                        final_g=np.asarray(pre_bass, dtype=float),
-                        raw_safe_ref=core.raw_safe_ref,
-                        conf_mask=conf_mask,
-                        filter_smooth=_filter_smooth,
-                        debug_stage_stats=False,
-                        stage_probes={},
-                        apply_confidence_weighted_target_pull=apply_confidence_weighted_target_pull,
-                        m_anal=np.asarray(inputs.m_anal, dtype=float),
-                        target_mags=np.asarray(inputs.target_mags, dtype=float),
-                        calc_offset_db=float(inputs.calc_offset_db),
-                    )
-                )
-                d_rms_eff, d_max_eff, d_max_hz_eff = _band_delta_metrics(
-                    np.asarray(post.gain_db, dtype=float),
-                    np.asarray(shadow_post.gain_db, dtype=float),
-                    np.asarray(freq_axis, dtype=float),
-                    f_lo=20.0,
-                    f_hi=200.0,
-                )
-                if isinstance(st, dict):
-                    st["bass_adaptive_smoothing_delta_rms_db_20_200_core"] = float(d_rms_core)
-                    st["bass_adaptive_smoothing_delta_max_db_20_200_core"] = float(d_max_core)
-                    st["bass_adaptive_smoothing_delta_rms_db_20_200"] = float(d_rms_eff)
-                    st["bass_adaptive_smoothing_delta_max_db_20_200"] = float(d_max_eff)
-                    st["bass_adaptive_smoothing_delta_max_hz_20_200"] = (
-                        float(d_max_hz_eff)
-                        if (d_max_hz_eff is not None and np.isfinite(float(d_max_hz_eff)))
-                        else None
-                    )
-                    st["bass_adaptive_smoothing_delta_basis"] = "mag_post_limits_pre_ir"
-            except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError, KeyError):
-                if isinstance(st, dict):
-                    st["bass_adaptive_smoothing_delta_max_hz_20_200"] = None
-                    st["bass_adaptive_smoothing_delta_basis"] = "core_stage_fallback"
 
     return _MagCorrectionContext(
         afdw_on=bool(afdw_on),

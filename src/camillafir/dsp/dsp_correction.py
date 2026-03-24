@@ -8,8 +8,8 @@ from .correction_types import (
     CorrectionInputs,
     CorrectionOutputs,
     _MagPipelineInputs,
-    apply_baseline_telemetry_to_stats,
 )
+from .dsp_telemetry import apply_baseline_telemetry_to_stats
 
 
 def _sanitize_freq_axis(freq_axis: np.ndarray) -> np.ndarray:

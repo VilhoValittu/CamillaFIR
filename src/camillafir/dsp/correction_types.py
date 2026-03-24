@@ -6,16 +6,6 @@ from typing import Any, Callable
 import numpy as np
 
 
-def _telemetry_list(value: Any) -> list[Any] | None:
-    """Normalisoi numpy/list-datan stats-adapteria varten."""
-    if value is None:
-        return None
-    try:
-        return np.asarray(value).tolist()
-    except (TypeError, ValueError):
-        return None
-
-
 @dataclass
 class BaselineNativeTelemetry:
     """Typed baseline-telemetria natiiville stats-rakenteelle."""
@@ -51,64 +41,6 @@ class BaselineComparisonTelemetry:
     target_level_db_window: float
     offset_method: str
     target_shift_db: float
-
-
-def apply_baseline_telemetry_to_stats(
-    *,
-    st: Any,
-    cmp: Any,
-    native: BaselineNativeTelemetry | None,
-    comparison: BaselineComparisonTelemetry | None,
-) -> None:
-    """Sovittaa typed baseline-telemetrian vanhoihin st/cmp-sanakirjoihin."""
-
-    if isinstance(st, dict) and native is not None:
-        st["analysis_mode"] = str(native.analysis_mode)
-        if native.freq_axis is not None:
-            st["freq_axis"] = _telemetry_list(native.freq_axis)
-        if native.measured_mags is not None:
-            st["measured_mags"] = _telemetry_list(native.measured_mags)
-        if native.target_mags is not None:
-            st["target_mags"] = _telemetry_list(native.target_mags)
-        if native.target_env_lo is not None and native.target_env_hi is not None:
-            st["target_env_lo"] = _telemetry_list(native.target_env_lo)
-            st["target_env_hi"] = _telemetry_list(native.target_env_hi)
-            st["target_env_pivot_hz"] = (
-                float(native.target_env_pivot_hz)
-                if native.target_env_pivot_hz is not None
-                else None
-            )
-        st["target_shift_db"] = float(native.target_shift_db)
-        st["eff_target_db"] = float(native.eff_target_db)
-        st["target_level_db_window"] = float(native.target_level_db_window)
-        st["meas_level_db_window"] = float(native.meas_level_db_window)
-        st["offset_db"] = float(native.offset_db)
-        st["offset_method"] = str(native.offset_method)
-        st["smart_scan_range"] = [
-            float(native.smart_scan_range[0]),
-            float(native.smart_scan_range[1]),
-        ]
-
-    if isinstance(cmp, dict) and comparison is not None:
-        cmp["analysis_mode"] = str(comparison.analysis_mode)
-        if comparison.target_mags is not None:
-            cmp["cmp_target_mags"] = _telemetry_list(comparison.target_mags)
-        if comparison.measured_mags is not None:
-            cmp["cmp_measured_mags"] = _telemetry_list(comparison.measured_mags)
-        if comparison.filter_mags is not None:
-            cmp["cmp_filter_mags"] = _telemetry_list(comparison.filter_mags)
-        cmp["cmp_eff_target_db"] = float(comparison.eff_target_db)
-        cmp["cmp_offset_db"] = float(comparison.offset_db)
-        cmp["cmp_smart_scan_range"] = [
-            float(comparison.smart_scan_range[0]),
-            float(comparison.smart_scan_range[1]),
-        ]
-        cmp["cmp_meas_level_db_window"] = float(comparison.meas_level_db_window)
-        cmp["cmp_target_level_db_window"] = float(comparison.target_level_db_window)
-        cmp["cmp_offset_method"] = str(comparison.offset_method)
-        cmp["cmp_target_shift_db"] = float(comparison.target_shift_db)
-
-
 @dataclass
 class CorrectionInputs:
     """Korjausvaiheen syotepaketti, jolla pidetaan funktioraja siistina."""
@@ -287,6 +219,7 @@ class _MagPostProcessInputs:
     gain_apply: np.ndarray
     raw_g: np.ndarray
     final_g: np.ndarray
+    pre_bass_adapt_g: np.ndarray | None
     raw_safe_ref: np.ndarray | None
     conf_mask: np.ndarray
     filter_smooth: float

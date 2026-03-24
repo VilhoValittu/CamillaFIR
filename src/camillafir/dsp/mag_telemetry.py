@@ -147,3 +147,62 @@ def _band_delta_metrics(
         return float(np.sqrt(np.mean(d * d))), float(np.max(ad)), max_hz
     except (TypeError, ValueError, FloatingPointError, IndexError):
         return 0.0, 0.0, None
+
+
+def _store_band_delta_metrics(
+    st: Any,
+    *,
+    prefix: str,
+    a_db: np.ndarray,
+    b_db: np.ndarray,
+    freq_axis: np.ndarray,
+    f_lo: float = 20.0,
+    f_hi: float = 200.0,
+) -> tuple[float, float, float | None]:
+    d_rms, d_max, d_hz = _band_delta_metrics(
+        a_db,
+        b_db,
+        freq_axis,
+        f_lo=f_lo,
+        f_hi=f_hi,
+    )
+    if isinstance(st, dict):
+        st[f"{prefix}_rms_db_20_200"] = float(d_rms)
+        st[f"{prefix}_max_db_20_200"] = float(d_max)
+        st[f"{prefix}_max_hz_20_200"] = float(d_hz) if d_hz is not None else None
+    return d_rms, d_max, d_hz
+
+
+def _band_error_rms(
+    *,
+    gain_db: np.ndarray,
+    measured_db: np.ndarray,
+    target_db: np.ndarray,
+    calc_offset_db: float,
+    freq_axis: np.ndarray,
+    mask_c: np.ndarray,
+    f_lo: float,
+    f_hi: float,
+) -> float | None:
+    try:
+        gain = np.asarray(gain_db, dtype=float).reshape(-1)
+        meas = np.asarray(measured_db, dtype=float).reshape(-1)
+        target = np.asarray(target_db, dtype=float).reshape(-1)
+        freq = np.asarray(freq_axis, dtype=float).reshape(-1)
+        mask = np.asarray(mask_c, dtype=bool).reshape(-1)
+        n = int(min(gain.size, meas.size, target.size, freq.size, mask.size))
+        if n < 8:
+            return None
+        err = target[:n] - ((meas[:n] - float(calc_offset_db)) + gain[:n])
+        band = (
+            mask[:n]
+            & np.isfinite(err)
+            & np.isfinite(freq[:n])
+            & (freq[:n] >= float(f_lo))
+            & (freq[:n] <= float(f_hi))
+        )
+        if int(np.count_nonzero(band)) < 8:
+            return None
+        return float(np.sqrt(np.mean(err[band] * err[band])))
+    except (TypeError, ValueError, FloatingPointError, IndexError):
+        return None

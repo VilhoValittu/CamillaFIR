@@ -5,6 +5,8 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .dsp_config import CfgReader
+
 
 @dataclass(frozen=True)
 class GainPolicy:
@@ -23,42 +25,19 @@ def resolve_gain_policy(
     *,
     cfg_float_allow_zero_fn: Callable[[Any, str, float], float] | None = None,
 ) -> GainPolicy:
-    try:
-        max_cut_db = abs(float(getattr(cfg, "max_cut_db", 15.0) or 15.0))
-    except (AttributeError, TypeError, ValueError):
-        max_cut_db = 15.0
-    try:
-        max_boost_db = float(getattr(cfg, "max_boost_db", 0.0) or 0.0)
-    except (AttributeError, TypeError, ValueError):
-        max_boost_db = 0.0
+    reader = CfgReader(cfg)
+    max_cut_db = abs(reader.float("max_cut_db", 15.0))
+    max_boost_db = reader.float_allow_zero("max_boost_db", 0.0)
 
-    try:
-        low_cut_enable = bool(getattr(cfg, "low_bass_cut_enable", True))
-    except (AttributeError, TypeError, ValueError):
-        low_cut_enable = True
-    try:
-        if cfg_float_allow_zero_fn is not None:
-            low_cut_hz = float(cfg_float_allow_zero_fn(cfg, "low_bass_cut_hz", 0.0) or 0.0)
-        else:
-            low_cut_hz = float(getattr(cfg, "low_bass_cut_hz", 0.0) or 0.0)
-    except (AttributeError, TypeError, ValueError):
-        low_cut_hz = 0.0
-    try:
-        low_cut_strength = float(getattr(cfg, "low_bass_cut_strength", 0.0) or 0.0)
-    except (AttributeError, TypeError, ValueError):
-        low_cut_strength = 0.0
+    low_cut_enable = reader.bool("low_bass_cut_enable", True)
+    low_cut_hz = reader.float_allow_zero("low_bass_cut_hz", 0.0)
+    low_cut_strength = reader.float_allow_zero("low_bass_cut_strength", 0.0)
     if not np.isfinite(low_cut_strength):
         low_cut_strength = 0.0
     low_cut_strength = float(np.clip(low_cut_strength, 0.0, 1.0))
 
-    try:
-        exc_prot = bool(getattr(cfg, "exc_prot", False))
-    except (AttributeError, TypeError, ValueError):
-        exc_prot = False
-    try:
-        exc_freq = float(getattr(cfg, "exc_freq", 0.0) or 0.0)
-    except (AttributeError, TypeError, ValueError):
-        exc_freq = 0.0
+    exc_prot = reader.bool("exc_prot", False)
+    exc_freq = reader.float_allow_zero("exc_freq", 0.0)
     if not np.isfinite(exc_freq) or exc_freq <= 0.0:
         exc_freq = 0.0
     exc_soft_hz = float(exc_freq * 1.41) if exc_freq > 0.0 else 0.0

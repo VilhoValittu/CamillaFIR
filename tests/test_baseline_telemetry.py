@@ -1,10 +1,7 @@
 import numpy as np
 
-from camillafir.dsp.correction_types import (
-    BaselineComparisonTelemetry,
-    BaselineNativeTelemetry,
-    apply_baseline_telemetry_to_stats,
-)
+from camillafir.dsp.correction_types import BaselineComparisonTelemetry, BaselineNativeTelemetry
+from camillafir.dsp.dsp_telemetry import apply_baseline_telemetry_to_stats
 
 
 def test_apply_baseline_telemetry_to_stats_populates_legacy_keys():

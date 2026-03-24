@@ -184,7 +184,14 @@ def interpolate_response(input_freqs, input_values, target_freqs):
     return _interpolate_response_impl(input_freqs, input_values, target_freqs)
 
 
-def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig, *, stereo_link_ctx: StereoLinkContext | None = None):
+def _run_generate_filter_pipeline(
+    freqs,
+    meas_mags,
+    raw_phases,
+    cfg: FilterConfig,
+    *,
+    stereo_link_ctx: StereoLinkContext | None = None,
+) -> dict:
     prep = run_preprocess(freqs, meas_mags, raw_phases, cfg, stereo_link_ctx=stereo_link_ctx)
     f_in = prep.f_in
     m_in = prep.m_in
@@ -204,8 +211,6 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig, *, stereo_l
     cmp = prep.cmp
     analysis_mode = prep.analysis_mode
     is_psy = prep.is_psy
-
-
     corr = run_correction_stage(
         cfg=cfg,
         freq_axis=freq_axis,
@@ -307,6 +312,124 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig, *, stereo_l
     auto_headroom_db = phase_ir.auto_headroom_db
     current_peak_gain = phase_ir.current_peak_gain
     final_gain_total = phase_ir.final_gain_total
+
+    return {
+        "cfg": cfg,
+        "freq_axis": freq_axis,
+        "st": st,
+        "reflections": reflections,
+        "target_mags": target_mags,
+        "m_anal": m_anal,
+        "conf_mask": conf_mask,
+        "cmp": cmp,
+        "analysis_mode": analysis_mode,
+        "delay_slope": delay_slope,
+        "current_rt60": current_rt60,
+        "rt60_bands": rt60_bands,
+        "band_avg": band_avg,
+        "target_level_db": target_level_db,
+        "calc_offset_db": calc_offset_db,
+        "meas_level_db_window": meas_level_db_window,
+        "target_level_db_window": target_level_db_window,
+        "offset_method": offset_method,
+        "s_min": s_min,
+        "s_max": s_max,
+        "target_shift_db": target_shift_db,
+        "gain_db": gain_db,
+        "afdw_on": afdw_on,
+        "mask_c": mask_c,
+        "stage_probes": stage_probes,
+        "use_bassfirst": use_bassfirst,
+        "bf_room_mode": bf_room_mode,
+        "bf_rel": bf_rel,
+        "bf_conf_for_smoothing": bf_conf_for_smoothing,
+        "boost_peak_db": boost_peak_db,
+        "cut_peak_db": cut_peak_db,
+        "n_boost": n_boost,
+        "boost_cand_peak": boost_cand_peak,
+        "boost_cand_min_hz": boost_cand_min_hz,
+        "n_boost_cand": n_boost_cand,
+        "n_boost_cand_low": n_boost_cand_low,
+        "n_boost_cand_exc": n_boost_cand_exc,
+        "softclip_boost_bins": softclip_boost_bins,
+        "softclip_cut_bins": softclip_cut_bins,
+        "over_boost": over_boost,
+        "over_cut": over_cut,
+        "hardclamp_boost_bins": hardclamp_boost_bins,
+        "hardclamp_cut_bins": hardclamp_cut_bins,
+        "hard_over_boost": hard_over_boost,
+        "hard_over_cut": hard_over_cut,
+        "impulse": impulse,
+        "auto_global_gain_db": auto_global_gain_db,
+        "gain_margin_db": gain_margin_db,
+        "auto_headroom_db": auto_headroom_db,
+        "current_peak_gain": current_peak_gain,
+        "final_gain_total": final_gain_total,
+    }
+
+
+def _assemble_generate_filter_result(impulse, stats):
+    return impulse, stats
+
+
+def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig, *, stereo_link_ctx: StereoLinkContext | None = None):
+    pipeline = _run_generate_filter_pipeline(
+        freqs,
+        meas_mags,
+        raw_phases,
+        cfg,
+        stereo_link_ctx=stereo_link_ctx,
+    )
+    freq_axis = pipeline["freq_axis"]
+    st = pipeline["st"]
+    reflections = pipeline["reflections"]
+    target_mags = pipeline["target_mags"]
+    m_anal = pipeline["m_anal"]
+    conf_mask = pipeline["conf_mask"]
+    cmp = pipeline["cmp"]
+    analysis_mode = pipeline["analysis_mode"]
+    delay_slope = pipeline["delay_slope"]
+    current_rt60 = pipeline["current_rt60"]
+    rt60_bands = pipeline["rt60_bands"]
+    band_avg = pipeline["band_avg"]
+    target_level_db = pipeline["target_level_db"]
+    calc_offset_db = pipeline["calc_offset_db"]
+    meas_level_db_window = pipeline["meas_level_db_window"]
+    target_level_db_window = pipeline["target_level_db_window"]
+    offset_method = pipeline["offset_method"]
+    s_min = pipeline["s_min"]
+    s_max = pipeline["s_max"]
+    target_shift_db = pipeline["target_shift_db"]
+    gain_db = pipeline["gain_db"]
+    afdw_on = pipeline["afdw_on"]
+    mask_c = pipeline["mask_c"]
+    stage_probes = pipeline["stage_probes"]
+    use_bassfirst = pipeline["use_bassfirst"]
+    bf_room_mode = pipeline["bf_room_mode"]
+    bf_rel = pipeline["bf_rel"]
+    bf_conf_for_smoothing = pipeline["bf_conf_for_smoothing"]
+    boost_peak_db = pipeline["boost_peak_db"]
+    cut_peak_db = pipeline["cut_peak_db"]
+    n_boost = pipeline["n_boost"]
+    boost_cand_peak = pipeline["boost_cand_peak"]
+    boost_cand_min_hz = pipeline["boost_cand_min_hz"]
+    n_boost_cand = pipeline["n_boost_cand"]
+    n_boost_cand_low = pipeline["n_boost_cand_low"]
+    n_boost_cand_exc = pipeline["n_boost_cand_exc"]
+    softclip_boost_bins = pipeline["softclip_boost_bins"]
+    softclip_cut_bins = pipeline["softclip_cut_bins"]
+    over_boost = pipeline["over_boost"]
+    over_cut = pipeline["over_cut"]
+    hardclamp_boost_bins = pipeline["hardclamp_boost_bins"]
+    hardclamp_cut_bins = pipeline["hardclamp_cut_bins"]
+    hard_over_boost = pipeline["hard_over_boost"]
+    hard_over_cut = pipeline["hard_over_cut"]
+    impulse = pipeline["impulse"]
+    auto_global_gain_db = pipeline["auto_global_gain_db"]
+    gain_margin_db = pipeline["gain_margin_db"]
+    auto_headroom_db = pipeline["auto_headroom_db"]
+    current_peak_gain = pipeline["current_peak_gain"]
+    final_gain_total = pipeline["final_gain_total"]
 
     max_peak = np.max(np.abs(impulse))
     normalize_gain_db_applied = 0.0
@@ -659,7 +782,7 @@ def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig, *, stereo_l
     except (TypeError, ValueError, FloatingPointError, IndexError, KeyError):
         pass
 
-    return impulse, stats
+    return _assemble_generate_filter_result(impulse, stats)
 
 def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
     """

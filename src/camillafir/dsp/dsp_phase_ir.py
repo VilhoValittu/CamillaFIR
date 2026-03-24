@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import numpy as np
 
+from .dsp_telemetry import apply_residual_telemetry
+from .phase_ir_contracts import (
+    require_allowed_keys,
+    require_scalar_unchanged,
+    require_unchanged,
+)
 from .phase_ir_autogain import compute_auto_gain_and_headroom
 from .phase_ir_build import build_phase_and_ir
 from .phase_ir_phase import _compute_excess_phase
 from .phase_ir_residual import apply_residual_pass_if_enabled
 from .phase_ir_theoretical import compute_theoretical_phase_and_store_stats
-from .phase_ir_types import (
-    PhaseIRInputs,
-    PhaseIROutputs,
-    apply_residual_telemetry_to_stats,
-)
+from .phase_ir_types import PhaseIRInputs, PhaseIROutputs
 
 __all__ = ("run_phase_ir_stage", "_compute_excess_phase")
 
@@ -48,49 +50,6 @@ _BUILD_ALLOWED_KEYS = frozenset(
         "mixed_transition_hz",
     }
 )
-
-
-def _arrays_equal_strict(lhs, rhs) -> bool:
-    a = np.asarray(lhs)
-    b = np.asarray(rhs)
-    if a.shape != b.shape:
-        return False
-    if a.dtype.kind in ("f", "c") or b.dtype.kind in ("f", "c"):
-        return bool(np.allclose(a, b, atol=0.0, rtol=0.0, equal_nan=True))
-    return bool(np.array_equal(a, b))
-
-
-def _require_unchanged(stage: str, value_name: str, before, after) -> None:
-    if _arrays_equal_strict(before, after):
-        return
-    raise RuntimeError(
-        f"Phase-IR contract breach in {stage}: '{value_name}' was modified, "
-        "but this stage is not allowed to mutate it."
-    )
-
-
-def _require_scalar_unchanged(stage: str, value_name: str, before, after) -> None:
-    if bool(np.isclose(float(before), float(after), atol=0.0, rtol=0.0, equal_nan=True)):
-        return
-    raise RuntimeError(
-        f"Phase-IR contract breach in {stage}: scalar '{value_name}' changed "
-        "but must remain immutable in this stage."
-    )
-
-
-def _require_allowed_keys(stage: str, obj, allowed: frozenset[str]) -> None:
-    if not isinstance(obj, dict):
-        raise RuntimeError(
-            f"Phase-IR contract breach in {stage}: expected dict output, got {type(obj).__name__}."
-        )
-    extra = set(obj.keys()) - set(allowed)
-    if extra:
-        keys_txt = ", ".join(sorted(str(k) for k in extra))
-        raise RuntimeError(
-            f"Phase-IR contract breach in {stage}: unexpected output keys: {keys_txt}."
-        )
-
-
 def run_phase_ir_stage(
     *,
     cfg,
@@ -141,7 +100,7 @@ def run_phase_ir_stage(
         cfg_float_allow_zero_fn=cfg_float_allow_zero_fn,
     )
     outputs = _run_phase_ir_stage(inputs)
-    apply_residual_telemetry_to_stats(st=inputs.st, telemetry=outputs.residual_telemetry)
+    apply_residual_telemetry(st=inputs.st, telemetry=outputs.residual_telemetry)
     return outputs
 
 
@@ -178,14 +137,14 @@ def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
         st=st,
         logger=logger,
     )
-    _require_allowed_keys("phase_ir_theoretical", theo, _THEORETICAL_ALLOWED_KEYS)
-    _require_unchanged(
+    require_allowed_keys("phase_ir_theoretical", theo, _THEORETICAL_ALLOWED_KEYS)
+    require_unchanged(
         "phase_ir_theoretical",
         "gain_db",
         gain_db_before_theoretical,
         gain_db,
     )
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_theoretical",
         "p_rad_interp input",
         p_rad_interp,
@@ -244,31 +203,31 @@ def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
             "Phase-IR contract breach in phase_ir_residual: "
             "gain_db shape changed unexpectedly."
         )
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_residual",
         "freq_axis",
         freq_axis_before_residual,
         freq_axis,
     )
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_residual",
         "p_rad_interp",
         p_rad_before_residual,
         p_rad_interp,
     )
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_residual",
         "m_anal",
         m_anal_before_residual,
         m_anal,
     )
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_residual",
         "target_mags",
         target_mags_before_residual,
         target_mags,
     )
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_residual",
         "mask_c",
         mask_c_before_residual,
@@ -283,14 +242,14 @@ def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
         mask_c=mask_c,
         logger=logger,
     )
-    _require_allowed_keys("phase_ir_autogain", ag, _AUTOGAIN_ALLOWED_KEYS)
-    _require_unchanged(
+    require_allowed_keys("phase_ir_autogain", ag, _AUTOGAIN_ALLOWED_KEYS)
+    require_unchanged(
         "phase_ir_autogain",
         "gain_db input",
         gain_db_before_autogain,
         gain_db_for_autogain,
     )
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_autogain",
         "gain_db",
         gain_db_before_autogain,
@@ -303,7 +262,7 @@ def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
     auto_headroom_db = float(ag["auto_headroom_db"])
     final_gain_total = np.asarray(ag["final_gain_total"], dtype=float)
     expected_final_gain_total = gain_db + auto_global_gain_db + auto_headroom_db
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_autogain",
         "final_gain_total formula",
         expected_final_gain_total,
@@ -336,44 +295,44 @@ def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
         final_gain_total=final_gain_total_for_build,
         limit_gd_gradient_ms_per_oct_fn=_limit_gd_gradient_ms_per_oct,
     )
-    _require_allowed_keys("phase_ir_build", built, _BUILD_ALLOWED_KEYS)
-    _require_unchanged(
+    require_allowed_keys("phase_ir_build", built, _BUILD_ALLOWED_KEYS)
+    require_unchanged(
         "phase_ir_build",
         "gain_db input",
         gain_db_before_build,
         gain_db_for_build,
     )
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_build",
         "p_rad_interp input",
         p_rad_before_build,
         p_rad_for_build,
     )
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_build",
         "final_gain_total input",
         final_gain_total_before_build,
         final_gain_total_for_build,
     )
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_build",
         "gain_db",
         gain_db_before_build,
         gain_db,
     )
-    _require_unchanged(
+    require_unchanged(
         "phase_ir_build",
         "final_gain_total",
         final_gain_total_before_build,
         final_gain_total,
     )
-    _require_scalar_unchanged(
+    require_scalar_unchanged(
         "phase_ir_build",
         "auto_global_gain_db",
         auto_global_gain_db_before_build,
         auto_global_gain_db,
     )
-    _require_scalar_unchanged(
+    require_scalar_unchanged(
         "phase_ir_build",
         "auto_headroom_db",
         auto_headroom_db_before_build,
