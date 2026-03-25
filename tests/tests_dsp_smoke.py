@@ -19,6 +19,8 @@ Notes:
 - This assumes you run it from the project root (so `camillafir` is importable).
 - It tries to instantiate `FilterConfig()` with defaults. If your FilterConfig requires args,
   adapt `make_cfg()` accordingly.
+- Manual helper only: this file is meant for direct script use, not normal pytest collection.
+  Keep smoke checks here as plain helper routines unless they are split into dedicated `test_*.py` tests.
 """
 
 from __future__ import annotations
