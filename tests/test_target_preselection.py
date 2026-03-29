@@ -1,7 +1,7 @@
 import numpy as np
 
+from camillafir.common.house_curves import get_house_curve_by_name
 from camillafir.io.auto_mode.target_preselection import _auto_select_builtin_target_curve
-from camillafir.ui.camillafir_housecurve import get_house_curve_by_name
 
 
 def _synth_target_like_measurement(hc_name: str):
@@ -13,11 +13,11 @@ def _synth_target_like_measurement(hc_name: str):
     base = np.interp(f, hc_f[mask], hc_m[mask])
 
     # Add smooth room-like coloration so the case is not a trivial exact-curve match.
-    ripple = 0.18 * np.sin(np.log(f) * 2.3) + 0.08 * np.cos(np.log(f) * 5.2)
-    lf_hump = 0.6 * np.exp(-0.5 * ((np.log10(f) - np.log10(55.0)) / 0.12) ** 2)
-    hf_roll = -0.25 * np.clip(np.log10(f / 6000.0), 0.0, None)
+    ripple = 0.12 * np.sin(np.log(f) * 2.3) + 0.06 * np.cos(np.log(f) * 5.2)
+    lf_hump = 0.4 * np.exp(-0.5 * ((np.log10(f) - np.log10(55.0)) / 0.12) ** 2)
+    hf_roll = -0.15 * np.clip(np.log10(f / 6000.0), 0.0, None)
     ml = base + ripple + lf_hump + hf_roll
-    mr = base + (0.9 * ripple) + (0.85 * lf_hump) + hf_roll + 0.05 * np.sin(np.log(f) * 7.0)
+    mr = base + (0.9 * ripple) + (0.85 * lf_hump) + hf_roll + 0.04 * np.sin(np.log(f) * 7.0)
     return f, ml, mr
 
 

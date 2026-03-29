@@ -82,7 +82,13 @@ def _limit_gd_gradient_ms_per_oct(
     omega = 2.0 * np.pi * ff
     gd_ms = np.nan_to_num((-np.gradient(pp_u, omega)) * 1000.0, nan=0.0, posinf=0.0, neginf=0.0)
     log2f = np.log2(np.maximum(ff, 1e-12))
-    lim = float(max(0.1, max_grad_ms_per_oct))
+    base_lim = float(max(0.1, max_grad_ms_per_oct))
+    lim_arr = np.where(
+        ff < 100.0,
+        base_lim * 0.67,
+        np.where(ff < 500.0, base_lim, base_lim * 1.5),
+    )
+    lim_scalar = float(np.min(lim_arr))
     gd_l = gd_ms.copy()
     try:
         sigma = float(grad_smooth_sigma) if float(grad_smooth_sigma) > 0.0 else 0.6
@@ -91,12 +97,12 @@ def _limit_gd_gradient_ms_per_oct(
     sigma = float(max(0.25, sigma))
     for _ in range(14):
         gd_grad_now = np.nan_to_num(np.gradient(gd_l, log2f), nan=0.0, posinf=0.0, neginf=0.0)
-        if gd_grad_now.size == 0 or float(np.max(np.abs(gd_grad_now))) <= (lim * 1.001):
+        if gd_grad_now.size == 0 or float(np.max(np.abs(gd_grad_now / lim_arr))) <= 1.001:
             break
         gd_l = scipy.ndimage.gaussian_filter1d(gd_l, sigma=sigma, mode="nearest")
         sigma *= 1.25
     gd_grad = np.nan_to_num(np.gradient(gd_l, log2f), nan=0.0, posinf=0.0, neginf=0.0)
-    gd_grad_l = lim * np.tanh(gd_grad / lim) if soft_limit else np.clip(gd_grad, -lim, lim)
+    gd_grad_l = lim_arr * np.tanh(gd_grad / lim_arr) if soft_limit else np.clip(gd_grad, -lim_arr, lim_arr)
     gd_new = np.empty_like(gd_l)
     gd_new[0] = float(gd_l[0])
     for k in range(1, ff.size):

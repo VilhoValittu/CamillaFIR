@@ -33,3 +33,6 @@ tulossa.txt
 settings.json
 .vscode/
 .pytest_cache/
+.claude/
+.gitignore
+CLAUDE.md

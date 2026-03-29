@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from asyncio.log import logger
 from typing import Any, Dict, List, Optional, Tuple
 import logging
 import math
 import numpy as np
 
 from ..io.auto_mode.filter_priors import get_auto_mode_filter_auto_defaults
-from ..ui.camillafir_modes import MODE_DEFAULTS
+from ..config.mode_policy import MODE_DEFAULTS
+
+logger = logging.getLogger("CamillaFIR")
 
 
 _AUTO_MODE_DEFAULT_CFG_TO_UI = {
@@ -101,7 +102,6 @@ def _apply_auto_mode_managed_settings(data: Dict[str, Any]) -> None:
 
 def collect_ui_data(pin) -> Dict[str, Any]:
     """Funktio: collect ui data."""
-    logger = logging.getLogger("CamillaFIR")
     p_keys = [
         "mode", "auto_goal", "auto_target_mode", "auto_mode_workers", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
         "mag_c_min", "mag_c_max", "max_boost", "max_cut_db", "max_slope_db_per_oct",
@@ -140,7 +140,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     for k in p_keys:
         try:
             data[k] = pin[k]
-        except Exception:
+        except (KeyError, TypeError):
             data[k] = None
 
     if data.get("ir_window_right", None) in (None, ""):
@@ -160,11 +160,8 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "unsafe_raw_dsp",
         "camillafir_automatic_mode",
     ]:
-        try:
-            if isinstance(data.get(k, None), list):
-                data[k] = bool(data[k])
-        except Exception:
-            pass
+        if isinstance(data.get(k, None), list):
+            data[k] = bool(data[k])
 
     try:
         mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
@@ -191,6 +188,8 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         atm = "auto"
     if atm in ("selected", "manual", "fixed", "user"):
         atm = "selected"
+    elif atm == "adaptive":
+        atm = "adaptive"
     else:
         atm = "auto"
     data["auto_target_mode"] = str(atm)
@@ -317,40 +316,29 @@ def collect_ui_data(pin) -> Dict[str, Any]:
             data["ir_window_mode"] = "rew_asym"
             data["ir_export_window_shape"] = "tukey"
             data["ir_export_tukey_alpha"] = 0.25
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
+        logger.debug("Failed to normalize asymmetric export-window defaults", exc_info=True)
         pass
 
-    try:
-        logger.info(
-            f"UI pins: ir_export_window_mode={data.get('ir_export_window_mode')}, "
-            f"shape={data.get('ir_export_window_shape')}, alpha={data.get('ir_export_tukey_alpha')}"
-        )
-    except Exception:
-        pass
+    logger.info(
+        f"UI pins: ir_export_window_mode={data.get('ir_export_window_mode')}, "
+        f"shape={data.get('ir_export_window_shape')}, alpha={data.get('ir_export_tukey_alpha')}"
+    )
 
-    try:
-        if data.get("filter_smooth", None) is None and data.get("smoothing_level", None) is not None:
-            data["filter_smooth"] = data.get("smoothing_level")
-    except Exception:
-        pass
+    if data.get("filter_smooth", None) is None and data.get("smoothing_level", None) is not None:
+        data["filter_smooth"] = data.get("smoothing_level")
 
-    try:
-        if data.get("plot_smoothing_level", None) is None:
-            data["plot_smoothing_level"] = "Psychoacoustic"
-    except Exception:
-        pass
+    if data.get("plot_smoothing_level", None) is None:
+        data["plot_smoothing_level"] = "Psychoacoustic"
     return data
 
 
 def log_df_smoothing_toggle(pin, logger) -> bool:
     try:
         df_on = bool(pin["df_smoothing"])
-    except Exception:
+    except (KeyError, TypeError, AttributeError):
         df_on = False
-    try:
-        logger.info(f"DF smoothing: {'ON' if df_on else 'OFF'}")
-    except Exception:
-        pass
+    logger.info(f"DF smoothing: {'ON' if df_on else 'OFF'}")
     return df_on
 
 
@@ -403,7 +391,7 @@ def choose_target_rates(data: Dict[str, Any]) -> List[int]:
         return [44100, 48000, 88200, 96000, 176400, 192000]
     try:
         return [int(data.get("fs") or 44100)]
-    except Exception:
+    except (TypeError, ValueError):
         return [44100]
 
 
@@ -416,22 +404,22 @@ def choose_dash_fs(target_rates: List[int], *, multi_rate_on: bool, forced_plot_
     return dash_fs
 
 
-def detect_is_wav_source(data: Dict[str, Any], pin) -> bool:
+def detect_is_wav_source(data: Dict[str, Any]) -> bool:
     try:
         lp_l_s = str(data.get("local_path_l", "") or "").lower()
         lp_r_s = str(data.get("local_path_r", "") or "").lower()
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         lp_l_s, lp_r_s = "", ""
 
     try:
         up_l_s = (
-            str(pin["file_l"].get("filename", "") or "").lower()
-            if isinstance(pin.get("file_l", None), dict)
+            str(data["file_l"].get("filename", "") or "").lower()
+            if isinstance(data.get("file_l"), dict)
             else ""
         )
         up_r_s = (
-            str(pin["file_r"].get("filename", "") or "").lower()
-            if isinstance(pin.get("file_r", None), dict)
+            str(data["file_r"].get("filename", "") or "").lower()
+            if isinstance(data.get("file_r"), dict)
             else ""
         )
     except Exception:
@@ -455,33 +443,9 @@ def build_filter_config(
     hpf,
     hc_f,
     hc_m,
-    pin,
+    pin=None,
 ) -> Any:
     """Rakentaa tai generoi: build filter config."""
-
-    def _pin_get(key: str, default=None):
-        """Sisainen apufunktio: pin get."""
-        try:
-            if hasattr(pin, "get"):
-                v = pin.get(key, None)
-                if v is not None:
-                    return v
-        except Exception:
-            pass
-
-        try:
-            return pin[key]
-        except Exception:
-            pass
-
-        try:
-            v = getattr(pin, key)
-            if v is not None:
-                return v
-        except Exception:
-            pass
-
-        return default
 
     def _as_float(v, default=0.0) -> float:
         try:
@@ -606,20 +570,18 @@ def build_filter_config(
         mode_u = "BASIC"
     auto_mode_locked = bool(mode_u == "AUTO" or data.get("camillafir_automatic_mode", False))
     df_smoothing = _as_bool_default(
-        data.get("df_smoothing", False)
-        if auto_mode_locked
-        else _pin_get("df_smoothing", data.get("df_smoothing", False)),
+        data.get("df_smoothing", False),
         False,
     )
     bass_smooth_adaptive = _as_bool_default(
-        _pin_get("bass_smooth_adaptive", data.get("bass_smooth_adaptive", True)),
+        data.get("bass_smooth_adaptive", True),
         True,
     )
     bass_smooth_hz = _as_float_allow_zero(data.get("bass_smooth_hz", None), 200.0)
     bass_smooth_sigma_scale = _as_float_allow_zero(data.get("bass_smooth_sigma_scale", None), 1.4)
     bass_smooth_conf_floor = _as_float_allow_zero(data.get("bass_smooth_conf_floor", None), 0.3)
     mid_refit_enable = _as_bool_default(
-        _pin_get("mid_refit_enable", data.get("mid_refit_enable", True)),
+        data.get("mid_refit_enable", True),
         True,
     )
     mid_refit_hz_lo = _as_float_allow_zero(data.get("mid_refit_hz_lo", None), 200.0)
@@ -629,7 +591,7 @@ def build_filter_config(
     mid_refit_conf_min_avg = _as_float_allow_zero(data.get("mid_refit_conf_min_avg", None), 0.20)
     # process_run may enforce this in `data`; keep data as highest-priority source.
     bass_adaptive_isolation_mode = _as_bool_default(
-        data.get("bass_adaptive_isolation_mode", _pin_get("bass_adaptive_isolation_mode", False)),
+        data.get("bass_adaptive_isolation_mode", False),
         False,
     )
     bass_smooth_kwargs = {}
@@ -656,14 +618,14 @@ def build_filter_config(
     if hasattr(FilterConfig_cls, "mid_refit_conf_min_avg"):
         bass_smooth_kwargs["mid_refit_conf_min_avg"] = float(np.clip(mid_refit_conf_min_avg, 0.0, 1.0))
     bass_boost_cap_enable = _as_bool_default(
-        _pin_get("bass_boost_cap_enable", data.get("bass_boost_cap_enable", True)),
+        data.get("bass_boost_cap_enable", True),
         True,
     )
     bass_boost_cap_hz = _as_float_allow_zero(data.get("bass_boost_cap_hz", None), 200.0)
     bass_boost_cap_extra_db = _as_float_allow_zero(data.get("bass_boost_cap_extra_db", None), 2.0)
     bass_boost_cap_conf_min = _as_float_allow_zero(data.get("bass_boost_cap_conf_min", None), 0.55)
     bass_boost_post_restore_enable = _as_bool_default(
-        _pin_get("bass_boost_post_restore_enable", data.get("bass_boost_post_restore_enable", True)),
+        data.get("bass_boost_post_restore_enable", True),
         True,
     )
     bass_boost_post_restore_strength = _as_float_allow_zero(data.get("bass_boost_post_restore_strength", None), 0.60)
@@ -681,36 +643,24 @@ def build_filter_config(
     if hasattr(FilterConfig_cls, "bass_boost_post_restore_strength"):
         bass_boost_cap_kwargs["bass_boost_post_restore_strength"] = float(np.clip(bass_boost_post_restore_strength, 0.0, 1.0))
     enable_afdw = _as_bool_default(
-        data.get("enable_afdw", False)
-        if auto_mode_locked
-        else _pin_get("enable_afdw", data.get("enable_afdw", False)),
+        data.get("enable_afdw", False),
         False,
     )
     enable_tdc = _as_bool_default(
-        data.get("enable_tdc", False)
-        if auto_mode_locked
-        else _pin_get("enable_tdc", data.get("enable_tdc", False)),
+        data.get("enable_tdc", False),
         False,
     )
     tdc_max_red = _as_float(
-        data.get("tdc_max_reduction_db", 9.0)
-        if auto_mode_locked
-        else _pin_get("tdc_max_reduction_db", data.get("tdc_max_reduction_db", 9.0)),
+        data.get("tdc_max_reduction_db", 9.0),
         9.0,
     )
     tdc_slope = _as_float(
-        data.get("tdc_slope_db_per_oct", 0.0)
-        if auto_mode_locked
-        else _pin_get("tdc_slope_db_per_oct", data.get("tdc_slope_db_per_oct", 0.0)),
+        data.get("tdc_slope_db_per_oct", 0.0),
         0.0,
     )
     filter_smooth = _as_int(
-        (
-            data.get("filter_smooth", data.get("smoothing_level", 12))
-            if auto_mode_locked
-            else _pin_get("filter_smooth", data.get("filter_smooth", data.get("smoothing_level", 12)))
-        ),
-        12
+        data.get("filter_smooth", data.get("smoothing_level", 12)),
+        12,
     )
     comparison_mode = bool(data.get("comparison_mode", True))
     lvl_mode = str(data.get("lvl_mode", "Auto") or "Auto")
@@ -788,19 +738,22 @@ def build_filter_config(
     )
     try:
         setattr(cfg, "auto_gain_margin_db", float(max(0.0, _as_float_allow_zero(data.get("gain", None), 0.0))))
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
+        logger.debug("FilterConfig has no writable auto_gain_margin_db", exc_info=True)
         pass
     logger.info(f"UI raw: conf_pull_floor pin={data.get('conf_pull_floor')}, low_bass_cut_strength pin={data.get('low_bass_cut_strength')}")
     
     try:
         setattr(cfg, "enable_residual_pass", bool(data.get("enable_residual_pass", False)))
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
+        logger.debug("FilterConfig has no writable enable_residual_pass", exc_info=True)
         pass
 
     try:
         setattr(cfg, "lvl_force_window", None)
         setattr(cfg, "lvl_force_offset_db", None)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
+        logger.debug("FilterConfig has no writable forced leveling fields", exc_info=True)
         pass
 
     return cfg

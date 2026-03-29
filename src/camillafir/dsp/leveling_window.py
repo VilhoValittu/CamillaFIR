@@ -90,6 +90,8 @@ def _evaluate_level_window_candidate(
         if f_eval.size < 20 or y.size < 20:
             return None
 
+        channel_offset = float(np.median(y - t_eval)) if (t_eval is not None and t_eval.size == y.size) else float(np.median(y))
+
         x = np.log2(np.clip(f_eval, 1e-9, None))
         x0 = float(np.median(x))
         xc = x - x0
@@ -98,7 +100,8 @@ def _evaluate_level_window_candidate(
         residual = y - (float(np.dot(xc, (y - y_med)) / denom) * xc) if denom > 1e-12 else y
 
         std = lower_tail_robust_std_db_fn(residual, clip_below_db=6.0)
-        weight = 1.0 + 0.05 * abs(np.log10(max(float(f_eval[0]), 1.0) / 1000.0))
+        f_center = float(np.sqrt(max(float(f_eval[0]), 1e-9) * max(float(f_eval[-1]), 1e-9)))
+        weight = 1.0 + 0.05 * abs(np.log10(max(f_center, 1.0) / 1000.0))
         score = float(std * weight)
 
         target_rms = float("inf")
@@ -150,6 +153,7 @@ def _evaluate_level_window_candidate(
             "offset_spread": float(offset_spread),
             "tilt_abs": float(tilt_abs),
             "perceptual_rms": float(perceptual_rms),
+            "channel_offset": float(channel_offset),
         }
     except (TypeError, ValueError, FloatingPointError, IndexError):
         return None
@@ -214,7 +218,7 @@ def find_stable_level_window_impl(
         res_min, res_max = float(safe_f_min), float(f_max)
         tie_eps_rel = 0.05
         current_f = float(safe_f_min)
-        step = 2 ** (1 / 24.0)
+        step = 2 ** (1 / 48.0)
 
         while current_f * (2 ** float(window_size_octaves)) <= float(f_max):
             w_start = current_f
@@ -325,8 +329,7 @@ def find_shared_stereo_level_window_impl(
             return float(f_min), float(f_max)
 
         safe_f_min = max(float(prep_l["safe_f_min"]), float(prep_r["safe_f_min"]))
-        safe_f_max = min(float(prep_l["f_max"]), float(prep_r["f_max"]))
-        if safe_f_min <= 0.0 or safe_f_max <= safe_f_min:
+        if safe_f_min <= 0.0 or safe_f_min >= float(f_max):
             return float(f_min), float(f_max)
 
         f_l = np.asarray(prep_l["freq"], dtype=float)
@@ -342,12 +345,12 @@ def find_shared_stereo_level_window_impl(
         best_target_rms = float("inf")
         best_tilt_abs = float("inf")
         best_perceptual_rms = float("inf")
-        res_min, res_max = float(safe_f_min), float(safe_f_max)
+        res_min, res_max = float(safe_f_min), float(f_max)
         tie_eps_rel = 0.05
         current_f = float(safe_f_min)
-        step = 2 ** (1 / 24.0)
+        step = 2 ** (1 / 48.0)
 
-        while current_f * (2 ** float(window_size_octaves)) <= float(safe_f_max):
+        while current_f * (2 ** float(window_size_octaves)) <= float(f_max):
             w_start = current_f
             w_end = current_f * (2 ** float(window_size_octaves))
             mask_l = (f_l >= w_start) & (f_l <= w_end)
@@ -376,7 +379,8 @@ def find_shared_stereo_level_window_impl(
                 if metrics_l is not None and metrics_r is not None:
                     score_l = float(metrics_l["score"])
                     score_r = float(metrics_r["score"])
-                    primary = max(score_l, score_r)
+                    offset_diff = abs(float(metrics_l["channel_offset"]) - float(metrics_r["channel_offset"]))
+                    primary = max(score_l, score_r) + 0.25 * offset_diff
                     secondary = 0.5 * (score_l + score_r)
                     offset_spread = max(float(metrics_l["offset_spread"]), float(metrics_r["offset_spread"]))
                     target_rms = max(float(metrics_l["target_rms"]), float(metrics_r["target_rms"]))
@@ -385,13 +389,13 @@ def find_shared_stereo_level_window_impl(
                     better_stability = primary < (best_primary * (1.0 - tie_eps_rel))
                     near_tie = primary <= (best_primary * (1.0 + tie_eps_rel))
                     better_tie_break = near_tie and (
-                        (secondary < best_secondary)
+                        (offset_spread < best_offset_spread)
                         or (
-                            secondary <= (best_secondary + 1e-6)
+                            offset_spread <= (best_offset_spread + 1e-6)
                             and (
-                                (offset_spread < best_offset_spread)
+                                (secondary < best_secondary)
                                 or (
-                                    offset_spread <= (best_offset_spread + 1e-6)
+                                    secondary <= (best_secondary + 1e-6)
                                     and (
                                         (target_rms < best_target_rms)
                                         or (

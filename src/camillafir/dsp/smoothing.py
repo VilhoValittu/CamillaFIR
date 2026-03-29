@@ -6,7 +6,7 @@ import logging
 logger = logging.getLogger("CamillaFIR.dsp")
 
 AFDW_BW_MIN_OCT = 1.0 / 96.0
-AFDW_BW_MAX_OCT = 1.0 / 3.0
+AFDW_BW_MAX_OCT = 1.0 / 2.0
 
 def psychoacoustic_smoothing(
     freqs,
@@ -97,7 +97,10 @@ def apply_adaptive_fdw(freqs, mags, confidence_mask, base_cycles=15.0, min_cycle
     adaptive_cycles = min_cycles + (c * (base_cycles - min_cycles))
     oct_widths = 2.0 / np.maximum(adaptive_cycles, 1.0)
 
-    bw_list = np.array([1.0/96.0, 1.0/48.0, 1.0/24.0, 1.0/12.0, 1.0/6.0, 1.0/3.0], dtype=float)
+    bw_list = np.array([
+        1.0/96.0, 1.0/72.0, 1.0/48.0, 1.0/36.0, 1.0/24.0, 1.0/18.0,
+        1.0/12.0, 1.0/9.0, 1.0/6.0, 1.0/4.5, 1.0/3.0, 1.0/2.0,
+    ], dtype=float)
 
     sm_stack = []
     dummy = np.zeros_like(m)
@@ -168,7 +171,12 @@ def apply_smoothing_std(freqs, mags, phases, octave_fraction=1.0):
     
     window_size = int(points_per_octave * octave_fraction)
     window_size = max(window_size, 1)
-    window = np.ones(window_size) / window_size
+    window = np.hanning(window_size)
+    w_sum = window.sum()
+    if w_sum > 0:
+        window = window / w_sum
+    else:
+        window = np.ones(window_size) / window_size
     
     pad_len = window_size // 2
     m_padded = np.pad(log_mags, (pad_len, pad_len), mode='edge')

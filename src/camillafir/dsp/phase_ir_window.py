@@ -28,6 +28,16 @@ def _apply_ir_window(ir, cfg, st, logger=None) -> np.ndarray:
     tukey_alpha = float(np.clip(tukey_alpha, 0.0, 1.0))
     if win_shape not in ("hann", "tukey"):
         win_shape = "hann"
+    # Adaptive tukey alpha: increase when pre-ringing is low (< -45 dB)
+    try:
+        pre_ring_db = float((st or {}).get("ir_pre_ringing_db", float("nan")))
+        if np.isfinite(pre_ring_db) and win_shape == "tukey":
+            # Scale alpha up when pre-ringing is well-controlled
+            # -50 dB → alpha * 1.4, -40 dB → alpha * 1.0, -35 dB → alpha * 0.8
+            alpha_scale = float(np.clip(1.0 + 0.08 * (-45.0 - pre_ring_db), 0.8, 1.5))
+            tukey_alpha = float(np.clip(tukey_alpha * alpha_scale, 0.05, 0.95))
+    except (TypeError, ValueError, FloatingPointError, KeyError):
+        pass
 
     n = len(impulse)
     if n == 0:
@@ -45,6 +55,16 @@ def _apply_ir_window(ir, cfg, st, logger=None) -> np.ndarray:
     if not np.isfinite(auto_asym_left_ratio):
         auto_asym_left_ratio = 0.35
     auto_asym_left_ratio = float(np.clip(auto_asym_left_ratio, 0.0, 1.0))
+    # Adaptive left ratio: scale based on pre-ringing level
+    # More pre-ringing → smaller left side (less linear-phase contribution)
+    try:
+        pre_ring_db = float((st or {}).get("ir_pre_ringing_db", float("nan")))
+        if np.isfinite(pre_ring_db):
+            # -50 dB → ratio * 1.3 (more left OK), -35 dB → ratio * 0.7 (less left)
+            ratio_scale = float(np.clip(1.0 + 0.06 * (-42.0 - pre_ring_db), 0.6, 1.4))
+            auto_asym_left_ratio = float(np.clip(auto_asym_left_ratio * ratio_scale, 0.15, 0.60))
+    except (TypeError, ValueError, FloatingPointError, KeyError):
+        pass
     try:
         auto_asym_left_max_ms = float(getattr(cfg, "auto_asym_left_max_ms", 25.0) or 25.0)
     except (AttributeError, TypeError, ValueError):

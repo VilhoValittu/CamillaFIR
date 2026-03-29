@@ -4,6 +4,31 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [3.6.6] - 2026-03-29
+
+### DSP / Internal
+- Centralized DSP config and telemetry into dedicated adapters (`dsp_config`, `dsp_telemetry`, `mag_telemetry`, `phase_ir_contracts`) so all DSP modules share a single typed configuration surface.
+- Added `target_synthesis` and `_pruning` DSP modules to separate target-curve synthesis and Optuna trial pruning from core correction logic.
+
+### Automatic mode
+- Updated Optuna legacy compatibility in cache signature handling so older stored study data is recognized correctly across optuna version changes.
+- Split monolithic automatic-mode logic into focused orchestrator modules: `orchestrator_target`, `orchestrator_refine`, `orchestrator_finalize`, `optuna_backend`, `scoring_metrics`, `search_entrypoints`, `runtime_context`, `refine_eval`, `winner_polish`, `materialize`, and `protection_seed`.
+
+### Architecture / Refactoring
+- Extracted process execution from `camillafir.py` into a dedicated `workflow/` package (`process_run_flow`, `process_support`) to separate run orchestration from entry-point logic.
+- Created a `common/` package for shared utilities: `acoustic_stats`, `comparison_stats`, `house_curves`, and `result_postprocess`.
+- Split large UI files (`camillafir_ui`, `camillafir_ui_helpers`, `camillafir_plot`, `layout_sections`) into focused modules: `controls_ir_window`, `controls_mode`, `controls_target_preview`, `layout_builders`, `layout_theme`, `plot_generation`, `plot_summary`, `process_run_bridge`, `results_formatters`, `results_sections`, and `ui_state`.
+- Added `mode_policy` to the config layer for centralized Basic/Advanced mode policy decisions.
+
+### Tests
+- Added tests for DSP config reader, mag post-limits pipeline, phase IR contracts, and filter-pair smoke checks.
+
+### Build & Docs
+- Updated release build workflow to Node 24.
+- Refreshed `guide.md` with expanded content and updated version references.
+
+---
+
 ## [3.6.5] - 2026-03-23
 
 ### Automatic mode / Persistence

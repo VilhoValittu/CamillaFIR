@@ -1,9 +1,17 @@
 import numpy as np
 
+from ...common.house_curves import get_house_curve_by_name
 from ...dsp.smoothing import apply_smoothing_std
-from ...ui.camillafir_housecurve import get_house_curve_by_name
+from ...dsp.target_synthesis import synthesize_target_from_measurements
 from .shared import (
     AUTO_MODE_BUILTIN_TARGETS,
+    AUTO_MODE_SYNTH_TARGET_ENABLED,
+    AUTO_MODE_SYNTH_TARGET_NAME,
+    AUTO_MODE_SYNTH_TARGET_BASS_COMP_FRAC,
+    AUTO_MODE_SYNTH_TARGET_BASS_COMP_REF_DB,
+    AUTO_MODE_SYNTH_TARGET_TILT_COMP_FRAC,
+    AUTO_MODE_SYNTH_TARGET_HF_COMP_FRAC,
+    AUTO_MODE_SYNTH_TARGET_SMOOTH_OCT,
     AUTO_MODE_TARGET_PRESELECT_ASYM_W,
     AUTO_MODE_TARGET_PRESELECT_BASS_SHAPE_W,
     AUTO_MODE_TARGET_PRESELECT_BOOST_W,
@@ -347,6 +355,134 @@ def _auto_target_insert_cached_wildcard(
     }
 
 
+def _auto_build_synth_target_candidate(
+    data: dict,
+    *,
+    f_l,
+    m_l,
+    f_r,
+    m_r,
+) -> dict | None:
+    """Build and score a synthesized adaptive target candidate from measurements."""
+    try:
+        synth = synthesize_target_from_measurements(
+            f_l, m_l, f_r, m_r,
+            bass_comp_frac=float(AUTO_MODE_SYNTH_TARGET_BASS_COMP_FRAC),
+            bass_comp_ref_db=float(AUTO_MODE_SYNTH_TARGET_BASS_COMP_REF_DB),
+            tilt_comp_frac=float(AUTO_MODE_SYNTH_TARGET_TILT_COMP_FRAC),
+            hf_comp_frac=float(AUTO_MODE_SYNTH_TARGET_HF_COMP_FRAC),
+            smooth_oct=float(AUTO_MODE_SYNTH_TARGET_SMOOTH_OCT),
+        )
+        if synth is None:
+            return None
+        hf, hm = synth
+        hf = np.asarray(hf, dtype=float).reshape(-1)
+        hm = np.asarray(hm, dtype=float).reshape(-1)
+        if hf.size < 4 or hm.size != hf.size:
+            return None
+    except Exception:
+        return None
+
+    # Build scoring grid from raw measurement arrays
+    try:
+        fl = np.asarray(f_l, dtype=float).reshape(-1)
+        ml = np.asarray(m_l, dtype=float).reshape(-1)
+        fr = np.asarray(f_r, dtype=float).reshape(-1)
+        mr = np.asarray(m_r, dtype=float).reshape(-1)
+    except Exception:
+        return None
+
+    l_ok = bool(fl.size >= 32 and ml.size == fl.size)
+    r_ok = bool(fr.size >= 32 and mr.size == fr.size)
+    if not l_ok and not r_ok:
+        return None
+    if not l_ok:
+        fl, ml = fr.copy(), mr.copy()
+    if not r_ok:
+        fr, mr = fl.copy(), ml.copy()
+
+    def _sf(f, m):
+        idx = np.argsort(f)
+        ff, mm = f[idx], m[idx]
+        mask = np.isfinite(ff) & np.isfinite(mm) & (ff > 0.)
+        return ff[mask], mm[mask]
+
+    fl, ml = _sf(fl, ml)
+    fr, mr = _sf(fr, mr)
+    if fl.size < 32 or fr.size < 32:
+        return None
+
+    try:
+        lvl_min = float(data.get("lvl_min", 500.0) or 500.0)
+        lvl_max = float(data.get("lvl_max", 2000.0) or 2000.0)
+    except Exception:
+        lvl_min, lvl_max = 500.0, 2000.0
+    if not np.isfinite(lvl_min) or not np.isfinite(lvl_max) or lvl_min <= 0. or lvl_max <= lvl_min:
+        lvl_min, lvl_max = 500.0, 2000.0
+
+    try:
+        mag_lo = float(data.get("mag_c_min", 20.0) or 20.0)
+        mag_hi = float(data.get("mag_c_max", 250.0) or 250.0)
+    except Exception:
+        mag_lo, mag_hi = 20.0, 250.0
+    if not np.isfinite(mag_lo) or not np.isfinite(mag_hi) or mag_lo <= 0. or mag_hi <= mag_lo:
+        mag_lo, mag_hi = 20.0, 250.0
+
+    mode_lo = float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_MODE_BAND_MIN_HZ, 25.0))
+    mode_hi = float(_auto_safe_float(AUTO_MODE_TARGET_PRESELECT_MODE_BAND_MAX_HZ, 160.0))
+    if not np.isfinite(mode_lo) or not np.isfinite(mode_hi) or mode_hi <= mode_lo:
+        mode_lo, mode_hi = 25.0, 160.0
+
+    try:
+        f_lo = max(20., float(np.min(fl)), float(np.min(fr)), float(np.min(hf)))
+        f_hi = min(20000., float(np.max(fl)), float(np.max(fr)), float(np.max(hf)))
+        if not np.isfinite(f_lo) or not np.isfinite(f_hi) or f_hi <= f_lo * 1.15:
+            return None
+
+        fg = np.logspace(np.log10(f_lo), np.log10(f_hi), 320)
+        ml_g = np.interp(fg, fl, ml)
+        mr_g = np.interp(fg, fr, mr)
+        try:
+            ml_sm, _ = apply_smoothing_std(fg, ml_g, np.zeros_like(ml_g), float(AUTO_MODE_TARGET_PRESELECT_SMOOTH_OCT))
+            ml_g = np.asarray(ml_sm, dtype=float)
+        except Exception:
+            pass
+        try:
+            mr_sm, _ = apply_smoothing_std(fg, mr_g, np.zeros_like(mr_g), float(AUTO_MODE_TARGET_PRESELECT_SMOOTH_OCT))
+            mr_g = np.asarray(mr_sm, dtype=float)
+        except Exception:
+            pass
+        t_g = np.interp(fg, hf, hm)
+
+        lvl_mask = (fg >= lvl_min) & (fg <= lvl_max)
+        if int(np.count_nonzero(lvl_mask)) < 16:
+            lvl_mask = (fg >= 300.0) & (fg <= 3000.0)
+        if int(np.count_nonzero(lvl_mask)) < 16:
+            lvl_mask = np.ones_like(fg, dtype=bool)
+
+        corr_mask = (fg >= mag_lo) & (fg <= mag_hi)
+        if int(np.count_nonzero(corr_mask)) < 16:
+            corr_mask = np.ones_like(fg, dtype=bool)
+
+        mode_mask = (fg >= mode_lo) & (fg <= mode_hi) & corr_mask
+        if int(np.count_nonzero(mode_mask)) < 8:
+            mode_mask = (fg >= mode_lo) & (fg <= mode_hi)
+
+        tc = _auto_target_preselect_score(
+            fg=fg, ml_g=ml_g, mr_g=mr_g, t_g=t_g,
+            lvl_mask=lvl_mask, corr_mask=corr_mask, mode_mask=mode_mask,
+        )
+        if not isinstance(tc, dict) or not tc:
+            return None
+
+        tc["hc_mode"] = str(AUTO_MODE_SYNTH_TARGET_NAME)
+        tc["_synth_hc_f"] = hf
+        tc["_synth_hc_m"] = hm
+        return dict(tc)
+    except Exception:
+        return None
+
+
 def _auto_select_builtin_target_curve(
     data: dict,
     *,
@@ -489,6 +625,14 @@ def _auto_select_builtin_target_curve(
             scored.append(dict(tc))
         except Exception:
             continue
+
+    if bool(AUTO_MODE_SYNTH_TARGET_ENABLED):
+        try:
+            synth_tc = _auto_build_synth_target_candidate(data, f_l=fl, m_l=ml, f_r=fr, m_r=mr)
+            if isinstance(synth_tc, dict) and synth_tc:
+                scored.append(dict(synth_tc))
+        except Exception:
+            pass
 
     if not scored:
         return None

@@ -51,6 +51,27 @@ def max_abs_gd_gradient_ms_per_oct(freq_axis: np.ndarray, phase_rad: np.ndarray,
     return float(m["max_ms_per_oct"]), m["at_hz"]
 
 
+def gd_abs_band_max_ms(
+    freq_axis: np.ndarray,
+    phase_rad: np.ndarray,
+    lo_hz: float = 20.0,
+    hi_hz: float = 500.0,
+) -> float | None:
+    """Return max absolute GD (ms) within [lo_hz, hi_hz]. Returns None if insufficient data."""
+    try:
+        f = np.asarray(freq_axis, dtype=float)
+        p = np.asarray(phase_rad, dtype=float)
+        sel = np.isfinite(f) & np.isfinite(p) & (f >= float(lo_hz)) & (f <= float(hi_hz))
+        if np.count_nonzero(sel) < 4:
+            return None
+        ff = f[sel]
+        pp = np.unwrap(p[sel])
+        gd_ms = np.nan_to_num((-np.gradient(pp, 2.0 * np.pi * ff)) * 1000.0, nan=0.0, posinf=0.0, neginf=0.0)
+        return float(np.max(np.abs(gd_ms)))
+    except (TypeError, ValueError, FloatingPointError, IndexError):
+        return None
+
+
 def gd_grad_limiter(ir, cfg, st, *, freq_axis=None, phase_mask=None, limiter_fn=None) -> tuple[np.ndarray, dict[str, Any]]:
     in_phase = np.asarray(ir, dtype=float).copy()
     out = in_phase.copy()

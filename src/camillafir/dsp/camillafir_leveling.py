@@ -240,30 +240,25 @@ def _window_offset_consistency_score(
         shape_resid = diff - float(off_full) - (float(slope_full) * xc)
         shape_rms = _centered_rms(shape_resid)
 
-        parts: list[tuple[float, float]] = []
-        n = int(f.size)
-        half = n // 2
-        if half >= 12:
-            parts.append((0.0, 0.5))
-            parts.append((0.5, 1.0))
+        log_f = np.log2(np.clip(f, 1e-9, None))
+        log_f_lo = float(log_f[0])
+        log_f_span = float(log_f[-1]) - log_f_lo
 
-        third = n // 3
-        if third >= 10:
-            parts.append((0.0, 2.0 / 3.0))
-            parts.append((1.0 / 3.0, 1.0))
-
-        parts.append((0.2, 0.8))
+        parts: list[tuple[float, float]] = [
+            (0.0, 0.5), (0.5, 1.0),
+            (0.0, 2.0 / 3.0), (1.0 / 3.0, 1.0),
+            (0.2, 0.8),
+        ]
 
         offsets = [float(off_full)]
         for start_frac, end_frac in parts:
-            i0 = int(np.floor(float(start_frac) * n))
-            i1 = int(np.ceil(float(end_frac) * n))
-            i0 = max(0, min(i0, n - 1))
-            i1 = max(i0 + 1, min(i1, n))
-            if (i1 - i0) < 10:
+            f_lo_sub = 2.0 ** (log_f_lo + start_frac * log_f_span)
+            f_hi_sub = 2.0 ** (log_f_lo + end_frac * log_f_span)
+            sub_mask = (f >= f_lo_sub) & (f <= f_hi_sub)
+            if int(np.count_nonzero(sub_mask)) < 10:
                 continue
-            f_sub = f[i0:i1]
-            d_sub = diff[i0:i1]
+            f_sub = f[sub_mask]
+            d_sub = diff[sub_mask]
             if tilt_comp:
                 off_sub, _ = _tilt_fit_offset_and_slope_db_per_oct(
                     f_sub,
@@ -708,10 +703,10 @@ def find_stable_level_window(
     tilt_comp: bool = True,
     tilt_max_db_per_oct: float = 2.0,
     perceptual_weighting: bool = False,
-    perceptual_strength: float = 0.12,
+    perceptual_strength: float = 0.18,
     perceptual_min_hz: float = 250.0,
     perceptual_max_hz: float = 4000.0,
-    perceptual_tie_only: bool = True,
+    perceptual_tie_only: bool = False,
 ) -> Tuple[float, float]:
     return find_stable_level_window_impl(
         freq_axis,
@@ -751,10 +746,10 @@ def find_shared_stereo_level_window(
     tilt_comp: bool = True,
     tilt_max_db_per_oct: float = 2.0,
     perceptual_weighting: bool = False,
-    perceptual_strength: float = 0.12,
+    perceptual_strength: float = 0.18,
     perceptual_min_hz: float = 250.0,
     perceptual_max_hz: float = 4000.0,
-    perceptual_tie_only: bool = True,
+    perceptual_tie_only: bool = False,
 ) -> Tuple[float, float]:
     return find_shared_stereo_level_window_impl(
         freq_axis_l,

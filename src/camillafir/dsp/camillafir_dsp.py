@@ -5,6 +5,7 @@ import logging
 logger = logging.getLogger("CamillaFIR.dsp")
 from camillafir.config.models import FilterConfig
 from .dsp_correction import run_correction_stage
+from ._pruning import get_pruning_hook as _get_pruning_hook
 from .dsp_ops import (
     _limit_gd_gradient_ms_per_oct as _limit_gd_gradient_ms_per_oct_impl,
     _stage_probe as _stage_probe_impl,
@@ -279,6 +280,24 @@ def _run_generate_filter_pipeline(
     hardclamp_cut_bins = corr.hardclamp_cut_bins
     hard_over_boost = corr.hard_over_boost
     hard_over_cut = corr.hard_over_cut
+
+    # --- Optuna pruning: partial score after magnitude correction ---
+    # Computed before the more expensive phase-IR stage so that clearly
+    # bad parameter combinations can be discarded early.
+    _pruning_hook = _get_pruning_hook()
+    if callable(_pruning_hook):
+        try:
+            _g = np.asarray(getattr(corr, "final_g", []), dtype=float)
+            _g_fin = _g[np.isfinite(_g)]
+            _p90 = float(np.percentile(np.abs(_g_fin), 90)) if _g_fin.size > 0 else 0.0
+            _clip_pen = (
+                float(getattr(corr, "over_boost", 0.0) or 0.0) * 5.0
+                + float(getattr(corr, "over_cut", 0.0) or 0.0) * 2.0
+            )
+            _pruning_hook(-(_p90 + _clip_pen))
+        except Exception:
+            pass  # Never interrupt the pipeline due to pruning errors
+    # --- end pruning ---
 
     phase_ir = run_phase_ir_stage(
         cfg=cfg,

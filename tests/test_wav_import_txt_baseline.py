@@ -48,18 +48,16 @@ def test_wav_parse_is_deterministic_vs_ui_knobs():
 
 
 def test_detect_is_wav_source_ignores_fmt_override():
-    pin = {}
-
     data_txt_fmt_wav = {
         "local_path_l": r"C:\REW\uudet\L_subit_mukana.txt",
         "local_path_r": r"C:\REW\uudet\R_subit_mukana.txt",
         "fmt": "WAV",
     }
-    assert detect_is_wav_source(data_txt_fmt_wav, pin) is False
+    assert detect_is_wav_source(data_txt_fmt_wav) is False
 
     data_wav_fmt_txt = {
         "local_path_l": r"C:\REW\uudet\L.wav",
         "local_path_r": r"C:\REW\uudet\R.wav",
         "fmt": "TXT",
     }
-    assert detect_is_wav_source(data_wav_fmt_txt, pin) is True
+    assert detect_is_wav_source(data_wav_fmt_txt) is True

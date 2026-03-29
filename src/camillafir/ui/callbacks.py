@@ -1,3 +1,4 @@
+import logging
 import sys
 from datetime import datetime
 
@@ -6,17 +7,15 @@ from pywebio.output import put_html, use_scope
 from pywebio.pin import pin, pin_on_change, pin_update
 
 from .camillafir_housecurve import _normalize_hc_mode_key
-from .camillafir_modes import MODE_DEFAULTS
+from ..config.mode_policy import MODE_DEFAULTS
+from . import ui_state
 from .camillafir_ui_helpers import (
     _warn_max_boost_if_over_cap,
     _warn_taps_if_over_cap,
-    apply_afdw_preset,
-    apply_mode_defaults_to_ui,
-    apply_tdc_preset,
+)
+from .controls_ir_window import (
     update_afdw_cycles_ui,
-    update_auto_mode_controls_ui,
-    update_basic_clamp_hints_ui,
-    update_confidence_pull_ui,
+    update_bass_first_ui,
     update_ir_export_window_mode_ui,
     update_ir_lr_window_ui,
     update_ir_tukey_ui,
@@ -24,13 +23,22 @@ from .camillafir_ui_helpers import (
     update_low_bass_cut_ui,
     update_lvl_ui,
     update_mixed_freq_ui,
+    update_tdc_controls_ui,
+)
+from .controls_mode import (
+    apply_afdw_preset,
+    apply_mode_defaults_to_ui,
+    apply_tdc_preset,
+    update_auto_mode_controls_ui,
+    update_basic_clamp_hints_ui,
+    update_confidence_pull_ui,
     update_mode_desc,
     update_taps_auto_info,
-    update_target_preview_ui,
-    update_tdc_controls_ui,
     update_unsafe_raw_dsp_ui,
 )
+from .controls_target_preview import update_target_preview_ui
 
+logger = logging.getLogger("CamillaFIR")
 _PROCESS_RUN_HOOK = None
 
 
@@ -44,7 +52,7 @@ def _terminal_run_event(label: str, *, clock_text: str, elapsed_s: float | None 
             parts.append(f"| {float(elapsed_s):.1f} s")
         sys.stdout.write(" ".join(parts).strip() + "\n")
         sys.stdout.flush()
-    except Exception:
+    except (OSError, TypeError, ValueError):
         pass
 
 
@@ -62,35 +70,41 @@ def on_start_click():
             from . import app as _app
             _app.activate_run_tab()
         except Exception:
+            # UI-only convenience; keep the DSP run reachable even if tab activation fails.
+            logger.debug("Run-tab activation unavailable in current UI context", exc_info=True)
             pass
 
         try:
             with use_scope("results", clear=True):
                 pass
         except Exception:
+            # UI-only cleanup must not block starting the DSP run if the scope is not mounted yet.
+            logger.debug("Unable to clear previous results scope before run start", exc_info=True)
             pass
 
         stop_evt = threading.Event()
         run_started_at = time.perf_counter()
         run_started_clock = datetime.now().strftime("%H:%M:%S")
         _terminal_run_event("START", clock_text=run_started_clock)
+        timer_error_logged = False
 
         def _timer_tick():
-            try:
-                from . import app as _app
-            except Exception:
-                return
+            nonlocal timer_error_logged
             while not stop_evt.wait(1.0):
                 try:
-                    base = _app.get_status_base_message(default="CamillaFIR running")
+                    base = ui_state.get_status_base_message(default="CamillaFIR running")
                     elapsed = max(0.0, float(time.perf_counter() - run_started_at))
-                    _app.update_status(f"{base} | {elapsed:.1f} s")
+                    ui_state.update_status(f"{base} | {elapsed:.1f} s")
                 except Exception:
+                    # Best-effort UI refresh only; keep the processing thread alive if the session/DOM changes.
+                    if not timer_error_logged:
+                        logger.debug("Status timer update failed; suppressing further timer errors", exc_info=True)
+                        timer_error_logged = True
                     pass
 
         try:
             from pywebio.session import register_thread
-        except Exception:
+        except ImportError:
             register_thread = None
 
         timer_thread = threading.Thread(
@@ -102,18 +116,21 @@ def on_start_click():
             if callable(register_thread):
                 register_thread(timer_thread)
         except Exception:
+            # Thread registration is optional; the timer still works as a daemon fallback.
+            logger.debug("Failed to register status timer thread with PyWebIO session", exc_info=True)
             pass
         timer_thread.start()
 
         try:
             try:
-                from . import app as _app
-                _app.set_run_wall_clock_text(run_started_clock)
-                _app.update_status_notices(summary_text="", info_text="")
-                _app.update_auto_selected_bar("")
-                _app.reset_auto_status_details()
-                _app.update_status("CamillaFIR running | 0.0 s")
+                ui_state.set_run_wall_clock_text(run_started_clock)
+                ui_state.update_status_notices(summary_text="", info_text="")
+                ui_state.update_auto_selected_bar("")
+                ui_state.reset_auto_status_details()
+                ui_state.update_status("CamillaFIR running | 0.0 s")
             except Exception:
+                # Status reset is cosmetic; starting the run must remain possible even if UI state sync fails.
+                logger.debug("Failed to reset UI status state before run start", exc_info=True)
                 pass
             result = _PROCESS_RUN_HOOK()
             elapsed_done = max(0.0, float(time.perf_counter() - run_started_at))
@@ -125,6 +142,7 @@ def on_start_click():
             )
             return result
         except Exception:
+            logger.exception("CamillaFIR run failed in UI start handler")
             elapsed_fail = max(0.0, float(time.perf_counter() - run_started_at))
             _terminal_run_event(
                 "FAILED",
@@ -165,7 +183,7 @@ def update_engine_metrics_ui(*, pin=pin, pin_update=pin_update):
         try:
             fs_v = pin["fs"]
             taps_v = pin["taps"]
-        except Exception:
+        except (KeyError, TypeError):
             return
 
         if fs_v in (None, "") or taps_v in (None, ""):
@@ -198,6 +216,7 @@ def update_engine_metrics_ui(*, pin=pin, pin_update=pin_update):
                 """
             )
     except Exception:
+        logger.debug("Engine metrics UI refresh failed", exc_info=True)
         return
 
 
@@ -214,6 +233,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
         try:
             update_engine_metrics_ui(pin=pin, pin_update=pin_update)
         except Exception:
+            logger.debug("Deferred engine metrics UI refresh failed", exc_info=True)
             pass
 
     _render_engine_metrics_later()
@@ -234,6 +254,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
                 pin_update("lvl_min", value=b)
                 pin_update("lvl_max", value=a)
         except Exception:
+            logger.debug("Level-range normalization failed; continuing with preview refresh", exc_info=True)
             pass
         update_target_preview_ui()
 
@@ -249,6 +270,9 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
         get_val=get_val,
         t=t,
     )
+    update_bass_first_ui(pin=pin, get_val=get_val, t=t)
+    update_afdw_cycles_ui(pin=pin, get_val=get_val, t=t)
+    update_tdc_controls_ui(pin=pin, get_val=get_val, t=t, apply_tdc_preset=apply_tdc_preset)
     update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t)
     update_confidence_pull_ui(pin=pin, get_val=get_val, t=t)
     update_unsafe_raw_dsp_ui(pin=pin, get_val=get_val, t=t)
@@ -264,6 +288,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
                 if str(pin.get("ir_export_window_mode", "") or "").lower() != "auto":
                     pin_update("ir_export_window_mode", value="auto")
         except Exception:
+            logger.debug("IR-window mode normalization failed; proceeding with UI refresh", exc_info=True)
             pass
 
         update_ir_export_window_mode_ui()
@@ -337,6 +362,41 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
             update_auto_mode_controls_ui(),
         ),
     )
+    pin_on_change(
+        "bass_first_ai",
+        onchange=lambda _: update_bass_first_ui(pin=pin, get_val=get_val, t=t),
+    )
+
+    def _update_stereo_link_strategy_state(_=None):
+        try:
+            from pywebio.session import run_js
+            mode_u = str(_pin_get("mode", "BASIC") or "BASIC").strip().upper()
+            is_auto = (mode_u == "AUTO")
+            enabled_raw = pin.get("stereo_link", None)
+            if isinstance(enabled_raw, (list, tuple, set)):
+                link_on = len(enabled_raw) > 0
+            else:
+                link_on = bool(enabled_raw) if enabled_raw is not None else False
+            disable = (not link_on) or is_auto
+            js_dis = "true" if disable else "false"
+            run_js(
+                "(function(){"
+                "var els=document.querySelectorAll('[name=\"stereo_link_strategy\"]');"
+                "if(!els.length)return;"
+                f"var dis={js_dis};"
+                "els.forEach(function(el){el.disabled=dis;});"
+                "var wrap=els[0].closest('.form-group')||els[0].closest('div');"
+                "if(wrap){"
+                "wrap.style.opacity=dis?'0.55':'';"
+                "wrap.style.pointerEvents=dis?'none':'';"
+                "wrap.style.filter=dis?'grayscale(1)':'';"
+                "}"
+                "})();"
+            )
+        except Exception:
+            pass
+
+    pin_on_change("stereo_link", onchange=_update_stereo_link_strategy_state)
 
     _warn_taps_if_over_cap()
 
@@ -366,15 +426,18 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
                     value=cur_mode,
                 )
         except Exception:
+            logger.debug("Failed to update lvl_mode selector for current mode", exc_info=True)
             pass
 
         try:
             update_confidence_pull_ui(pin=pin, get_val=get_val, t=t)
         except Exception:
+            logger.debug("Confidence-pull UI refresh failed", exc_info=True)
             pass
         try:
             update_unsafe_raw_dsp_ui(pin=pin, get_val=get_val, t=t)
         except Exception:
+            logger.debug("Unsafe-raw-DSP UI refresh failed", exc_info=True)
             pass
 
         update_mode_desc()
@@ -384,6 +447,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
             update_target_preview_ui()
             update_basic_clamp_hints_ui(pin=pin, pin_update=pin_update, t=t)
         except Exception:
+            logger.debug("Mode-change UI refresh failed", exc_info=True)
             pass
         try:
             m = str(_pin_get("mode", "BASIC") or "BASIC").strip().upper()
@@ -393,6 +457,7 @@ def register_callbacks(*, t, get_val, pin=pin, pin_update=pin_update, pin_on_cha
                 pin_update("ir_export_window_mode", value=v.strip())
                 _refresh_ir_window_controls()
         except Exception:
+            logger.debug("Mode default IR-window sync failed", exc_info=True)
             pass
 
     pin_on_change("mode", onchange=_on_mode_change)

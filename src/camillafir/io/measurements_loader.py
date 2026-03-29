@@ -1,5 +1,4 @@
 import os
-from pywebio.pin import pin
 
 from .measurements_txt import parse_measurements_from_path as parse_txt_path
 from .measurements_txt import parse_measurements_from_bytes as parse_txt_bytes
@@ -12,6 +11,22 @@ def _clean_local_path(p) -> str:
         return str(p or "").strip().strip('"').strip("'")
     except Exception:
         return ""
+
+
+def _get_uploaded_file(data: dict, key: str):
+    """Palauttaa upload-dictionaryn datasta tai None."""
+    try:
+        v = data.get(key)
+        if isinstance(v, dict) and v.get("content") is not None:
+            return v
+    except Exception:
+        pass
+    return None
+
+
+def _get_local_path(data: dict, key: str) -> str:
+    """Palauttaa paikallisen tiedostopolun datasta tai tyhjän merkkijonon."""
+    return _clean_local_path(data.get(key, ""))
 
 
 def parse_measurements_from_upload(
@@ -65,7 +80,7 @@ def load_measurements_lr(data: dict, *, logger=None):
     Lataa vasemman ja oikean kanavan mittaukset ensisijaisuusjarjestyksessa.
 
     Jarjestys:
-    1) selainlataukset (`pin.file_l`, `pin.file_r`)
+    1) selainlataukset (`data["file_l"]`, `data["file_r"]`)
     2) paikalliset polut (`local_path_l`, `local_path_r`)
 
     Palauttaa aina 6-arvoisen tuplen:
@@ -84,26 +99,17 @@ def load_measurements_lr(data: dict, *, logger=None):
     except Exception:
         sl = 0
 
-    try:
-        up_l = pin["file_l"]
-    except Exception:
-        up_l = None
-    try:
-        up_r = pin["file_r"]
-    except Exception:
-        up_r = None
+    up_l = _get_uploaded_file(data, "file_l")
+    up_r = _get_uploaded_file(data, "file_r")
 
-    has_up_l = isinstance(up_l, dict) and (up_l.get("content") is not None)
-    has_up_r = isinstance(up_r, dict) and (up_r.get("content") is not None)
-
-    if has_up_l and has_up_r:
+    if up_l is not None and up_r is not None:
         f_l, m_l, p_l = parse_measurements_from_upload(up_l, pre_ms=pre_ms, post_ms=post_ms, smoothing_level=sl, logger=logger)
         f_r, m_r, p_r = parse_measurements_from_upload(up_r, pre_ms=pre_ms, post_ms=post_ms, smoothing_level=sl, logger=logger)
         if f_l is not None and f_r is not None:
             return f_l, m_l, p_l, f_r, m_r, p_r
 
-    lp_l = _clean_local_path(data.get("local_path_l", ""))
-    lp_r = _clean_local_path(data.get("local_path_r", ""))
+    lp_l = _get_local_path(data, "local_path_l")
+    lp_r = _get_local_path(data, "local_path_r")
 
     if lp_l and lp_r:
         ext_l = os.path.splitext(lp_l)[1].lower()

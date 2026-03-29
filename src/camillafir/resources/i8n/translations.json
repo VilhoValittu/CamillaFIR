@@ -1,6 +1,6 @@
 {
     "en": {
-        "about_body": "**CamillaFIR** is a room correction FIR generator for DSP systems that support FIR filters.\n\n- **Author:** VilhoValittu\n- **Contact:** 📧 [camillafir.py@gmail.com](mailto:camillafir.py@gmail.com)\n- **Community testing & feedback:** Patu\n- **Support development:** ☕ [ko-fi.com/camillafir](https://ko-fi.com/camillafir)\n\nOngoing testing and community feedback help ensure reliability and consistent results. If you would like to support the continued development of the project, you can make a voluntary contribution via Ko-fi.",
+        "about_body": "**CamillaFIR** is a room correction FIR generator for DSP systems that support FIR filters.\n\n- **Author:** VilhoValittu\n- **Contact:** 📧 [camillafir.py@gmail.com](mailto:camillafir.py@gmail.com)\n- **Community testing & feedback:** Patu\n- **Support development:** ☕ <a href='https://ko-fi.com/camillafir' target='_blank'>ko-fi.com/camillafir</a>\n\nOngoing testing and community feedback help ensure reliability and consistent results. If you would like to support the continued development of the project, you can make a voluntary contribution via Ko-fi.",
         "about_title": "ℹ️ About CamillaFIR",
         "afdw_help": "Controls how finely different frequencies are corrected based on measurement reliability.",
         "afdw_help_long": "Adaptive Frequency-Domain Windowing (A-FDW) adjusts the correction resolution across frequency.\n\nHigh confidence areas receive sharper, more precise correction, while low confidence areas are smoothed more aggressively to avoid over-correction.\n\nA-FDW operates in the frequency domain only. It does not affect impulse windowing, delay, or filter symmetry.",
@@ -227,6 +227,7 @@
         "auto_target_mode_label": "Automatic mode target curve selection",
         "auto_target_mode_help": "Used only when Mode = Automatic. Auto searches the best built-in target curve, while Use selected keeps your current target curve selection.",
         "auto_target_mode_auto": "Auto: search best built-in",
+        "auto_target_mode_adaptive": "Adaptive: derive from measurements",
         "auto_target_mode_selected": "Use selected target curve from Target page ",
         "unsafe_raw_dsp_label": "UNSAFE / Raw DSP (disable all guards)",
         "unsafe_raw_dsp_help": "Bypasses safety/guard logic and allows unrestricted correction shaping. Intended only for diagnostics and algorithm testing.",
@@ -425,7 +426,7 @@
         "plot_level_both": "Both"
     },
     "fi": {
-        "about_body": "**CamillaFIR** on huonekorjauksen FIR-generaattori DSP-järjestelmille, jotka tukevat FIR-suodattimia.\n\n- **Tekijä:** VilhoValittu\n- **Yhteys:** 📧 [camillafir.py@gmail.com](mailto:camillafir.py@gmail.com)\n- **Yhteisötestaus ja palaute:** Patu\n- **Tue kehitystä:** ☕ [ko-fi.com/camillafir](https://ko-fi.com/camillafir)\n\nJatkuva testaus ja yhteisön palaute parantavat luotettavuutta ja lopputulosta. Jos haluat tukea projektin kehitystä, voit tehdä vapaaehtoisen lahjoituksen Ko-fi-sivun kautta.",
+        "about_body": "**CamillaFIR** on huonekorjauksen FIR-generaattori DSP-järjestelmille, jotka tukevat FIR-suodattimia.\n\n- **Tekijä:** VilhoValittu\n- **Yhteys:** 📧 [camillafir.py@gmail.com](mailto:camillafir.py@gmail.com)\n- **Yhteisötestaus ja palaute:** Patu\n- **Tue kehitystä:** ☕ <a href='https://ko-fi.com/camillafir' target='_blank'>ko-fi.com/camillafir</a>\n\nJatkuva testaus ja yhteisön palaute parantavat luotettavuutta ja lopputulosta. Jos haluat tukea projektin kehitystä, voit tehdä vapaaehtoisen lahjoituksen Ko-fi-sivun kautta.",
         "about_title": "ℹ️ Tietoa CamillaFIR:stä",
         "afdw_help": "Säätää korjauksen tarkkuutta eri taajuuksilla mittauksen luotettavuuden mukaan.",
         "afdw_help_long": "Adaptive Frequency-Domain Windowing (A-FDW) säätää korjauksen taajuusresoluutiota.\n\nKorkean luottamuksen alueilla korjaus on tarkempaa, matalan luottamuksen alueilla korjausta silotetaan liiallisen korjauksen välttämiseksi.\n\nA-FDW vaikuttaa vain taajuusalueessa. Se ei muuta impulssivasteen ikkunointia, viivettä tai suodatintyypin symmetriaa.",
@@ -652,6 +653,7 @@
         "auto_target_mode_label": "Automaattimoodin target-käyrän valinta",
         "auto_target_mode_help": "Käytössä vain, kun tila on Automatic. Auto etsii parhaan sisäänrakennetun target-käyrän, kun taas Käytä valittua käyttää nykyistä target-käyrävalintaasi.",
         "auto_target_mode_auto": "Auto: etsi paras sisäänrakennettu",
+        "auto_target_mode_adaptive": "Adaptiivinen: johda mittauksista",
         "auto_target_mode_selected": "Käytä valittua target-käyrää Tavoite-sivulta",
         "unsafe_raw_dsp_label": "UNSAFE / Raw DSP (poista kaikki suojat)",
         "unsafe_raw_dsp_help": "Ohittaa turvallisuus- ja guard-logiikan ja sallii rajoittamattoman korjausmuotoilun. Tarkoitettu vain diagnostiikkaan ja algoritmitestaukseen.",

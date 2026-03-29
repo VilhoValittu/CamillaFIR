@@ -95,7 +95,7 @@ def _raised_cosine_lp(freqs: np.ndarray, f0: float, f1: float) -> np.ndarray:
         w[mid] = 0.5 * (1.0 + np.cos(np.pi * x))
     return w
 
-def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=120.0, transition_hz=120.0):
+def combine_mixed_phase(ir_lin, ir_min, fs, split_freq=120.0, transition_hz=60.0):
     """
     Combine linear-phase and minimum-phase IRs using EXCESS-phase blending.
 
