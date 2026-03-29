@@ -2,6 +2,7 @@ from camillafir.config.camillafir_config import load_config
 from camillafir.config.camillafir_pipeline import build_filter_config
 from camillafir.config.camillafir_pipeline import collect_ui_data
 from camillafir.config.models import FilterConfig
+from camillafir.io.auto_mode.orchestrator_target import _target_eval_one
 from camillafir.io.camillafir_automatic_mode import _auto_select_target_curve_with_trials
 from camillafir.io.camillafir_automatic_mode import _run_auto_mode_search
 
@@ -252,7 +253,7 @@ def test_auto_mode_search_uses_exact_signature_cache_without_trials(monkeypatch)
     )
     monkeypatch.setattr(
         "camillafir.io.camillafir_automatic_mode.build_config",
-        lambda *args, **kwargs: SimpleNamespace(),
+        lambda ui_data, preset=None, *, fs_v=None, taps_v=None, xos=None, hpf=None, hc_f=None, hc_m=None, filter_config_cls=None, max_safe_boost=8.0: SimpleNamespace(),
     )
     monkeypatch.setattr(
         "camillafir.io.camillafir_automatic_mode.run_pipeline",
@@ -345,7 +346,7 @@ def test_auto_mode_search_replays_exact_cache_results_into_optuna_study(monkeypa
     )
     monkeypatch.setattr(
         "camillafir.io.camillafir_automatic_mode.build_config",
-        lambda *args, **kwargs: SimpleNamespace(),
+        lambda ui_data, preset=None, *, fs_v=None, taps_v=None, xos=None, hpf=None, hc_f=None, hc_m=None, filter_config_cls=None, max_safe_boost=8.0: SimpleNamespace(),
     )
     monkeypatch.setattr(
         "camillafir.io.camillafir_automatic_mode.run_pipeline",
@@ -414,3 +415,68 @@ def test_auto_mode_search_replays_exact_cache_results_into_optuna_study(monkeypa
     assert any(str(call.get("study_name", "")).find("phase1") >= 0 for call in remembered)
     assert any(dict(call.get("preset", {}) or {}).get("preset_id") == "micro-1" for call in remembered)
     assert any(dict(call.get("preset", {}) or {}).get("preset_id") == "exact-cache" for call in remembered)
+
+
+def test_target_eval_one_uses_current_build_config_signature_without_pin():
+    from types import SimpleNamespace
+
+    calls = []
+
+    def _build_config(
+        ui_data,
+        preset=None,
+        *,
+        fs_v=None,
+        taps_v=None,
+        xos=None,
+        hpf=None,
+        hc_f=None,
+        hc_m=None,
+        filter_config_cls=None,
+        max_safe_boost=8.0,
+    ):
+        calls.append(
+            {
+                "fs_v": fs_v,
+                "taps_v": taps_v,
+                "max_safe_boost": max_safe_boost,
+                "ui_data": dict(ui_data or {}),
+            }
+        )
+        return SimpleNamespace()
+
+    runtime = SimpleNamespace(
+        build_config=_build_config,
+        run_pipeline=lambda cfg, measurements, include_response_arrays=False: SimpleNamespace(
+            metrics={},
+            ui_data=dict(measurements.get("ui_data", {}) or {}),
+        ),
+        auto_score_result=lambda result, **kwargs: {"rank_score": 84.0, "avg_score": 80.0},
+    )
+
+    out = _target_eval_one(
+        runtime=runtime,
+        preset={"phase_limit": 420.0},
+        base_tc={"filter_type": "Linear Phase", "comparison_mode": True},
+        measurements={
+            "f_l": [20.0, 100.0],
+            "m_l": [0.0, 0.0],
+            "p_l": [0.0, 0.0],
+            "f_r": [20.0, 100.0],
+            "m_r": [0.0, 0.0],
+            "p_r": [0.0, 0.0],
+        },
+        fs_v=44100,
+        taps_v=65536,
+        xos=[],
+        hpf=None,
+        hc_f_arr=[20.0, 100.0],
+        hc_m_arr=[0.0, 0.0],
+        pin_obj=object(),
+        filter_key="linear",
+    )
+
+    assert out["ok"] is True
+    assert out["metrics"]["rank_score"] == 84.0
+    assert len(calls) == 1
+    assert int(calls[0]["fs_v"]) == 44100

@@ -174,7 +174,6 @@ def evaluate_search_candidate(
         hpf=ctx.hpf,
         hc_f=ctx.hc_f,
         hc_m=ctx.hc_m,
-        pin=ctx.pin_obj,
         max_safe_boost=float(MAX_SAFE_BOOST),
     )
     try:

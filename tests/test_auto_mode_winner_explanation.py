@@ -93,7 +93,19 @@ def test_run_auto_mode_search_impl_returns_winner_explanation(monkeypatch):
             {"preset_id": "b", "mixed_freq": 160.0},
         ]
 
-    def fake_build_config(*args, **kwargs):
+    def fake_build_config(
+        ui_data,
+        preset=None,
+        *,
+        fs_v=None,
+        taps_v=None,
+        xos=None,
+        hpf=None,
+        hc_f=None,
+        hc_m=None,
+        filter_config_cls=None,
+        max_safe_boost=8.0,
+    ):
         return SimpleNamespace()
 
     def fake_run_pipeline(cfg, measurements, include_response_arrays=False):
@@ -188,7 +200,19 @@ def test_run_auto_mode_search_impl_uses_optuna_backend_even_for_small_trial_coun
             return [{"preset_id": "seed", "mixed_freq": 180.0}]
         raise AssertionError("builtin candidate sampler should not be used for full phase1 when optuna is enabled")
 
-    def fake_build_config(*args, **kwargs):
+    def fake_build_config(
+        ui_data,
+        preset=None,
+        *,
+        fs_v=None,
+        taps_v=None,
+        xos=None,
+        hpf=None,
+        hc_f=None,
+        hc_m=None,
+        filter_config_cls=None,
+        max_safe_boost=8.0,
+    ):
         return SimpleNamespace()
 
     def fake_run_pipeline(cfg, measurements, include_response_arrays=False):

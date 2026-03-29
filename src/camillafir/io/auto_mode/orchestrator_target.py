@@ -240,7 +240,6 @@ def _target_eval_one(
         hpf=hpf,
         hc_f=hc_f_arr,
         hc_m=hc_m_arr,
-        pin=pin_obj,
         max_safe_boost=float(MAX_SAFE_BOOST),
     )
     try:
