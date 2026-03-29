@@ -1,7 +1,10 @@
 """Backward-compatible shims for the relocated auto_mode package."""
 
+from __future__ import annotations
+
 from importlib import import_module
 import sys
+from types import ModuleType
 
 _SUBMODULES = (
     "cache_signature",
@@ -25,11 +28,47 @@ _SUBMODULES = (
     "winner_polish",
 )
 
+__all__ = list(_SUBMODULES)
+
+
+class _LazyAliasModule(ModuleType):
+    def __init__(self, alias_name: str, target_name: str) -> None:
+        super().__init__(alias_name)
+        self.__dict__["_alias_target_name"] = target_name
+
+    def _load(self) -> ModuleType:
+        module = import_module(self.__dict__["_alias_target_name"], __name__)
+        sys.modules[self.__name__] = module
+        globals()[self.__name__.rsplit(".", 1)[-1]] = module
+        return module
+
+    def __getattr__(self, name: str):
+        return getattr(self._load(), name)
+
+    def __dir__(self) -> list[str]:
+        return dir(self._load())
+
+
 for _name in _SUBMODULES:
-    _module = import_module(f"...auto_mode.{_name}", __name__)
-    sys.modules[f"{__name__}.{_name}"] = _module
-    globals()[_name] = _module
+    _alias_name = f"{__name__}.{_name}"
+    if _alias_name not in sys.modules:
+        sys.modules[_alias_name] = _LazyAliasModule(
+            _alias_name,
+            f"...auto_mode.{_name}",
+        )
 
-del _module
+
+def __getattr__(name: str):
+    if name not in _SUBMODULES:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = sys.modules[f"{__name__}.{name}"]
+    globals()[name] = module
+    return module
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))
+
+
+del _alias_name
 del _name
-
