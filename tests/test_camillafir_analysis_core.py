@@ -1,11 +1,11 @@
 import numpy as np
 
-from camillafir.camillafir import (
+from camillafir.common.result_postprocess import (
     _avg_confidence_pct,
     _ensure_scoring_keys,
     _inject_filter_mags_for_ui,
-    _resolve_ui_stats_fs,
 )
+from camillafir.workflow.process_support import resolve_ui_stats_fs as _resolve_ui_stats_fs
 from camillafir.dsp.camillafir_analysis import (
     _distance_bins_from_hz,
     _sigma_bins_from_hz,

@@ -188,7 +188,37 @@ def _inject_filter_gd_stats(st: dict | None, filt_ir, fs: int, lo_hz: float = 20
             st["gd_abs_max_20_500_ms"] = None
 
 
+def _avg_confidence_pct(st: dict) -> float:
+    if not st:
+        return 0.0
+    mode = str(st.get("analysis_mode", "native")).lower()
+    if mode == "comparison":
+        v = st.get("cmp_avg_confidence", None)
+        if v is not None:
+            try:
+                return float(v)
+            except Exception:
+                pass
+        cm_src = st.get("cmp_confidence_mask", None)
+        cm = np.asarray(cm_src if cm_src is not None else [], dtype=float)
+        if cm.size:
+            return float(np.mean(cm) * 100.0)
+        return 0.0
+    v = st.get("avg_confidence", None)
+    if v is not None:
+        try:
+            return float(v)
+        except Exception:
+            pass
+    cm_src = st.get("confidence_mask", None)
+    cm = np.asarray(cm_src if cm_src is not None else [], dtype=float)
+    if cm.size:
+        return float(np.mean(cm) * 100.0)
+    return 0.0
+
+
 __all__ = [
+    "_avg_confidence_pct",
     "_ensure_scoring_keys",
     "_inject_filter_gd_stats",
     "_inject_filter_mags_for_ui",
