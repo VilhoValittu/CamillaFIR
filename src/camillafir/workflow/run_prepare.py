@@ -8,14 +8,15 @@ from datetime import datetime
 
 import numpy as np
 
-from ..auto_mode.api import AUTO_MODE_COMPAT_VERSION
+from ..application.health_service import compute_health
+from ..application.house_curve_service import load_house_curve
+from ..application.run_request import RunRequest
 from ..common.result_postprocess import _irwin_tag
 from ..config.camillafir_config import save_config
 from ..config.camillafir_pipeline import (
     build_xos_hpf,
     choose_dash_fs,
     choose_target_rates,
-    collect_ui_data,
     detect_is_wav_source,
     filter_type_short,
     log_df_smoothing_toggle,
@@ -33,10 +34,9 @@ logger = logging.getLogger("CamillaFIR")
 
 def _prepare_ui_and_measurements(
     *,
-    pin_obj,
+    request: RunRequest,
     callbacks: ProcessRunCallbacks,
     support: ProcessRunSupport,
-    run_started_at: float,
 ) -> dict | None:
     perf_stats = {
         "read_s": 0.0,
@@ -45,19 +45,13 @@ def _prepare_ui_and_measurements(
     }
     per_fs_stats: dict[int, dict[str, float]] = {}
 
-    data = collect_ui_data(pin_obj)
+    data = dict(request.raw_ui_data or {})
+    run_started_at = float(request.run_started_at or time.perf_counter())
     callbacks.set_auto_selected_bar("")
-    data["bass_adaptive_isolation_mode"] = True
-    data["bass_smooth_sigma_scale"] = 1.20
-    data["bass_smooth_conf_floor"] = 0.25
-    data["bass_smooth_w_gamma"] = 2.40
-    data["bass_smooth_w_max"] = 0.45
-    data["program_version"] = support.version
-    data["auto_mode_compat_version"] = AUTO_MODE_COMPAT_VERSION
 
     try:
         mode = str(data.get("mode") or "BASIC").strip().upper()
-        hr = support.ui_bridge.compute_health(data, mode)
+        hr = compute_health(data, mode)
         if support.ui_bridge.toast_health_gate_result(hr, mode):
             return None
     except Exception:
@@ -124,7 +118,6 @@ def _prepare_ui_and_measurements(
 def _prepare_target_curve_and_run_context(
     ctx: dict,
     *,
-    pin_obj,
     support: ProcessRunSupport,
 ):
     data = ctx["data"]
@@ -136,7 +129,7 @@ def _prepare_target_curve_and_run_context(
     m_r = ctx["m_r"]
     p_r = ctx["p_r"]
 
-    hc_f, hc_m, hc_source = support.ui_bridge.load_house_curve(
+    hc_f, hc_m, hc_source = load_house_curve(
         data,
         parse_measurements_from_path=parse_measurements_from_path,
     )
@@ -175,7 +168,7 @@ def _prepare_target_curve_and_run_context(
             logger.info("HPF (UI->CFG): off")
     except Exception:
         pass
-    log_df_smoothing_toggle(pin_obj, logger)
+    log_df_smoothing_toggle(data, logger)
 
     target_rates = choose_target_rates(data)
     multi_rate_on = bool(data.get("multi_rate_opt"))

@@ -443,7 +443,6 @@ class _AutoModeSearcher:
         hpf: dict | None,
         hc_f,
         hc_m,
-        pin_obj,
         status_cb,
         n_trials: int = auto_api.AUTO_MODE_TRIALS,
     ):
@@ -455,7 +454,6 @@ class _AutoModeSearcher:
         self.hpf = hpf
         self.hc_f = hc_f
         self.hc_m = hc_m
-        self.pin_obj = pin_obj
         self.status_cb = status_cb
         self.n_trials = int(n_trials)
 
@@ -469,7 +467,7 @@ class _AutoModeSearcher:
             hpf=self.hpf,
             hc_f=self.hc_f,
             hc_m=self.hc_m,
-            pin_obj=self.pin_obj,
+            pin_obj=None,
             status_cb=self.status_cb,
             n_trials=int(self.n_trials),
         )
@@ -485,7 +483,7 @@ def _run_auto_mode_search(
     hpf: dict | None,
     hc_f,
     hc_m,
-    pin_obj,
+    pin_obj=None,
     status_cb,
     n_trials: int = auto_api.AUTO_MODE_TRIALS,
 ) -> dict | None:
@@ -498,7 +496,6 @@ def _run_auto_mode_search(
         hpf=hpf,
         hc_f=hc_f,
         hc_m=hc_m,
-        pin_obj=pin_obj,
         status_cb=status_cb,
         n_trials=int(n_trials),
     ).run()

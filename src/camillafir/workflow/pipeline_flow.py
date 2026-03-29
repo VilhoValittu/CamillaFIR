@@ -19,7 +19,7 @@ _PIPELINE_PROGRESS_START_AUTO = 0.60
 _PIPELINE_PROGRESS_END = 0.80
 
 
-def _run_pipeline(ctx: dict, *, pin_obj, callbacks: ProcessRunCallbacks, support: ProcessRunSupport) -> bool:
+def _run_pipeline(ctx: dict, *, callbacks: ProcessRunCallbacks, support: ProcessRunSupport) -> bool:
     data = ctx["data"]
     measurements = ctx["measurements"]
     target_rates = ctx["target_rates"]

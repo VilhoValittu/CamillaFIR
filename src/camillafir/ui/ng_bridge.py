@@ -23,10 +23,8 @@ class ProcessRunCallbacks:
 class ProcessRunUiBridge:
     ensure_progress_bar: typing.Callable[[], None]
     set_progress: typing.Callable[[float], None]
-    compute_health: typing.Callable[..., typing.Any]
     toast_health_gate_result: typing.Callable[..., bool]
     toast_measurement_files_missing: typing.Callable[[], None]
-    load_house_curve: typing.Callable[..., tuple]
     render_results: typing.Callable[..., None]
     build_export_zip: typing.Callable[..., tuple]
     save_export_bundle: typing.Callable[..., tuple]
@@ -106,20 +104,16 @@ def _lazy_render_results(*args: typing.Any, **kwargs: typing.Any) -> None:
 
 def build_default_ui_bridge() -> ProcessRunUiBridge:
     from .ng_health import (  # noqa: PLC0415
-        compute_health,
         toast_health_gate_result,
         toast_measurement_files_missing,
     )
-    from ..ui.camillafir_housecurve import load_house_curve  # noqa: PLC0415
     from ..ui.camillafir_export import build_export_zip, save_export_bundle  # noqa: PLC0415
 
     return ProcessRunUiBridge(
         ensure_progress_bar=_default_ensure_progress_bar,
         set_progress=_default_set_progress,
-        compute_health=compute_health,
         toast_health_gate_result=toast_health_gate_result,
         toast_measurement_files_missing=toast_measurement_files_missing,
-        load_house_curve=load_house_curve,
         render_results=_lazy_render_results,
         build_export_zip=build_export_zip,
         save_export_bundle=save_export_bundle,

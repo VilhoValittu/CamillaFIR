@@ -333,9 +333,12 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     return data
 
 
-def log_df_smoothing_toggle(pin, logger) -> bool:
+def log_df_smoothing_toggle(source, logger) -> bool:
     try:
-        df_on = bool(pin["df_smoothing"])
+        if isinstance(source, dict):
+            df_on = bool(source.get("df_smoothing"))
+        else:
+            df_on = bool(source["df_smoothing"])
     except (KeyError, TypeError, AttributeError):
         df_on = False
     logger.info(f"DF smoothing: {'ON' if df_on else 'OFF'}")

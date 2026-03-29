@@ -45,6 +45,8 @@ def resolve_static_dir() -> str | None:
 
 
 def process_run():
+    from .application.request_builder import build_run_request_from_pin
+    from .auto_mode.api import AUTO_MODE_COMPAT_VERSION
     from .ui.ng_controls import NgPinProxy
 
     from .workflow.process_run_flow import ProcessRunSupport, run_process_flow
@@ -57,8 +59,14 @@ def process_run():
     )
     from .ui.ng_bridge import build_default_ui_bridge
 
+    request = build_run_request_from_pin(
+        NgPinProxy(),
+        version=str(VERSION),
+        auto_mode_compat_version=str(AUTO_MODE_COMPAT_VERSION),
+    )
+
     return run_process_flow(
-        pin_obj=NgPinProxy(),
+        request=request,
         support=ProcessRunSupport(
             version=str(VERSION),
             max_safe_boost=float(MAX_SAFE_BOOST),

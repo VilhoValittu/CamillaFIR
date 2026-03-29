@@ -365,7 +365,6 @@ def _build_auto_finalize_status(
 def _run_auto_mode_seed_phases(
     ctx: dict,
     *,
-    pin_obj,
     callbacks: ProcessRunCallbacks,
     support: ProcessRunSupport,
 ):
@@ -584,7 +583,6 @@ def _run_auto_mode_seed_phases(
                     taps_v=int(pre_taps),
                     xos=pre_xos,
                     hpf=pre_hpf,
-                    pin_obj=pin_obj,
                     status_cb=auto_status,
                     top_n=int(AUTO_MODE_TARGET_TOP_N),
                     trials_per_curve=int(AUTO_MODE_TARGET_TRIALS_PER_CURVE),
@@ -651,7 +649,6 @@ def _run_auto_mode_seed_phases(
 def _run_auto_mode_search_if_needed(
     ctx: dict,
     *,
-    pin_obj,
     callbacks: ProcessRunCallbacks,
     support: ProcessRunSupport,
 ):
@@ -700,7 +697,6 @@ def _run_auto_mode_search_if_needed(
             hpf=hpf,
             hc_f=hc_f,
             hc_m=hc_m,
-            pin_obj=pin_obj,
             status_cb=auto_status,
             n_trials=int(AUTO_MODE_TRIALS),
         )

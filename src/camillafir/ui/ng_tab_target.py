@@ -42,7 +42,7 @@ def _step_manual_target(delta_db: float) -> None:
 
 def build_target_tab(*, t: Callable, get_val: Callable) -> None:
     from nicegui import ui
-    from .camillafir_housecurve import _normalize_hc_mode_key  # noqa: PLC0415
+    from ..application.house_curve_service import _normalize_hc_mode_key  # noqa: PLC0415
 
     ui.markdown(f"#### {t('tab_target')}")
     ui.separator()
@@ -240,7 +240,7 @@ def _build_target_preview_fig():
             parse_measurements_from_wav_bytes as _parse_wav_bytes,
             parse_measurements_from_wav_path as _parse_wav_path,
         )
-        from .camillafir_housecurve import (  # noqa: PLC0415
+        from ..application.house_curve_service import (  # noqa: PLC0415
             _normalize_hc_mode_key,
             load_house_curve,
             load_target_curve,

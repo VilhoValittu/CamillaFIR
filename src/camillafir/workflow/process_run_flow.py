@@ -4,6 +4,7 @@ import time
 import typing
 from dataclasses import dataclass
 
+from ..application.run_request import RunRequest
 from ..ui.ng_bridge import ProcessRunUiBridge
 from .auto_flow import (
     _run_auto_mode_search_if_needed,
@@ -30,39 +31,35 @@ class ProcessRunSupport:
     ui_bridge: ProcessRunUiBridge
 
 
-def run_process_flow(*, pin_obj, support: ProcessRunSupport):
+def run_process_flow(*, request: RunRequest, support: ProcessRunSupport):
     run_started_at = time.perf_counter()
+    request.run_started_at = run_started_at
     callbacks = support.ui_bridge.make_callbacks(run_started_at)
 
     ctx = _prepare_ui_and_measurements(
-        pin_obj=pin_obj,
+        request=request,
         callbacks=callbacks,
         support=support,
-        run_started_at=run_started_at,
     )
     if ctx is None:
         return
 
     _run_auto_mode_seed_phases(
         ctx,
-        pin_obj=pin_obj,
         callbacks=callbacks,
         support=support,
     )
     _prepare_target_curve_and_run_context(
         ctx,
-        pin_obj=pin_obj,
         support=support,
     )
     _run_auto_mode_search_if_needed(
         ctx,
-        pin_obj=pin_obj,
         callbacks=callbacks,
         support=support,
     )
     if not _run_pipeline(
         ctx,
-        pin_obj=pin_obj,
         callbacks=callbacks,
         support=support,
     ):

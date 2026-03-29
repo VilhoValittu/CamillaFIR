@@ -1,21 +1,15 @@
-"""NiceGUI toast backend for system_health.
+"""NiceGUI toast backend for the application health service.
 
-Patches system_health._get_toast_callable to return a NiceGUI ui.notify wrapper,
-then re-exports all public symbols so callers can import from here instead of
-system_health directly.
-
-Usage:
-    from ..ui.ng_health import (
-        compute_health, toast_health_gate_result, toast_measurement_files_missing, ...
-    )
+Patches the application health service to return a NiceGUI `ui.notify`
+callable, then re-exports the public API for UI callers.
 """
 from __future__ import annotations
 
-from . import system_health as _sh
+from ..application import health_service as _sh
 
 
 def _ng_toast_callable():
-    from nicegui import ui  # noqa: PLC0415 – deferred to avoid import at module level
+    from nicegui import ui  # noqa: PLC0415
 
     _COLOR_MAP = {
         "success": "positive",
@@ -33,13 +27,10 @@ def _ng_toast_callable():
     return _notify
 
 
-# Patch system_health to use NiceGUI toast instead of PyWebIO toast.
-# _get_toast_callable() is called lazily inside show_toast(), so this
-# override takes effect for every subsequent call.
+# Patch the application health service to use NiceGUI toast notifications.
 _sh._get_toast_callable = _ng_toast_callable  # type: ignore[attr-defined]
 
-# Re-export the full public API so callers only need to import from ng_health.
-from .system_health import (  # noqa: E402 – after the patch
+from ..application.health_service import (  # noqa: E402
     HealthResult,
     Issue,
     Level,
