@@ -101,7 +101,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          test -f dist/CamillaFIR/docs/User_Manual.md
+          find dist/CamillaFIR -path "*docs/User_Manual.md" -print -quit | grep -q .
 
       - name: Smoke test startup (Linux)
         if: runner.os == 'Linux'
@@ -140,7 +140,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if (-not (Test-Path "dist\CamillaFIR\docs\User_Manual.md")) {
+          $manual = Get-ChildItem -Path "dist\CamillaFIR" -Recurse -Filter "User_Manual.md" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -eq "docs" } |
+            Select-Object -First 1
+          if (-not $manual) {
             throw "Packaged user manual missing from Windows build"
           }
 
