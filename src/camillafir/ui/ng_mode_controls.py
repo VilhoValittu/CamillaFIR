@@ -4,8 +4,6 @@ Replaces controls_mode.py + controls_ir_window.py + parts of callbacks.py.
 
 Each function reads the current state from ng_controls and updates
 visibility/options/values of dependent elements accordingly.
-
-Phase 3 fills in the full implementations as tab elements are created.
 """
 from __future__ import annotations
 

@@ -1,11 +1,8 @@
 """NiceGUI cross-tab reactive callbacks.
 
-Replaces callbacks.py.  This module is called AFTER all tab builders have
-registered their elements in ng_controls, so all elements are guaranteed to
-exist when register_callbacks() runs.
-
-Phase 3 will implement each callback.  This stub allows ng_app.py to import
-without errors during development.
+This module is called after all tab builders have registered their elements in
+`ng_controls`, so every callback can safely assume the referenced controls
+already exist.
 """
 from __future__ import annotations
 
@@ -18,11 +15,7 @@ logger = logging.getLogger("CamillaFIR")
 
 
 def register_callbacks(*, t: Callable, get_val: Callable, max_safe_boost: float) -> None:
-    """Register all reactive callbacks on form elements.
-
-    Called once per page load, after all tab builders have run.
-    Phase 3 fills in each individual callback below.
-    """
+    """Register all reactive callbacks on form elements."""
     _register_mode_callbacks(t=t)
     _register_target_callbacks(t=t)
     _register_lvl_callbacks(t=t)
@@ -35,14 +28,15 @@ def register_callbacks(*, t: Callable, get_val: Callable, max_safe_boost: float)
 
 
 # ---------------------------------------------------------------------------
-# Stubs – each will be implemented in Phase 3
+# Callback groups
 # ---------------------------------------------------------------------------
 
 def _register_mode_callbacks(*, t: Callable) -> None:
-    """mode → lvl_mode options, desc, auto controls, raw dsp visibility."""
+    """mode -> lvl_mode options, desc, auto controls, raw dsp visibility."""
 
     def _on_mode_change(v: Any) -> None:
         from .ng_mode_controls import on_mode_change
+
         on_mode_change(mode=str(v or "BASIC").upper(), t=t)
         _update_target_preview()
 
@@ -50,7 +44,8 @@ def _register_mode_callbacks(*, t: Callable) -> None:
 
 
 def _register_target_callbacks(*, t: Callable) -> None:
-    """hc_mode, hc_custom_file, auto_goal, auto_target_mode → target preview."""
+    """hc_mode, hc_custom_file, auto_goal, auto_target_mode -> target preview."""
+
     def _sync_hc_upload_visibility(v: Any) -> None:
         upload_col = ctrl.get_container("hc_custom_upload_col")
         if upload_col is None:
@@ -61,11 +56,23 @@ def _register_target_callbacks(*, t: Callable) -> None:
             logger.debug("hc custom upload visibility update failed", exc_info=True)
 
     _preview_fields = [
-        "hc_mode", "hc_custom_file", "auto_goal", "auto_target_mode",
-        "mag_c_min", "mag_c_max", "file_l", "file_r",
-        "local_path_l", "local_path_r", "lvl_min", "lvl_max",
-        "ir_window_left", "ir_window_right", "ir_window",
-        "filter_smooth", "smoothing_level",
+        "hc_mode",
+        "hc_custom_file",
+        "auto_goal",
+        "auto_target_mode",
+        "mag_c_min",
+        "mag_c_max",
+        "file_l",
+        "file_r",
+        "local_path_l",
+        "local_path_r",
+        "lvl_min",
+        "lvl_max",
+        "ir_window_left",
+        "ir_window_right",
+        "ir_window",
+        "filter_smooth",
+        "smoothing_level",
     ]
     for field in _preview_fields:
         ctrl.on_change(field, lambda v, f=field: _update_target_preview())
@@ -81,10 +88,11 @@ def _register_target_callbacks(*, t: Callable) -> None:
 
 
 def _register_lvl_callbacks(*, t: Callable) -> None:
-    """lvl_mode → show/hide manual dB; lvl_min/max → swap if inverted."""
+    """lvl_mode -> show/hide manual dB; lvl_min/max -> swap if inverted."""
 
     def _on_lvl_mode(v: Any) -> None:
         from .ng_mode_controls import update_lvl_ui
+
         update_lvl_ui(t=t)
         _update_target_preview()
 
@@ -92,6 +100,7 @@ def _register_lvl_callbacks(*, t: Callable) -> None:
 
     def _on_lvl_range(v: Any) -> None:
         from .ng_mode_controls import update_lvl_range
+
         update_lvl_range()
 
     for field in ("lvl_min", "lvl_max"):
@@ -100,10 +109,11 @@ def _register_lvl_callbacks(*, t: Callable) -> None:
 
 
 def _register_ir_window_callbacks(*, t: Callable) -> None:
-    """ir_export_window_mode, ir_export_window_shape → show/hide sub-controls."""
+    """ir_export_window_mode, ir_export_window_shape -> show/hide sub-controls."""
 
     def _refresh(v: Any) -> None:
         from .ng_mode_controls import update_ir_window_controls, update_mixed_freq_ui
+
         update_ir_window_controls(t=t)
         update_mixed_freq_ui(t=t)
 
@@ -113,30 +123,34 @@ def _register_ir_window_callbacks(*, t: Callable) -> None:
 
 
 def _register_bass_callbacks(*, t: Callable) -> None:
-    """low_bass_cut_enable, bass_first_ai → show/hide sub-controls."""
+    """low_bass_cut_enable, bass_first_ai -> show/hide sub-controls."""
 
     def _on_bass_cut(v: Any) -> None:
         from .ng_mode_controls import update_low_bass_cut_ui
+
         update_low_bass_cut_ui()
 
     ctrl.on_change("low_bass_cut_enable", _on_bass_cut)
 
     def _on_bass_first(v: Any) -> None:
         from .ng_mode_controls import update_bass_first_ui
+
         update_bass_first_ui()
 
     ctrl.on_change("bass_first_ai", _on_bass_first)
 
 
 def _register_tdc_afdw_callbacks(*, t: Callable) -> None:
-    """enable_tdc, enable_afdw → show/hide sub-controls + clamp hints."""
+    """enable_tdc, enable_afdw -> show/hide sub-controls + clamp hints."""
 
     def _on_tdc(v: Any) -> None:
         from .ng_mode_controls import update_tdc_controls_ui
+
         update_tdc_controls_ui(t=t)
 
     def _on_afdw(v: Any) -> None:
         from .ng_mode_controls import update_afdw_cycles_ui
+
         update_afdw_cycles_ui(t=t)
 
     ctrl.on_change("enable_tdc", _on_tdc)
@@ -144,7 +158,7 @@ def _register_tdc_afdw_callbacks(*, t: Callable) -> None:
 
 
 def _register_stereo_callbacks(*, t: Callable) -> None:
-    """stereo_link → enable/disable stereo_link_strategy."""
+    """stereo_link -> enable/disable stereo_link_strategy."""
 
     def _on_stereo(v: Any) -> None:
         mode = str(ctrl.value("mode", "BASIC") or "BASIC").upper()
@@ -156,10 +170,11 @@ def _register_stereo_callbacks(*, t: Callable) -> None:
 
 
 def _register_metric_callbacks(*, t: Callable) -> None:
-    """fs, taps, multi_rate_opt → latency/resolution display."""
+    """fs, taps, multi_rate_opt -> latency/resolution display."""
 
     def _refresh(v: Any) -> None:
         from .ng_mode_controls import update_engine_metrics_ui, update_taps_auto_info
+
         update_engine_metrics_ui(t=t)
         update_taps_auto_info(t=t)
 
@@ -177,6 +192,7 @@ def _initial_state_sync(*, t: Callable, get_val: Callable) -> None:
             update_mixed_freq_ui,
             update_taps_auto_info,
         )
+
         mode = str(ctrl.value("mode", get_val("mode", "BASIC")) or "BASIC").upper()
         on_mode_change(mode=mode, t=t)
         update_lvl_ui(t=t)
@@ -193,9 +209,10 @@ def _initial_state_sync(*, t: Callable, get_val: Callable) -> None:
 # ---------------------------------------------------------------------------
 
 def _update_target_preview() -> None:
-    """Update target curve preview.  Implemented in Phase 3 (ng_tab_target)."""
+    """Refresh the target curve preview if the preview tab is available."""
     try:
         from .ng_tab_target import refresh_target_preview  # noqa: PLC0415
+
         refresh_target_preview()
     except Exception:
         pass

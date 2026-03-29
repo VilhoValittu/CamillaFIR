@@ -1,9 +1,9 @@
 from nicegui import ui
-from camillafir.camillafir import PROGRAM_NAME, _get_main_app
+from camillafir.camillafir import PROGRAM_NAME, configure_main_app
 
 
 def main():
-    _get_main_app()  # register @ui.page('/') route
+    configure_main_app()
     ui.run(
         port=8080,
         show=True,

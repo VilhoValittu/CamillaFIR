@@ -1,17 +1,8 @@
-"""NiceGUI UI adapter for workflow/process_run_flow.py.
+"""NiceGUI workflow bridge helpers.
 
-Drop-in replacement for process_run_bridge.py.  The dataclass interfaces
-(ProcessRunCallbacks, ProcessRunUiBridge) are identical so workflow code needs
-no changes when switching to the NiceGUI bridge.
-
-Progress element integration
------------------------------
-The NiceGUI progress bar element is created in ng_run_section.py as part of
-the page layout.  Call set_progress_element_getter() once after building the
-layout to wire it in:
-
-    import ng_bridge
-    ng_bridge.set_progress_element_getter(lambda: _progress_element)
+The bridge keeps workflow/process-run code decoupled from NiceGUI widgets while
+letting the UI layer provide progress, notifications, target loading, and
+result rendering hooks.
 """
 from __future__ import annotations
 
@@ -100,11 +91,12 @@ def _default_make_callbacks(run_started_at: float) -> ProcessRunCallbacks:
 
 
 # ---------------------------------------------------------------------------
-# Lazy render_results – ng_results_sections.py is created in Phase 4
+# Lazy import to avoid loading result sections before the page is assembled.
 # ---------------------------------------------------------------------------
 
 def _lazy_render_results(*args: typing.Any, **kwargs: typing.Any) -> None:
     from .ng_results_sections import render_results  # noqa: PLC0415
+
     render_results(*args, **kwargs)
 
 

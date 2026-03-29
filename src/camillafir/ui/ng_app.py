@@ -1,9 +1,8 @@
-"""NiceGUI app builder for CamillaFIR.
+"""NiceGUI app configuration for CamillaFIR.
 
-Replaces app.py + camillafir_ui.py.
-
-Public API (same as app.py / camillafir_ui.py):
-    build_app(*, process_run, PROGRAM_NAME, VERSION, MAX_SAFE_BOOST) → callable
+Public API:
+    configure_app(*, process_run, PROGRAM_NAME, VERSION, MAX_SAFE_BOOST)
+    build_app(*, process_run, PROGRAM_NAME, VERSION, MAX_SAFE_BOOST)
     update_status(msg)
     update_status_notices(*, summary_text, info_text)
     update_auto_selected_bar(msg)
@@ -77,22 +76,28 @@ def _resolve_user_manual_path() -> Path | None:
 
 
 # ---------------------------------------------------------------------------
-# Public API  (same signatures as app.py / camillafir_ui.py)
+# Public API
 # ---------------------------------------------------------------------------
 
-def build_app(*, process_run, PROGRAM_NAME: str, VERSION: str, MAX_SAFE_BOOST: float):
-    """Wire globals and register the NiceGUI page route.
-
-    Returns a no-op callable for compatibility with the PyWebIO build_app
-    contract (callers may call the return value, but NiceGUI doesn't need it).
-    """
+def configure_app(*, process_run, PROGRAM_NAME: str, VERSION: str, MAX_SAFE_BOOST: float) -> None:
+    """Wire runtime globals and register the NiceGUI main page."""
     g = globals()
     g["_PROCESS_RUN"] = process_run
     g["PROGRAM_NAME"] = PROGRAM_NAME
     g["VERSION"] = VERSION
     g["MAX_SAFE_BOOST"] = float(MAX_SAFE_BOOST)
-    _register_page()
-    return lambda *a, **kw: None  # no-op placeholder
+    register_main_page()
+
+
+def build_app(*, process_run, PROGRAM_NAME: str, VERSION: str, MAX_SAFE_BOOST: float):
+    """Backward-compatible wrapper around the current NiceGUI app setup."""
+    configure_app(
+        process_run=process_run,
+        PROGRAM_NAME=PROGRAM_NAME,
+        VERSION=VERSION,
+        MAX_SAFE_BOOST=MAX_SAFE_BOOST,
+    )
+    return lambda *a, **kw: None
 
 
 def update_status(msg) -> None:
@@ -123,7 +128,7 @@ def get_run_wall_clock_text(default: str = "") -> str:
 # Page registration
 # ---------------------------------------------------------------------------
 
-def _register_page() -> None:
+def register_main_page() -> None:
     from nicegui import ui
     from . import ng_controls
 
@@ -140,50 +145,58 @@ def _register_page() -> None:
             _build_header(version=VERSION)
 
             with ui.tabs().classes("w-full") as tabs:
-                tab_files    = ui.tab(t("tab_files"))
-                tab_basic    = ui.tab(t("tab_basic"))
-                tab_target   = ui.tab(t("tab_target"))
+                tab_files = ui.tab(t("tab_files"))
+                tab_basic = ui.tab(t("tab_basic"))
+                tab_target = ui.tab(t("tab_target"))
                 tab_advanced = ui.tab(t("tab_adv"))
-                tab_export   = ui.tab(t("tab_window_tdc"))
-                tab_xo       = ui.tab(t("tab_xo"))
-                tab_run      = ui.tab(t("tab_run"))
+                tab_export = ui.tab(t("tab_window_tdc"))
+                tab_xo = ui.tab(t("tab_xo"))
+                tab_run = ui.tab(t("tab_run"))
 
         with ui.tab_panels(tabs, value=tab_files).classes("w-full"):
             with ui.tab_panel(tab_files):
-                from .ng_tab_files import build_files_tab   # noqa: PLC0415
+                from .ng_tab_files import build_files_tab  # noqa: PLC0415
+
                 build_files_tab(t=t, get_val=get_val)
 
             with ui.tab_panel(tab_basic):
-                from .ng_tab_basic import build_basic_tab   # noqa: PLC0415
+                from .ng_tab_basic import build_basic_tab  # noqa: PLC0415
+
                 build_basic_tab(t=t, get_val=get_val, max_safe_boost=float(MAX_SAFE_BOOST))
 
             with ui.tab_panel(tab_target):
                 from .ng_tab_target import build_target_tab  # noqa: PLC0415
+
                 build_target_tab(t=t, get_val=get_val)
 
             with ui.tab_panel(tab_advanced):
                 from .ng_tab_advanced import build_advanced_tab  # noqa: PLC0415
+
                 build_advanced_tab(t=t, get_val=get_val, max_safe_boost=float(MAX_SAFE_BOOST))
 
             with ui.tab_panel(tab_export):
                 from .ng_tab_window import build_window_tab  # noqa: PLC0415
+
                 build_window_tab(t=t, get_val=get_val)
 
             with ui.tab_panel(tab_xo):
                 from .ng_tab_xo import build_xo_tab  # noqa: PLC0415
+
                 build_xo_tab(t=t, get_val=get_val)
 
             with ui.tab_panel(tab_run):
                 from .ng_run_section import build_run_section  # noqa: PLC0415
+
                 build_run_section(on_start_click=_on_start_click)
 
-        # Register cross-tab callbacks after all elements exist
+        # Register cross-tab callbacks after all elements exist.
         from .ng_callbacks import register_callbacks  # noqa: PLC0415
+
         register_callbacks(t=t, get_val=get_val, max_safe_boost=float(MAX_SAFE_BOOST))
 
 
 # ---------------------------------------------------------------------------
-# Start handler (wires camillafir.py process_run → ng_controls pin proxy)
+# Start handler
 # ---------------------------------------------------------------------------
 
 def _on_start_click() -> None:
@@ -225,12 +238,14 @@ def _build_header(*, version: str) -> None:
                 ui.label("CamillaFIR").classes("text-3xl font-bold tracking-wide text-white")
                 ui.label(version).classes("text-sm text-gray-400 mt-1")
         from .ng_run_section import build_info_panel  # noqa: PLC0415
+
         build_info_panel()
 
     ui.separator()
 
     # Progress bar and status area (hidden until a run starts)
     from .ng_run_section import build_global_progress_bar  # noqa: PLC0415
+
     build_global_progress_bar()
 
     # About / guide (collapsed by default)

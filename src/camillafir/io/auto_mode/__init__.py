@@ -1,4 +1,8 @@
-"""Backward-compatible shims for the relocated auto_mode package."""
+"""Backward-compatible shims for the relocated auto_mode package.
+
+These imports exist only to preserve legacy entrypoints. Do not add new
+business logic here; new functionality belongs in `camillafir.auto_mode`.
+"""
 
 from __future__ import annotations
 

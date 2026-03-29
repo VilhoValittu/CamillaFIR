@@ -21,7 +21,7 @@ FORCE_SINGLE_PLOT_FS_HZ = 48000
 MAX_SAFE_TAPS = 131072
 TEST_MODE = os.environ.get("CAMILLAFIR_TEST", "0") == "1"
 
-_MAIN_APP = None
+_MAIN_APP_CONFIGURED = False
 
 
 def resolve_static_dir() -> str | None:
@@ -73,32 +73,17 @@ def process_run():
     )
 
 
-def _get_main_app():
-    global _MAIN_APP
-    if _MAIN_APP is None:
-        from .ui.ng_app import build_app as _build_ui_app
+def configure_main_app() -> None:
+    global _MAIN_APP_CONFIGURED
+    if _MAIN_APP_CONFIGURED:
+        return
 
-        _MAIN_APP = _build_ui_app(
-            process_run=process_run,
-            PROGRAM_NAME=PROGRAM_NAME,
-            VERSION=VERSION,
-            MAX_SAFE_BOOST=MAX_SAFE_BOOST,
-        )
-    return _MAIN_APP
+    from .ui.ng_app import configure_app as _configure_ui_app
 
-
-def main(*args, **kwargs):
-    return _get_main_app()(*args, **kwargs)
-
-
-if __name__ == "__main__":
-    from nicegui import ui
-
-    _get_main_app()  # register @ui.page('/') route
-    ui.run(
-        port=8080,
-        show=True,
-        dark=True,
-        reload=False,
-        title=PROGRAM_NAME,
+    _configure_ui_app(
+        process_run=process_run,
+        PROGRAM_NAME=PROGRAM_NAME,
+        VERSION=VERSION,
+        MAX_SAFE_BOOST=MAX_SAFE_BOOST,
     )
+    _MAIN_APP_CONFIGURED = True
