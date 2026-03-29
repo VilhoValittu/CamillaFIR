@@ -89,6 +89,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="CamillaFIR.app",
-    icon=None,
+    icon="src/camillafir/ui/assets/camillafir_logo.icns",
     bundle_identifier=None,
 )

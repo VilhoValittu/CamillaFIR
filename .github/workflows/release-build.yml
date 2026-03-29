@@ -183,6 +183,35 @@ jobs:
           EOF
           chmod +x dist/CamillaFIR/run.sh
 
+          cp src/camillafir/ui/assets/camillafir_logo.png dist/CamillaFIR/CamillaFIR.png
+
+          cat > dist/CamillaFIR/install-desktop-entry.sh << 'EOF'
+          #!/usr/bin/env sh
+          set -eu
+
+          DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+          DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+          DESKTOP_FILE="$DESKTOP_DIR/CamillaFIR.desktop"
+
+          mkdir -p "$DESKTOP_DIR"
+
+          cat > "$DESKTOP_FILE" << DESKTOP_EOF
+          [Desktop Entry]
+          Version=1.0
+          Type=Application
+          Name=CamillaFIR
+          Comment=CamillaFIR portable build
+          Exec=$DIR/run.sh
+          Icon=$DIR/CamillaFIR.png
+          Terminal=false
+          Categories=AudioVideo;Audio;
+          DESKTOP_EOF
+
+          update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
+          printf 'Installed desktop entry: %s\n' "$DESKTOP_FILE"
+          EOF
+          chmod +x dist/CamillaFIR/install-desktop-entry.sh
+
           cat > dist/CamillaFIR/README.txt << 'EOF'
           CamillaFIR Linux portable build
 
@@ -191,6 +220,9 @@ jobs:
 
           If needed, ensure executable permissions:
               chmod +x CamillaFIR
+
+          Optional desktop launcher with app icon:
+              ./install-desktop-entry.sh
           EOF
 
           tar -C dist -czf out/CamillaFIR_${VERSION}_linux.tar.gz CamillaFIR

@@ -77,6 +77,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=True,
+    icon="src/camillafir/ui/assets/camillafir_logo.ico",
     exclude_binaries=True,
 )
 
