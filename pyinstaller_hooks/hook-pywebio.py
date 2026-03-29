@@ -10,6 +10,9 @@ datas = collect_data_files(
         "html/css/codemirror.min.css",
         "html/css/toastify.min.css",
         "html/css/bootstrap-select.min.css",
+        # The packaged app enters through a wrapper function, so PyWebIO falls
+        # back to the default theme during initial page rendering.
+        "html/css/bs-theme/default.min.css",
         "html/css/bs-theme/dark.min.css",
         "html/js/mustache.min.js",
         "html/js/codemirror.min.js",
