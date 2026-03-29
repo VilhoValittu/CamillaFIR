@@ -8,13 +8,12 @@ CamillaFIR produces:
 
 1. Interactive dashboards in the UI (Left/Right analysis view).
 2. A ZIP package saved to `Documents/CamillaFIR/filters/<version>/` (safe fallback used if needed):
-   - FIR WAV files (`L_...wav`, `R_...wav`)
+   - FIR WAV files (either `L_...wav` + `R_...wav` or a single `Stereo_...wav`, depending on layout)
    - Summary report (`Summary_<type>_<fs>Hz.txt`)
    - Convolver configs (`Config_...cfg`, `camilladsp_...yml`)
 
 Important current detail:
 - ZIP dashboard PNG export is currently disabled by default.
-- TXT FIR export is not part of the current ZIP export path.
 
 ## 2. Reading the dashboard (UI)
 

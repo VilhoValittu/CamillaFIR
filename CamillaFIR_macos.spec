@@ -9,6 +9,8 @@ block_cipher = None
 datas = [
     # i18n (expected at _MEIPASS/i8n/translations.json)
     ("src/camillafir/resources/i8n/translations.json", "i8n"),
+    # In-app user manual (expected at _MEIPASS/docs/User_Manual.md)
+    ("docs/User_Manual.md", "docs"),
     # AUTO-mode priors (expected relative to camillafir/resources)
     ("src/camillafir/resources/auto_mode_filter_priors.json", "camillafir/resources"),
     # plotly.js (expected at _MEIPASS/assets/plotly.min.js)

@@ -3,7 +3,7 @@
 numpy
 scipy
 matplotlib
-pywebio
+nicegui>=1.4
 plotly
 kaleido
 optuna

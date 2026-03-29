@@ -16,6 +16,7 @@ _AUTO_STATUS_DETAILS: list[str] = []
 _AUTO_STATUS_DETAIL_MAX = 80
 _AUTO_STATUS_LAST_DETAIL = ""
 _RUN_WALL_CLOCK_TEXT = ""
+_LAST_RUN_INFO: dict = {}
 _STATUS_RENDERER: Callable[..., None] | None = None
 
 
@@ -224,6 +225,21 @@ def update_status_notices(*, summary_text=None, info_text=None) -> None:
     _notify_renderer("status_notices")
 
 
+def set_last_run_info(info: dict) -> None:
+    global _LAST_RUN_INFO
+    try:
+        _LAST_RUN_INFO = dict(info) if isinstance(info, dict) else {}
+    except Exception:
+        _LAST_RUN_INFO = {}
+
+
+def get_last_run_info() -> dict:
+    try:
+        return dict(_LAST_RUN_INFO)
+    except Exception:
+        return {}
+
+
 def reset_auto_status_details() -> None:
     global _AUTO_STATUS_DETAILS, _AUTO_STATUS_LAST_DETAIL
     _AUTO_STATUS_DETAILS = []
@@ -232,12 +248,14 @@ def reset_auto_status_details() -> None:
 
 
 __all__ = [
+    "get_last_run_info",
     "get_run_wall_clock_text",
     "get_status_base_message",
     "get_status_snapshot",
     "is_status_dom_ready",
     "mark_status_dom_ready",
     "reset_auto_status_details",
+    "set_last_run_info",
     "set_run_wall_clock_text",
     "set_status_renderer",
     "update_auto_selected_bar",

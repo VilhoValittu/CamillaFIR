@@ -1,5 +1,4 @@
 import numpy as np
-from pywebio.pin import pin
 from ..common.house_curves import _normalize_hc_mode_key, get_house_curve_by_name
 
 def load_target_curve(file_content: bytes):
@@ -57,8 +56,8 @@ def load_house_curve(data: dict, *, parse_measurements_from_path=None):
 
 
     try:
-        if want_upload and getattr(pin, "hc_custom_file", None):
-            up = pin.hc_custom_file
+        up = data.get("hc_custom_file", None) if isinstance(data, dict) else None
+        if want_upload and up and isinstance(up, dict) and up.get("content"):
             hc_f, hc_m = load_target_curve(up["content"])
             if hc_f is not None and hc_m is not None:
                 hc_source = "Upload"

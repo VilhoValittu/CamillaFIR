@@ -5,7 +5,7 @@ import logging
 import math
 import numpy as np
 
-from ..io.auto_mode.filter_priors import get_auto_mode_filter_auto_defaults
+from ..auto_mode.filter_priors import get_auto_mode_filter_auto_defaults
 from ..config.mode_policy import MODE_DEFAULTS
 
 logger = logging.getLogger("CamillaFIR")
@@ -114,7 +114,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "stereo_link", "stereo_link_strategy", "exc_prot", "exc_freq", "low_bass_cut_hz", "low_bass_cut_enable", "hpf_enable", "hpf_freq",
         "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_window_right", "ir_export_window_mode", "ir_window_mode",
         "ir_export_window_shape", "ir_export_tukey_alpha",
-        "local_path_l", "local_path_r", "fmt", "lvl_manual_db",
+        "local_path_l", "local_path_r", "fmt", "layout", "lvl_manual_db",
         "lvl_min", "lvl_max", "lvl_algo", "fdw_cycles",
         "trans_width", "smoothing_level", "filter_smooth", "plot_smoothing_level",
         "bass_smooth_adaptive", "bass_smooth_hz", "bass_smooth_sigma_scale", "bass_smooth_conf_floor",

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pywebio.output import put_html
-
 from ..resources.i8n.camillafir_i18n import t
 
 
@@ -78,7 +76,7 @@ def fmt_tilt(st: dict, warn_thr: float = 1.5):
     try:
         tilt = float(tilt)
         if abs(tilt) > warn_thr:
-            return put_html(
+            return (
                 "<span title=\"Large broadband tilt detected during leveling, "
                 "house curve not suitable for speaker in room.\">"
                 f"{tilt:+.2f} dB/oct &#9888;"

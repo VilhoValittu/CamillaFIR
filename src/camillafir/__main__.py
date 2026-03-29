@@ -1,14 +1,15 @@
-from pywebio import start_server
-from camillafir.camillafir import main as _app, resolve_static_dir
+from nicegui import ui
+from camillafir.camillafir import PROGRAM_NAME, _get_main_app
 
 
 def main():
-    start_server(
-        _app,
+    _get_main_app()  # register @ui.page('/') route
+    ui.run(
         port=8080,
-        debug=True,
-        auto_open_webbrowser=True,
-        static_dir=resolve_static_dir(),
+        show=True,
+        dark=True,
+        reload=False,
+        title=PROGRAM_NAME,
     )
 
 

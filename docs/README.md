@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v3.6.6
+## v4.0.0
 
 Stable release - feedback welcome: camillafir.py@gmail.com
 
@@ -10,31 +10,12 @@ CamillaFIR generates high-resolution FIR room-correction filters from REW export
 CamillaFIR is a recommended filter creation tool for CamillaDSP and is listed in the official CamillaDSP README under
 [Measurement and filter generation tools](https://github.com/HEnquist/camilladsp?tab=readme-ov-file#measurement-and-filter-generation-tools).
 
-## v3.6.4 Highlights - AUTO mode subwoofers goal
+## v4.0.0 Highlights - NiceGUI UI rewrite
 
-- **New AUTO goal: `subwoofers`:** optimized for subwoofer-focused runs while staying in the normal automatic-mode search flow.
-- **Forced Smart Scan range:** the `subwoofers` goal always uses a `20-200 Hz` leveling/search window.
-- **Consistent preview/reporting:** the forced bass-only Smart Scan window is now reflected more clearly in the UI/docs flow.
-
-## v3.6.0 Highlights - AUTO mode HPF control and reporting
-
-- **Optional HPF in AUTO mode:** HPF enable, frequency, and slope can now be set in automatic mode instead of being forced on.
-- **Safer HPF auto-fit:** response-fit HPF is only auto-applied when HPF is enabled; otherwise CamillaFIR reports the estimate as a suggestion.
-- **More stable stereo-linked leveling:** shared target-shift handling is now aligned between left and right channels.
-
-## v3.5.5 Highlights - smarter automatic-mode reuse
-
-- **Exact cache-hit reuse:** same measurements + same relevant settings can now skip repeated target-selection and preset-search trial loops.
-- **Seeded Optuna flow:** automatic mode keeps known-good seed presets in play through target trials, phase 1, local refine, and micro-refine.
-- **Clearer reporting:** automatic mode now reports target-selection method text more clearly and exports richer summary metadata for cached winners.
-- **Startup defaults updated:** fresh configs now start with `Asymmetric` as the default filter type.
-
-## v3.5.0 Highlights - Automatic mode consistency & reproducibility
-
-- **Deterministic auto-mode trials:** same measurements + same key settings now produce the same trial sequence and typically the same winner.
-- **Smarter auto-mode cache:** filter-type aware cache buckets + version mismatch handling for safer reuse across updates.
-- **Better results on hard rooms:** phase-2 hard gate (severity/ripple) before Pareto + adaptive search-space shrinking + a final micro-refine pass.
-- **Improved mode handling:** optional dual-mode (two LF resonances) detection and mode-ripple-aware scoring.
+- **NiceGUI replaces PyWebIO:** CamillaFIR now uses a new `NiceGUI` browser frontend instead of the legacy `PyWebIO` UI.
+- **Cleaner module boundaries:** UI tabs, run orchestration, export/report generation, and engine/config assembly have been split into smaller modules to make further development safer.
+- **Built-in manual:** the application now ships with a dedicated `User Manual` document that matches the new UI flow.
+- **More regression coverage:** targeted tests were added for NiceGUI tabs, controls, run flow, export layout, and packaging.
 
 ---
 
@@ -86,9 +67,9 @@ Selection is based on **Best rank score**, which evaluates:
 - acoustic events
 - stereo consistency (L/R delta)
 
-## Current automatic-mode snapshot (v3.6.1)
+## Reference automatic-mode snapshot (v3.6.1)
 
-The current README benchmark is based on four **v3.6.1** summary exports generated
+The benchmark below is based on four **v3.6.1** summary exports generated
 from the **same measurement set** and the same target curve (**Harman8**).
 
 Common conditions in these comparison runs:
@@ -106,7 +87,7 @@ This is not meant to claim that one phase type always wins in every room.
 It shows what the current optimiser does on one real-world dataset with identical
 conditions.
 
-### Current v3.6.1 results
+### Reference v3.6.1 results
 
 | Rank | Filter type | Best rank score | Avg acoustic score | Run ranking score | Target match (L / R) | Notes |
 |---|---|---:|---:|---:|---|---|

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import time
 from typing import Any, Dict, List, Literal, Optional
 
@@ -80,21 +81,49 @@ def _as_int(v: Any) -> Optional[int]:
         return None
 
 
-def _valid_path(p: Any) -> bool:
+def _clean_path_text(p: Any) -> str:
     if not isinstance(p, str):
+        return ""
+    return p.strip().strip('"').strip("'")
+
+
+def _has_path_text(p: Any) -> bool:
+    return bool(_clean_path_text(p))
+
+
+def _valid_path(p: Any) -> bool:
+    path = _clean_path_text(p)
+    if not path:
         return False
-    p = p.strip().strip('"').strip("'")
-    if not p:
+    return os.path.isfile(path)
+
+
+def _has_uploaded_file_name(v: Any) -> bool:
+    try:
+        if isinstance(v, dict):
+            for key in ("filename", "name", "file_name"):
+                name = str(v.get(key, "") or "").strip()
+                if name:
+                    return True
+        if isinstance(v, list):
+            return any(_has_uploaded_file_name(x) for x in v)
+    except Exception:
         return False
-    return True
+    return False
 
 
 def _has_uploaded_file(v: Any) -> bool:
     """Sisainen apufunktio: has uploaded file."""
     try:
         if isinstance(v, dict):
-            name = str(v.get("filename", "") or "").strip()
-            return bool(name)
+            if not _has_uploaded_file_name(v):
+                return False
+            content = v.get("content", None)
+            if content is None:
+                return False
+            if isinstance(content, (bytes, bytearray, str)):
+                return len(content) > 0
+            return True
         if isinstance(v, list):
             return any(_has_uploaded_file(x) for x in v)
     except Exception:
@@ -103,11 +132,7 @@ def _has_uploaded_file(v: Any) -> bool:
 
 
 def _get_toast_callable():
-    try:
-        from pywebio.output import toast as pywebio_toast
-        return pywebio_toast
-    except Exception:
-        return None
+    return None
 
 
 def show_toast(
@@ -175,8 +200,12 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
     issues: List[Issue] = []
     mode_u = str(mode or "BASIC").strip().upper()
 
+    raw_up_l = _has_uploaded_file_name(data.get("file_l", None))
+    raw_up_r = _has_uploaded_file_name(data.get("file_r", None))
     up_l = _has_uploaded_file(data.get("file_l", None))
     up_r = _has_uploaded_file(data.get("file_r", None))
+    raw_lp_l = _has_path_text(data.get("local_path_l", None))
+    raw_lp_r = _has_path_text(data.get("local_path_r", None))
     lp_l = _valid_path(data.get("local_path_l", None))
     lp_r = _valid_path(data.get("local_path_r", None))
 
@@ -185,7 +214,7 @@ def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
 
     if has_upload_pair or has_local_pair:
         issues.append(Issue("ok", _tr("health_measurements"), _tr("health_upload_source_provided")))
-    elif up_l or up_r or lp_l or lp_r:
+    elif raw_up_l or raw_up_r or raw_lp_l or raw_lp_r:
         issues.append(Issue("warn", _tr("health_measurements"), _tr("health_measurements_missing_pair")))
     else:
         issues.append(Issue("warn", _tr("health_measurements"), _tr("health_measurements_missing")))

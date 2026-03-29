@@ -97,6 +97,12 @@ jobs:
           rm -rf build dist
           pyinstaller --clean --noconfirm CamillaFIR_linux.spec
 
+      - name: Verify packaged user manual (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          test -f dist/CamillaFIR/docs/User_Manual.md
+
       - name: Smoke test startup (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -129,6 +135,14 @@ jobs:
         run: |
           rm -rf build dist
           pyinstaller --clean --noconfirm CamillaFIR_standalone.spec
+
+      - name: Verify packaged user manual (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist\CamillaFIR\docs\User_Manual.md")) {
+            throw "Packaged user manual missing from Windows build"
+          }
 
       - name: Smoke test startup (Windows)
         if: runner.os == 'Windows'
@@ -262,6 +276,11 @@ jobs:
           file dist/CamillaFIR.app/Contents/MacOS/CamillaFIR
           lipo -archs dist/CamillaFIR.app/Contents/MacOS/CamillaFIR || true
 
+      - name: Verify packaged user manual (macOS arm64)
+        shell: bash
+        run: |
+          find dist/CamillaFIR.app -path "*docs/User_Manual.md" -print -quit | grep -q .
+
       - name: Smoke test startup (macOS arm64)
         shell: bash
         run: |
@@ -343,6 +362,11 @@ jobs:
           arch -x86_64 pyinstaller --clean --noconfirm CamillaFIR_macos.spec
           file dist/CamillaFIR.app/Contents/MacOS/CamillaFIR
           lipo -archs dist/CamillaFIR.app/Contents/MacOS/CamillaFIR || true
+
+      - name: Verify packaged user manual (macOS x86_64)
+        shell: bash
+        run: |
+          find dist/CamillaFIR.app -path "*docs/User_Manual.md" -print -quit | grep -q .
 
       - name: Smoke test startup (macOS x86_64)
         shell: bash

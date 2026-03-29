@@ -4,6 +4,23 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [4.0.0] - 2026-03-29
+
+### UI
+- Replaced the legacy browser UI built on `PyWebIO` with a new `NiceGUI` frontend. The interface is now organized around dedicated NiceGUI tab builders, a shared control registry, NiceGUI-native callbacks, and updated run/results sections.
+- Added NiceGUI-specific status/toast handling and refreshed results rendering to match the new frontend flow.
+
+### Architecture
+- Split the old monolithic UI and run orchestration into smaller modules such as `ng_app`, `ng_controls`, `ng_mode_controls`, `ng_results_sections`, `engine_build`, `engine_run`, `engine_summary`, and the `workflow/` helpers.
+- Continued the auto-mode modularization by exposing the main runtime surface through a dedicated `auto_mode/` package instead of keeping the logic behind legacy import paths.
+- Broke export/report generation into focused modules (`export_bundle`, `export_outputs`, `export_scoring`, `export_summary_text`) and added a bundled `User_Manual.md` for the new app layout.
+
+### Tests & Packaging
+- Added targeted regression coverage for the NiceGUI application, controls, mode handling, run section, export layout, packaging, and related UI helpers.
+- Updated versioned docs/runtime packaging for the `4.0.0` release.
+
+---
+
 ## [3.6.6] - 2026-03-29
 
 ### DSP / Internal
