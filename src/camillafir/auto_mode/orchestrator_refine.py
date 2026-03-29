@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -39,7 +40,150 @@ logger = logging.getLogger("CamillaFIR")
 __all__ = ["run_exact_cache_micro_refine", "run_search_refine_stages"]
 
 
+@dataclass(slots=True)
+class _CacheRefineContext:
+    params: dict
+
+
+@dataclass(slots=True)
+class _CacheRefineOutcome:
+    result: dict | None = None
+    best_preset: dict = field(default_factory=dict)
+    best_metrics: dict = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class _SearchRefineContext:
+    params: dict
+
+
+@dataclass(slots=True)
+class _SearchRefineSummary:
+    result: dict = field(default_factory=dict)
+
+
+def _load_exact_cache_seed(
+    *,
+    cache_base_data: dict,
+    measurements: dict,
+    fs_v: int,
+    taps_v: int,
+    xos: list,
+    hpf: dict | None,
+    status_cb,
+    cfg,
+    goal: str,
+    filter_key: str,
+    compat_version: str,
+    optimizer_backend: str,
+    optuna_mod,
+    seed: int,
+    optuna_search_sig: str,
+    _cache_ready_preset,
+    _materialize_preset_result,
+    runtime=None,
+) -> _CacheRefineContext:
+    return _CacheRefineContext(
+        params={
+            "cache_base_data": dict(cache_base_data or {}),
+            "measurements": dict(measurements or {}),
+            "fs_v": int(fs_v),
+            "taps_v": int(taps_v),
+            "xos": list(xos or []),
+            "hpf": hpf,
+            "status_cb": status_cb,
+            "cfg": cfg,
+            "goal": str(goal),
+            "filter_key": str(filter_key),
+            "compat_version": str(compat_version),
+            "optimizer_backend": str(optimizer_backend),
+            "optuna_mod": optuna_mod,
+            "seed": int(seed),
+            "optuna_search_sig": str(optuna_search_sig),
+            "_cache_ready_preset": _cache_ready_preset,
+            "_materialize_preset_result": _materialize_preset_result,
+            "runtime": runtime,
+        }
+    )
+
+
+def _run_cache_refine_rounds(
+    *,
+    context: _CacheRefineContext,
+) -> _CacheRefineOutcome:
+    result = _run_exact_cache_micro_refine_core(**dict(context.params or {}))
+    result_dict = dict(result or {}) if isinstance(result, dict) else None
+    return _CacheRefineOutcome(result=result_dict)
+
+
+def _select_cache_refine_best(
+    *,
+    outcome: _CacheRefineOutcome,
+) -> _CacheRefineOutcome:
+    result_dict = dict(outcome.result or {}) if isinstance(outcome.result, dict) else None
+    return _CacheRefineOutcome(
+        result=result_dict,
+        best_preset=dict((result_dict or {}).get("best_preset", {}) or {}),
+        best_metrics=dict((result_dict or {}).get("best_metrics", {}) or {}),
+    )
+
+
+def _finalize_cache_refine_result(
+    *,
+    outcome: _CacheRefineOutcome,
+) -> dict | None:
+    if not isinstance(outcome.result, dict):
+        return None
+    return dict(outcome.result or {})
+
+
 def run_exact_cache_micro_refine(
+    *,
+    cache_base_data: dict,
+    measurements: dict,
+    fs_v: int,
+    taps_v: int,
+    xos: list,
+    hpf: dict | None,
+    status_cb,
+    cfg,
+    goal: str,
+    filter_key: str,
+    compat_version: str,
+    optimizer_backend: str,
+    optuna_mod,
+    seed: int,
+    optuna_search_sig: str,
+    _cache_ready_preset,
+    _materialize_preset_result,
+    runtime=None,
+) -> dict | None:
+    context = _load_exact_cache_seed(
+        cache_base_data=cache_base_data,
+        measurements=measurements,
+        fs_v=int(fs_v),
+        taps_v=int(taps_v),
+        xos=xos,
+        hpf=hpf,
+        status_cb=status_cb,
+        cfg=cfg,
+        goal=str(goal),
+        filter_key=str(filter_key),
+        compat_version=str(compat_version),
+        optimizer_backend=str(optimizer_backend),
+        optuna_mod=optuna_mod,
+        seed=int(seed),
+        optuna_search_sig=str(optuna_search_sig),
+        _cache_ready_preset=_cache_ready_preset,
+        _materialize_preset_result=_materialize_preset_result,
+        runtime=runtime,
+    )
+    rounds = _run_cache_refine_rounds(context=context)
+    winner = _select_cache_refine_best(outcome=rounds)
+    return _finalize_cache_refine_result(outcome=winner)
+
+
+def _run_exact_cache_micro_refine_core(
     *,
     cache_base_data: dict,
     measurements: dict,
@@ -500,7 +644,156 @@ def run_exact_cache_micro_refine(
     return None
 
 
+def _run_phase1_search(
+    *,
+    search_base_data: dict,
+    measurements: dict,
+    fs_v: int,
+    taps_v: int,
+    xos: list,
+    hpf: dict | None,
+    hc_f,
+    hc_m,
+    pin_obj,
+    status_cb,
+    cfg,
+    goal: str,
+    filter_key: str,
+    optimizer_backend: str,
+    optuna_mod,
+    seed: int,
+    optuna_search_sig: str,
+    status_prefix: str,
+    winner_target_name: str | None,
+    search_state,
+    n_trials_eff: int,
+    candidates: list[dict],
+    prior_seed_preset: dict | None,
+    use_optuna_trials: bool,
+    runtime=None,
+) -> _SearchRefineContext:
+    return _SearchRefineContext(
+        params={
+            "search_base_data": dict(search_base_data or {}),
+            "measurements": dict(measurements or {}),
+            "fs_v": int(fs_v),
+            "taps_v": int(taps_v),
+            "xos": list(xos or []),
+            "hpf": hpf,
+            "hc_f": hc_f,
+            "hc_m": hc_m,
+            "pin_obj": pin_obj,
+            "status_cb": status_cb,
+            "cfg": cfg,
+            "goal": str(goal),
+            "filter_key": str(filter_key),
+            "optimizer_backend": str(optimizer_backend),
+            "optuna_mod": optuna_mod,
+            "seed": int(seed),
+            "optuna_search_sig": str(optuna_search_sig),
+            "status_prefix": str(status_prefix),
+            "winner_target_name": winner_target_name,
+            "search_state": search_state,
+            "n_trials_eff": int(n_trials_eff),
+            "candidates": list(candidates or []),
+            "prior_seed_preset": dict(prior_seed_preset or {}) if isinstance(prior_seed_preset, dict) else prior_seed_preset,
+            "use_optuna_trials": bool(use_optuna_trials),
+            "runtime": runtime,
+        }
+    )
+
+
+def _build_phase2_kept_pool(
+    *,
+    context: _SearchRefineContext,
+) -> _SearchRefineContext:
+    return context
+
+
+def _run_phase2_local_refine(
+    *,
+    context: _SearchRefineContext,
+) -> _SearchRefineContext:
+    return context
+
+
+def _run_phase3_micro_refine(
+    *,
+    context: _SearchRefineContext,
+) -> _SearchRefineSummary:
+    result = _run_search_refine_stages_core(**dict(context.params or {}))
+    return _SearchRefineSummary(result=dict(result or {}))
+
+
+def _assemble_refine_summary(
+    *,
+    summary: _SearchRefineSummary,
+) -> dict:
+    return dict(summary.result or {})
+
+
 def run_search_refine_stages(
+    *,
+    search_base_data: dict,
+    measurements: dict,
+    fs_v: int,
+    taps_v: int,
+    xos: list,
+    hpf: dict | None,
+    hc_f,
+    hc_m,
+    pin_obj,
+    status_cb,
+    cfg,
+    goal: str,
+    filter_key: str,
+    optimizer_backend: str,
+    optuna_mod,
+    seed: int,
+    optuna_search_sig: str,
+    status_prefix: str,
+    winner_target_name: str | None,
+    search_state,
+    n_trials_eff: int,
+    candidates: list[dict],
+    prior_seed_preset: dict | None,
+    use_optuna_trials: bool,
+    runtime=None,
+) -> dict:
+    phase1 = _run_phase1_search(
+        search_base_data=search_base_data,
+        measurements=measurements,
+        fs_v=int(fs_v),
+        taps_v=int(taps_v),
+        xos=xos,
+        hpf=hpf,
+        hc_f=hc_f,
+        hc_m=hc_m,
+        pin_obj=pin_obj,
+        status_cb=status_cb,
+        cfg=cfg,
+        goal=str(goal),
+        filter_key=str(filter_key),
+        optimizer_backend=str(optimizer_backend),
+        optuna_mod=optuna_mod,
+        seed=int(seed),
+        optuna_search_sig=str(optuna_search_sig),
+        status_prefix=str(status_prefix),
+        winner_target_name=winner_target_name,
+        search_state=search_state,
+        n_trials_eff=int(n_trials_eff),
+        candidates=list(candidates or []),
+        prior_seed_preset=prior_seed_preset,
+        use_optuna_trials=bool(use_optuna_trials),
+        runtime=runtime,
+    )
+    phase2 = _build_phase2_kept_pool(context=phase1)
+    phase2_local = _run_phase2_local_refine(context=phase2)
+    phase3 = _run_phase3_micro_refine(context=phase2_local)
+    return _assemble_refine_summary(summary=phase3)
+
+
+def _run_search_refine_stages_core(
     *,
     search_base_data: dict,
     measurements: dict,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -75,6 +76,32 @@ from ..dsp.target_synthesis import synthesize_target_from_measurements
 
 logger = logging.getLogger("CamillaFIR")
 __all__ = ["select_target_curve_with_trials"]
+
+
+@dataclass(slots=True)
+class _TargetEvalMaterialization:
+    tc: dict
+    hc_name: str
+
+
+@dataclass(slots=True)
+class _TargetEvalSummary:
+    item: dict | None = None
+    best_metrics: dict = field(default_factory=dict)
+    best_preset: dict = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class _TargetSelectionContext:
+    params: dict
+
+
+@dataclass(slots=True)
+class _TargetSelectionOutcome:
+    result: dict | None = None
+    candidates: list[dict] = field(default_factory=list)
+    evaluated: list[dict] = field(default_factory=list)
+    winner: dict | None = None
 
 
 def select_target_curve_with_trials(
@@ -480,7 +507,143 @@ def _run_target_trials(
     ]
 
 
+def _materialize_target_candidate(*, tc: dict) -> _TargetEvalMaterialization:
+    tc_dict = dict(tc or {})
+    return _TargetEvalMaterialization(
+        tc=tc_dict,
+        hc_name=str(tc_dict.get("hc_mode", "") or "").strip(),
+    )
+
+
+def _run_target_eval_trials(
+    *,
+    materialized: _TargetEvalMaterialization,
+    runtime,
+    cfg,
+    base_data: dict,
+    measurements: dict,
+    fs_v: int,
+    taps_v: int,
+    xos: list,
+    hpf: dict | None,
+    pin_obj,
+    goal: str,
+    filter_key: str,
+    optimizer_backend: str,
+    optuna_mod,
+    seed_target: int,
+    target_study_sig: str,
+    trials_eff: int,
+    shortlisted: list[dict],
+    status_cb,
+    f6_txt: str,
+    t_idx: int,
+    emit_status: bool,
+    curve_inner_workers: int | None,
+) -> dict | None:
+    if not bool(materialized.hc_name):
+        return None
+    return _run_target_eval_trials_core(
+        runtime=runtime,
+        cfg=cfg,
+        base_data=base_data,
+        measurements=measurements,
+        fs_v=int(fs_v),
+        taps_v=int(taps_v),
+        xos=xos,
+        hpf=hpf,
+        pin_obj=pin_obj,
+        goal=goal,
+        filter_key=filter_key,
+        optimizer_backend=optimizer_backend,
+        optuna_mod=optuna_mod,
+        seed_target=int(seed_target),
+        target_study_sig=str(target_study_sig),
+        trials_eff=int(trials_eff),
+        shortlisted=list(shortlisted or []),
+        status_cb=status_cb,
+        f6_txt=str(f6_txt),
+        tc=dict(materialized.tc or {}),
+        t_idx=int(t_idx),
+        emit_status=bool(emit_status),
+        curve_inner_workers=curve_inner_workers,
+    )
+
+
+def _summarize_target_eval(*, trial_result: dict | None) -> _TargetEvalSummary:
+    if not isinstance(trial_result, dict):
+        return _TargetEvalSummary()
+    item = dict(trial_result or {})
+    return _TargetEvalSummary(
+        item=item,
+        best_metrics=dict(item.get("best_metrics", {}) or {}),
+        best_preset=dict(item.get("best_preset", {}) or {}),
+    )
+
+
+def _build_target_eval_result(*, summary: _TargetEvalSummary) -> dict | None:
+    if not isinstance(summary.item, dict):
+        return None
+    return dict(summary.item)
+
+
 def _evaluate_target_curve(
+    *,
+    runtime,
+    cfg,
+    base_data: dict,
+    measurements: dict,
+    fs_v: int,
+    taps_v: int,
+    xos: list,
+    hpf: dict | None,
+    pin_obj,
+    goal: str,
+    filter_key: str,
+    optimizer_backend: str,
+    optuna_mod,
+    seed_target: int,
+    target_study_sig: str,
+    trials_eff: int,
+    shortlisted: list[dict],
+    status_cb,
+    f6_txt: str,
+    tc: dict,
+    t_idx: int,
+    emit_status: bool,
+    curve_inner_workers: int | None,
+) -> dict | None:
+    materialized = _materialize_target_candidate(tc=dict(tc or {}))
+    trial_result = _run_target_eval_trials(
+        materialized=materialized,
+        runtime=runtime,
+        cfg=cfg,
+        base_data=base_data,
+        measurements=measurements,
+        fs_v=int(fs_v),
+        taps_v=int(taps_v),
+        xos=xos,
+        hpf=hpf,
+        pin_obj=pin_obj,
+        goal=goal,
+        filter_key=filter_key,
+        optimizer_backend=optimizer_backend,
+        optuna_mod=optuna_mod,
+        seed_target=int(seed_target),
+        target_study_sig=str(target_study_sig),
+        trials_eff=int(trials_eff),
+        shortlisted=list(shortlisted or []),
+        status_cb=status_cb,
+        f6_txt=str(f6_txt),
+        t_idx=int(t_idx),
+        emit_status=bool(emit_status),
+        curve_inner_workers=curve_inner_workers,
+    )
+    summary = _summarize_target_eval(trial_result=trial_result)
+    return _build_target_eval_result(summary=summary)
+
+
+def _run_target_eval_trials_core(
     *,
     runtime,
     cfg,
@@ -946,7 +1109,119 @@ def _evaluate_target_curve(
     }
 
 
+def _resolve_target_cache_seed(
+    *,
+    base_data: dict,
+    measurements: dict,
+    fs_v: int,
+    taps_v: int,
+    xos: list,
+    hpf: dict | None,
+    pin_obj,
+    status_cb=None,
+    top_n: int = AUTO_MODE_TARGET_TOP_N,
+    trials_per_curve: int = AUTO_MODE_TARGET_TRIALS_PER_CURVE,
+    runtime=None,
+) -> _TargetSelectionContext:
+    return _TargetSelectionContext(
+        params={
+            "base_data": dict(base_data or {}),
+            "measurements": dict(measurements or {}),
+            "fs_v": int(fs_v),
+            "taps_v": int(taps_v),
+            "xos": list(xos or []),
+            "hpf": hpf,
+            "pin_obj": pin_obj,
+            "status_cb": status_cb,
+            "top_n": int(top_n),
+            "trials_per_curve": int(trials_per_curve),
+            "runtime": runtime,
+        }
+    )
+
+
+def _build_target_candidate_list(
+    *,
+    context: _TargetSelectionContext,
+) -> _TargetSelectionContext:
+    return context
+
+
+def _run_target_shortlist_trials(
+    *,
+    context: _TargetSelectionContext,
+) -> _TargetSelectionOutcome:
+    result = _select_target_curve_with_trials_core(**dict(context.params or {}))
+    result_dict = dict(result or {}) if isinstance(result, dict) else None
+    return _TargetSelectionOutcome(
+        result=result_dict,
+        candidates=list((result_dict or {}).get("candidates", []) or []),
+        evaluated=list((result_dict or {}).get("evaluated", []) or []),
+    )
+
+
+def _choose_target_winner(
+    *,
+    outcome: _TargetSelectionOutcome,
+) -> _TargetSelectionOutcome:
+    result_dict = dict(outcome.result or {}) if isinstance(outcome.result, dict) else None
+    winner = None
+    if isinstance(result_dict, dict):
+        winner = {
+            "hc_mode": str(result_dict.get("selected_hc_mode", "") or "").strip(),
+            "best_preset": dict(result_dict.get("best_preset", {}) or {}),
+        }
+    return _TargetSelectionOutcome(
+        result=result_dict,
+        candidates=list(outcome.candidates or []),
+        evaluated=list(outcome.evaluated or []),
+        winner=winner,
+    )
+
+
+def _finalize_target_selection_metadata(
+    *,
+    outcome: _TargetSelectionOutcome,
+) -> dict | None:
+    if not isinstance(outcome.result, dict):
+        return None
+    return dict(outcome.result or {})
+
+
 def _select_target_curve_with_trials_impl(
+    *,
+    base_data: dict,
+    measurements: dict,
+    fs_v: int,
+    taps_v: int,
+    xos: list,
+    hpf: dict | None,
+    pin_obj,
+    status_cb=None,
+    top_n: int = AUTO_MODE_TARGET_TOP_N,
+    trials_per_curve: int = AUTO_MODE_TARGET_TRIALS_PER_CURVE,
+    runtime=None,
+) -> dict | None:
+    context = _resolve_target_cache_seed(
+        base_data=base_data,
+        measurements=measurements,
+        fs_v=int(fs_v),
+        taps_v=int(taps_v),
+        xos=xos,
+        hpf=hpf,
+        pin_obj=pin_obj,
+        status_cb=status_cb,
+        top_n=int(top_n),
+        trials_per_curve=int(trials_per_curve),
+        runtime=runtime,
+    )
+    shortlisted = _build_target_candidate_list(context=context)
+    evaluated = _run_target_shortlist_trials(context=shortlisted)
+    winner = _choose_target_winner(outcome=evaluated)
+    return _finalize_target_selection_metadata(outcome=winner)
+
+
+def _select_target_curve_with_trials_core(
     *,
     base_data: dict,
     measurements: dict,

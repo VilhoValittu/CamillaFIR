@@ -8,6 +8,7 @@ import logging
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -1462,7 +1463,148 @@ def _auto_optuna_objective_value(metrics: dict | None, *, use_refine_tiebreak: b
         return float(value)
     return 0.0
 
+
+@dataclass(slots=True)
+class _OptunaEvalContext:
+    params: dict
+    total: int
+    workers: int
+    phase_label: str
+
+
+@dataclass(slots=True)
+class _OptunaEvalState:
+    context: _OptunaEvalContext
+    telemetry: dict = field(default_factory=dict)
+
+
+def _prepare_optuna_eval_context(
+    *,
+    optuna_mod,
+    cfg: AutoModeConfig | None = None,
+    n_total: int,
+    seed: int,
+    startup_trials: int | None = None,
+    base_data: dict | None,
+    seed_presets: list[dict] | None,
+    build_preset,
+    eval_one,
+    consume_one,
+    objective_value,
+    workers: int,
+    seed_to_params=None,
+    study_name: str | None = None,
+    study_scope: str | None = None,
+    phase_label: str | None = None,
+    phase_kind: str | None = None,
+) -> _OptunaEvalContext:
+    return _OptunaEvalContext(
+        params={
+            "optuna_mod": optuna_mod,
+            "cfg": cfg,
+            "n_total": int(n_total),
+            "seed": int(seed),
+            "startup_trials": startup_trials,
+            "base_data": dict(base_data or {}) if isinstance(base_data, dict) else base_data,
+            "seed_presets": list(seed_presets or []) if seed_presets is not None else None,
+            "build_preset": build_preset,
+            "eval_one": eval_one,
+            "consume_one": consume_one,
+            "objective_value": objective_value,
+            "workers": int(workers),
+            "seed_to_params": seed_to_params,
+            "study_name": study_name,
+            "study_scope": study_scope,
+            "phase_label": phase_label,
+            "phase_kind": phase_kind,
+        },
+        total=int(max(0, n_total)),
+        workers=int(workers),
+        phase_label=str(phase_label or study_scope or study_name or "optuna"),
+    )
+
+
+def _submit_or_schedule_trials(
+    *,
+    context: _OptunaEvalContext,
+) -> _OptunaEvalState:
+    telemetry = _auto_run_optuna_eval_loop_core(**dict(context.params or {}))
+    return _OptunaEvalState(
+        context=context,
+        telemetry=dict(telemetry or {}),
+    )
+
+
+def _consume_completed_trial(
+    *,
+    state: _OptunaEvalState,
+) -> _OptunaEvalState:
+    return state
+
+
+def _update_best_and_telemetry(
+    *,
+    state: _OptunaEvalState,
+) -> _OptunaEvalState:
+    return _OptunaEvalState(
+        context=state.context,
+        telemetry=dict(state.telemetry or {}),
+    )
+
+
+def _finalize_optuna_eval_loop(
+    *,
+    state: _OptunaEvalState,
+) -> dict:
+    return dict(state.telemetry or {})
+
+
 def _auto_run_optuna_eval_loop(
+    *,
+    optuna_mod,
+    cfg: AutoModeConfig | None = None,
+    n_total: int,
+    seed: int,
+    startup_trials: int | None = None,
+    base_data: dict | None,
+    seed_presets: list[dict] | None,
+    build_preset,
+    eval_one,
+    consume_one,
+    objective_value,
+    workers: int,
+    seed_to_params=None,
+    study_name: str | None = None,
+    study_scope: str | None = None,
+    phase_label: str | None = None,
+    phase_kind: str | None = None,
+) -> dict:
+    context = _prepare_optuna_eval_context(
+        optuna_mod=optuna_mod,
+        cfg=cfg,
+        n_total=int(n_total),
+        seed=int(seed),
+        startup_trials=startup_trials,
+        base_data=base_data,
+        seed_presets=seed_presets,
+        build_preset=build_preset,
+        eval_one=eval_one,
+        consume_one=consume_one,
+        objective_value=objective_value,
+        workers=int(workers),
+        seed_to_params=seed_to_params,
+        study_name=study_name,
+        study_scope=study_scope,
+        phase_label=phase_label,
+        phase_kind=phase_kind,
+    )
+    scheduled = _submit_or_schedule_trials(context=context)
+    consumed = _consume_completed_trial(state=scheduled)
+    telemetry = _update_best_and_telemetry(state=consumed)
+    return _finalize_optuna_eval_loop(state=telemetry)
+
+
+def _auto_run_optuna_eval_loop_core(
     *,
     optuna_mod,
     cfg: AutoModeConfig | None = None,
