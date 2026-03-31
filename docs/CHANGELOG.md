@@ -4,6 +4,24 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [4.0.2] - 2026-03-31
+
+### Target preview / Manual mode
+- Added direct Manual-mode target dragging in the Target tab preview, so the displayed target curve can be moved vertically with the mouse to update the manual target level.
+- Added a dedicated Manual target tilt control using a fixed `1 kHz` pivot, allowing the target curve shape to be tilted intentionally instead of only shifted up/down.
+- Added a dedicated right-side tilt handle in the preview so Manual target tilt can also be adjusted with the mouse.
+- Added preview-side legend/readout entries for both `Manual level` and `Manual tilt` to make the current manual target settings visible at a glance.
+
+### Config / Runtime
+- Kept manual target level and manual target tilt as explicit source-of-truth settings, so preview interaction, saved config, and runtime target loading stay aligned.
+- Applied Manual target tilt consistently to preview and runtime house-curve loading, instead of leaving it as a visual-only preview effect.
+
+### Docs & Tests
+- Updated README release notes and version references for `4.0.2`.
+- Added regression coverage for manual target tilt transforms and preview interaction parsing.
+
+---
+
 ## [4.0.1] - 2026-03-31
 
 ### Automatic mode

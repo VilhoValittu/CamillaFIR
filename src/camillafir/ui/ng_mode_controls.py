@@ -253,7 +253,8 @@ def _build_taps_auto_info_markdown(*, multi_rate: bool, base_taps: int, t: Calla
 
 _AUTO_LOCKED_FIELDS = [
     "comparison_mode", "gain", "lvl_algo", "lvl_min", "lvl_max",
-    "lvl_mode", "lvl_manual_db", "mag_correct", "mag_c_min", "mag_c_max",
+    "lvl_mode", "lvl_manual_db", "manual_target_tilt_db_per_oct",
+    "mag_correct", "mag_c_min", "mag_c_max",
     "max_boost", "bass_first_ai", "bass_first_mode_max_hz",
     "max_slope_db_per_oct", "max_slope_boost_db_per_oct",
     "max_slope_cut_db_per_oct", "trans_width", "filter_smooth",

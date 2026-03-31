@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v4.0.1
+## v4.0.2
 
 Stable release - feedback welcome: camillafir.py@gmail.com
 
@@ -9,6 +9,12 @@ CamillaFIR generates high-resolution FIR room-correction filters from REW export
 
 CamillaFIR is a recommended filter creation tool for CamillaDSP and is listed in the official CamillaDSP README under
 [Measurement and filter generation tools](https://github.com/HEnquist/camilladsp?tab=readme-ov-file#measurement-and-filter-generation-tools).
+
+## v4.0.2 Highlights - Manual target preview interaction
+
+- **Direct Manual target dragging:** in Target tab Manual mode, the target curve can now be dragged vertically in the preview to adjust manual target level directly.
+- **Manual target tilt control:** Manual mode now includes a dedicated target tilt control around a fixed **1 kHz pivot**, so target shape can be tilted intentionally instead of only shifted up/down.
+- **Mouse-adjustable tilt handle:** the preview now exposes a dedicated right-side tilt handle and legend readouts for both **Manual level** and **Manual tilt**, making manual target shaping much easier to inspect.
 
 ## v4.0.1 Highlights - AUTO mode speed-up
 

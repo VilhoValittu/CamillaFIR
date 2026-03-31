@@ -3,6 +3,49 @@
 import numpy as np
 from ..common.house_curves import _normalize_hc_mode_key, get_house_curve_by_name
 
+MANUAL_TARGET_TILT_PIVOT_HZ = 1000.0
+
+
+def apply_manual_target_curve_tilt(
+    freq_axis,
+    target_curve,
+    tilt_db_per_oct: float,
+    *,
+    pivot_hz: float = MANUAL_TARGET_TILT_PIVOT_HZ,
+):
+    """Apply a broadband manual target tilt around a fixed pivot frequency."""
+    target_arr = np.asarray(target_curve, dtype=float)
+    try:
+        freq_arr = np.asarray(freq_axis, dtype=float)
+    except Exception:
+        return target_arr
+
+    if target_arr.shape != freq_arr.shape:
+        return target_arr
+
+    try:
+        slope = float(tilt_db_per_oct)
+    except Exception:
+        slope = 0.0
+    if not np.isfinite(slope) or abs(slope) <= 1e-9:
+        return target_arr
+
+    try:
+        pivot = float(pivot_hz)
+    except Exception:
+        pivot = MANUAL_TARGET_TILT_PIVOT_HZ
+    if not np.isfinite(pivot) or pivot <= 0.0:
+        pivot = MANUAL_TARGET_TILT_PIVOT_HZ
+
+    positive_freqs = freq_arr[np.isfinite(freq_arr) & (freq_arr > 0.0)]
+    if positive_freqs.size > 0:
+        floor_hz = float(np.min(positive_freqs))
+    else:
+        floor_hz = float(pivot)
+    safe_freqs = np.where(np.isfinite(freq_arr) & (freq_arr > 0.0), freq_arr, floor_hz)
+    return target_arr + (float(slope) * np.log2(float(pivot) / safe_freqs))
+
+
 def load_target_curve(file_content: bytes):
     """Lataa tai lukee: load target curve."""
     try:
@@ -47,10 +90,12 @@ def load_house_curve(data: dict, *, parse_measurements_from_path=None):
     # Synthesized adaptive target: arrays are stored in data by the pipeline
     if mode_key == "Adaptive" and data.get("_synth_hc_f") is not None:
         try:
-            hc_f = np.asarray(data["_synth_hc_f"], dtype=float)
-            hc_m = np.asarray(data["_synth_hc_m"], dtype=float)
-            if hc_f.size >= 4 and hc_m.size == hc_f.size:
-                return hc_f, hc_m, "Adaptive"
+            synth_f = np.asarray(data["_synth_hc_f"], dtype=float)
+            synth_m = np.asarray(data["_synth_hc_m"], dtype=float)
+            if synth_f.size >= 4 and synth_m.size == synth_f.size:
+                hc_f = synth_f
+                hc_m = synth_m
+                hc_source = "Adaptive"
         except Exception:
             pass
 
@@ -91,5 +136,16 @@ def load_house_curve(data: dict, *, parse_measurements_from_path=None):
         if hc_source == "Preset":
             hc_source = f"Preset ({preset_key})"
 
+
+    try:
+        lvl_mode = str(data.get("lvl_mode", "Auto") or "Auto").strip().lower()
+    except Exception:
+        lvl_mode = "auto"
+    if hc_f is not None and hc_m is not None and "manual" in lvl_mode:
+        hc_m = apply_manual_target_curve_tilt(
+            hc_f,
+            hc_m,
+            data.get("manual_target_tilt_db_per_oct", 0.0),
+        )
 
     return hc_f, hc_m, hc_source

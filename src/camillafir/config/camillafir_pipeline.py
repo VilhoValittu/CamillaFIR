@@ -36,6 +36,7 @@ _AUTO_MODE_DEFAULT_CFG_TO_UI = {
     "max_slope_boost_db_per_oct": "max_slope_boost_db_per_oct",
     "max_slope_cut_db_per_oct": "max_slope_cut_db_per_oct",
     "lvl_manual_db": "lvl_manual_db",
+    "manual_target_tilt_db_per_oct": "manual_target_tilt_db_per_oct",
     "lvl_min": "lvl_min",
     "lvl_max": "lvl_max",
     "conf_pull_floor": "conf_pull_floor",
@@ -81,6 +82,7 @@ def _apply_auto_mode_managed_settings(data: Dict[str, Any]) -> None:
         "lvl_mode": "Auto",
         "lvl_algo": "Median",
         "lvl_manual_db": 0.0,
+        "manual_target_tilt_db_per_oct": 0.0,
         "normalize_opt": False,
         "align_opt": True,
         "unsafe_raw_dsp": False,
@@ -115,6 +117,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_window_right", "ir_export_window_mode", "ir_window_mode",
         "ir_export_window_shape", "ir_export_tukey_alpha",
         "local_path_l", "local_path_r", "fmt", "layout", "lvl_manual_db",
+        "manual_target_tilt_db_per_oct",
         "lvl_min", "lvl_max", "lvl_algo", "fdw_cycles",
         "trans_width", "smoothing_level", "filter_smooth", "plot_smoothing_level",
         "bass_smooth_adaptive", "bass_smooth_hz", "bass_smooth_sigma_scale", "bass_smooth_conf_floor",
@@ -269,6 +272,11 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         data["lvl_manual_db"] = v if math.isfinite(v) else 0.0
     except Exception:
         data["lvl_manual_db"] = 0.0
+    try:
+        v = float(data.get("manual_target_tilt_db_per_oct", 0.0) or 0.0)
+        data["manual_target_tilt_db_per_oct"] = v if math.isfinite(v) else 0.0
+    except Exception:
+        data["manual_target_tilt_db_per_oct"] = 0.0
 
     try:
         data["gain"] = max(0.0, float(data.get("gain", 0.0) or 0.0))
@@ -710,6 +718,7 @@ def build_filter_config(
         filter_smooth=int(filter_smooth),
         fdw_cycles=data["fdw_cycles"],
         lvl_manual_db=data["lvl_manual_db"],
+        manual_target_tilt_db_per_oct=data["manual_target_tilt_db_per_oct"],
         lvl_min=data["lvl_min"],
         lvl_max=data["lvl_max"],
         lvl_algo=data["lvl_algo"],

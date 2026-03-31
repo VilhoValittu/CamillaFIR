@@ -107,6 +107,7 @@ class FilterConfig:
     lvl_mode: str = "Auto"
     lvl_algo: str = "Median"
     lvl_manual_db: float = 0.0
+    manual_target_tilt_db_per_oct: float = 0.0
     lvl_min: float = 200.0
     lvl_max: float = 3000.0
     stereo_link: bool = False

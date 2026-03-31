@@ -69,6 +69,7 @@ def load_config() -> dict:
         "lvl_mode": "Auto",
         "lvl_algo": "Median",
         "lvl_manual_db": 0.0,
+        "manual_target_tilt_db_per_oct": 0.0,
         "lvl_min": 300.0,
         "lvl_max": 3000.0,
         "normalize_opt": False,

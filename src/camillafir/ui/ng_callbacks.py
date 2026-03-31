@@ -106,6 +106,7 @@ def _register_lvl_callbacks(*, t: Callable) -> None:
     for field in ("lvl_min", "lvl_max"):
         ctrl.on_change(field, _on_lvl_range)
     ctrl.on_change("lvl_manual_db", lambda v: _update_target_preview())
+    ctrl.on_change("manual_target_tilt_db_per_oct", lambda v: _update_target_preview())
 
 
 def _register_ir_window_callbacks(*, t: Callable) -> None:

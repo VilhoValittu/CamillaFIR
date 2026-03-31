@@ -7,7 +7,18 @@ from __future__ import annotations
 from typing import Callable
 
 from . import ng_controls as ctrl
-from .target_preview_common import apply_manual_target_preview_shift
+from .target_preview_common import apply_manual_target_preview_adjustments
+from .target_preview_interaction import (
+    build_draggable_tilt_handle_shape,
+    build_draggable_target_shape,
+    build_level_window_trace,
+    build_target_curve_path,
+    build_tilt_handle_path,
+    build_vertical_marker_trace,
+    extract_target_tilt_from_shape_relayout,
+    extract_vertical_shift_from_shape_relayout,
+    parse_svg_path_points,
+)
 
 _HC_OPTS = {
     "Harman6":   "Harman 6 dB",
@@ -28,6 +39,11 @@ _HC_OPTS = {
     "Upload":    "Upload Custom",
 }
 
+_TARGET_PREVIEW_REFRESH_TOKEN = 0
+_TARGET_PREVIEW_DRAG_BASE_POINTS: list[tuple[float, float]] = []
+_TARGET_PREVIEW_TILT_HANDLE_POINTS: list[tuple[float, float]] = []
+_TARGET_PREVIEW_DRAG_ACTIVE = False
+
 
 def _step_manual_target(delta_db: float) -> None:
     try:
@@ -37,6 +53,17 @@ def _step_manual_target(delta_db: float) -> None:
 
     nxt = round((float(cur) + float(delta_db)) * 10.0) / 10.0
     ctrl.set_value("lvl_manual_db", float(nxt))
+    refresh_target_preview()
+
+
+def _step_manual_target_tilt(delta_db_per_oct: float) -> None:
+    try:
+        cur = float(ctrl.value("manual_target_tilt_db_per_oct", 0.0) or 0.0)
+    except Exception:
+        cur = 0.0
+
+    nxt = round((float(cur) + float(delta_db_per_oct)) * 10.0) / 10.0
+    ctrl.set_value("manual_target_tilt_db_per_oct", float(nxt))
     refresh_target_preview()
 
 
@@ -160,8 +187,28 @@ def build_target_tab(*, t: Callable, get_val: Callable) -> None:
                     "-",
                     on_click=lambda: _step_manual_target(-0.1),
                 ).props('color="secondary" outline').style("min-width:34px;")
+            with ui.row().classes("w-full gap-2 items-end"):
+                ctrl.register(
+                    "manual_target_tilt_db_per_oct",
+                    ui.number(
+                        label=t("manual_target_tilt"),
+                        value=float(get_val("manual_target_tilt_db_per_oct", 0.0) or 0.0),
+                        format="%.1f",
+                    ).props("dense outlined step=0.1").classes("flex-1"),
+                )
+                ui.button(
+                    "+",
+                    on_click=lambda: _step_manual_target_tilt(+0.1),
+                ).props('color="secondary" outline').style("min-width:34px;")
+                ui.button(
+                    "-",
+                    on_click=lambda: _step_manual_target_tilt(-0.1),
+                ).props('color="secondary" outline').style("min-width:34px;")
             ui.label(t("lvl_manual_help")).classes("text-xs text-gray-400")
+            ui.label(t("manual_target_tilt_help")).classes("text-xs text-gray-400")
             ui.label(t("lvl_manual_bias_hint")).classes("text-xs text-gray-400")
+            ui.label(t("lvl_manual_drag_hint_curve")).classes("text-xs text-gray-400")
+            ui.label(t("manual_target_tilt_drag_hint")).classes("text-xs text-gray-400")
         lvl_manual_col.set_visibility(False)
 
     ui.separator()
@@ -209,22 +256,89 @@ def refresh_target_preview() -> None:
 
     Reads values from ng_controls instead of PyWebIO pin.
     """
+    global _TARGET_PREVIEW_DRAG_ACTIVE, _TARGET_PREVIEW_DRAG_BASE_POINTS, _TARGET_PREVIEW_TILT_HANDLE_POINTS
+
     preview_col = ctrl.get_container("target_preview_scope")
     if preview_col is None:
         return
 
-    fig = _build_target_preview_fig()
+    fig, drag_base_points, tilt_handle_points = _build_target_preview_fig()
+    _TARGET_PREVIEW_DRAG_BASE_POINTS = drag_base_points
+    _TARGET_PREVIEW_TILT_HANDLE_POINTS = tilt_handle_points
     preview_col.clear()
     if fig is not None:
         from nicegui import ui  # noqa: PLC0415
+
         with preview_col:
-            ui.plotly(fig).classes("w-full")
+            plot = ui.plotly(fig).classes("w-full")
+            plot.on("plotly_relayout", _on_target_preview_relayout)
+    _TARGET_PREVIEW_DRAG_ACTIVE = False
+
+
+def _schedule_target_preview_refresh(delay_s: float = 0.10) -> None:
+    global _TARGET_PREVIEW_REFRESH_TOKEN
+
+    preview_col = ctrl.get_container("target_preview_scope")
+    if preview_col is None:
+        return
+
+    _TARGET_PREVIEW_REFRESH_TOKEN += 1
+    token = _TARGET_PREVIEW_REFRESH_TOKEN
+
+    from nicegui import ui  # noqa: PLC0415
+
+    def _run() -> None:
+        global _TARGET_PREVIEW_DRAG_ACTIVE
+
+        if token != _TARGET_PREVIEW_REFRESH_TOKEN:
+            return
+        try:
+            refresh_target_preview()
+        finally:
+            _TARGET_PREVIEW_DRAG_ACTIVE = False
+
+    with preview_col:
+        ui.timer(delay_s, _run, once=True, immediate=False)
+
+
+def _on_target_preview_relayout(e) -> None:
+    global _TARGET_PREVIEW_DRAG_ACTIVE
+
+    app_mode = str(ctrl.value("mode", "BASIC") or "BASIC").upper()
+    lvl_mode = str(ctrl.value("lvl_mode", "Auto") or "Auto").strip().lower()
+    if app_mode in ("BASIC", "AUTO") or lvl_mode != "manual":
+        return
+
+    payload = getattr(e, "args", None)
+    if not isinstance(payload, dict):
+        return
+
+    new_tilt = extract_target_tilt_from_shape_relayout(
+        payload,
+        _TARGET_PREVIEW_TILT_HANDLE_POINTS,
+    )
+    if new_tilt is not None:
+        _TARGET_PREVIEW_DRAG_ACTIVE = True
+        ctrl.set_value("manual_target_tilt_db_per_oct", new_tilt, emit=False)
+        _schedule_target_preview_refresh()
+        return
+
+    new_db = extract_vertical_shift_from_shape_relayout(
+        payload,
+        _TARGET_PREVIEW_DRAG_BASE_POINTS,
+    )
+    if new_db is None:
+        return
+
+    _TARGET_PREVIEW_DRAG_ACTIVE = True
+    ctrl.set_value("lvl_manual_db", new_db, emit=False)
+    _schedule_target_preview_refresh()
 
 
 def _build_target_preview_fig():
     """Build the target curve preview Plotly figure from current ctrl values.
 
-    Returns a plotly Figure or None on failure.
+    Returns a Plotly dict plus the base points of the draggable target curve and tilt handle.
     """
     try:
         import math  # noqa: PLC0415
@@ -245,6 +359,8 @@ def _build_target_preview_fig():
             load_house_curve,
             load_target_curve,
         )
+
+        global _TARGET_PREVIEW_DRAG_ACTIVE
 
         def _cv(name, default=None):
             return ctrl.value(name, default)
@@ -294,7 +410,9 @@ def _build_target_preview_fig():
             lvl_mode = "Auto"
         is_manual_level = "manual" in lvl_mode.strip().lower()
         lvl_manual_db = _to_float(_cv("lvl_manual_db", 0.0), 0.0)
+        manual_target_tilt_db_per_oct = _to_float(_cv("manual_target_tilt_db_per_oct", 0.0), 0.0)
         preview_level_shift_db = lvl_manual_db if is_manual_level else 0.0
+        preview_manual_target_tilt_db_per_oct = manual_target_tilt_db_per_oct if is_manual_level else 0.0
         pre_ms = _to_float(_cv("ir_window_left", 85.0), 85.0)
         post_ms = _to_float(_cv("ir_window_right") or _cv("ir_window", 500.0), 500.0)
         smoothing_level = int(float(_cv("filter_smooth", _cv("smoothing_level", 0)) or 0))
@@ -325,7 +443,7 @@ def _build_target_preview_fig():
                 target_curve = np.interp(freq_axis, hc_f, hc_m, left=hc_m[0], right=hc_m[-1])
 
         if target_curve is None:
-            return None
+            return None, [], []
 
         # AUTO mode forced level window
         if app_mode in ("BASIC", "AUTO"):
@@ -386,18 +504,60 @@ def _build_target_preview_fig():
                 m_aligned = _align(m_interp, target_curve, freq_axis, lvl_min, lvl_max)
                 speaker_interp[ch] = _smooth_for_preview(freq_axis, m_aligned)
 
-        target_curve_display = apply_manual_target_preview_shift(
+        target_curve_display = apply_manual_target_preview_adjustments(
+            freq_axis,
             target_curve,
             preview_level_shift_db,
+            preview_manual_target_tilt_db_per_oct,
         )
+        target_curve_path = build_target_curve_path(freq_axis, target_curve_display)
+        drag_base_points = []
+        tilt_handle_points = []
+        if is_manual_level and target_curve_path:
+            drag_base_points = [
+                (float(x), float(y))
+                for x, y in zip(freq_axis, target_curve_display)
+                if math.isfinite(float(x)) and math.isfinite(float(y))
+            ]
+            tilt_handle_y = float(np.interp(16000.0, freq_axis, target_curve_display))
+            tilt_handle_points = parse_svg_path_points(build_tilt_handle_path(tilt_handle_y))
 
         # --- build figure ---
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=freq_axis, y=target_curve_display, mode="lines",
+        fig.add_trace(build_level_window_trace(lvl_min, lvl_max))
+        fig.add_trace(build_vertical_marker_trace(mag_c_min))
+        fig.add_trace(build_vertical_marker_trace(mag_c_max))
+
+        target_trace = dict(
+            x=freq_axis,
+            y=target_curve_display,
+            mode="lines",
             name=f"Target ({hc_mode_raw})",
             line=dict(color="#4caf50", width=2.0),
-        ))
+        )
+        if is_manual_level:
+            target_trace["opacity"] = 0.45
+            target_trace["hoverinfo"] = "skip"
+        fig.add_trace(go.Scatter(**target_trace))
+        if is_manual_level:
+            fig.add_trace(go.Scatter(
+                x=[freq_axis[0], freq_axis[-1]],
+                y=[lvl_manual_db, lvl_manual_db],
+                mode="lines",
+                name=f"Manual level ({lvl_manual_db:+.1f} dB)",
+                line=dict(color="rgba(255,255,255,0.70)", width=1.2, dash="dot"),
+                hoverinfo="skip",
+                visible="legendonly",
+            ))
+            fig.add_trace(go.Scatter(
+                x=[freq_axis[0], freq_axis[-1]],
+                y=[0.0, 0.0],
+                mode="lines",
+                name=f"Manual tilt ({manual_target_tilt_db_per_oct:+.1f} dB/oct @ 1 kHz)",
+                line=dict(color="#f4a261", width=1.8, dash="dot"),
+                hoverinfo="skip",
+                visible="legendonly",
+            ))
         if "L" in speaker_interp:
             fig.add_trace(go.Scatter(
                 x=freq_axis, y=speaker_interp["L"], mode="lines",
@@ -414,19 +574,37 @@ def _build_target_preview_fig():
                 x=freq_axis, y=avg, mode="lines",
                 name="Speaker avg", line=dict(color="#ffd166", width=2.0),
             ))
-        fig.add_vrect(x0=max(1.0, lvl_min), x1=max(1.0, lvl_max),
-                      fillcolor="rgba(180,180,180,0.16)", line_width=0, layer="below")
-        fig.add_vline(x=max(1.0, mag_c_min), line_width=1, opacity=0.35)
-        fig.add_vline(x=max(1.0, mag_c_max), line_width=1, opacity=0.35)
         fig.update_xaxes(type="log", title_text="Hz",
                          range=[math.log10(10.0), math.log10(20000.0)], fixedrange=True)
         fig.update_yaxes(title_text="dB", range=[-10.0, 20.0], fixedrange=True)
         fig.update_layout(height=320, margin=dict(l=40, r=20, t=30, b=35),
                           showlegend=True, template="plotly_dark",
                           uirevision="target_preview_lock")
-        return fig
+        if is_manual_level and target_curve_path:
+            drag_shape = build_draggable_target_shape(freq_axis, target_curve_display)
+            drag_shape["path"] = target_curve_path
+            tilt_handle_shape = build_draggable_tilt_handle_shape(float(np.interp(16000.0, freq_axis, target_curve_display)))
+            fig.update_layout(shapes=[drag_shape, tilt_handle_shape])
+
+        fig_dict = fig.to_plotly_json()
+        layout = fig_dict.setdefault("layout", {})
+        layout["uirevision"] = "target_preview_lock"
+        layout["editrevision"] = (
+            f"target_preview_manual_{_TARGET_PREVIEW_REFRESH_TOKEN}_{int(_TARGET_PREVIEW_DRAG_ACTIVE)}"
+            if is_manual_level else
+            "target_preview_static"
+        )
+        fig_dict["config"] = {
+            "responsive": True,
+            "displayModeBar": False,
+            "editable": False,
+            "edits": {"shapePosition": bool(is_manual_level)},
+            "doubleClick": False,
+            "scrollZoom": False,
+        }
+        return fig_dict, drag_base_points, tilt_handle_points
 
     except Exception:
         import logging  # noqa: PLC0415
         logging.getLogger("CamillaFIR").warning("_build_target_preview_fig failed", exc_info=True)
-        return None
+        return None, [], []

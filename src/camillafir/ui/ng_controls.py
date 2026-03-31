@@ -24,6 +24,7 @@ logger = logging.getLogger("CamillaFIR")
 _CONTROLS: dict[str, Any] = {}
 # name → NiceGUI container (column/row/html) used as dynamic scope
 _CONTAINERS: dict[str, Any] = {}
+_SUPPRESSED_CALLBACKS: set[str] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -57,18 +58,24 @@ def value(name: str, default: Any = None) -> Any:
 # Value + option updates  (pin_update equivalent)
 # ---------------------------------------------------------------------------
 
-def set_value(name: str, v: Any) -> None:
+def set_value(name: str, v: Any, *, emit: bool = True) -> None:
     el = _CONTROLS.get(name)
     if el is None:
         return
+    if not emit:
+        _SUPPRESSED_CALLBACKS.add(name)
     try:
-        el.set_value(v)
-    except Exception:
         try:
-            el.value = v
-            el.update()
+            el.set_value(v)
         except Exception:
-            logger.debug("set_value(%r, %r) failed", name, v, exc_info=True)
+            try:
+                el.value = v
+                el.update()
+            except Exception:
+                logger.debug("set_value(%r, %r) failed", name, v, exc_info=True)
+    finally:
+        if not emit:
+            _SUPPRESSED_CALLBACKS.discard(name)
 
 
 def set_options(name: str, options: list | dict) -> None:
@@ -128,11 +135,17 @@ def on_change(name: str, callback: Callable) -> None:
     if el is None:
         logger.debug("on_change: element %r not registered yet", name)
         return
+
+    def _wrapped(e: Any) -> None:
+        if name in _SUPPRESSED_CALLBACKS:
+            return
+        callback(e.value)
+
     try:
-        el.on_value_change(lambda e: callback(e.value))
+        el.on_value_change(_wrapped)
     except Exception:
         try:
-            el.on("change", lambda e: callback(e.value))
+            el.on("change", _wrapped)
         except Exception:
             logger.debug("on_change(%r) failed", name, exc_info=True)
 
@@ -167,6 +180,7 @@ def reset() -> None:
     """Clear all registrations.  Call once per page load to avoid stale refs."""
     _CONTROLS.clear()
     _CONTAINERS.clear()
+    _SUPPRESSED_CALLBACKS.clear()
 
 
 # ---------------------------------------------------------------------------

@@ -860,6 +860,17 @@ def _format_summary_content_legacy(settings, l_stats, r_stats):
     for k in keys:
         if k in settings:
             lines.append(f"{k}: {settings.get(k)}")
+    try:
+        lvl_mode_value = str(settings.get("lvl_mode", "Auto") or "Auto").strip()
+    except Exception:
+        lvl_mode_value = "Auto"
+    lines.append(f"Level match mode: {lvl_mode_value}")
+    if lvl_mode_value.lower() == "manual":
+        lines.append(f"Manual target level: {_safe_float(settings.get('lvl_manual_db', 0.0), 0.0):+.1f} dB")
+        lines.append(
+            "Manual target tilt: "
+            f"{_safe_float(settings.get('manual_target_tilt_db_per_oct', 0.0), 0.0):+.1f} dB/oct @ 1 kHz"
+        )
 
     lines.append("\n--- Analysis Mode ---")
     lines.append(
