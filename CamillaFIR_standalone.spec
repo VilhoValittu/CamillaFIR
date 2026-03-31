@@ -8,7 +8,13 @@
 
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+SPEC_ROOT = globals().get("SPECPATH")
+if SPEC_ROOT is not None:
+    PROJECT_ROOT = Path(SPEC_ROOT).resolve()
+elif "__file__" in globals():
+    PROJECT_ROOT = Path(__file__).resolve().parent
+else:
+    PROJECT_ROOT = Path.cwd().resolve()
 SRC_ROOT = PROJECT_ROOT / "src"
 ENTRYPOINT = SRC_ROOT / "camillafir" / "__main__.py"
 
