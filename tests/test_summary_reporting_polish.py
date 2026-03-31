@@ -78,6 +78,20 @@ def test_dsp_quality_report_uses_aligned_measurement_axis_for_mag_error():
     assert "186." not in report
 
 
+def test_dsp_quality_report_includes_gd_abs_spread_metric():
+    stats = {
+        "gd_abs_max_20_500_ms": 17.25,
+        "pre_energy_metric_valid": False,
+        "pre_energy_metric_suspect": True,
+        "pre_energy_metric_reason_code": "anchor_near_boundary",
+        "reflections": [],
+    }
+
+    report = "\n".join(plots.format_dsp_quality_report_block({}, stats, stats))
+
+    assert "GD abs spread 20-500 Hz (ms): L 17.25 | R 17.25" in report
+
+
 def test_format_summary_content_warns_on_large_leveling_offset():
     stats = {
         "rt60_val": 0.30,

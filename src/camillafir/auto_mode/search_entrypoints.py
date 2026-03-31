@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 
 import numpy as np
 
+
+@contextmanager
+def _nullctx():
+    yield
+
 from . import api as auto_api
 from . import orchestrator_finalize, orchestrator_refine
+from .auto_mode_profile import AutoModeProfiler, active_profiler_scope, auto_mode_profile_enabled
 from .filter_priors import get_auto_mode_filter_seed_preset
 from .materialize import AutoModeMaterializeContext, build_materialize_helpers
 
@@ -70,6 +77,8 @@ def _run_auto_mode_search_impl(
     cache_base_data = dict(base_data or {})
     search_base_data = dict(base_data or {})
     cfg = auto_api.AutoModeConfig.from_base_data(search_base_data)
+    _profiling = auto_mode_profile_enabled(search_base_data)
+    _prof = AutoModeProfiler() if _profiling else None
     n_trials_eff = int(max(1, auto_api._auto_safe_int(n_trials, cfg.trials)))
     compat_version = auto_api._auto_compat_version(search_base_data)
     goal = auto_api._auto_goal(search_base_data)
@@ -86,6 +95,16 @@ def _run_auto_mode_search_impl(
             "falling back to builtin sampler."
         )
         optimizer_backend = "builtin"
+    def _runtime(prof: AutoModeProfiler | None) -> dict:
+        rt = _build_auto_mode_orchestrator_runtime()
+        if prof is not None:
+            rt["run_pipeline"] = prof.wrap(rt["run_pipeline"], "run_pipeline")
+            rt["summarize_run"] = prof.wrap(rt["summarize_run"], "summarize_run")
+            rt["build_config"] = prof.wrap(rt["build_config"], "build_config")
+            rt["auto_score_result"] = prof.wrap(rt["auto_score_result"], "auto_score_result")
+        return rt
+
+    rt = _runtime(_prof)
     exact_cached_metrics = {}
     (
         _cache_ready_preset,
@@ -109,13 +128,13 @@ def _run_auto_mode_search_impl(
             goal=str(goal),
             status_cb=status_cb,
             exact_cached_metrics_getter=lambda: exact_cached_metrics,
-            auto_score_result_fn=auto_api._auto_score_result,
+            auto_score_result_fn=rt["auto_score_result"],
             auto_optuna_jsonable_fn=auto_api._auto_optuna_jsonable,
             auto_rank_key_fn=auto_api._auto_rank_key,
             auto_is_better_refine_fn=auto_api._auto_is_better_refine,
-            build_config_fn=auto_api.build_config,
-            run_pipeline_fn=auto_api.run_pipeline,
-            summarize_run_fn=auto_api.summarize_run,
+            build_config_fn=rt["build_config"],
+            run_pipeline_fn=rt["run_pipeline"],
+            summarize_run_fn=rt["summarize_run"],
             preset_transient_keys=tuple(auto_api.AUTO_MODE_PRESET_TRANSIENT_KEYS),
             residual_tiebreak_enabled=bool(auto_api.AUTO_MODE_RESIDUAL_TIEBREAK_ENABLED),
             residual_top_k=int(auto_api.AUTO_MODE_RESIDUAL_TIEBREAK_TOP_K),
@@ -134,67 +153,73 @@ def _run_auto_mode_search_impl(
         include_hc_mode=True,
     )
 
-    exact_cache_result = orchestrator_refine.run_exact_cache_micro_refine(
-        cache_base_data=cache_base_data,
-        measurements=measurements,
-        fs_v=int(fs_v),
-        taps_v=int(taps_v),
-        xos=xos,
-        hpf=hpf,
-        status_cb=status_cb,
-        cfg=cfg,
-        goal=goal,
-        filter_key=filter_key,
-        compat_version=compat_version,
-        optimizer_backend=optimizer_backend,
-        optuna_mod=optuna_mod,
-        seed=int(seed),
-        optuna_search_sig=optuna_search_sig,
-        _cache_ready_preset=_cache_ready_preset,
-        _materialize_preset_result=_materialize_preset_result,
-        runtime=_build_auto_mode_orchestrator_runtime(),
-    )
+    with active_profiler_scope(_prof):
+        with (_prof.section("cache_micro_refine") if _prof else _nullctx()):
+            exact_cache_result = orchestrator_refine.run_exact_cache_micro_refine(
+                cache_base_data=cache_base_data,
+                measurements=measurements,
+                fs_v=int(fs_v),
+                taps_v=int(taps_v),
+                xos=xos,
+                hpf=hpf,
+                status_cb=status_cb,
+                cfg=cfg,
+                goal=goal,
+                filter_key=filter_key,
+                compat_version=compat_version,
+                optimizer_backend=optimizer_backend,
+                optuna_mod=optuna_mod,
+                seed=int(seed),
+                optuna_search_sig=optuna_search_sig,
+                _cache_ready_preset=_cache_ready_preset,
+                _materialize_preset_result=_materialize_preset_result,
+                runtime=rt,
+            )
     if isinstance(exact_cache_result, dict):
-        exact_cache_final = orchestrator_finalize.finalize_search_result(
-            search_base_data=search_base_data,
-            cache_base_data=cache_base_data,
-            measurements=measurements,
-            fs_v=int(fs_v),
-            taps_v=int(taps_v),
-            xos=xos,
-            hpf=hpf,
-            hc_f=hc_f,
-            hc_m=hc_m,
-            pin_obj=pin_obj,
-            cfg=cfg,
-            goal=goal,
-            rank_basis=rank_basis,
-            filter_key=filter_key,
-            compat_version=compat_version,
-            optimizer_backend=optimizer_backend,
-            status_cb=status_cb,
-            optuna_mod=optuna_mod,
-            optuna_search_sig=optuna_search_sig,
-            seed=int(seed),
-            search_state=None,
-            winner_target_name=str(cache_base_data.get("hc_mode", "") or "").strip() or None,
-            phase1_ok=0,
-            phase2_ok=0,
-            phase1_tried=0,
-            phase2_tried=0,
-            phase1_plateau_hit=False,
-            phase2_plateau_hit=False,
-            phase1_optuna_tel={},
-            phase2_local_optuna_tels=[],
-            phase3_micro_optuna_tel={},
-            phase2_rollup_tel={},
-            _cache_ready_preset=_cache_ready_preset,
-            _materialize_preset_result=_materialize_preset_result,
-            _maybe_apply_residual_tiebreak=_maybe_apply_residual_tiebreak,
-            cache_refine_result=exact_cache_result,
-            runtime=_build_auto_mode_orchestrator_runtime(),
-        )
+        with active_profiler_scope(_prof):
+            with (_prof.section("finalize") if _prof else _nullctx()):
+                exact_cache_final = orchestrator_finalize.finalize_search_result(
+                    search_base_data=search_base_data,
+                    cache_base_data=cache_base_data,
+                    measurements=measurements,
+                    fs_v=int(fs_v),
+                    taps_v=int(taps_v),
+                    xos=xos,
+                    hpf=hpf,
+                    hc_f=hc_f,
+                    hc_m=hc_m,
+                    pin_obj=pin_obj,
+                    cfg=cfg,
+                    goal=goal,
+                    rank_basis=rank_basis,
+                    filter_key=filter_key,
+                    compat_version=compat_version,
+                    optimizer_backend=optimizer_backend,
+                    status_cb=status_cb,
+                    optuna_mod=optuna_mod,
+                    optuna_search_sig=optuna_search_sig,
+                    seed=int(seed),
+                    search_state=None,
+                    winner_target_name=str(cache_base_data.get("hc_mode", "") or "").strip() or None,
+                    phase1_ok=0,
+                    phase2_ok=0,
+                    phase1_tried=0,
+                    phase2_tried=0,
+                    phase1_plateau_hit=False,
+                    phase2_plateau_hit=False,
+                    phase1_optuna_tel={},
+                    phase2_local_optuna_tels=[],
+                    phase3_micro_optuna_tel={},
+                    phase2_rollup_tel={},
+                    _cache_ready_preset=_cache_ready_preset,
+                    _materialize_preset_result=_materialize_preset_result,
+                    _maybe_apply_residual_tiebreak=_maybe_apply_residual_tiebreak,
+                    cache_refine_result=exact_cache_result,
+                    runtime=rt,
+                )
         if isinstance(exact_cache_final, dict):
+            if _prof:
+                _prof.log_summary(logger, label="auto-mode cache-hit")
             return exact_cache_final
 
     try:
@@ -364,71 +389,78 @@ def _run_auto_mode_search_impl(
             )
     except Exception:
         pass
-    phase_stats = orchestrator_refine.run_search_refine_stages(
-        search_base_data=search_base_data,
-        measurements=measurements,
-        fs_v=int(fs_v),
-        taps_v=int(taps_v),
-        xos=xos,
-        hpf=hpf,
-        hc_f=hc_f,
-        hc_m=hc_m,
-        pin_obj=pin_obj,
-        status_cb=status_cb,
-        cfg=cfg,
-        goal=goal,
-        filter_key=filter_key,
-        optimizer_backend=optimizer_backend,
-        optuna_mod=optuna_mod,
-        seed=int(seed),
-        optuna_search_sig=optuna_search_sig,
-        status_prefix=status_prefix,
-        winner_target_name=winner_target_name,
-        search_state=search_state,
-        n_trials_eff=int(n_trials_eff),
-        candidates=list(candidates or []),
-        prior_seed_preset=dict(prior_seed_preset or {}),
-        use_optuna_trials=bool(use_optuna_trials),
-        runtime=_build_auto_mode_orchestrator_runtime(),
-    )
-    return orchestrator_finalize.finalize_search_result(
-        search_base_data=search_base_data,
-        cache_base_data=cache_base_data,
-        measurements=measurements,
-        fs_v=int(fs_v),
-        taps_v=int(taps_v),
-        xos=xos,
-        hpf=hpf,
-        hc_f=hc_f,
-        hc_m=hc_m,
-        pin_obj=pin_obj,
-        cfg=cfg,
-        goal=goal,
-        rank_basis=rank_basis,
-        filter_key=filter_key,
-        compat_version=compat_version,
-        optimizer_backend=optimizer_backend,
-        status_cb=status_cb,
-        optuna_mod=optuna_mod,
-        optuna_search_sig=optuna_search_sig,
-        seed=int(seed),
-        search_state=search_state,
-        winner_target_name=winner_target_name,
-        phase1_ok=int(dict(phase_stats or {}).get('phase1_ok', 0) or 0),
-        phase2_ok=int(dict(phase_stats or {}).get('phase2_ok', 0) or 0),
-        phase1_tried=int(dict(phase_stats or {}).get('phase1_tried', 0) or 0),
-        phase2_tried=int(dict(phase_stats or {}).get('phase2_tried', 0) or 0),
-        phase1_plateau_hit=bool(dict(phase_stats or {}).get('phase1_plateau_hit', False)),
-        phase2_plateau_hit=bool(dict(phase_stats or {}).get('phase2_plateau_hit', False)),
-        phase1_optuna_tel=dict(dict(phase_stats or {}).get('phase1_optuna_tel', {}) or {}),
-        phase2_local_optuna_tels=list(dict(phase_stats or {}).get('phase2_local_optuna_tels', []) or []),
-        phase3_micro_optuna_tel=dict(dict(phase_stats or {}).get('phase3_micro_optuna_tel', {}) or {}),
-        phase2_rollup_tel=dict(dict(phase_stats or {}).get('phase2_rollup_tel', {}) or {}),
-        _cache_ready_preset=_cache_ready_preset,
-        _materialize_preset_result=_materialize_preset_result,
-        _maybe_apply_residual_tiebreak=_maybe_apply_residual_tiebreak,
-        runtime=_build_auto_mode_orchestrator_runtime(),
-    )
+    with active_profiler_scope(_prof):
+        with (_prof.section("search_refine_stages") if _prof else _nullctx()):
+            phase_stats = orchestrator_refine.run_search_refine_stages(
+                search_base_data=search_base_data,
+                measurements=measurements,
+                fs_v=int(fs_v),
+                taps_v=int(taps_v),
+                xos=xos,
+                hpf=hpf,
+                hc_f=hc_f,
+                hc_m=hc_m,
+                pin_obj=pin_obj,
+                status_cb=status_cb,
+                cfg=cfg,
+                goal=goal,
+                filter_key=filter_key,
+                optimizer_backend=optimizer_backend,
+                optuna_mod=optuna_mod,
+                seed=int(seed),
+                optuna_search_sig=optuna_search_sig,
+                status_prefix=status_prefix,
+                winner_target_name=winner_target_name,
+                search_state=search_state,
+                n_trials_eff=int(n_trials_eff),
+                candidates=list(candidates or []),
+                prior_seed_preset=dict(prior_seed_preset or {}),
+                use_optuna_trials=bool(use_optuna_trials),
+                runtime=rt,
+            )
+    with active_profiler_scope(_prof):
+        with (_prof.section("finalize") if _prof else _nullctx()):
+            result = orchestrator_finalize.finalize_search_result(
+                search_base_data=search_base_data,
+                cache_base_data=cache_base_data,
+                measurements=measurements,
+                fs_v=int(fs_v),
+                taps_v=int(taps_v),
+                xos=xos,
+                hpf=hpf,
+                hc_f=hc_f,
+                hc_m=hc_m,
+                pin_obj=pin_obj,
+                cfg=cfg,
+                goal=goal,
+                rank_basis=rank_basis,
+                filter_key=filter_key,
+                compat_version=compat_version,
+                optimizer_backend=optimizer_backend,
+                status_cb=status_cb,
+                optuna_mod=optuna_mod,
+                optuna_search_sig=optuna_search_sig,
+                seed=int(seed),
+                search_state=search_state,
+                winner_target_name=winner_target_name,
+                phase1_ok=int(dict(phase_stats or {}).get('phase1_ok', 0) or 0),
+                phase2_ok=int(dict(phase_stats or {}).get('phase2_ok', 0) or 0),
+                phase1_tried=int(dict(phase_stats or {}).get('phase1_tried', 0) or 0),
+                phase2_tried=int(dict(phase_stats or {}).get('phase2_tried', 0) or 0),
+                phase1_plateau_hit=bool(dict(phase_stats or {}).get('phase1_plateau_hit', False)),
+                phase2_plateau_hit=bool(dict(phase_stats or {}).get('phase2_plateau_hit', False)),
+                phase1_optuna_tel=dict(dict(phase_stats or {}).get('phase1_optuna_tel', {}) or {}),
+                phase2_local_optuna_tels=list(dict(phase_stats or {}).get('phase2_local_optuna_tels', []) or []),
+                phase3_micro_optuna_tel=dict(dict(phase_stats or {}).get('phase3_micro_optuna_tel', {}) or {}),
+                phase2_rollup_tel=dict(dict(phase_stats or {}).get('phase2_rollup_tel', {}) or {}),
+                _cache_ready_preset=_cache_ready_preset,
+                _materialize_preset_result=_materialize_preset_result,
+                _maybe_apply_residual_tiebreak=_maybe_apply_residual_tiebreak,
+                runtime=rt,
+            )
+    if _prof:
+        _prof.log_summary(logger, label="auto-mode search")
+    return result
 
 
 class _AutoModeSearcher:

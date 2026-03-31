@@ -5,6 +5,8 @@ from typing import Any, Callable
 import numpy as np
 import scipy.ndimage
 
+from camillafir.auto_mode.auto_mode_profile import profiled_section
+
 from . import bassfirst as bf
 from .camillafir_analysis import _sigma_bins_from_hz
 from .correction_types import (
@@ -742,7 +744,8 @@ def _run_mag_correction_pipeline(inputs: _MagPipelineInputs) -> _MagCorrectionCo
     _cfg_float_allow_zero = inputs.cfg_float_allow_zero
     apply_confidence_weighted_target_pull = inputs.apply_confidence_weighted_target_pull
 
-    core = _run_mag_core_stage(inputs)
+    with profiled_section("generate_filter.correction.mag_core"):
+        core = _run_mag_core_stage(inputs)
 
     afdw_on = core.afdw_on
     base_sigma = core.base_sigma
@@ -777,35 +780,36 @@ def _run_mag_correction_pipeline(inputs: _MagPipelineInputs) -> _MagCorrectionCo
     clamp_dominance_level = "NONE"
 
     if core.mag_enabled:
-        post = _apply_post_limits_and_metrics(
-            _MagPostProcessInputs(
-                cfg=cfg,
-                freq_axis=freq_axis,
-                st=st,
-                logger=logger,
-                stage_probe=_stage_probe,
-                cfg_float_allow_zero=_cfg_float_allow_zero,
-                mask_c=mask_c,
-                gain_db=gain_db,
-                gain_apply=core.gain_apply,
-                raw_g=raw_g,
-                final_g=final_g,
-                pre_bass_adapt_g=(
-                    None
-                    if core.pre_bass_adapt_g is None
-                    else np.asarray(core.pre_bass_adapt_g, dtype=float)
-                ),
-                raw_safe_ref=core.raw_safe_ref,
-                conf_mask=conf_mask,
-                filter_smooth=_filter_smooth,
-                debug_stage_stats=core.debug_stage_stats,
-                stage_probes=stage_probes,
-                apply_confidence_weighted_target_pull=apply_confidence_weighted_target_pull,
-                m_anal=np.asarray(inputs.m_anal, dtype=float),
-                target_mags=np.asarray(inputs.target_mags, dtype=float),
-                calc_offset_db=float(inputs.calc_offset_db),
+        with profiled_section("generate_filter.correction.mag_post"):
+            post = _apply_post_limits_and_metrics(
+                _MagPostProcessInputs(
+                    cfg=cfg,
+                    freq_axis=freq_axis,
+                    st=st,
+                    logger=logger,
+                    stage_probe=_stage_probe,
+                    cfg_float_allow_zero=_cfg_float_allow_zero,
+                    mask_c=mask_c,
+                    gain_db=gain_db,
+                    gain_apply=core.gain_apply,
+                    raw_g=raw_g,
+                    final_g=final_g,
+                    pre_bass_adapt_g=(
+                        None
+                        if core.pre_bass_adapt_g is None
+                        else np.asarray(core.pre_bass_adapt_g, dtype=float)
+                    ),
+                    raw_safe_ref=core.raw_safe_ref,
+                    conf_mask=conf_mask,
+                    filter_smooth=_filter_smooth,
+                    debug_stage_stats=core.debug_stage_stats,
+                    stage_probes=stage_probes,
+                    apply_confidence_weighted_target_pull=apply_confidence_weighted_target_pull,
+                    m_anal=np.asarray(inputs.m_anal, dtype=float),
+                    target_mags=np.asarray(inputs.target_mags, dtype=float),
+                    calc_offset_db=float(inputs.calc_offset_db),
+                )
             )
-        )
         gain_db = post.gain_db
         stage_probes = post.stage_probes
         boost_peak_db = post.boost_peak_db

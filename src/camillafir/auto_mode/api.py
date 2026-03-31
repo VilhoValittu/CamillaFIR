@@ -180,7 +180,7 @@ AUTO_MODE_MAG_C_MIN_WINNER_POLISH_MAX_DOWN_HZ = 15.0
 # --- Trial parallelism ---
 # 0 workers in UI/config => auto (cpu_count), 1 => sequential.
 AUTO_MODE_PARALLEL_ENABLED = True
-AUTO_MODE_PARALLEL_MIN_TRIALS = 6
+AUTO_MODE_PARALLEL_MIN_TRIALS = 4
 AUTO_MODE_PARALLEL_MAX_WORKERS = 0
 AUTO_MODE_PARALLEL_BATCH_MULTIPLIER = 2
 AUTO_MODE_OPTUNA_PILOT_ENABLED = True
@@ -302,6 +302,7 @@ AUTO_MODE_BUILTIN_TARGET_LOOKUP = {
 # --------------------------------------------------------------------
 
 from . import optuna_backend as _optuna_backend
+from . import optuna_telemetry as _optuna_telemetry
 
 _auto_import_optuna = _optuna_backend._auto_import_optuna
 _auto_optuna_module_ready = _optuna_backend._auto_optuna_module_ready
@@ -337,13 +338,13 @@ _auto_optuna_attach_out_telemetry = _optuna_backend._auto_optuna_attach_out_tele
 _auto_optuna_base_data_without_constraints = _optuna_backend._auto_optuna_base_data_without_constraints
 _auto_optuna_needs_zero_feasible_rescue = _optuna_backend._auto_optuna_needs_zero_feasible_rescue
 _auto_optuna_build_run_telemetry = _optuna_backend._auto_optuna_build_run_telemetry
-_auto_optuna_log_run_telemetry = _optuna_backend._auto_optuna_log_run_telemetry
-_auto_optuna_fmt_value = _optuna_backend._auto_optuna_fmt_value
-_auto_optuna_telemetry_text = _optuna_backend._auto_optuna_telemetry_text
-_auto_optuna_telemetry_text_ex = _optuna_backend._auto_optuna_telemetry_text_ex
-_auto_optuna_events_debug_text = _optuna_backend._auto_optuna_events_debug_text
-_auto_optuna_fallback_summary_text = _optuna_backend._auto_optuna_fallback_summary_text
-_auto_optuna_telemetry_rollup = _optuna_backend._auto_optuna_telemetry_rollup
+_auto_optuna_log_run_telemetry = _optuna_telemetry._auto_optuna_log_run_telemetry
+_auto_optuna_fmt_value = _optuna_telemetry._auto_optuna_fmt_value
+_auto_optuna_telemetry_text = _optuna_telemetry._auto_optuna_telemetry_text
+_auto_optuna_telemetry_text_ex = _optuna_telemetry._auto_optuna_telemetry_text_ex
+_auto_optuna_events_debug_text = _optuna_telemetry._auto_optuna_events_debug_text
+_auto_optuna_fallback_summary_text = _optuna_telemetry._auto_optuna_fallback_summary_text
+_auto_optuna_telemetry_rollup = _optuna_telemetry._auto_optuna_telemetry_rollup
 _auto_optuna_study_records = _optuna_backend._auto_optuna_study_records
 _auto_optuna_remember_result = _optuna_backend._auto_optuna_remember_result
 _auto_optuna_objective_value = _optuna_backend._auto_optuna_objective_value
@@ -358,7 +359,9 @@ _run_auto_mode_search = _search_entrypoints._run_auto_mode_search
 
 def _auto_trial_workers(base_data: dict | None, n_trials: int) -> int:
     """Facade wrapper kept for monkeypatch-compatible worker budgeting tests."""
-    if (not bool(AUTO_MODE_PARALLEL_ENABLED)) or int(n_trials) < int(AUTO_MODE_PARALLEL_MIN_TRIALS):
+    trials_n = int(max(1, _auto_safe_int(n_trials, 1)))
+    min_trials = int(max(1, _auto_safe_int(AUTO_MODE_PARALLEL_MIN_TRIALS, 1)))
+    if (not bool(AUTO_MODE_PARALLEL_ENABLED)) or trials_n < min_trials:
         return 1
     cpu_n = int(max(1, _auto_safe_int(os.cpu_count(), 1)))
     env_raw = os.environ.get("CAMILLAFIR_AUTO_MODE_WORKERS", "").strip()
@@ -370,7 +373,9 @@ def _auto_trial_workers(base_data: dict | None, n_trials: int) -> int:
     hard_max = int(max(0, _auto_safe_int(AUTO_MODE_PARALLEL_MAX_WORKERS, 0)))
     if hard_max > 0:
         req = min(req, hard_max)
-    req = int(max(1, min(int(req), int(cpu_n), int(max(1, n_trials)))))
+    # Keep at least `min_trials` work items per worker so tiny runs stay sequential.
+    trial_budget_cap = int(max(1, trials_n // min_trials))
+    req = int(max(1, min(int(req), int(cpu_n), trial_budget_cap)))
     return int(req)
 
 # --------------------------------------------------------------------

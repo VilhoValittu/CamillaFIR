@@ -50,6 +50,18 @@ from .api import (
     program_version_token,
 )
 
+from .optuna_telemetry import (
+    _auto_metric_summary,
+    _auto_metric_summary_text,
+    _auto_optuna_log_run_telemetry,
+    _auto_optuna_fmt_value,
+    _auto_optuna_telemetry_text,
+    _auto_optuna_telemetry_text_ex,
+    _auto_optuna_events_debug_text,
+    _auto_optuna_fallback_summary_text,
+    _auto_optuna_telemetry_rollup,
+)
+
 logger = logging.getLogger("CamillaFIR")
 def _auto_import_optuna():
     try:
@@ -807,46 +819,6 @@ def _auto_optuna_attach_out_telemetry(
     }
     return out2
 
-def _auto_metric_summary(values) -> dict:
-    vals = []
-    for v in list(values or []):
-        try:
-            fv = float(v)
-            if np.isfinite(fv):
-                vals.append(float(fv))
-        except Exception:
-            pass
-
-    if not vals:
-        return {"count": 0, "min": None, "median": None, "max": None}
-
-    arr = np.asarray(vals, dtype=float)
-    return {
-        "count": int(arr.size),
-        "min": float(np.min(arr)),
-        "median": float(np.median(arr)),
-        "max": float(np.max(arr)),
-    }
-
-def _auto_metric_summary_text(name: str, summary: dict | None, ndigits: int = 3) -> str:
-    s = dict(summary or {})
-    if int(s.get("count", 0) or 0) <= 0:
-        return f"{str(name)} n/a"
-
-    def _fmt(x):
-        try:
-            fx = float(x)
-            if np.isfinite(fx):
-                return f"{fx:.{int(ndigits)}f}"
-        except Exception:
-            pass
-        return "n/a"
-
-    return (
-        f"{str(name)} min/med/max "
-        f"{_fmt(s.get('min'))}/{_fmt(s.get('median'))}/{_fmt(s.get('max'))}"
-    )
-
 def _auto_optuna_base_data_without_constraints(base_data: dict | None) -> dict:
     data = dict(base_data or {})
     data["auto_mode_optuna_constraints"] = False
@@ -1042,242 +1014,6 @@ def _auto_optuna_build_run_telemetry(
         "constraint_flags": dict(constraint_flags or {}),
         "source_counts": dict(source_counts or {}),
     }
-
-def _auto_optuna_log_run_telemetry(logger, *, phase_label: str, tel: dict | None) -> None:
-    tel = dict(tel or {})
-    if not tel:
-        return
-
-    msg = (
-        "Automatic mode Optuna telemetry [%s]: requested=%d run=%d complete=%d fail=%d "
-        "startup=%d model=%d dup=%d(replay=%d,reserved=%d)"
-        % (
-            str(phase_label),
-            int(tel.get("requested_total", 0) or 0),
-            int(tel.get("run_trials", 0) or 0),
-            int(tel.get("complete_trials", 0) or 0),
-            int(tel.get("failed_trials", 0) or 0),
-            int(tel.get("startup_complete", 0) or 0),
-            int(tel.get("model_complete", 0) or 0),
-            int(tel.get("duplicate_skips", 0) or 0),
-            int(tel.get("duplicate_replays", 0) or 0),
-            int(tel.get("duplicate_reserved", 0) or 0),
-        )
-    )
-    logger.info(msg)
-
-    if bool(tel.get("constraints_active", False)):
-        cflags = dict(tel.get("constraint_flags", {}) or {})
-        use_events = bool(cflags.get("use_events", True))
-        logger.info(
-            "Automatic mode Optuna feasible [%s]: feasible=%d infeasible=%d "
-            "best_raw=%s best_feasible=%s violations(r=%d,e=%d,b=%d)",
-            str(phase_label),
-            int(tel.get("feasible_trials", 0) or 0),
-            int(tel.get("infeasible_trials", 0) or 0),
-            "n/a" if tel.get("best_raw_value", None) is None else f"{float(tel['best_raw_value']):.6f}",
-            "n/a" if tel.get("best_feasible_value", None) is None else f"{float(tel['best_feasible_value']):.6f}",
-            int((tel.get("violation_counts", {}) or {}).get("ripple", 0) or 0),
-            int((tel.get("violation_counts", {}) or {}).get("events", 0) or 0),
-            int((tel.get("violation_counts", {}) or {}).get("boost", 0) or 0),
-        )
-        if not use_events:
-            logger.info(
-                "Automatic mode Optuna refine constraints [%s]: events constraint disabled for refine scope",
-                str(phase_label),
-            )
-        if (
-            use_events
-            and
-            int(tel.get("complete_trials", 0) or 0) > 0
-            and int(tel.get("feasible_trials", 0) or 0) == 0
-            and int(tel.get("infeasible_trials", 0) or 0) > 0
-        ):
-            ev_all_txt = _auto_metric_summary_text("events", tel.get("events_summary", {}), 3)
-            ev_bad_txt = _auto_metric_summary_text("events_bad", tel.get("events_infeasible_summary", {}), 3)
-            ev_thr = ((tel.get("constraint_thresholds", {}) or {}).get("max_events_severity", None))
-            logger.warning(
-                "Automatic mode Optuna zero-feasible [%s]: all complete trials violated constraints, "
-                "events<=%s required, %s, %s",
-                str(phase_label),
-                "n/a" if ev_thr is None else f"{float(ev_thr):.3f}",
-                str(ev_all_txt),
-                str(ev_bad_txt),
-            )
-
-def _auto_optuna_fmt_value(v, ndigits: int = 3) -> str:
-    try:
-        fv = float(v)
-        if np.isfinite(fv):
-            return f"{fv:.{int(ndigits)}f}"
-    except Exception:
-        pass
-    return "n/a"
-
-def _auto_optuna_telemetry_text(tel: dict | None) -> str:
-    return _auto_optuna_telemetry_text_ex(tel, include_phase_kind=False)
-
-def _auto_optuna_telemetry_text_ex(tel: dict | None, *, include_phase_kind: bool = False) -> str:
-    t = dict(tel or {})
-    if not t:
-        return ""
-
-    run_n = int(t.get("run_trials", 0) or 0)
-    complete_n = int(t.get("complete_trials", 0) or 0)
-    startup_n = int(t.get("startup_complete", 0) or 0)
-    model_n = int(t.get("model_complete", 0) or 0)
-    dup_n = int(t.get("duplicate_skips", 0) or 0)
-
-    parts = [
-        f"optuna run={run_n}",
-        f"ok={complete_n}",
-        f"startup={startup_n}",
-        f"model={model_n}",
-    ]
-    if bool(include_phase_kind):
-        phase_kind = str(t.get("phase_kind", "") or "").strip()
-        if phase_kind:
-            parts.insert(0, f"phase={phase_kind}")
-    if dup_n > 0:
-        parts.append(f"dup={dup_n}")
-
-    if bool(t.get("constraints_active", False)):
-        cflags = dict(t.get("constraint_flags", {}) or {})
-        feas_n = int(t.get("feasible_trials", 0) or 0)
-        infeas_n = int(t.get("infeasible_trials", 0) or 0)
-        parts.append(f"feas={feas_n}/{feas_n + infeas_n}")
-        if not bool(cflags.get("use_events", True)):
-            parts.append("events=off")
-        best_raw = t.get("best_raw_value", None)
-        best_feas = t.get("best_feasible_value", None)
-        if best_raw is not None:
-            parts.append(f"raw={_auto_optuna_fmt_value(best_raw, 3)}")
-        if best_feas is not None:
-            parts.append(f"best={_auto_optuna_fmt_value(best_feas, 3)}")
-
-        vc = dict(t.get("violation_counts", {}) or {})
-        vr = int(vc.get("ripple", 0) or 0)
-        ve = int(vc.get("events", 0) or 0)
-        vb = int(vc.get("boost", 0) or 0)
-        if (vr + ve + vb) > 0:
-            parts.append(f"viol r/e/b={vr}/{ve}/{vb}")
-    else:
-        best_raw = t.get("best_raw_value", None)
-        if best_raw is not None:
-            parts.append(f"best={_auto_optuna_fmt_value(best_raw, 3)}")
-
-    return ", ".join(parts)
-
-def _auto_optuna_events_debug_text(tel: dict | None, ndigits: int = 3) -> str:
-    t = dict(tel or {})
-    thr = dict(t.get("constraint_thresholds", {}) or {})
-    cflags = dict(t.get("constraint_flags", {}) or {})
-    use_events = bool(cflags.get("use_events", True))
-    ev_thr = thr.get("max_events_severity", None)
-    summ = dict(t.get("events_summary", {}) or {})
-
-    def _fmt(x):
-        try:
-            fx = float(x)
-            if np.isfinite(fx):
-                return f"{fx:.{int(ndigits)}f}"
-        except Exception:
-            pass
-        return "n/a"
-
-    ev_body = "events n/a"
-    if int(summ.get("count", 0) or 0) > 0:
-        ev_body = (
-            f"events min/med/max "
-            f"{_fmt(summ.get('min'))}/{_fmt(summ.get('median'))}/{_fmt(summ.get('max'))}"
-        )
-    if not use_events:
-        return f"events=off, {ev_body}"
-    if ev_thr is None:
-        return str(ev_body)
-    return f"events<={_fmt(ev_thr)}, {ev_body}"
-
-def _auto_optuna_fallback_summary_text(tel: dict | None) -> str:
-    t = dict(tel or {})
-    fallback_tel = dict(t.get("fallback_telemetry", {}) or {})
-    constrained_txt = _auto_optuna_telemetry_text(t)
-    fallback_txt = _auto_optuna_telemetry_text(fallback_tel)
-    events_txt = _auto_optuna_events_debug_text(t, 3)
-
-    parts = []
-    if constrained_txt:
-        parts.append(f"constrained {constrained_txt}")
-    if fallback_txt:
-        parts.append(f"fallback {fallback_txt}")
-    if events_txt:
-        parts.append(str(events_txt))
-    return "; ".join(parts)
-
-def _auto_optuna_telemetry_rollup(items: list[dict] | None) -> dict:
-    arr = [dict(x or {}) for x in list(items or []) if isinstance(x, dict) and x]
-    if not arr:
-        return {}
-
-    out = {
-        "run_trials": 0,
-        "complete_trials": 0,
-        "failed_trials": 0,
-        "startup_complete": 0,
-        "model_complete": 0,
-        "duplicate_skips": 0,
-        "duplicate_replays": 0,
-        "duplicate_reserved": 0,
-        "constraints_active": False,
-        "feasible_trials": 0,
-        "infeasible_trials": 0,
-        "best_raw_value": None,
-        "best_feasible_value": None,
-        "violation_counts": {"ripple": 0, "events": 0, "boost": 0},
-    }
-
-    for t in arr:
-        out["run_trials"] += int(t.get("run_trials", 0) or 0)
-        out["complete_trials"] += int(t.get("complete_trials", 0) or 0)
-        out["failed_trials"] += int(t.get("failed_trials", 0) or 0)
-        out["startup_complete"] += int(t.get("startup_complete", 0) or 0)
-        out["model_complete"] += int(t.get("model_complete", 0) or 0)
-        out["duplicate_skips"] += int(t.get("duplicate_skips", 0) or 0)
-        out["duplicate_replays"] += int(t.get("duplicate_replays", 0) or 0)
-        out["duplicate_reserved"] += int(t.get("duplicate_reserved", 0) or 0)
-
-        if bool(t.get("constraints_active", False)):
-            out["constraints_active"] = True
-            out["feasible_trials"] += int(t.get("feasible_trials", 0) or 0)
-            out["infeasible_trials"] += int(t.get("infeasible_trials", 0) or 0)
-
-        br = t.get("best_raw_value", None)
-        if br is not None:
-            try:
-                brf = float(br)
-                if np.isfinite(brf) and (
-                    out["best_raw_value"] is None or brf > float(out["best_raw_value"])
-                ):
-                    out["best_raw_value"] = float(brf)
-            except Exception:
-                pass
-
-        bf = t.get("best_feasible_value", None)
-        if bf is not None:
-            try:
-                bff = float(bf)
-                if np.isfinite(bff) and (
-                    out["best_feasible_value"] is None or bff > float(out["best_feasible_value"])
-                ):
-                    out["best_feasible_value"] = float(bff)
-            except Exception:
-                pass
-
-        vc = dict(t.get("violation_counts", {}) or {})
-        out["violation_counts"]["ripple"] += int(vc.get("ripple", 0) or 0)
-        out["violation_counts"]["events"] += int(vc.get("events", 0) or 0)
-        out["violation_counts"]["boost"] += int(vc.get("boost", 0) or 0)
-
-    return out
 
 def _auto_optuna_study_records(study, *, seed_to_params=None) -> dict[str, dict]:
     try:
@@ -1557,6 +1293,204 @@ def _finalize_optuna_eval_loop(
     state: _OptunaEvalState,
 ) -> dict:
     return dict(state.telemetry or {})
+
+
+def _log_optuna_duplicate_summary(*, duplicate_skips: int, study_name: str | None) -> None:
+    if int(duplicate_skips) <= 0:
+        return
+    logger.info(
+        "Automatic mode Optuna duplicate guard skipped %d duplicate suggestions in study %s.",
+        int(duplicate_skips),
+        str(study_name or "in-memory"),
+    )
+
+
+def _run_optuna_seed_trials(
+    *,
+    total: int,
+    seed_items: list[dict],
+    seed_to_params,
+    ask_new_trial,
+    eval_one,
+    consume_one,
+    tell_trial,
+    finalize_telemetry,
+) -> tuple[int, dict | None]:
+    idx_next = 1
+    for preset in list(seed_items):
+        if idx_next > int(total):
+            return int(idx_next), dict(finalize_telemetry() or {})
+        trial_obj = None
+        params_sig = ""
+        preset_eval = dict(preset or {})
+        if callable(seed_to_params):
+            trial_obj, preset_eval, params_sig, ask_error = ask_new_trial()
+            if trial_obj is None:
+                out = {
+                    "idx": int(idx_next),
+                    "ok": False,
+                    "error": str(ask_error or "no unique optuna candidate available"),
+                }
+                if consume_one(int(idx_next), dict(out or {})):
+                    return int(idx_next), dict(finalize_telemetry() or {})
+                idx_next += 1
+                continue
+        try:
+            out = eval_one(int(idx_next), dict(preset_eval or {}))
+        except Exception as exc:
+            out = {
+                "idx": int(idx_next),
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        finally:
+            _clear_pruning_hook()
+        if trial_obj is not None:
+            tell_trial(trial_obj, out, params_sig=params_sig, source="seed")
+        if consume_one(int(idx_next), dict(out or {})):
+            return int(idx_next), dict(finalize_telemetry() or {})
+        idx_next += 1
+    return int(idx_next), None
+
+
+def _run_optuna_serial_trials(
+    *,
+    idx_next: int,
+    total: int,
+    ask_new_trial,
+    eval_one,
+    consume_one,
+    tell_trial,
+    finalize_telemetry,
+    pruner,
+    make_pruning_hook,
+    trial_pruned_cls,
+    pruned_state,
+    study,
+    reserved_signatures: set[str],
+) -> dict | None:
+    for idx in range(int(idx_next), int(total) + 1):
+        trial_obj, preset, params_sig, ask_error = ask_new_trial()
+        if trial_obj is None:
+            out = {
+                "idx": int(idx),
+                "ok": False,
+                "error": str(ask_error or "no unique optuna candidate available"),
+            }
+            if consume_one(int(idx), dict(out or {})):
+                return dict(finalize_telemetry() or {})
+            continue
+        if pruner is not None:
+            _set_pruning_hook(make_pruning_hook(trial_obj))
+        try:
+            out = eval_one(int(idx), dict(preset))
+        except Exception as exc:
+            if trial_pruned_cls is not None and isinstance(exc, trial_pruned_cls):
+                if pruned_state is not None:
+                    try:
+                        study.tell(trial_obj, state=pruned_state)
+                    except Exception:
+                        pass
+                if params_sig:
+                    reserved_signatures.discard(str(params_sig))
+                _clear_pruning_hook()
+                continue
+            out = {
+                "idx": int(idx),
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        finally:
+            _clear_pruning_hook()
+        tell_trial(trial_obj, out, params_sig=params_sig, source="optuna")
+        if consume_one(int(idx), dict(out or {})):
+            return dict(finalize_telemetry() or {})
+    return None
+
+
+def _run_optuna_parallel_trials(
+    *,
+    idx_next: int,
+    total: int,
+    workers: int,
+    chunk_size: int,
+    ask_new_trial,
+    eval_with_hook,
+    consume_one,
+    tell_trial,
+    finalize_telemetry,
+    trial_pruned_cls,
+    pruned_state,
+    study,
+    reserved_signatures: set[str],
+) -> dict | None:
+    with ThreadPoolExecutor(max_workers=int(workers)) as ex:
+        idx_cursor = int(idx_next)
+        while idx_cursor <= int(total):
+            chunk_items = []
+            while idx_cursor <= int(total) and len(chunk_items) < int(chunk_size):
+                trial_obj, preset, params_sig, ask_error = ask_new_trial()
+                if trial_obj is None:
+                    chunk_items.append(
+                        (
+                            int(idx_cursor),
+                            None,
+                            {},
+                            "",
+                            {
+                                "idx": int(idx_cursor),
+                                "ok": False,
+                                "error": str(ask_error or "no unique optuna candidate available"),
+                            },
+                        )
+                    )
+                    idx_cursor += 1
+                    continue
+                chunk_items.append((int(idx_cursor), trial_obj, dict(preset), str(params_sig), None))
+                idx_cursor += 1
+            if not chunk_items:
+                break
+
+            fut_map = {
+                ex.submit(eval_with_hook, int(idx), dict(preset), trial_obj): (int(idx), trial_obj, str(params_sig))
+                for idx, trial_obj, preset, params_sig, pre_out in chunk_items
+                if trial_obj is not None and pre_out is None
+            }
+            chunk_out: dict[int, dict] = {}
+            for fut in as_completed(list(fut_map.keys())):
+                idx, trial_obj, params_sig = fut_map.get(fut, (0, None, ""))
+                try:
+                    out = fut.result()
+                    if not isinstance(out, dict):
+                        out = {"idx": int(idx), "ok": False, "error": "invalid worker result"}
+                except Exception as exc:
+                    if trial_pruned_cls is not None and isinstance(exc, trial_pruned_cls):
+                        if trial_obj is not None and pruned_state is not None:
+                            try:
+                                study.tell(trial_obj, state=pruned_state)
+                            except Exception:
+                                pass
+                        if params_sig:
+                            reserved_signatures.discard(str(params_sig))
+                        continue
+                    out = {"idx": int(idx), "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                tell_trial(trial_obj, out, params_sig=params_sig, source="optuna")
+                chunk_out[int(idx)] = dict(out or {})
+
+            for idx, _trial_obj, _preset, _params_sig, pre_out in chunk_items:
+                if isinstance(pre_out, dict):
+                    out = dict(pre_out or {})
+                else:
+                    out = dict(
+                        chunk_out.get(
+                            int(idx),
+                            {"idx": int(idx), "ok": False, "error": "missing worker result"},
+                        )
+                        or {}
+                    )
+                if consume_one(int(idx), out):
+                    return dict(finalize_telemetry() or {})
+    return None
 
 
 def _auto_run_optuna_eval_loop(
@@ -1972,7 +1906,6 @@ def _auto_run_optuna_eval_loop_core(
             return trial_obj, preset, str(params_sig), None
         return None, {}, "", str(last_error or "no unique optuna candidate available")
 
-    idx_next = 1
     seed_items = list(seed_presets or [])[: int(total)]
     if callable(seed_to_params) and hasattr(study, "enqueue_trial"):
         seed_items_filtered = []
@@ -1998,93 +1931,51 @@ def _auto_run_optuna_eval_loop_core(
             seed_items_filtered.append(dict(preset or {}))
         seed_items = list(seed_items_filtered)
 
-    for preset in list(seed_items):
-        if idx_next > total:
-            return _finalize_telemetry()
-        trial_obj = None
-        params_sig = ""
-        preset_eval = dict(preset or {})
-        if callable(seed_to_params):
-            trial_obj, preset_eval, params_sig, ask_error = _ask_new_trial()
-            if trial_obj is None:
-                out = {
-                    "idx": int(idx_next),
-                    "ok": False,
-                    "error": str(ask_error or "no unique optuna candidate available"),
-                }
-                if consume_one(int(idx_next), dict(out or {})):
-                    return _finalize_telemetry()
-                idx_next += 1
-                continue
-        try:
-            out = eval_one(int(idx_next), dict(preset_eval or {}))
-        except Exception as exc:
-            out = {
-                "idx": int(idx_next),
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-        finally:
-            _clear_pruning_hook()
-        if trial_obj is not None:
-            _tell(trial_obj, out, params_sig=params_sig, source="seed")
-        if consume_one(int(idx_next), dict(out or {})):
-            return _finalize_telemetry()
-        idx_next += 1
+    idx_next, seed_telemetry = _run_optuna_seed_trials(
+        total=int(total),
+        seed_items=list(seed_items or []),
+        seed_to_params=seed_to_params,
+        ask_new_trial=_ask_new_trial,
+        eval_one=eval_one,
+        consume_one=consume_one,
+        tell_trial=_tell,
+        finalize_telemetry=_finalize_telemetry,
+    )
+    if seed_telemetry is not None:
+        _log_optuna_duplicate_summary(
+            duplicate_skips=int(duplicate_skips),
+            study_name=study_name,
+        )
+        return dict(seed_telemetry or {})
     if idx_next > total:
-        if duplicate_skips > 0:
-            logger.info(
-                "Automatic mode Optuna duplicate guard skipped %d duplicate suggestions in study %s.",
-                int(duplicate_skips),
-                str(study_name or "in-memory"),
-            )
+        _log_optuna_duplicate_summary(
+            duplicate_skips=int(duplicate_skips),
+            study_name=study_name,
+        )
         return _finalize_telemetry()
 
     remaining = int(total - idx_next + 1)
     if workers <= 1 or remaining <= 1:
-        for idx in range(int(idx_next), int(total) + 1):
-            trial_obj, preset, params_sig, ask_error = _ask_new_trial()
-            if trial_obj is None:
-                out = {
-                    "idx": int(idx),
-                    "ok": False,
-                    "error": str(ask_error or "no unique optuna candidate available"),
-                }
-                if consume_one(int(idx), dict(out or {})):
-                    break
-                continue
-            if pruner is not None:
-                _set_pruning_hook(_make_pruning_hook(trial_obj))
-            try:
-                out = eval_one(int(idx), dict(preset))
-            except Exception as exc:
-                if _trial_pruned_cls is not None and isinstance(exc, _trial_pruned_cls):
-                    if _pruned_state is not None:
-                        try:
-                            study.tell(trial_obj, state=_pruned_state)
-                        except Exception:
-                            pass
-                    if params_sig:
-                        reserved_signatures.discard(str(params_sig))
-                    _clear_pruning_hook()
-                    continue
-                out = {
-                    "idx": int(idx),
-                    "ok": False,
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            finally:
-                _clear_pruning_hook()
-            _tell(trial_obj, out, params_sig=params_sig, source="optuna")
-            if consume_one(int(idx), dict(out or {})):
-                break
-        if duplicate_skips > 0:
-            logger.info(
-                "Automatic mode Optuna duplicate guard skipped %d duplicate suggestions in study %s.",
-                int(duplicate_skips),
-                str(study_name or "in-memory"),
-            )
-        return _finalize_telemetry()
+        serial_telemetry = _run_optuna_serial_trials(
+            idx_next=int(idx_next),
+            total=int(total),
+            ask_new_trial=_ask_new_trial,
+            eval_one=eval_one,
+            consume_one=consume_one,
+            tell_trial=_tell,
+            finalize_telemetry=_finalize_telemetry,
+            pruner=pruner,
+            make_pruning_hook=_make_pruning_hook,
+            trial_pruned_cls=_trial_pruned_cls,
+            pruned_state=_pruned_state,
+            study=study,
+            reserved_signatures=reserved_signatures,
+        )
+        _log_optuna_duplicate_summary(
+            duplicate_skips=int(duplicate_skips),
+            study_name=study_name,
+        )
+        return dict(serial_telemetry or _finalize_telemetry() or {})
 
     chunk_size = int(_auto_trial_chunk_size(workers))
 
@@ -2096,81 +1987,23 @@ def _auto_run_optuna_eval_loop_core(
         finally:
             _clear_pruning_hook()
 
-    with ThreadPoolExecutor(max_workers=int(workers)) as ex:
-        while idx_next <= total:
-            chunk_items = []
-            while idx_next <= total and len(chunk_items) < int(chunk_size):
-                trial_obj, preset, params_sig, ask_error = _ask_new_trial()
-                if trial_obj is None:
-                    chunk_items.append(
-                        (
-                            int(idx_next),
-                            None,
-                            {},
-                            "",
-                            {
-                                "idx": int(idx_next),
-                                "ok": False,
-                                "error": str(ask_error or "no unique optuna candidate available"),
-                            },
-                        )
-                    )
-                    idx_next += 1
-                    continue
-                chunk_items.append((int(idx_next), trial_obj, dict(preset), str(params_sig), None))
-                idx_next += 1
-            if not chunk_items:
-                break
-
-            fut_map = {
-                ex.submit(_eval_with_hook, int(idx), dict(preset), trial_obj): (int(idx), trial_obj, str(params_sig))
-                for idx, trial_obj, preset, params_sig, pre_out in chunk_items
-                if trial_obj is not None and pre_out is None
-            }
-            chunk_out: dict[int, dict] = {}
-            for fut in as_completed(list(fut_map.keys())):
-                idx, trial_obj, params_sig = fut_map.get(fut, (0, None, ""))
-                try:
-                    out = fut.result()
-                    if not isinstance(out, dict):
-                        out = {"idx": int(idx), "ok": False, "error": "invalid worker result"}
-                except Exception as exc:
-                    if _trial_pruned_cls is not None and isinstance(exc, _trial_pruned_cls):
-                        if trial_obj is not None and _pruned_state is not None:
-                            try:
-                                study.tell(trial_obj, state=_pruned_state)
-                            except Exception:
-                                pass
-                        if params_sig:
-                            reserved_signatures.discard(str(params_sig))
-                        continue
-                    out = {"idx": int(idx), "ok": False, "error": f"{type(exc).__name__}: {exc}"}
-                _tell(trial_obj, out, params_sig=params_sig, source="optuna")
-                chunk_out[int(idx)] = dict(out or {})
-
-            for idx, _trial_obj, _preset, _params_sig, pre_out in chunk_items:
-                if isinstance(pre_out, dict):
-                    out = dict(pre_out or {})
-                else:
-                    out = dict(
-                        chunk_out.get(
-                            int(idx),
-                            {"idx": int(idx), "ok": False, "error": "missing worker result"},
-                        )
-                        or {}
-                    )
-                if consume_one(int(idx), out):
-                    if duplicate_skips > 0:
-                        logger.info(
-                            "Automatic mode Optuna duplicate guard skipped %d duplicate suggestions in study %s.",
-                            int(duplicate_skips),
-                            str(study_name or "in-memory"),
-                        )
-                    return _finalize_telemetry()
-    if duplicate_skips > 0:
-        logger.info(
-            "Automatic mode Optuna duplicate guard skipped %d duplicate suggestions in study %s.",
-            int(duplicate_skips),
-            str(study_name or "in-memory"),
-        )
-    return _finalize_telemetry()
+    parallel_telemetry = _run_optuna_parallel_trials(
+        idx_next=int(idx_next),
+        total=int(total),
+        workers=int(workers),
+        chunk_size=int(chunk_size),
+        ask_new_trial=_ask_new_trial,
+        eval_with_hook=_eval_with_hook,
+        consume_one=consume_one,
+        tell_trial=_tell,
+        finalize_telemetry=_finalize_telemetry,
+        trial_pruned_cls=_trial_pruned_cls,
+        pruned_state=_pruned_state,
+        study=study,
+        reserved_signatures=reserved_signatures,
+    )
+    _log_optuna_duplicate_summary(
+        duplicate_skips=int(duplicate_skips),
+        study_name=study_name,
+    )
+    return dict(parallel_telemetry or _finalize_telemetry() or {})

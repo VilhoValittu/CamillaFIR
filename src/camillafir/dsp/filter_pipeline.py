@@ -2,6 +2,7 @@ import logging
 
 import numpy as np
 
+from camillafir.auto_mode.auto_mode_profile import profiled_section
 from camillafir.config.models import FilterConfig
 
 from ._pruning import get_pruning_hook as _get_pruning_hook
@@ -27,6 +28,8 @@ from .dsp_stats import (
     safe_stats_update as _safe_stats_update_impl,
 )
 from .dsp_utils import cfg_float_allow_zero as _cfg_float_allow_zero
+from .phase_ir_autogain import compute_auto_gain_and_headroom
+from .phase_ir_residual import apply_residual_pass_if_enabled
 
 logger = logging.getLogger("CamillaFIR.dsp")
 
@@ -186,15 +189,24 @@ def interpolate_response(input_freqs, input_values, target_freqs):
     return _interpolate_response_impl(input_freqs, input_values, target_freqs)
 
 
-def _run_generate_filter_pipeline(
+def _run_generate_filter_pre_correction(
     freqs,
     meas_mags,
     raw_phases,
     cfg: FilterConfig,
     *,
     stereo_link_ctx: StereoLinkContext | None = None,
+    presolve_mode: bool = False,
 ) -> dict:
-    prep = run_preprocess(freqs, meas_mags, raw_phases, cfg, stereo_link_ctx=stereo_link_ctx)
+    with profiled_section("generate_filter.preprocess"):
+        prep = run_preprocess(
+            freqs,
+            meas_mags,
+            raw_phases,
+            cfg,
+            stereo_link_ctx=stereo_link_ctx,
+            presolve_mode=bool(presolve_mode),
+        )
     f_in = prep.f_in
     m_in = prep.m_in
     n_fft = prep.ctx.n_fft
@@ -213,74 +225,30 @@ def _run_generate_filter_pipeline(
     cmp = prep.cmp
     analysis_mode = prep.analysis_mode
     is_psy = prep.is_psy
-    corr = run_correction_stage(
-        cfg=cfg,
-        freq_axis=freq_axis,
-        f_in=f_in,
-        m_in=m_in,
-        reflections=reflections,
-        st=st,
-        m_anal=m_anal,
-        m_plot_db=m_plot_db,
-        is_psy=is_psy,
-        cmp=cmp,
-        analysis_mode=analysis_mode,
-        gain_db=gain_db,
-        conf_mask=conf_mask,
-        complex_meas=complex_meas,
-        logger=logger,
-        interpolate_response_fn=interpolate_response,
-        apply_confidence_weighted_target_pull_fn=apply_confidence_weighted_target_pull,
-        stage_probe_fn=_stage_probe,
-        cfg_float_allow_zero_fn=_cfg_float_allow_zero,
-        stereo_link_ctx=stereo_link_ctx,
-    )
-
-    current_rt60 = corr.current_rt60
-    rt60_bands = corr.rt60_bands
-    band_avg = corr.band_avg
-    target_mags = corr.target_mags
-    hpf_f = corr.hpf_f
-    hpf_order = corr.hpf_order
-    target_level_db = corr.target_level_db
-    calc_offset_db = corr.calc_offset_db
-    meas_level_db_window = corr.meas_level_db_window
-    target_level_db_window = corr.target_level_db_window
-    offset_method = corr.offset_method
-    s_min = corr.s_min
-    s_max = corr.s_max
-    target_shift_db = corr.target_shift_db
-    cmp = corr.cmp
-    analysis_mode = corr.analysis_mode
-    gain_db = corr.gain_db
-    afdw_on = corr.afdw_on
-    base_sigma = corr.base_sigma
-    _filter_smooth = corr.filter_smooth
-    df_mode = corr.df_mode
-    raw_g = corr.raw_g
-    final_g = corr.final_g
-    mask_c = corr.mask_c
-    stage_probes = corr.stage_probes
-    use_bassfirst = corr.use_bassfirst
-    bf_room_mode = corr.bf_room_mode
-    bf_rel = corr.bf_rel
-    bf_conf_for_smoothing = corr.bf_conf_for_smoothing
-    boost_peak_db = corr.boost_peak_db
-    cut_peak_db = corr.cut_peak_db
-    n_boost = corr.n_boost
-    boost_cand_peak = corr.boost_cand_peak
-    boost_cand_min_hz = corr.boost_cand_min_hz
-    n_boost_cand = corr.n_boost_cand
-    n_boost_cand_low = corr.n_boost_cand_low
-    n_boost_cand_exc = corr.n_boost_cand_exc
-    softclip_boost_bins = corr.softclip_boost_bins
-    softclip_cut_bins = corr.softclip_cut_bins
-    over_boost = corr.over_boost
-    over_cut = corr.over_cut
-    hardclamp_boost_bins = corr.hardclamp_boost_bins
-    hardclamp_cut_bins = corr.hardclamp_cut_bins
-    hard_over_boost = corr.hard_over_boost
-    hard_over_cut = corr.hard_over_cut
+    with profiled_section("generate_filter.correction"):
+        corr = run_correction_stage(
+            cfg=cfg,
+            freq_axis=freq_axis,
+            f_in=f_in,
+            m_in=m_in,
+            reflections=reflections,
+            st=st,
+            m_anal=m_anal,
+            m_plot_db=m_plot_db,
+            is_psy=is_psy,
+            cmp=cmp,
+            analysis_mode=analysis_mode,
+            gain_db=gain_db,
+            conf_mask=conf_mask,
+            complex_meas=complex_meas,
+            logger=logger,
+            interpolate_response_fn=interpolate_response,
+            apply_confidence_weighted_target_pull_fn=apply_confidence_weighted_target_pull,
+            stage_probe_fn=_stage_probe,
+            cfg_float_allow_zero_fn=_cfg_float_allow_zero,
+            stereo_link_ctx=stereo_link_ctx,
+            presolve_mode=bool(presolve_mode),
+        )
 
     _pruning_hook = _get_pruning_hook()
     if callable(_pruning_hook):
@@ -296,30 +264,194 @@ def _run_generate_filter_pipeline(
         except Exception:
             pass
 
-    phase_ir = run_phase_ir_stage(
-        cfg=cfg,
-        freq_axis=freq_axis,
-        n_fft=n_fft,
-        gain_db=gain_db,
-        p_rad_interp=p_rad_interp,
-        conf_mask=conf_mask,
-        m_anal=m_anal,
-        calc_offset_db=calc_offset_db,
-        target_mags=target_mags,
-        st=st,
-        mask_c=mask_c,
-        base_sigma=base_sigma,
-        _filter_smooth=_filter_smooth,
-        df_mode=df_mode,
-        raw_g=raw_g,
-        final_g=final_g,
-        use_bassfirst=use_bassfirst,
-        afdw_on=afdw_on,
-        logger=logger,
-        apply_hpf_to_mags_fn=apply_hpf_to_mags,
-        limit_gd_gradient_ms_per_oct_fn=_limit_gd_gradient_ms_per_oct,
-        cfg_float_allow_zero_fn=_cfg_float_allow_zero,
+    return {
+        "cfg": cfg,
+        "n_fft": n_fft,
+        "freq_axis": freq_axis,
+        "st": st,
+        "reflections": reflections,
+        "target_mags": corr.target_mags,
+        "m_anal": m_anal,
+        "conf_mask": conf_mask,
+        "cmp": corr.cmp,
+        "analysis_mode": corr.analysis_mode,
+        "delay_slope": delay_slope,
+        "gain_db": corr.gain_db,
+        "mask_c": corr.mask_c,
+        "base_sigma": corr.base_sigma,
+        "filter_smooth": corr.filter_smooth,
+        "df_mode": corr.df_mode,
+        "raw_g": corr.raw_g,
+        "final_g": corr.final_g,
+        "p_rad_interp": p_rad_interp,
+        "current_rt60": corr.current_rt60,
+        "rt60_bands": corr.rt60_bands,
+        "band_avg": corr.band_avg,
+        "target_level_db": corr.target_level_db,
+        "calc_offset_db": corr.calc_offset_db,
+        "meas_level_db_window": corr.meas_level_db_window,
+        "target_level_db_window": corr.target_level_db_window,
+        "offset_method": corr.offset_method,
+        "s_min": corr.s_min,
+        "s_max": corr.s_max,
+        "target_shift_db": corr.target_shift_db,
+        "afdw_on": corr.afdw_on,
+        "stage_probes": corr.stage_probes,
+        "use_bassfirst": corr.use_bassfirst,
+        "bf_room_mode": corr.bf_room_mode,
+        "bf_rel": corr.bf_rel,
+        "bf_conf_for_smoothing": corr.bf_conf_for_smoothing,
+        "boost_peak_db": corr.boost_peak_db,
+        "cut_peak_db": corr.cut_peak_db,
+        "n_boost": corr.n_boost,
+        "boost_cand_peak": corr.boost_cand_peak,
+        "boost_cand_min_hz": corr.boost_cand_min_hz,
+        "n_boost_cand": corr.n_boost_cand,
+        "n_boost_cand_low": corr.n_boost_cand_low,
+        "n_boost_cand_exc": corr.n_boost_cand_exc,
+        "softclip_boost_bins": corr.softclip_boost_bins,
+        "softclip_cut_bins": corr.softclip_cut_bins,
+        "over_boost": corr.over_boost,
+        "over_cut": corr.over_cut,
+        "hardclamp_boost_bins": corr.hardclamp_boost_bins,
+        "hardclamp_cut_bins": corr.hardclamp_cut_bins,
+        "hard_over_boost": corr.hard_over_boost,
+        "hard_over_cut": corr.hard_over_cut,
+    }
+
+
+def _run_generate_filter_stereo_link_presolve(
+    freqs,
+    meas_mags,
+    raw_phases,
+    cfg: FilterConfig,
+    *,
+    stereo_link_ctx: StereoLinkContext | None = None,
+) -> dict:
+    with profiled_section("generate_filter.stereo_link_presolve"):
+        state = _run_generate_filter_pre_correction(
+            freqs,
+            meas_mags,
+            raw_phases,
+            cfg,
+            stereo_link_ctx=stereo_link_ctx,
+            presolve_mode=True,
+        )
+
+        freq_axis = np.asarray(state["freq_axis"], dtype=float)
+        gain_db = np.asarray(state["gain_db"], dtype=float).copy()
+        hs = getattr(cfg, "hpf_settings", None)
+        if isinstance(hs, dict) and hs.get("enabled"):
+            hpf_f = float(hs.get("freq", 0.0) or 0.0)
+            hpf_order = int(hs.get("order", 0) or 0)
+            if hpf_f > 0 and hpf_order > 0:
+                hpf_db = apply_hpf_to_mags(freq_axis, np.zeros_like(freq_axis), hpf_f, hpf_order)
+                gain_db = gain_db + hpf_db
+
+        gain_db, _residual_telemetry = apply_residual_pass_if_enabled(
+            cfg=cfg,
+            freq_axis=freq_axis,
+            gain_db=gain_db,
+            conf_mask=state["conf_mask"],
+            m_anal=np.asarray(state["m_anal"], dtype=float),
+            calc_offset_db=float(state["calc_offset_db"]),
+            target_mags=np.asarray(state["target_mags"], dtype=float),
+            st=state["st"],
+            mask_c=np.asarray(state["mask_c"], dtype=bool),
+            base_sigma=state["base_sigma"],
+            filter_smooth=state["filter_smooth"],
+            df_mode=bool(state["df_mode"]),
+            raw_g=state["raw_g"],
+            final_g=state["final_g"],
+            logger=logger,
+            cfg_float_allow_zero_fn=_cfg_float_allow_zero,
+        )
+        ag = compute_auto_gain_and_headroom(
+            cfg=cfg,
+            gain_db=gain_db,
+            mask_c=np.asarray(state["mask_c"], dtype=bool),
+            logger=logger,
+        )
+
+    return {
+        "freq_axis": state["freq_axis"],
+        "target_mags": state["target_mags"],
+        "m_anal": state["m_anal"],
+        "analysis_mode": state["analysis_mode"],
+        "target_level_db": state["target_level_db"],
+        "calc_offset_db": state["calc_offset_db"],
+        "meas_level_db_window": state["meas_level_db_window"],
+        "target_level_db_window": state["target_level_db_window"],
+        "offset_method": state["offset_method"],
+        "s_min": state["s_min"],
+        "s_max": state["s_max"],
+        "target_shift_db": state["target_shift_db"],
+        "current_peak_gain": float(ag["current_peak_gain"]),
+        "gain_margin_db": float(ag["gain_margin_db"]),
+        "auto_global_gain_db": float(ag["auto_global_gain_db"]),
+        "auto_headroom_db": float(ag["auto_headroom_db"]),
+    }
+
+
+def _run_generate_filter_pipeline(
+    freqs,
+    meas_mags,
+    raw_phases,
+    cfg: FilterConfig,
+    *,
+    stereo_link_ctx: StereoLinkContext | None = None,
+) -> dict:
+    state = _run_generate_filter_pre_correction(
+        freqs,
+        meas_mags,
+        raw_phases,
+        cfg,
+        stereo_link_ctx=stereo_link_ctx,
+        presolve_mode=False,
     )
+    n_fft = state["n_fft"]
+    freq_axis = state["freq_axis"]
+    gain_db = state["gain_db"]
+    p_rad_interp = state["p_rad_interp"]
+    conf_mask = state["conf_mask"]
+    m_anal = state["m_anal"]
+    calc_offset_db = state["calc_offset_db"]
+    target_mags = state["target_mags"]
+    st = state["st"]
+    mask_c = state["mask_c"]
+    base_sigma = state["base_sigma"]
+    _filter_smooth = state["filter_smooth"]
+    df_mode = state["df_mode"]
+    raw_g = state["raw_g"]
+    final_g = state["final_g"]
+    use_bassfirst = state["use_bassfirst"]
+    afdw_on = state["afdw_on"]
+
+    with profiled_section("generate_filter.phase_ir"):
+        phase_ir = run_phase_ir_stage(
+            cfg=cfg,
+            freq_axis=freq_axis,
+            n_fft=n_fft,
+            gain_db=gain_db,
+            p_rad_interp=p_rad_interp,
+            conf_mask=conf_mask,
+            m_anal=m_anal,
+            calc_offset_db=calc_offset_db,
+            target_mags=target_mags,
+            st=st,
+            mask_c=mask_c,
+            base_sigma=base_sigma,
+            _filter_smooth=_filter_smooth,
+            df_mode=df_mode,
+            raw_g=raw_g,
+            final_g=final_g,
+            use_bassfirst=use_bassfirst,
+            afdw_on=afdw_on,
+            logger=logger,
+            apply_hpf_to_mags_fn=apply_hpf_to_mags,
+            limit_gd_gradient_ms_per_oct_fn=_limit_gd_gradient_ms_per_oct,
+            cfg_float_allow_zero_fn=_cfg_float_allow_zero,
+        )
 
     impulse = phase_ir.impulse
     gain_db = phase_ir.gain_db
@@ -332,49 +464,49 @@ def _run_generate_filter_pipeline(
     return {
         "cfg": cfg,
         "freq_axis": freq_axis,
-        "st": st,
-        "reflections": reflections,
+        "st": state["st"],
+        "reflections": state["reflections"],
         "target_mags": target_mags,
         "m_anal": m_anal,
         "conf_mask": conf_mask,
-        "cmp": cmp,
-        "analysis_mode": analysis_mode,
-        "delay_slope": delay_slope,
-        "current_rt60": current_rt60,
-        "rt60_bands": rt60_bands,
-        "band_avg": band_avg,
-        "target_level_db": target_level_db,
+        "cmp": state["cmp"],
+        "analysis_mode": state["analysis_mode"],
+        "delay_slope": state["delay_slope"],
+        "current_rt60": state["current_rt60"],
+        "rt60_bands": state["rt60_bands"],
+        "band_avg": state["band_avg"],
+        "target_level_db": state["target_level_db"],
         "calc_offset_db": calc_offset_db,
-        "meas_level_db_window": meas_level_db_window,
-        "target_level_db_window": target_level_db_window,
-        "offset_method": offset_method,
-        "s_min": s_min,
-        "s_max": s_max,
-        "target_shift_db": target_shift_db,
+        "meas_level_db_window": state["meas_level_db_window"],
+        "target_level_db_window": state["target_level_db_window"],
+        "offset_method": state["offset_method"],
+        "s_min": state["s_min"],
+        "s_max": state["s_max"],
+        "target_shift_db": state["target_shift_db"],
         "gain_db": gain_db,
-        "afdw_on": afdw_on,
+        "afdw_on": state["afdw_on"],
         "mask_c": mask_c,
-        "stage_probes": stage_probes,
-        "use_bassfirst": use_bassfirst,
-        "bf_room_mode": bf_room_mode,
-        "bf_rel": bf_rel,
-        "bf_conf_for_smoothing": bf_conf_for_smoothing,
-        "boost_peak_db": boost_peak_db,
-        "cut_peak_db": cut_peak_db,
-        "n_boost": n_boost,
-        "boost_cand_peak": boost_cand_peak,
-        "boost_cand_min_hz": boost_cand_min_hz,
-        "n_boost_cand": n_boost_cand,
-        "n_boost_cand_low": n_boost_cand_low,
-        "n_boost_cand_exc": n_boost_cand_exc,
-        "softclip_boost_bins": softclip_boost_bins,
-        "softclip_cut_bins": softclip_cut_bins,
-        "over_boost": over_boost,
-        "over_cut": over_cut,
-        "hardclamp_boost_bins": hardclamp_boost_bins,
-        "hardclamp_cut_bins": hardclamp_cut_bins,
-        "hard_over_boost": hard_over_boost,
-        "hard_over_cut": hard_over_cut,
+        "stage_probes": state["stage_probes"],
+        "use_bassfirst": state["use_bassfirst"],
+        "bf_room_mode": state["bf_room_mode"],
+        "bf_rel": state["bf_rel"],
+        "bf_conf_for_smoothing": state["bf_conf_for_smoothing"],
+        "boost_peak_db": state["boost_peak_db"],
+        "cut_peak_db": state["cut_peak_db"],
+        "n_boost": state["n_boost"],
+        "boost_cand_peak": state["boost_cand_peak"],
+        "boost_cand_min_hz": state["boost_cand_min_hz"],
+        "n_boost_cand": state["n_boost_cand"],
+        "n_boost_cand_low": state["n_boost_cand_low"],
+        "n_boost_cand_exc": state["n_boost_cand_exc"],
+        "softclip_boost_bins": state["softclip_boost_bins"],
+        "softclip_cut_bins": state["softclip_cut_bins"],
+        "over_boost": state["over_boost"],
+        "over_cut": state["over_cut"],
+        "hardclamp_boost_bins": state["hardclamp_boost_bins"],
+        "hardclamp_cut_bins": state["hardclamp_cut_bins"],
+        "hard_over_boost": state["hard_over_boost"],
+        "hard_over_cut": state["hard_over_cut"],
         "impulse": impulse,
         "auto_global_gain_db": auto_global_gain_db,
         "gain_margin_db": gain_margin_db,

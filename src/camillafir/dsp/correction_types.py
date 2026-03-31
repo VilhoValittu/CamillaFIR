@@ -65,6 +65,7 @@ class CorrectionInputs:
     apply_confidence_weighted_target_pull_fn: Callable[..., Any]
     stage_probe_fn: Callable[..., Any]
     cfg_float_allow_zero_fn: Callable[[Any, str, float], float]
+    presolve_mode: bool = False
 
 
 @dataclass

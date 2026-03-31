@@ -50,9 +50,6 @@ def _dsp_quality_penalty(st: dict | None) -> float:
         st,
         (
             "real_mag_error_rms",
-            "post_to_ir_staged_shape_delta_rms_20_200_db",
-            "post_to_ir_shape_delta_rms_20_200_db",
-            "post_to_ir_delta_rms_20_200_db",
         ),
         abs_value=True,
         nonneg=True,
@@ -64,8 +61,6 @@ def _dsp_quality_penalty(st: dict | None) -> float:
         st,
         (
             "ripple_rms",
-            "post_to_ir_staged_shape_delta_rms_20_200_db",
-            "post_to_ir_shape_delta_rms_20_200_db",
         ),
         abs_value=True,
         nonneg=True,

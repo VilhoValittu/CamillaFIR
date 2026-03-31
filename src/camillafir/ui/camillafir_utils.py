@@ -1,4 +1,7 @@
 
+import scipy.fft
+
+
 def scale_taps_with_fs(
     fs: int,
     base_taps: int = 65536,
@@ -13,6 +16,7 @@ def scale_taps_with_fs(
             return int(base_taps_i if base_taps_i > 0 else 65536)
 
         scaled = int(round(float(base_taps_i) * (float(fs_i) / float(base_fs_i))))
-        return max(1, scaled)
+        scaled = max(1, scaled)
+        return int(scipy.fft.next_fast_len(scaled, real=True))
     except Exception:
         return int(base_taps)

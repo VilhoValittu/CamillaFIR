@@ -4,6 +4,22 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [4.0.1] - 2026-03-31
+
+### Automatic mode
+- Continued the AUTO-mode speed-up work by splitting the search flow more clearly into target, refine, finalize, and materialization stages.
+- Added lightweight AUTO-mode profiling and separated Optuna telemetry helpers to make performance tuning and troubleshooting easier without changing the normal workflow.
+
+### Architecture
+- Introduced an `application/` service layer for run-request assembly, system-health checks, and house-curve loading so UI callbacks stay thinner and module responsibilities remain clearer.
+- Removed more NiceGUI migration scaffolding and aligned the runtime entry flow around `src/camillafir/__main__.py`.
+
+### Tests & Docs
+- Expanded regression coverage around AUTO-mode selection, stereo leveling, summary/reporting polish, and filter-generation smoke cases.
+- Updated README release notes and version references for `4.0.1`.
+
+---
+
 ## [4.0.0] - 2026-03-29
 
 ### UI

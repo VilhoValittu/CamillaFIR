@@ -3,6 +3,7 @@ import scipy.ndimage
 import copy
 import logging
 logger = logging.getLogger("CamillaFIR.dsp")
+from camillafir.auto_mode.auto_mode_profile import profiled_section
 from camillafir.config.models import FilterConfig
 from .dsp_correction import run_correction_stage
 from ._pruning import get_pruning_hook as _get_pruning_hook
@@ -28,7 +29,10 @@ from .dsp_stats import (
 from .camillafir_leveling import StereoLinkContext, find_shared_stereo_level_window
 from .dsp_utils import cfg_float_allow_zero as _cfg_float_allow_zero
 from .dsp_utils import safe_range as _safe_range
-from .filter_pipeline import _run_generate_filter_pipeline
+from .filter_pipeline import (
+    _run_generate_filter_pipeline,
+    _run_generate_filter_stereo_link_presolve,
+)
 from .filter_result import _assemble_generate_filter_result
 
 
@@ -187,16 +191,52 @@ def interpolate_response(input_freqs, input_values, target_freqs):
     return _interpolate_response_impl(input_freqs, input_values, target_freqs)
 
 
+def _run_generate_filter_stereo_link_presolve_stats(
+    freqs,
+    meas_mags,
+    raw_phases,
+    cfg: FilterConfig,
+) -> dict:
+    presolve = _run_generate_filter_stereo_link_presolve(freqs, meas_mags, raw_phases, cfg)
+    freq_axis = np.asarray(presolve["freq_axis"], dtype=float)
+    target_mags = np.asarray(presolve["target_mags"], dtype=float)
+    m_anal = np.asarray(presolve["m_anal"], dtype=float)
+    calc_offset_db = float(presolve["calc_offset_db"])
+    return {
+        "analysis_mode": str(presolve["analysis_mode"]),
+        "freq_axis": freq_axis,
+        "target_mags": target_mags,
+        "measured_mags": (m_anal - calc_offset_db),
+        "smart_scan_range": (float(presolve["s_min"]), float(presolve["s_max"])),
+        "eff_target_db": float(presolve["target_level_db"]),
+        "offset_db": float(calc_offset_db),
+        "meas_level_db_window": float(presolve["meas_level_db_window"]),
+        "target_level_db_window": float(presolve["target_level_db_window"]),
+        "offset_method": str(presolve["offset_method"]),
+        "target_shift_db": float(presolve["target_shift_db"]),
+        "tilt_slope_db_per_oct": (
+            float(getattr(cfg, "_lvl_tilt_slope_db_per_oct"))
+            if getattr(cfg, "_lvl_tilt_slope_db_per_oct", None) is not None
+            else None
+        ),
+        "gain_margin_db": float(presolve["gain_margin_db"]),
+        "auto_global_gain_db": float(presolve["auto_global_gain_db"]),
+        "auto_headroom_db": float(presolve["auto_headroom_db"]),
+        "peak_gain_db": float(presolve["current_peak_gain"]),
+    }
+
+
 
 
 def generate_filter(freqs, meas_mags, raw_phases, cfg: FilterConfig, *, stereo_link_ctx: StereoLinkContext | None = None):
-    pipeline = _run_generate_filter_pipeline(
-        freqs,
-        meas_mags,
-        raw_phases,
-        cfg,
-        stereo_link_ctx=stereo_link_ctx,
-    )
+    with profiled_section("generate_filter.pipeline"):
+        pipeline = _run_generate_filter_pipeline(
+            freqs,
+            meas_mags,
+            raw_phases,
+            cfg,
+            stereo_link_ctx=stereo_link_ctx,
+        )
     freq_axis = pipeline["freq_axis"]
     st = pipeline["st"]
     reflections = pipeline["reflections"]
@@ -621,8 +661,8 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
         r_imp, r_st = generate_filter(f_r, m_r, p_r, cfg)
         return l_imp, l_st, r_imp, r_st
 
-    l_imp1, l_st1 = generate_filter(f_l, m_l, p_l, cfg)
-    r_imp1, r_st1 = generate_filter(f_r, m_r, p_r, cfg)
+    l_st1 = _run_generate_filter_stereo_link_presolve_stats(f_l, m_l, p_l, cfg)
+    r_st1 = _run_generate_filter_stereo_link_presolve_stats(f_r, m_r, p_r, cfg)
 
     def _as_stat_float(st: dict | None, key: str, default=np.nan) -> float:
         try:
@@ -633,16 +673,24 @@ def generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg: FilterConfig):
             pass
         return float(default)
 
+    def _as_stat_array(st: dict | None, key: str) -> np.ndarray:
+        try:
+            if isinstance(st, dict):
+                return np.asarray(st.get(key, []), dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            pass
+        return np.asarray([], dtype=float)
+
     def _shared_window_from_stats(st_l: dict | None, st_r: dict | None):
         try:
             if not isinstance(st_l, dict) or not isinstance(st_r, dict):
                 return None
-            freq_l = np.asarray(st_l.get("freq_axis", []) or [], dtype=float)
-            meas_l = np.asarray(st_l.get("measured_mags", []) or [], dtype=float)
-            targ_l = np.asarray(st_l.get("target_mags", []) or [], dtype=float)
-            freq_r = np.asarray(st_r.get("freq_axis", []) or [], dtype=float)
-            meas_r = np.asarray(st_r.get("measured_mags", []) or [], dtype=float)
-            targ_r = np.asarray(st_r.get("target_mags", []) or [], dtype=float)
+            freq_l = _as_stat_array(st_l, "freq_axis")
+            meas_l = _as_stat_array(st_l, "measured_mags")
+            targ_l = _as_stat_array(st_l, "target_mags")
+            freq_r = _as_stat_array(st_r, "freq_axis")
+            meas_r = _as_stat_array(st_r, "measured_mags")
+            targ_r = _as_stat_array(st_r, "target_mags")
             if (
                 freq_l.size < 50
                 or freq_r.size < 50

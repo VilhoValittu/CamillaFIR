@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import threading
 from typing import Any, Callable
 
 import numpy as np
+import scipy.signal
+
+from camillafir.auto_mode.auto_mode_profile import profiled_section
 
 from .camillafir_analysis import calculate_rt60, calculate_rt60_bands
 from .camillafir_leveling import compute_leveling
@@ -15,6 +20,30 @@ from .dsp_config import CfgReader
 from .limits import build_slope_limit_envelope
 from .phase import get_min_phase_impulse
 from .tdc import apply_smart_tdc
+
+# ---- RT60 computation cache ------------------------------------------------
+# Keyed by MD5 hex digest of (f_in bytes | m_in bytes | fs | num_taps).
+# Value: (current_rt60: float, rt60_bands: dict, band_avg: float).
+# Populated once per unique measurement+grid combination; shared across all
+# Optuna trials in a session. Thread-safe via _RT60_CACHE_LOCK.
+_RT60_CACHE: dict[str, tuple[float, dict, float]] = {}
+_RT60_CACHE_LOCK = threading.Lock()
+
+
+def _rt60_cache_key(f_in: np.ndarray, m_in: np.ndarray, fs: int, num_taps: int) -> str:
+    h = hashlib.md5()
+    h.update(np.asarray(f_in, dtype=float).tobytes())
+    h.update(np.asarray(m_in, dtype=float).tobytes())
+    h.update(int(fs).to_bytes(8, "little"))
+    h.update(int(num_taps).to_bytes(8, "little"))
+    return h.hexdigest()
+
+
+def _clear_rt60_cache() -> None:
+    """Tyhjentää RT60-välimuistin. Vain testeille."""
+    with _RT60_CACHE_LOCK:
+        _RT60_CACHE.clear()
+
 
 def apply_null_guard_target(
     freq_axis: np.ndarray,
@@ -75,7 +104,7 @@ def apply_null_guard_target(
     x = np.arange(-half, half + 1, dtype=float)
     k = np.exp(-0.5 * (x / sigma_bins) ** 2)
     k /= np.sum(k)
-    env_band = np.convolve(env[band], k, mode="same")
+    env_band = scipy.signal.fftconvolve(env[band], k, mode="same")
     env[band] = env_band
 
     # dip depth relative to envelope
@@ -95,7 +124,7 @@ def apply_null_guard_target(
     w = w**1.4
 
     # smooth the mask too (prevents zipper artifacts)
-    w_band = np.convolve(w[band], k, mode="same")
+    w_band = scipy.signal.fftconvolve(w[band], k, mode="same")
     w2 = np.zeros_like(w)
     w2[band] = np.clip(w_band, 0.0, 1.0)
 
@@ -152,6 +181,45 @@ def _apply_target_preview_adjustments(target_mag_db: np.ndarray, cfg: Any) -> np
     return target_mag_db
 
 
+def _leveling_uses_forced_offset(cfg: Any, stereo_link_ctx: Any | None = None) -> bool:
+    forced_offset = None
+    try:
+        forced_offset = getattr(cfg, "lvl_force_offset_db", None)
+    except (AttributeError, TypeError, ValueError):
+        forced_offset = None
+    if stereo_link_ctx is not None:
+        try:
+            ctx_forced = getattr(stereo_link_ctx, "forced_offset_db", None)
+            if ctx_forced is not None:
+                forced_offset = ctx_forced
+        except (AttributeError, TypeError, ValueError):
+            pass
+    if forced_offset is None:
+        return False
+    try:
+        return bool(np.isfinite(float(forced_offset)))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _apply_uniform_target_shift_leveling(
+    *,
+    cfg: Any,
+    stereo_link_ctx: Any | None,
+    target_mags: np.ndarray,
+    target_shift_db: float,
+    calc_offset_db: float,
+    target_level_db_window: float,
+) -> tuple[np.ndarray, float, float]:
+    shift_db = float(target_shift_db)
+    shifted_target = np.asarray(target_mags, dtype=float) + shift_db
+    updated_offset_db = float(calc_offset_db)
+    if not _leveling_uses_forced_offset(cfg, stereo_link_ctx=stereo_link_ctx):
+        updated_offset_db -= shift_db
+    updated_target_level_db_window = float(target_level_db_window) + shift_db
+    return shifted_target, float(updated_offset_db), float(updated_target_level_db_window)
+
+
 def _prepare_correction_baseline(
     *,
     cfg,
@@ -170,71 +238,87 @@ def _prepare_correction_baseline(
     interpolate_response,
     _cfg_float_allow_zero,
     stereo_link_ctx=None,
+    presolve_mode: bool = False,
 ) -> _BaselineContext:
     cfg_reader = CfgReader(cfg)
+    # m_interp_for_rt lasketaan aina: halpa (np.interp) ja käytössä myöhemmin
+    # funktiossa, joten se ei voi olla else-haaran sisällä.
     m_interp_for_rt = _resample_or_interpolate_to_axis(f_in, m_in, freq_axis)
-    m_rt_lin = _resample_or_interpolate_to_axis(freq_axis, m_interp_for_rt, np.linspace(0, cfg.fs / 2, 65537))
-    rt_ir = get_min_phase_impulse(m_rt_lin, 131072)
-    current_rt60 = calculate_rt60(rt_ir, cfg.fs)
-    rt60_bands = calculate_rt60_bands(rt_ir, cfg.fs, f_min=31.5, f_max=8000.0, order=4)
-    band_avg = 0.0
-    if rt60_bands:
-        ks = np.array(sorted(rt60_bands.keys()), dtype=float)
-        vs = np.array([rt60_bands[k] for k in ks], dtype=float)
-        mid = (ks >= 125.0) & (ks <= 4000.0) & (vs > 0.05) & (vs < 5.0)
-        if np.any(mid):
-            band_avg = float(np.median(vs[mid]))
-        else:
-            band_avg = float(np.median(vs))
+
+    _rt60_key = _rt60_cache_key(f_in, m_in, int(cfg.fs), int(cfg.num_taps))
+    with _RT60_CACHE_LOCK:
+        _rt60_hit = _RT60_CACHE.get(_rt60_key)
+    if _rt60_hit is not None:
+        current_rt60, rt60_bands, band_avg = _rt60_hit
+    else:
+        with profiled_section("generate_filter.correction.baseline.rt60"):
+            m_rt_lin = _resample_or_interpolate_to_axis(freq_axis, m_interp_for_rt, np.linspace(0, cfg.fs / 2, 65537))
+            rt_ir = get_min_phase_impulse(m_rt_lin, 131072)
+            current_rt60 = calculate_rt60(rt_ir, cfg.fs)
+            rt60_bands = calculate_rt60_bands(rt_ir, cfg.fs, f_min=31.5, f_max=8000.0, order=4)
+            band_avg = 0.0
+            if rt60_bands:
+                ks = np.array(sorted(rt60_bands.keys()), dtype=float)
+                vs = np.array([rt60_bands[k] for k in ks], dtype=float)
+                mid = (ks >= 125.0) & (ks <= 4000.0) & (vs > 0.05) & (vs < 5.0)
+                if np.any(mid):
+                    band_avg = float(np.median(vs[mid]))
+                else:
+                    band_avg = float(np.median(vs))
+        with _RT60_CACHE_LOCK:
+            _RT60_CACHE[_rt60_key] = (float(current_rt60), dict(rt60_bands), float(band_avg))
 
     # B) Target ja mahdollinen preview-saato (nyt no-op)
-    target_mags = _build_target_curve(freq_axis, cfg, interpolate_response)
-    target_mags = _apply_target_preview_adjustments(target_mags, cfg)
+    with profiled_section("generate_filter.correction.baseline.target_curve"):
+        target_mags = _build_target_curve(freq_axis, cfg, interpolate_response)
+        target_mags = _apply_target_preview_adjustments(target_mags, cfg)
 
     if cfg_reader.bool("enable_tdc", False):
-        rt60_for_tdc = rt60_bands if rt60_bands else current_rt60
-        tdc_strength = cfg_reader.float_allow_zero("tdc_strength", 50.0)
-        tdc_max_red = cfg_reader.float_allow_zero("tdc_max_reduction_db", 9.0)
-        tdc_slope = cfg_reader.float_allow_zero("tdc_slope_db_per_oct", 0.0)
-        if tdc_strength < 0:
-            tdc_strength = 0.0
-        if tdc_strength > 100:
-            tdc_strength = 100.0
-        if tdc_max_red < 0:
-            tdc_max_red = 0.0
-        if tdc_max_red > 24:
-            tdc_max_red = 24.0
-        if tdc_slope < 0:
-            tdc_slope = 0.0
-        if tdc_slope > 24:
-            tdc_slope = 24.0
-        target_mags = apply_smart_tdc(
-            freq_axis,
-            target_mags,
-            reflections,
-            rt60_for_tdc,
-            tdc_strength / 100.0,
-            max_total_reduction_db=tdc_max_red,
-            max_slope_db_per_oct=tdc_slope,
-        )
+        with profiled_section("generate_filter.correction.baseline.tdc"):
+            rt60_for_tdc = rt60_bands if rt60_bands else current_rt60
+            tdc_strength = cfg_reader.float_allow_zero("tdc_strength", 50.0)
+            tdc_max_red = cfg_reader.float_allow_zero("tdc_max_reduction_db", 9.0)
+            tdc_slope = cfg_reader.float_allow_zero("tdc_slope_db_per_oct", 0.0)
+            if tdc_strength < 0:
+                tdc_strength = 0.0
+            if tdc_strength > 100:
+                tdc_strength = 100.0
+            if tdc_max_red < 0:
+                tdc_max_red = 0.0
+            if tdc_max_red > 24:
+                tdc_max_red = 24.0
+            if tdc_slope < 0:
+                tdc_slope = 0.0
+            if tdc_slope > 24:
+                tdc_slope = 24.0
+            target_mags = apply_smart_tdc(
+                freq_axis,
+                target_mags,
+                reflections,
+                rt60_for_tdc,
+                tdc_strength / 100.0,
+                max_total_reduction_db=tdc_max_red,
+                max_slope_db_per_oct=tdc_slope,
+            )
     # ---- Null-guard: make target realistic for deep/narrow cancellations ----
     ng_enable = cfg_reader.bool("enable_null_guard", True)
     if ng_enable:
-        mag_c_min = cfg_reader.float_allow_zero("mag_c_min", 0.0)
-        mag_c_max = cfg_reader.float_allow_zero("mag_c_max", 0.0)
-        # use analysis magnitude (m_anal) already on freq_axis scale
-        target_mags = apply_null_guard_target(
-            np.asarray(freq_axis, dtype=float),
-            np.asarray(target_mags, dtype=float),
-            np.asarray(m_anal, dtype=float),
-            mag_c_min=mag_c_min,
-            mag_c_max=mag_c_max,
-            enable=True,
-            depth_db=cfg_reader.float("null_guard_depth_db", 12.0),
-            max_blend=cfg_reader.float("null_guard_max_blend", 0.85),
-            max_total_relax_db=cfg_reader.float("null_guard_max_relax_db", 12.0),
-            smooth_oct=cfg_reader.float("null_guard_smooth_oct", 0.18),
-        )
+        with profiled_section("generate_filter.correction.baseline.null_guard"):
+            mag_c_min = cfg_reader.float_allow_zero("mag_c_min", 0.0)
+            mag_c_max = cfg_reader.float_allow_zero("mag_c_max", 0.0)
+            # use analysis magnitude (m_anal) already on freq_axis scale
+            target_mags = apply_null_guard_target(
+                np.asarray(freq_axis, dtype=float),
+                np.asarray(target_mags, dtype=float),
+                np.asarray(m_anal, dtype=float),
+                mag_c_min=mag_c_min,
+                mag_c_max=mag_c_max,
+                enable=True,
+                depth_db=cfg_reader.float("null_guard_depth_db", 12.0),
+                max_blend=cfg_reader.float("null_guard_max_blend", 0.85),
+                max_total_relax_db=cfg_reader.float("null_guard_max_relax_db", 12.0),
+                smooth_oct=cfg_reader.float("null_guard_smooth_oct", 0.18),
+            )
     hpf_f = 0.0
     hpf_order = 0
     if cfg.hpf_settings and cfg.hpf_settings.get("enabled"):
@@ -258,139 +342,149 @@ def _prepare_correction_baseline(
     s_min = cfg_reader.float("lvl_min", 500.0)
     s_max = cfg_reader.float("lvl_max", 2000.0)
     try:
-        (
-            target_level_db,
-            calc_offset_db,
-            meas_level_db_window,
-            target_level_db_window,
-            offset_method,
-            s_min,
-            s_max,
-        ) = compute_leveling(
-            cfg,
-            np.asarray(freq_axis, dtype=float),
-            np.asarray(m_anal, dtype=float),
-            np.asarray(target_mags, dtype=float),
-            stereo_link_ctx=stereo_link_ctx,
-        )
+        with profiled_section("generate_filter.correction.baseline.leveling"):
+            (
+                target_level_db,
+                calc_offset_db,
+                meas_level_db_window,
+                target_level_db_window,
+                offset_method,
+                s_min,
+                s_max,
+            ) = compute_leveling(
+                cfg,
+                np.asarray(freq_axis, dtype=float),
+                np.asarray(m_anal, dtype=float),
+                np.asarray(target_mags, dtype=float),
+                stereo_link_ctx=stereo_link_ctx,
+            )
     except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
         pass
     target_shift_db = 0.0
     try:
-        f = np.asarray(freq_axis, dtype=float)
-        t = np.asarray(target_mags, dtype=float)
-        if f.size == t.size and f.size > 16:
-            if shared_target_shift_db is not None:
-                target_shift_db = float(shared_target_shift_db)
-                target_mags = t + target_shift_db
-                (
-                    target_level_db,
-                    calc_offset_db,
-                    meas_level_db_window,
-                    target_level_db_window,
-                    offset_method,
-                    s_min,
-                    s_max,
-                ) = compute_leveling(cfg, f, m_anal, target_mags, stereo_link_ctx=stereo_link_ctx)
-            elif np.isfinite(float(s_min)) and np.isfinite(float(s_max)):
-                mask_lvl = (f >= float(s_min)) & (f <= float(s_max))
-                if int(np.count_nonzero(mask_lvl)) > 10:
-                    tgt_win_mean = float(np.mean(t[mask_lvl]))
-                    if np.isfinite(tgt_win_mean) and np.isfinite(float(target_level_db)):
-                        target_shift_db = float(target_level_db) - tgt_win_mean
-                        target_mags = t + target_shift_db
-                        (
-                            target_level_db,
-                            calc_offset_db,
-                            meas_level_db_window,
-                            target_level_db_window,
-                            offset_method,
-                            s_min,
-                            s_max,
-                        ) = compute_leveling(cfg, f, m_anal, target_mags, stereo_link_ctx=stereo_link_ctx)
+        with profiled_section("generate_filter.correction.baseline.target_shift"):
+            f = np.asarray(freq_axis, dtype=float)
+            t = np.asarray(target_mags, dtype=float)
+            if f.size == t.size and f.size > 16:
+                if shared_target_shift_db is not None:
+                    target_shift_db = float(shared_target_shift_db)
+                    (
+                        target_mags,
+                        calc_offset_db,
+                        target_level_db_window,
+                    ) = _apply_uniform_target_shift_leveling(
+                        cfg=cfg,
+                        stereo_link_ctx=stereo_link_ctx,
+                        target_mags=t,
+                        target_shift_db=target_shift_db,
+                        calc_offset_db=calc_offset_db,
+                        target_level_db_window=target_level_db_window,
+                    )
+                elif np.isfinite(float(s_min)) and np.isfinite(float(s_max)):
+                    mask_lvl = (f >= float(s_min)) & (f <= float(s_max))
+                    if int(np.count_nonzero(mask_lvl)) > 10:
+                        tgt_win_mean = float(np.mean(t[mask_lvl]))
+                        if np.isfinite(tgt_win_mean) and np.isfinite(float(target_level_db)):
+                            target_shift_db = float(target_level_db) - tgt_win_mean
+                            (
+                                target_mags,
+                                calc_offset_db,
+                                target_level_db_window,
+                            ) = _apply_uniform_target_shift_leveling(
+                                cfg=cfg,
+                                stereo_link_ctx=stereo_link_ctx,
+                                target_mags=t,
+                                target_shift_db=target_shift_db,
+                                calc_offset_db=calc_offset_db,
+                                target_level_db_window=target_level_db_window,
+                            )
     except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
         target_shift_db = 0.0
     native_telemetry: BaselineNativeTelemetry | None = None
-    try:
-        m_src = np.asarray(m_anal, dtype=float)
-        if is_psy and (m_plot_db is not None):
-            mp = np.asarray(m_plot_db, dtype=float)
-            if mp.size == m_src.size:
-                m_src = mp
-        measured_aligned = m_src - float(calc_offset_db)
-        target_aligned = np.asarray(target_mags, dtype=float) - float(target_level_db)
-        env_lo = env_hi = None
-        env_pivot = None
+    if not bool(presolve_mode):
         try:
-            max_slope = cfg_reader.float_allow_zero("max_slope_db_per_oct", 0.0)
-            max_slope_boost = cfg_reader.float_allow_zero("max_slope_boost_db_per_oct", 0.0)
-            max_slope_cut = cfg_reader.float_allow_zero("max_slope_cut_db_per_oct", 0.0)
-            if max_slope_boost <= 0.0:
-                max_slope_boost = max_slope
-            if max_slope_cut <= 0.0:
-                max_slope_cut = max_slope
-            env_lo, env_hi, env_pivot = build_slope_limit_envelope(
-                np.asarray(freq_axis, dtype=float),
-                target_aligned,
-                mag_c_min=cfg_reader.float_allow_zero("mag_c_min", 0.0),
-                mag_c_max=cfg_reader.float_allow_zero("mag_c_max", 0.0),
-                max_slope_boost_db_per_oct=float(max_slope_boost),
-                max_slope_cut_db_per_oct=float(max_slope_cut),
-            )
+            with profiled_section("generate_filter.correction.baseline.telemetry_native"):
+                m_src = np.asarray(m_anal, dtype=float)
+                if is_psy and (m_plot_db is not None):
+                    mp = np.asarray(m_plot_db, dtype=float)
+                    if mp.size == m_src.size:
+                        m_src = mp
+                measured_aligned = m_src - float(calc_offset_db)
+                target_aligned = np.asarray(target_mags, dtype=float) - float(target_level_db)
+                env_lo = env_hi = None
+                env_pivot = None
+                try:
+                    max_slope = cfg_reader.float_allow_zero("max_slope_db_per_oct", 0.0)
+                    max_slope_boost = cfg_reader.float_allow_zero("max_slope_boost_db_per_oct", 0.0)
+                    max_slope_cut = cfg_reader.float_allow_zero("max_slope_cut_db_per_oct", 0.0)
+                    if max_slope_boost <= 0.0:
+                        max_slope_boost = max_slope
+                    if max_slope_cut <= 0.0:
+                        max_slope_cut = max_slope
+                    env_lo, env_hi, env_pivot = build_slope_limit_envelope(
+                        np.asarray(freq_axis, dtype=float),
+                        target_aligned,
+                        mag_c_min=cfg_reader.float_allow_zero("mag_c_min", 0.0),
+                        mag_c_max=cfg_reader.float_allow_zero("mag_c_max", 0.0),
+                        max_slope_boost_db_per_oct=float(max_slope_boost),
+                        max_slope_cut_db_per_oct=float(max_slope_cut),
+                    )
+                except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
+                    env_lo = env_hi = None
+                    env_pivot = None
+                native_telemetry = BaselineNativeTelemetry(
+                    analysis_mode="native",
+                    freq_axis=np.asarray(freq_axis, dtype=float),
+                    measured_mags=np.asarray(measured_aligned, dtype=float),
+                    target_mags=np.asarray(target_aligned, dtype=float),
+                    target_env_lo=None if env_lo is None else np.asarray(env_lo, dtype=float),
+                    target_env_hi=None if env_hi is None else np.asarray(env_hi, dtype=float),
+                    target_env_pivot_hz=float(env_pivot) if env_pivot is not None else None,
+                    target_shift_db=float(target_shift_db),
+                    eff_target_db=float(target_level_db),
+                    target_level_db_window=float(target_level_db_window),
+                    meas_level_db_window=float(meas_level_db_window),
+                    offset_db=float(calc_offset_db),
+                    offset_method=str(offset_method),
+                    smart_scan_range=(float(s_min), float(s_max)),
+                )
         except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
-            env_lo = env_hi = None
-            env_pivot = None
-        native_telemetry = BaselineNativeTelemetry(
-            analysis_mode="native",
-            freq_axis=np.asarray(freq_axis, dtype=float),
-            measured_mags=np.asarray(measured_aligned, dtype=float),
-            target_mags=np.asarray(target_aligned, dtype=float),
-            target_env_lo=None if env_lo is None else np.asarray(env_lo, dtype=float),
-            target_env_hi=None if env_hi is None else np.asarray(env_hi, dtype=float),
-            target_env_pivot_hz=float(env_pivot) if env_pivot is not None else None,
-            target_shift_db=float(target_shift_db),
-            eff_target_db=float(target_level_db),
-            target_level_db_window=float(target_level_db_window),
-            meas_level_db_window=float(meas_level_db_window),
-            offset_db=float(calc_offset_db),
-            offset_method=str(offset_method),
-            smart_scan_range=(float(s_min), float(s_max)),
-        )
-    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
-        native_telemetry = None
+            native_telemetry = None
 
     comparison_telemetry: BaselineComparisonTelemetry | None = None
-    try:
-        if isinstance(cmp, dict) and analysis_mode == "comparison":
-            freq_cmp = np.asarray(cmp.get("cmp_freq_axis", []) or [], dtype=float)
-            if freq_cmp.size > 8:
-                m_cmp_raw = np.interp(freq_cmp, freq_axis, m_anal)
-                target_cmp = np.interp(freq_cmp, freq_axis, target_mags)
-                filt_cmp = np.interp(freq_cmp, freq_axis, gain_db)
-                (
-                    target_level_db_cmp,
-                    calc_offset_db_cmp,
-                    meas_level_db_window_cmp,
-                    target_level_db_window_cmp,
-                    offset_method_cmp,
-                    s_min_cmp,
-                    s_max_cmp,
-                ) = compute_leveling(cfg, freq_cmp, m_cmp_raw, target_cmp, stereo_link_ctx=stereo_link_ctx)
-                comparison_telemetry = BaselineComparisonTelemetry(
-                    analysis_mode="comparison",
-                    target_mags=np.asarray(target_cmp, dtype=float),
-                    measured_mags=np.asarray(m_cmp_raw - calc_offset_db_cmp, dtype=float),
-                    filter_mags=np.asarray(filt_cmp, dtype=float),
-                    eff_target_db=float(target_level_db_cmp),
-                    offset_db=float(calc_offset_db_cmp),
-                    smart_scan_range=(float(s_min_cmp), float(s_max_cmp)),
-                    meas_level_db_window=float(meas_level_db_window_cmp),
-                    target_level_db_window=float(target_level_db_window_cmp),
-                    offset_method=str(offset_method_cmp),
-                    target_shift_db=float(target_shift_db),
-                )
-    except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
-        comparison_telemetry = None
+    if not bool(presolve_mode):
+        try:
+            with profiled_section("generate_filter.correction.baseline.telemetry_comparison"):
+                if isinstance(cmp, dict) and analysis_mode == "comparison":
+                    freq_cmp = np.asarray(cmp.get("cmp_freq_axis", []) or [], dtype=float)
+                    if freq_cmp.size > 8:
+                        m_cmp_raw = np.interp(freq_cmp, freq_axis, m_anal)
+                        target_cmp = np.interp(freq_cmp, freq_axis, target_mags)
+                        filt_cmp = np.interp(freq_cmp, freq_axis, gain_db)
+                        (
+                            target_level_db_cmp,
+                            calc_offset_db_cmp,
+                            meas_level_db_window_cmp,
+                            target_level_db_window_cmp,
+                            offset_method_cmp,
+                            s_min_cmp,
+                            s_max_cmp,
+                        ) = compute_leveling(cfg, freq_cmp, m_cmp_raw, target_cmp, stereo_link_ctx=stereo_link_ctx)
+                        comparison_telemetry = BaselineComparisonTelemetry(
+                            analysis_mode="comparison",
+                            target_mags=np.asarray(target_cmp, dtype=float),
+                            measured_mags=np.asarray(m_cmp_raw - calc_offset_db_cmp, dtype=float),
+                            filter_mags=np.asarray(filt_cmp, dtype=float),
+                            eff_target_db=float(target_level_db_cmp),
+                            offset_db=float(calc_offset_db_cmp),
+                            smart_scan_range=(float(s_min_cmp), float(s_max_cmp)),
+                            meas_level_db_window=float(meas_level_db_window_cmp),
+                            target_level_db_window=float(target_level_db_window_cmp),
+                            offset_method=str(offset_method_cmp),
+                            target_shift_db=float(target_shift_db),
+                        )
+        except (AttributeError, TypeError, ValueError, FloatingPointError, IndexError):
+            comparison_telemetry = None
 
     return _BaselineContext(
         m_interp=np.asarray(m_interp_for_rt, dtype=float),

@@ -4,19 +4,25 @@
 # Produces: dist/CamillaFIR.app
 #
 
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+SRC_ROOT = PROJECT_ROOT / "src"
+ENTRYPOINT = SRC_ROOT / "camillafir" / "__main__.py"
+
 block_cipher = None
 
 datas = [
     # i18n (expected at _MEIPASS/i8n/translations.json)
-    ("src/camillafir/resources/i8n/translations.json", "i8n"),
+    (str(SRC_ROOT / "camillafir" / "resources" / "i8n" / "translations.json"), "i8n"),
     # In-app user manual (expected at _MEIPASS/docs/User_Manual.md)
     ("docs/User_Manual.md", "docs"),
     # AUTO-mode priors (expected relative to camillafir/resources)
-    ("src/camillafir/resources/auto_mode_filter_priors.json", "camillafir/resources"),
+    (str(SRC_ROOT / "camillafir" / "resources" / "auto_mode_filter_priors.json"), "camillafir/resources"),
     # plotly.js (expected at _MEIPASS/assets/plotly.min.js)
-    ("src/camillafir/resources/plotly/plotly.min.js", "assets"),
+    (str(SRC_ROOT / "camillafir" / "resources" / "plotly" / "plotly.min.js"), "assets"),
     # UI logo (expected at _MEIPASS/camillafir/ui/assets/camillafir_logo.png)
-    ("src/camillafir/ui/assets/camillafir_logo.png", "camillafir/ui/assets"),
+    (str(SRC_ROOT / "camillafir" / "ui" / "assets" / "camillafir_logo.png"), "camillafir/ui/assets"),
 ]
 
 # PyWebIO loads some components dynamically; keep these minimal hidden imports.
@@ -31,8 +37,8 @@ hiddenimports = [
 ]
 
 a = Analysis(
-    ["src/camillafir/__main__.py"],
-    pathex=["src"],
+    [str(ENTRYPOINT)],
+    pathex=[str(PROJECT_ROOT), str(SRC_ROOT)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -91,6 +97,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="CamillaFIR.app",
-    icon="src/camillafir/ui/assets/camillafir_logo.icns",
+    icon=str(SRC_ROOT / "camillafir" / "ui" / "assets" / "camillafir_logo.icns"),
     bundle_identifier=None,
 )

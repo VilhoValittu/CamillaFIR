@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v4.0.0
+## v4.0.1
 
 Stable release - feedback welcome: camillafir.py@gmail.com
 
@@ -9,6 +9,12 @@ CamillaFIR generates high-resolution FIR room-correction filters from REW export
 
 CamillaFIR is a recommended filter creation tool for CamillaDSP and is listed in the official CamillaDSP README under
 [Measurement and filter generation tools](https://github.com/HEnquist/camilladsp?tab=readme-ov-file#measurement-and-filter-generation-tools).
+
+## v4.0.1 Highlights - AUTO mode speed-up
+
+- **Faster AUTO mode:** target, refine, and finalize stages have been streamlined to reduce overhead in automatic runs.
+- **Better diagnostics for tuning:** lightweight AUTO-mode profiling and Optuna telemetry helpers were added to support performance work and troubleshooting.
+- **Cleaner internal boundaries:** health checks, house-curve loading, and run-request assembly now live behind dedicated application services instead of being spread across UI callbacks.
 
 ## v4.0.0 Highlights - NiceGUI UI rewrite
 
@@ -386,7 +392,7 @@ cd CamillaFIR
 python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
-python src/camillafir/camillafir.py
+python src/camillafir/__main__.py
 ```
 
 ### Ubuntu (from source)
@@ -399,7 +405,7 @@ cd CamillaFIR
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements-linux.txt
-python3 src/camillafir/camillafir.py
+python3 src/camillafir/__main__.py
 ```
 
 ### macOS (from source)
@@ -410,8 +416,10 @@ cd CamillaFIR
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-python3 src/camillafir/camillafir.py
+python3 src/camillafir/__main__.py
 ```
+
+Current source entrypoint is `src/camillafir/__main__.py`.
 
 UI opens in browser at `http://127.0.0.1:8080`.
 

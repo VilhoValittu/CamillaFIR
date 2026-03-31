@@ -148,11 +148,13 @@ pip install -r requirements.txt
 sudo apt update
 sudo apt install -y chromium-browser
 
-python src/camillafir/camillafir.py
+python src/camillafir/__main__.py
 # Linux
-#   python3 src/camillafir/camillafir.py
+#   python3 src/camillafir/__main__.py
 
 ```
+
+Current source entrypoint is `src/camillafir/__main__.py`.
 
 The UI opens in your browser (default: `http://localhost:8080`).
 

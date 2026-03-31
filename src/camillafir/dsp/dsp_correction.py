@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from camillafir.auto_mode.auto_mode_profile import profiled_section
+
 from .correction_baseline import _prepare_correction_baseline
 from .correction_mag import _run_mag_correction_pipeline
 from .correction_types import (
@@ -40,6 +42,7 @@ def run_correction_stage(
     stage_probe_fn,
     cfg_float_allow_zero_fn,
     stereo_link_ctx=None,
+    presolve_mode: bool = False,
 ):
     # Julkinen stage-rajapinta palauttaa typed outputin; legacy-adapteri kuuluu ulommalle kerrokselle.
     inputs = CorrectionInputs(
@@ -63,6 +66,7 @@ def run_correction_stage(
         apply_confidence_weighted_target_pull_fn=apply_confidence_weighted_target_pull_fn,
         stage_probe_fn=stage_probe_fn,
         cfg_float_allow_zero_fn=cfg_float_allow_zero_fn,
+        presolve_mode=bool(presolve_mode),
     )
     return _run_correction_stage(inputs)
 
@@ -89,6 +93,7 @@ def _run_correction_stage(inputs: CorrectionInputs) -> CorrectionOutputs:
     apply_confidence_weighted_target_pull_fn = inputs.apply_confidence_weighted_target_pull_fn
     stage_probe_fn = inputs.stage_probe_fn
     cfg_float_allow_zero_fn = inputs.cfg_float_allow_zero_fn
+    presolve_mode = bool(inputs.presolve_mode)
 
     # A) Input normalisointi & akselit
     freq_axis = _sanitize_freq_axis(freq_axis)
@@ -98,24 +103,26 @@ def _run_correction_stage(inputs: CorrectionInputs) -> CorrectionOutputs:
     _cfg_float_allow_zero = cfg_float_allow_zero_fn
 
     # Baseline-vaihe: mittauksen, targetin ja leveloinnin peruskonteksti.
-    baseline = _prepare_correction_baseline(
-        cfg=cfg,
-        freq_axis=freq_axis,
-        f_in=f_in,
-        m_in=m_in,
-        reflections=reflections,
-        st=st,
-        m_anal=m_anal,
-        m_plot_db=m_plot_db,
-        is_psy=is_psy,
-        cmp=cmp,
-        analysis_mode=analysis_mode,
-        gain_db=gain_db,
-        logger=logger,
-        interpolate_response=interpolate_response,
-        _cfg_float_allow_zero=_cfg_float_allow_zero,
-        stereo_link_ctx=stereo_link_ctx,
-    )
+    with profiled_section("generate_filter.correction.baseline"):
+        baseline = _prepare_correction_baseline(
+            cfg=cfg,
+            freq_axis=freq_axis,
+            f_in=f_in,
+            m_in=m_in,
+            reflections=reflections,
+            st=st,
+            m_anal=m_anal,
+            m_plot_db=m_plot_db,
+            is_psy=is_psy,
+            cmp=cmp,
+            analysis_mode=analysis_mode,
+            gain_db=gain_db,
+            logger=logger,
+            interpolate_response=interpolate_response,
+            _cfg_float_allow_zero=_cfg_float_allow_zero,
+            stereo_link_ctx=stereo_link_ctx,
+            presolve_mode=presolve_mode,
+        )
     current_rt60 = baseline.current_rt60
     rt60_bands = baseline.rt60_bands
     band_avg = baseline.band_avg
@@ -159,7 +166,8 @@ def _run_correction_stage(inputs: CorrectionInputs) -> CorrectionOutputs:
         cfg_float_allow_zero=_cfg_float_allow_zero,
         apply_confidence_weighted_target_pull=apply_confidence_weighted_target_pull,
     )
-    mag = _run_mag_correction_pipeline(mag_inputs)
+    with profiled_section("generate_filter.correction.mag_pipeline"):
+        mag = _run_mag_correction_pipeline(mag_inputs)
 
     gain_db = mag.gain_db
     afdw_on = mag.afdw_on

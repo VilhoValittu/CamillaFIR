@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from .auto_mode.auto_mode_profile import profiled_section
 from .common.comparison_stats import _make_comparison_stats
 from .common.result_postprocess import (
     _ensure_scoring_keys,
@@ -88,11 +89,12 @@ def run_pipeline(
 
     warnings: list[str] = []
 
-    if bool(getattr(cfg, "stereo_link", False)):
-        l_imp, l_st, r_imp, r_st = dsp.generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg)
-    else:
-        l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, cfg)
-        r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, cfg)
+    with profiled_section("run_pipeline.generate_filters"):
+        if bool(getattr(cfg, "stereo_link", False)):
+            l_imp, l_st, r_imp, r_st = dsp.generate_filter_pair(f_l, m_l, p_l, f_r, m_r, p_r, cfg)
+        else:
+            l_imp, l_st = dsp.generate_filter(f_l, m_l, p_l, cfg)
+            r_imp, r_st = dsp.generate_filter(f_r, m_r, p_r, cfg)
 
     is_wav = bool(measurements.get("is_wav_source", getattr(cfg, "is_wav_source", False)))
     rt_rel = 1.0 if is_wav else 0.25
@@ -104,50 +106,53 @@ def run_pipeline(
         r_st["rt60_reliability"] = float(rt_rel)
         r_st["rt60_source"] = rt_src
 
-    l_st = _ensure_scoring_keys(l_st, f_l, m_l, hc_f, hc_m)
-    r_st = _ensure_scoring_keys(r_st, f_r, m_r, hc_f, hc_m)
+    with profiled_section("run_pipeline.ensure_scoring_keys"):
+        l_st = _ensure_scoring_keys(l_st, f_l, m_l, hc_f, hc_m)
+        r_st = _ensure_scoring_keys(r_st, f_r, m_r, hc_f, hc_m)
 
     if comparison_mode:
-        try:
-            l_st = _make_comparison_stats(l_st, int(cfg.fs), int(cfg.num_taps))
-            r_st = _make_comparison_stats(r_st, int(cfg.fs), int(cfg.num_taps))
-        except Exception as exc:
-            warnings.append(f"comparison_stats_failed: {exc}")
-            logger.warning(f"Comparison-mode stats failed: {exc}")
+        with profiled_section("run_pipeline.comparison_stats"):
+            try:
+                l_st = _make_comparison_stats(l_st, int(cfg.fs), int(cfg.num_taps))
+                r_st = _make_comparison_stats(r_st, int(cfg.fs), int(cfg.num_taps))
+            except Exception as exc:
+                warnings.append(f"comparison_stats_failed: {exc}")
+                logger.warning(f"Comparison-mode stats failed: {exc}")
 
-    align_method = "peak"
-    d_peak = int(np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp)))
-    d_delay: int | None = None
-    try:
-        dl = l_st.get("delay_samples", None) if isinstance(l_st, dict) else None
-        dr = r_st.get("delay_samples", None) if isinstance(r_st, dict) else None
-        if dl is not None and dr is not None:
-            d_delay = int(round(float(dr))) - int(round(float(dl)))
-    except Exception:
-        d_delay = None
-
-    if d_delay is None:
-        d_s = d_peak
+    with profiled_section("run_pipeline.align"):
         align_method = "peak"
-    else:
-        d_s = int(d_delay)
-        align_method = "delay_samples"
+        d_peak = int(np.argmax(np.abs(l_imp)) - np.argmax(np.abs(r_imp)))
+        d_delay: int | None = None
         try:
-            guard_samples = 8
-            if abs(int(d_delay) - int(d_peak)) > int(guard_samples):
-                d_s = int(d_peak)
-                align_method = "peak_guard"
-                logger.info(
-                    f"Alignment guard: delay_samples={int(d_delay)} vs peak={int(d_peak)} "
-                    f"(>{guard_samples} samp) -> using peak"
-                )
+            dl = l_st.get("delay_samples", None) if isinstance(l_st, dict) else None
+            dr = r_st.get("delay_samples", None) if isinstance(r_st, dict) else None
+            if dl is not None and dr is not None:
+                d_delay = int(round(float(dr))) - int(round(float(dl)))
         except Exception:
-            pass
+            d_delay = None
 
-    if d_s > 0:
-        r_imp = _shift_zeropad_1d(r_imp, d_s)
-    elif d_s < 0:
-        l_imp = _shift_zeropad_1d(l_imp, -d_s)
+        if d_delay is None:
+            d_s = d_peak
+            align_method = "peak"
+        else:
+            d_s = int(d_delay)
+            align_method = "delay_samples"
+            try:
+                guard_samples = 8
+                if abs(int(d_delay) - int(d_peak)) > int(guard_samples):
+                    d_s = int(d_peak)
+                    align_method = "peak_guard"
+                    logger.info(
+                        f"Alignment guard: delay_samples={int(d_delay)} vs peak={int(d_peak)} "
+                        f"(>{guard_samples} samp) -> using peak"
+                    )
+            except Exception:
+                pass
+
+        if d_s > 0:
+            r_imp = _shift_zeropad_1d(r_imp, d_s)
+        elif d_s < 0:
+            l_imp = _shift_zeropad_1d(l_imp, -d_s)
 
     wav_like_fft_grid = False
     try:
@@ -160,33 +165,34 @@ def run_pipeline(
         wav_like_fft_grid = False
 
     if bool(is_wav) or bool(wav_like_fft_grid):
-        try:
-            mc_min = _as_float(getattr(cfg, "mag_c_min", data.get("mag_c_min", 10.0)), 10.0)
-            mc_max = _as_float(getattr(cfg, "mag_c_max", data.get("mag_c_max", 230.0)), 230.0)
-            tr_w = _as_float(getattr(cfg, "trans_width", data.get("trans_width", 100.0)), 100.0)
+        with profiled_section("run_pipeline.wav_postpolish"):
+            try:
+                mc_min = _as_float(getattr(cfg, "mag_c_min", data.get("mag_c_min", 10.0)), 10.0)
+                mc_max = _as_float(getattr(cfg, "mag_c_max", data.get("mag_c_max", 230.0)), 230.0)
+                tr_w = _as_float(getattr(cfg, "trans_width", data.get("trans_width", 100.0)), 100.0)
 
-            l_imp = _postpolish_wav_filter_ir(
-                l_imp,
-                int(cfg.fs),
-                mag_c_min=mc_min,
-                mag_c_max=mc_max,
-                trans_width=tr_w,
-            )
-            r_imp = _postpolish_wav_filter_ir(
-                r_imp,
-                int(cfg.fs),
-                mag_c_min=mc_min,
-                mag_c_max=mc_max,
-                trans_width=tr_w,
-            )
-            logger.info(
-                f"WAV final IR polish applied at {int(cfg.fs)} Hz "
-                f"(zone approx {max(mc_min, mc_max - 0.95 * tr_w):.0f}-{mc_max + 1.45 * tr_w:.0f} Hz, "
-                f"is_wav={bool(is_wav)}, wav_like_fft_grid={bool(wav_like_fft_grid)})"
-            )
-        except Exception as exc:
-            warnings.append(f"wav_postpolish_failed: {exc}")
-            logger.warning(f"WAV final IR polish failed: {exc}")
+                l_imp = _postpolish_wav_filter_ir(
+                    l_imp,
+                    int(cfg.fs),
+                    mag_c_min=mc_min,
+                    mag_c_max=mc_max,
+                    trans_width=tr_w,
+                )
+                r_imp = _postpolish_wav_filter_ir(
+                    r_imp,
+                    int(cfg.fs),
+                    mag_c_min=mc_min,
+                    mag_c_max=mc_max,
+                    trans_width=tr_w,
+                )
+                logger.info(
+                    f"WAV final IR polish applied at {int(cfg.fs)} Hz "
+                    f"(zone approx {max(mc_min, mc_max - 0.95 * tr_w):.0f}-{mc_max + 1.45 * tr_w:.0f} Hz, "
+                    f"is_wav={bool(is_wav)}, wav_like_fft_grid={bool(wav_like_fft_grid)})"
+                )
+            except Exception as exc:
+                warnings.append(f"wav_postpolish_failed: {exc}")
+                logger.warning(f"WAV final IR polish failed: {exc}")
 
     if isinstance(l_st, dict) and isinstance(r_st, dict):
         try:
@@ -202,30 +208,32 @@ def run_pipeline(
         except Exception:
             pass
 
-    _inject_filter_gd_stats(l_st, l_imp, int(cfg.fs))
-    _inject_filter_gd_stats(r_st, r_imp, int(cfg.fs))
+    with profiled_section("run_pipeline.inject_filter_gd_stats"):
+        _inject_filter_gd_stats(l_st, l_imp, int(cfg.fs))
+        _inject_filter_gd_stats(r_st, r_imp, int(cfg.fs))
 
     if bool(include_response_arrays):
-        _inject_filter_mags_for_ui(l_st, l_imp, int(cfg.fs))
-        _inject_filter_mags_for_ui(r_st, r_imp, int(cfg.fs))
+        with profiled_section("run_pipeline.response_arrays"):
+            _inject_filter_mags_for_ui(l_st, l_imp, int(cfg.fs))
+            _inject_filter_mags_for_ui(r_st, r_imp, int(cfg.fs))
 
-        l_mode = str((l_st or {}).get("analysis_mode", "native")).lower()
-        r_mode = str((r_st or {}).get("analysis_mode", "native")).lower()
-        l_fk = "cmp_freq_axis" if l_mode == "comparison" else "freq_axis"
-        r_fk = "cmp_freq_axis" if r_mode == "comparison" else "freq_axis"
-        l_gk = "cmp_filter_mags" if l_mode == "comparison" else "filter_mags"
-        r_gk = "cmp_filter_mags" if r_mode == "comparison" else "filter_mags"
+            l_mode = str((l_st or {}).get("analysis_mode", "native")).lower()
+            r_mode = str((r_st or {}).get("analysis_mode", "native")).lower()
+            l_fk = "cmp_freq_axis" if l_mode == "comparison" else "freq_axis"
+            r_fk = "cmp_freq_axis" if r_mode == "comparison" else "freq_axis"
+            l_gk = "cmp_filter_mags" if l_mode == "comparison" else "filter_mags"
+            r_gk = "cmp_filter_mags" if r_mode == "comparison" else "filter_mags"
 
-        l_freq = _to_axis((l_st or {}).get(l_fk), f_l)
-        r_freq = _to_axis((r_st or {}).get(r_fk), f_r)
-        freq_axis = l_freq if l_freq.size >= r_freq.size else r_freq
-        if freq_axis.size == 0:
-            freq_axis = f_l if f_l.size else f_r
+            l_freq = _to_axis((l_st or {}).get(l_fk), f_l)
+            r_freq = _to_axis((r_st or {}).get(r_fk), f_r)
+            freq_axis = l_freq if l_freq.size >= r_freq.size else r_freq
+            if freq_axis.size == 0:
+                freq_axis = f_l if f_l.size else f_r
 
-        l_mag = _resample_to_axis((l_st or {}).get(l_gk), l_freq, freq_axis)
-        r_mag = _resample_to_axis((r_st or {}).get(r_gk), r_freq, freq_axis)
-        l_phase = _phase_from_ir(np.asarray(l_imp, dtype=float), int(cfg.fs), freq_axis)
-        r_phase = _phase_from_ir(np.asarray(r_imp, dtype=float), int(cfg.fs), freq_axis)
+            l_mag = _resample_to_axis((l_st or {}).get(l_gk), l_freq, freq_axis)
+            r_mag = _resample_to_axis((r_st or {}).get(r_gk), r_freq, freq_axis)
+            l_phase = _phase_from_ir(np.asarray(l_imp, dtype=float), int(cfg.fs), freq_axis)
+            r_phase = _phase_from_ir(np.asarray(r_imp, dtype=float), int(cfg.fs), freq_axis)
     else:
         freq_axis = np.asarray([], dtype=float)
         l_mag = np.asarray([], dtype=float)

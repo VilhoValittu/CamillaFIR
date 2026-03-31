@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import numpy as np
+
+from .auto_mode_profile import profiled_section
 from .shared import (
     AUTO_MODE_EXC_MAX_HZ,
     AUTO_MODE_EXC_MIN_HZ,
@@ -55,6 +57,7 @@ def build_materialize_helpers(ctx: AutoModeMaterializeContext):
     goal = str(ctx.goal or "")
     status_cb = ctx.status_cb
     transient_keys = tuple(str(key) for key in tuple(ctx.preset_transient_keys or ()))
+    score_only_materialize_cache: dict[str, tuple[object, dict, dict]] = {}
 
     def _current_exact_cached_metrics() -> dict | None:
         getter = ctx.exact_cached_metrics_getter
@@ -102,6 +105,23 @@ def build_materialize_helpers(ctx: AutoModeMaterializeContext):
             out["exc_freq"] = float(auto_exc_hz)
         return dict(out)
 
+    def _materialize_score_only_cache_key(final_data: dict | None) -> str:
+        payload_data = dict(final_data or {})
+        try:
+            payload = json.dumps(
+                ctx.auto_optuna_jsonable_fn(payload_data),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except Exception as exc:
+            logger.debug(
+                "JSON serialization failed for materialize cache key, using str fallback: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
+            payload = str(sorted(payload_data.items()))
+        return str(payload)
+
     def _materialize_preset_result(
         preset: dict | None,
         *,
@@ -133,38 +153,60 @@ def build_materialize_helpers(ctx: AutoModeMaterializeContext):
         final_data["comparison_mode"] = True
         final_measurements = dict(measurements or {})
         final_measurements["ui_data"] = final_data
+        use_score_only_cache = (not bool(include_response_arrays)) and (not bool(summarize))
+        score_only_cache_key = None
+        if bool(use_score_only_cache):
+            score_only_cache_key = _materialize_score_only_cache_key(final_data)
+            cached = score_only_materialize_cache.get(str(score_only_cache_key))
+            if isinstance(cached, tuple) and len(cached) == 3:
+                cached_result, cached_metrics, cached_final_data = cached
+                return (
+                    cached_result,
+                    dict(cached_metrics or {}),
+                    dict(cached_final_data or {}),
+                )
 
-        cfg_final = ctx.build_config_fn(
-            final_data,
-            fs_v=int(ctx.fs_v),
-            taps_v=int(ctx.taps_v),
-            xos=ctx.xos,
-            hpf=ctx.hpf,
-            hc_f=ctx.hc_f,
-            hc_m=ctx.hc_m,
-            max_safe_boost=float(ctx.max_safe_boost),
-        )
+        with profiled_section("materialize.build_config"):
+            cfg_final = ctx.build_config_fn(
+                final_data,
+                fs_v=int(ctx.fs_v),
+                taps_v=int(ctx.taps_v),
+                xos=ctx.xos,
+                hpf=ctx.hpf,
+                hc_f=ctx.hc_f,
+                hc_m=ctx.hc_m,
+                max_safe_boost=float(ctx.max_safe_boost),
+            )
         try:
             setattr(cfg_final, "bass_smooth_w_gamma", float(final_data.get("bass_smooth_w_gamma", 2.40)))
             setattr(cfg_final, "bass_smooth_w_max", float(final_data.get("bass_smooth_w_max", 0.45)))
         except Exception as exc:
             logger.debug("Could not set bass_smooth attrs on cfg: %s: %s", type(exc).__name__, exc)
 
-        result = ctx.run_pipeline_fn(
-            cfg_final,
-            final_measurements,
-            include_response_arrays=bool(include_response_arrays),
-        )
+        with profiled_section("materialize.run_pipeline"):
+            result = ctx.run_pipeline_fn(
+                cfg_final,
+                final_measurements,
+                include_response_arrays=bool(include_response_arrays),
+            )
         if bool(summarize):
-            result.metrics["summary"] = ctx.summarize_run_fn(result)
-        metrics = ctx.auto_score_result_fn(
-            result,
-            auto_exc_freq_hz=_auto_safe_float(
-                final_data.get("_auto_exc_freq_hz", float("nan")),
-                float("nan"),
-            ),
-            base_data=final_data,
-        )
+            with profiled_section("materialize.summarize_run"):
+                result.metrics["summary"] = ctx.summarize_run_fn(result)
+        with profiled_section("materialize.auto_score_result"):
+            metrics = ctx.auto_score_result_fn(
+                result,
+                auto_exc_freq_hz=_auto_safe_float(
+                    final_data.get("_auto_exc_freq_hz", float("nan")),
+                    float("nan"),
+                ),
+                base_data=final_data,
+            )
+        if bool(use_score_only_cache) and score_only_cache_key is not None:
+            score_only_materialize_cache[str(score_only_cache_key)] = (
+                result,
+                dict(metrics or {}),
+                dict(final_data or {}),
+            )
         return result, dict(metrics or {}), dict(final_data or {})
 
     def _preset_signature_ignoring_residual(preset: dict | None) -> str:
@@ -198,143 +240,144 @@ def build_materialize_helpers(ctx: AutoModeMaterializeContext):
         if bool(cur_best_preset.get("enable_residual_pass", False)):
             return cur_best_preset, cur_best_metrics, False
 
-        logger.debug("Automatic mode residual tie-break starting (%s)", phase_label)
-        top_k = int(max(1, _auto_safe_int(ctx.residual_top_k, 3)))
-        rank_eps = float(max(0.0, _auto_safe_float(ctx.residual_rank_eps, 0.35)))
-        best_rank = _auto_safe_float(cur_best_metrics.get("rank_score"), float("nan"))
-        seen: set[str] = set()
-        shortlist: list[dict] = []
+        with profiled_section("residual_tiebreak"):
+            logger.debug("Automatic mode residual tie-break starting (%s)", phase_label)
+            top_k = int(max(1, _auto_safe_int(ctx.residual_top_k, 3)))
+            rank_eps = float(max(0.0, _auto_safe_float(ctx.residual_rank_eps, 0.35)))
+            best_rank = _auto_safe_float(cur_best_metrics.get("rank_score"), float("nan"))
+            seen: set[str] = set()
+            shortlist: list[dict] = []
 
-        def _maybe_add_candidate(preset: dict | None, metrics: dict | None, *, source: str) -> None:
-            if len(shortlist) >= int(top_k):
-                return
-            cand_preset = _cache_ready_preset(
-                dict(preset or {}),
-                best_metrics=dict(metrics or {}),
-            )
-            if bool(cand_preset.get("enable_residual_pass", False)):
-                return
-            sig = _preset_signature_ignoring_residual(cand_preset)
-            if sig in seen:
-                return
-            rank_v = _auto_safe_float(dict(metrics or {}).get("rank_score"), float("nan"))
-            if np.isfinite(best_rank) and np.isfinite(rank_v):
-                if float(best_rank - rank_v) > float(rank_eps):
+            def _maybe_add_candidate(preset: dict | None, metrics: dict | None, *, source: str) -> None:
+                if len(shortlist) >= int(top_k):
                     return
-            seen.add(sig)
-            shortlist.append(
-                {
-                    "preset": dict(cand_preset or {}),
-                    "metrics": dict(metrics or {}),
-                    "source": str(source),
-                }
-            )
-
-        _maybe_add_candidate(cur_best_preset, cur_best_metrics, source="current_best")
-        ranked_items = sorted(
-            [dict(it or {}) for it in list(candidate_items or []) if isinstance(it, dict)],
-            key=lambda it: ctx.auto_rank_key_fn(dict(it.get("metrics", {}) or {})),
-        )
-        for item in ranked_items:
-            _maybe_add_candidate(
-                dict(item.get("preset", {}) or {}),
-                dict(item.get("metrics", {}) or {}),
-                source=str(item.get("phase", item.get("source", "candidate")) or "candidate"),
-            )
-
-        if not shortlist:
-            return cur_best_preset, cur_best_metrics, False
-
-        improved = False
-        logger.info(
-            "Automatic mode residual tie-break: testing %d finalist preset(s) within %.2f rank window.",
-            int(len(shortlist)),
-            float(rank_eps),
-        )
-        for idx, item in enumerate(shortlist, start=1):
-            cand_base = dict(item.get("preset", {}) or {})
-            cand_test = dict(cand_base or {})
-            cand_test["enable_residual_pass"] = True
-            try:
-                _residual_result, residual_metrics, _residual_data = _materialize_preset_result(
-                    cand_test,
-                    include_response_arrays=False,
-                    summarize=False,
-                    base_data_override=base_data_ref,
+                cand_preset = _cache_ready_preset(
+                    dict(preset or {}),
+                    best_metrics=dict(metrics or {}),
                 )
-            except Exception as exc:
-                logger.warning(
-                    "Automatic mode residual tie-break failed for finalist %d/%d (%s): %s",
+                if bool(cand_preset.get("enable_residual_pass", False)):
+                    return
+                sig = _preset_signature_ignoring_residual(cand_preset)
+                if sig in seen:
+                    return
+                rank_v = _auto_safe_float(dict(metrics or {}).get("rank_score"), float("nan"))
+                if np.isfinite(best_rank) and np.isfinite(rank_v):
+                    if float(best_rank - rank_v) > float(rank_eps):
+                        return
+                seen.add(sig)
+                shortlist.append(
+                    {
+                        "preset": dict(cand_preset or {}),
+                        "metrics": dict(metrics or {}),
+                        "source": str(source),
+                    }
+                )
+
+            _maybe_add_candidate(cur_best_preset, cur_best_metrics, source="current_best")
+            ranked_items = sorted(
+                [dict(it or {}) for it in list(candidate_items or []) if isinstance(it, dict)],
+                key=lambda it: ctx.auto_rank_key_fn(dict(it.get("metrics", {}) or {})),
+            )
+            for item in ranked_items:
+                _maybe_add_candidate(
+                    dict(item.get("preset", {}) or {}),
+                    dict(item.get("metrics", {}) or {}),
+                    source=str(item.get("phase", item.get("source", "candidate")) or "candidate"),
+                )
+
+            if not shortlist:
+                return cur_best_preset, cur_best_metrics, False
+
+            improved = False
+            logger.info(
+                "Automatic mode residual tie-break: testing %d finalist preset(s) within %.2f rank window.",
+                int(len(shortlist)),
+                float(rank_eps),
+            )
+            for idx, item in enumerate(shortlist, start=1):
+                cand_base = dict(item.get("preset", {}) or {})
+                cand_test = dict(cand_base or {})
+                cand_test["enable_residual_pass"] = True
+                try:
+                    _residual_result, residual_metrics, _residual_data = _materialize_preset_result(
+                        cand_test,
+                        include_response_arrays=False,
+                        summarize=False,
+                        base_data_override=base_data_ref,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Automatic mode residual tie-break failed for finalist %d/%d (%s): %s",
+                        int(idx),
+                        int(len(shortlist)),
+                        str(item.get("source", "candidate")),
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                    continue
+
+                residual_metrics = dict(residual_metrics or {})
+                decision = ctx.auto_is_better_refine_fn(
+                    residual_metrics,
+                    cur_best_metrics,
+                    goal,
+                    return_reason=True,
+                )
+                if isinstance(decision, tuple):
+                    better, reason = decision
+                else:
+                    better, reason = bool(decision), ""
+                # Guard: reject residual if avg_score drops significantly
+                if bool(better):
+                    prev_avg = _auto_safe_float(cur_best_metrics.get("avg_score"), float("nan"))
+                    new_avg = _auto_safe_float(residual_metrics.get("avg_score"), float("nan"))
+                    if np.isfinite(prev_avg) and np.isfinite(new_avg):
+                        avg_drop = float(prev_avg - new_avg)
+                        if avg_drop > 3.0:
+                            better = False
+                            reason = "avg_score_guard"
+                            logger.info(
+                                "Automatic mode residual tie-break: rejected finalist %d/%d due to "
+                                "avg_score drop %.1f (%.1f -> %.1f)",
+                                int(idx), int(len(shortlist)),
+                                float(avg_drop), float(prev_avg), float(new_avg),
+                            )
+                            continue
+                base_rank = _auto_safe_float(dict(item.get("metrics", {}) or {}).get("rank_score"), float("nan"))
+                new_rank = _auto_safe_float(residual_metrics.get("rank_score"), float("nan"))
+                logger.info(
+                    "Automatic mode residual tie-break finalist %d/%d (%s): base_rank=%.3f -> residual_rank=%.3f, decision=%s (%s)",
                     int(idx),
                     int(len(shortlist)),
                     str(item.get("source", "candidate")),
-                    f"{type(exc).__name__}: {exc}",
+                    float(base_rank) if np.isfinite(base_rank) else float("nan"),
+                    float(new_rank) if np.isfinite(new_rank) else float("nan"),
+                    "accept" if bool(better) else "reject",
+                    str(reason),
                 )
-                continue
+                if not bool(better):
+                    continue
 
-            residual_metrics = dict(residual_metrics or {})
-            decision = ctx.auto_is_better_refine_fn(
-                residual_metrics,
-                cur_best_metrics,
-                goal,
-                return_reason=True,
-            )
-            if isinstance(decision, tuple):
-                better, reason = decision
-            else:
-                better, reason = bool(decision), ""
-            # Guard: reject residual if avg_score drops significantly
-            if bool(better):
-                prev_avg = _auto_safe_float(cur_best_metrics.get("avg_score"), float("nan"))
-                new_avg = _auto_safe_float(residual_metrics.get("avg_score"), float("nan"))
-                if np.isfinite(prev_avg) and np.isfinite(new_avg):
-                    avg_drop = float(prev_avg - new_avg)
-                    if avg_drop > 3.0:
-                        better = False
-                        reason = "avg_score_guard"
-                        logger.info(
-                            "Automatic mode residual tie-break: rejected finalist %d/%d due to "
-                            "avg_score drop %.1f (%.1f -> %.1f)",
-                            int(idx), int(len(shortlist)),
-                            float(avg_drop), float(prev_avg), float(new_avg),
-                        )
-                        continue
-            base_rank = _auto_safe_float(dict(item.get("metrics", {}) or {}).get("rank_score"), float("nan"))
-            new_rank = _auto_safe_float(residual_metrics.get("rank_score"), float("nan"))
-            logger.info(
-                "Automatic mode residual tie-break finalist %d/%d (%s): base_rank=%.3f -> residual_rank=%.3f, decision=%s (%s)",
-                int(idx),
-                int(len(shortlist)),
-                str(item.get("source", "candidate")),
-                float(base_rank) if np.isfinite(base_rank) else float("nan"),
-                float(new_rank) if np.isfinite(new_rank) else float("nan"),
-                "accept" if bool(better) else "reject",
-                str(reason),
-            )
-            if not bool(better):
-                continue
-
-            prev_best = dict(cur_best_metrics or {})
-            cur_best_metrics = dict(residual_metrics or {})
-            cur_best_preset = _cache_ready_preset(cand_test, best_metrics=cur_best_metrics)
-            improved = True
-            logger.info(
-                "Automatic mode residual tie-break accepted finalist %d/%d: rank %.3f -> %.3f, avg %.3f -> %.3f",
-                int(idx),
-                int(len(shortlist)),
-                _auto_safe_float(prev_best.get("rank_score"), 0.0),
-                _auto_safe_float(cur_best_metrics.get("rank_score"), 0.0),
-                _auto_safe_float(prev_best.get("avg_score"), 0.0),
-                _auto_safe_float(cur_best_metrics.get("avg_score"), 0.0),
-            )
-            if callable(status_cb):
-                status_cb(
-                    "CamillaFIR automatic mode: residual tie-break improved "
-                    f"(rank {_auto_safe_float(cur_best_metrics.get('rank_score'), 0.0):.3f}, "
-                    f"avg {_auto_safe_float(cur_best_metrics.get('avg_score'), 0.0):.3f})"
+                prev_best = dict(cur_best_metrics or {})
+                cur_best_metrics = dict(residual_metrics or {})
+                cur_best_preset = _cache_ready_preset(cand_test, best_metrics=cur_best_metrics)
+                improved = True
+                logger.info(
+                    "Automatic mode residual tie-break accepted finalist %d/%d: rank %.3f -> %.3f, avg %.3f -> %.3f",
+                    int(idx),
+                    int(len(shortlist)),
+                    _auto_safe_float(prev_best.get("rank_score"), 0.0),
+                    _auto_safe_float(cur_best_metrics.get("rank_score"), 0.0),
+                    _auto_safe_float(prev_best.get("avg_score"), 0.0),
+                    _auto_safe_float(cur_best_metrics.get("avg_score"), 0.0),
                 )
+                if callable(status_cb):
+                    status_cb(
+                        "CamillaFIR automatic mode: residual tie-break improved "
+                        f"(rank {_auto_safe_float(cur_best_metrics.get('rank_score'), 0.0):.3f}, "
+                        f"avg {_auto_safe_float(cur_best_metrics.get('avg_score'), 0.0):.3f})"
+                    )
 
-        return cur_best_preset, cur_best_metrics, bool(improved)
+            return cur_best_preset, cur_best_metrics, bool(improved)
 
     return (
         _cache_ready_preset,

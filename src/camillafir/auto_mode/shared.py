@@ -21,7 +21,7 @@ AUTO_MODE_SUBWOOFERS_LEVEL_MAX_HZ = 200.0
 AUTO_MODE_CACHE_ENABLED = True
 AUTO_MODE_CACHE_MAX_ITEMS = 64
 # Bump only when AUTO mode cache/Optuna persistence compatibility changes.
-AUTO_MODE_COMPAT_VERSION = "am3"
+AUTO_MODE_COMPAT_VERSION = "am4"
 AUTO_MODE_CACHE_FILENAME = "camillafir_auto_mode_cache.json"
 AUTO_MODE_CACHE_FILTER_KEYS = ("linear", "mixed", "minimum", "asym")
 AUTO_MODE_PHASE1_PLATEAU_ROUNDS = 5
@@ -70,8 +70,8 @@ AUTO_MODE_REFINE_TIEBREAK_RIPPLE_EPS = 0.02
 AUTO_MODE_REFINE_MODE_SOFT_K = 0.25
 AUTO_MODE_REFINE_MODE_BOOST_GUARD_MIN_RIPPLE_GAIN_DB = 0.06
 AUTO_MODE_PARALLEL_ENABLED = True
-AUTO_MODE_PARALLEL_MIN_TRIALS = 1
-AUTO_MODE_PARALLEL_MAX_WORKERS = 4
+AUTO_MODE_PARALLEL_MIN_TRIALS = 4
+AUTO_MODE_PARALLEL_MAX_WORKERS = 0
 AUTO_MODE_PARALLEL_BATCH_MULTIPLIER = 2
 AUTO_MODE_OPTUNA_PILOT_ENABLED = True
 AUTO_MODE_OPTUNA_PILOT_MIN_TRIALS = 24
@@ -696,7 +696,9 @@ class AutoModeConfig:
 
 
 def _auto_trial_workers(base_data: dict | None, n_trials: int) -> int:
-    if (not bool(AUTO_MODE_PARALLEL_ENABLED)) or int(n_trials) < int(AUTO_MODE_PARALLEL_MIN_TRIALS):
+    trials_n = int(max(1, _auto_safe_int(n_trials, 1)))
+    min_trials = int(max(1, _auto_safe_int(AUTO_MODE_PARALLEL_MIN_TRIALS, 1)))
+    if (not bool(AUTO_MODE_PARALLEL_ENABLED)) or trials_n < min_trials:
         return 1
     cpu_n = int(max(1, _auto_safe_int(os.cpu_count(), 1)))
     env_raw = os.environ.get("CAMILLAFIR_AUTO_MODE_WORKERS", "").strip()
@@ -708,7 +710,9 @@ def _auto_trial_workers(base_data: dict | None, n_trials: int) -> int:
     hard_max = int(max(0, _auto_safe_int(AUTO_MODE_PARALLEL_MAX_WORKERS, 0)))
     if hard_max > 0:
         req = min(req, hard_max)
-    req = int(max(1, min(int(req), int(cpu_n), int(max(1, n_trials)))))
+    # Keep at least `min_trials` work items per worker so tiny runs stay sequential.
+    trial_budget_cap = int(max(1, trials_n // min_trials))
+    req = int(max(1, min(int(req), int(cpu_n), trial_budget_cap)))
     return int(req)
 
 

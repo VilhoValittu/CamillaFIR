@@ -158,8 +158,36 @@ def _inject_filter_mags_for_ui(st: dict | None, filt_ir, fs: int):
         return
 
 
+def _gd_abs_spread_ms(gd_ms, *, mask=None) -> float | None:
+    try:
+        gd = np.asarray(gd_ms, dtype=float).reshape(-1)
+    except Exception:
+        return None
+    if gd.size == 0:
+        return None
+
+    valid = np.isfinite(gd)
+    if mask is not None:
+        try:
+            band_mask = np.asarray(mask, dtype=bool).reshape(-1)
+        except Exception:
+            return None
+        if band_mask.size != gd.size:
+            return None
+        valid &= band_mask
+    if np.count_nonzero(valid) < 16:
+        return None
+
+    gd_abs = np.abs(gd[valid])
+    lo = float(np.percentile(gd_abs, 5.0))
+    hi = float(np.percentile(gd_abs, 95.0))
+    if not (np.isfinite(lo) and np.isfinite(hi)):
+        return None
+    return float(max(0.0, hi - lo))
+
+
 def _inject_filter_gd_stats(st: dict | None, filt_ir, fs: int, lo_hz: float = 20.0, hi_hz: float = 500.0) -> None:
-    """Compute delay-compensated absolute GD from the final filter IR and store in st."""
+    """Compute delay-compensated absolute-GD spread from the final filter IR and store in st."""
     try:
         if st is None or filt_ir is None:
             return
@@ -177,12 +205,11 @@ def _inject_filter_gd_stats(st: dict | None, filt_ir, fs: int, lo_hz: float = 20
                                nan=0.0, posinf=0.0, neginf=0.0)
         # 5-95th percentile range in band — robust to spikes, no delay compensation needed
         mask = (f_fft >= float(lo_hz)) & (f_fft <= float(hi_hz)) & np.isfinite(gd_ms)
-        if np.count_nonzero(mask) >= 16:
-            gd_band = gd_ms[mask]
-            gd_range = float(np.percentile(gd_band, 95.0) - np.percentile(gd_band, 5.0))
-            st["gd_abs_max_20_500_ms"] = float(abs(gd_range))
-        else:
+        gd_range = _gd_abs_spread_ms(gd_ms, mask=mask)
+        if gd_range is None:
             st["gd_abs_max_20_500_ms"] = None
+        else:
+            st["gd_abs_max_20_500_ms"] = float(gd_range)
     except Exception:
         if isinstance(st, dict):
             st["gd_abs_max_20_500_ms"] = None

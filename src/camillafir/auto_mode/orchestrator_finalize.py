@@ -6,6 +6,7 @@ import logging
 
 import numpy as np
 
+from .auto_mode_profile import profiled_section
 from .cache_signature import (
     _auto_cache_put_best,
     _auto_cache_put_last_used_best,
@@ -177,59 +178,63 @@ def _finalize_cached_result(
     cache_refine_rollup_tel = dict(cache_refine_result.get("cache_refine_rollup_tel", {}) or {})
     stop_reason = str(cache_refine_result.get("stop_reason", "max_rounds") or "max_rounds")
     try:
-        best_preset, best_metrics, residual_cache_improved = _maybe_apply_residual_tiebreak(
-            best_preset=best_preset,
-            best_metrics=best_metrics,
-            candidate_items=None,
-            base_data_ref=cache_base_data,
-            phase_label="cache residual tie-break",
-        )
+        with profiled_section("finalize.cache_residual_tiebreak"):
+            best_preset, best_metrics, residual_cache_improved = _maybe_apply_residual_tiebreak(
+                best_preset=best_preset,
+                best_metrics=best_metrics,
+                candidate_items=None,
+                base_data_ref=cache_base_data,
+                phase_label="cache residual tie-break",
+            )
         if bool(residual_cache_improved):
             improved_any = True
             improved_count_total += 1
 
-        best_preset, best_metrics, phase_limit_cache_improved, phase_limit_cache_meta = apply_phase_limit_winner_polish(
-            best_preset=best_preset,
-            best_metrics=best_metrics,
-            base_data_ref=cache_base_data,
-            phase_label="cache phase_limit winner polish",
-            goal=goal,
-            filter_key=filter_key,
-            enabled=bool(runtime.phase_limit_winner_polish_enabled),
-            offsets_hz=tuple(runtime.phase_limit_winner_polish_offsets_hz),
-            status_cb=status_cb,
-            materialize_preset_result=_materialize_preset_result,
-            cache_ready_preset=_cache_ready_preset,
-            auto_is_better_refine=_auto_is_better_refine,
-        )
+        with profiled_section("finalize.cache_phase_limit_winner_polish"):
+            best_preset, best_metrics, phase_limit_cache_improved, phase_limit_cache_meta = apply_phase_limit_winner_polish(
+                best_preset=best_preset,
+                best_metrics=best_metrics,
+                base_data_ref=cache_base_data,
+                phase_label="cache phase_limit winner polish",
+                goal=goal,
+                filter_key=filter_key,
+                enabled=bool(runtime.phase_limit_winner_polish_enabled),
+                offsets_hz=tuple(runtime.phase_limit_winner_polish_offsets_hz),
+                status_cb=status_cb,
+                materialize_preset_result=_materialize_preset_result,
+                cache_ready_preset=_cache_ready_preset,
+                auto_is_better_refine=_auto_is_better_refine,
+            )
         if bool(phase_limit_cache_improved):
             improved_any = True
             improved_count_total += 1
 
-        best_preset, best_metrics, mag_c_min_cache_improved, mag_c_min_cache_meta = apply_mag_c_min_winner_polish(
-            best_preset=best_preset,
-            best_metrics=best_metrics,
-            base_data_ref=cache_base_data,
-            phase_label="cache mag_c_min winner polish",
-            goal=goal,
-            enabled=bool(runtime.mag_c_min_winner_polish_enabled),
-            step_hz=float(runtime.mag_c_min_winner_polish_step_hz),
-            max_down_hz=float(runtime.mag_c_min_winner_polish_max_down_hz),
-            status_cb=status_cb,
-            materialize_preset_result=_materialize_preset_result,
-            cache_ready_preset=_cache_ready_preset,
-            auto_is_better_refine=_auto_is_better_refine,
-        )
+        with profiled_section("finalize.cache_mag_c_min_winner_polish"):
+            best_preset, best_metrics, mag_c_min_cache_improved, mag_c_min_cache_meta = apply_mag_c_min_winner_polish(
+                best_preset=best_preset,
+                best_metrics=best_metrics,
+                base_data_ref=cache_base_data,
+                phase_label="cache mag_c_min winner polish",
+                goal=goal,
+                enabled=bool(runtime.mag_c_min_winner_polish_enabled),
+                step_hz=float(runtime.mag_c_min_winner_polish_step_hz),
+                max_down_hz=float(runtime.mag_c_min_winner_polish_max_down_hz),
+                status_cb=status_cb,
+                materialize_preset_result=_materialize_preset_result,
+                cache_ready_preset=_cache_ready_preset,
+                auto_is_better_refine=_auto_is_better_refine,
+            )
         if bool(mag_c_min_cache_improved):
             improved_any = True
             improved_count_total += 1
 
-        best_result, best_metrics_recalc, best_data = _materialize_preset_result(
-            best_preset,
-            include_response_arrays=True,
-            summarize=True,
-            base_data_override=cache_base_data,
-        )
+        with profiled_section("finalize.cache_materialize_best"):
+            best_result, best_metrics_recalc, best_data = _materialize_preset_result(
+                best_preset,
+                include_response_arrays=True,
+                summarize=True,
+                base_data_override=cache_base_data,
+            )
         best_metrics = attach_official_rank_score(best_metrics_recalc or best_metrics)
         best_applied_preset = dict(best_data or best_preset or {})
         best_cache_preset = _cache_ready_preset(best_preset, best_metrics=best_metrics)
@@ -559,13 +564,14 @@ def finalize_search_result(
         return None
 
     residual_candidate_items = list(search_state.phase2_pool or search_state.scored or [])
-    residual_best_preset, residual_best_metrics, residual_improved = _maybe_apply_residual_tiebreak(
-        best_preset=search_state.best_preset,
-        best_metrics=search_state.best_metrics,
-        candidate_items=residual_candidate_items,
-        base_data_ref=search_base_data,
-        phase_label="residual tie-break",
-    )
+    with profiled_section("finalize.residual_tiebreak"):
+        residual_best_preset, residual_best_metrics, residual_improved = _maybe_apply_residual_tiebreak(
+            best_preset=search_state.best_preset,
+            best_metrics=search_state.best_metrics,
+            candidate_items=residual_candidate_items,
+            base_data_ref=search_base_data,
+            phase_label="residual tie-break",
+        )
     if bool(residual_improved):
         from .search_state import _auto_set_search_winner
 
@@ -579,20 +585,21 @@ def finalize_search_result(
             target_name=winner_target_name,
         )
 
-    polished_best_preset, polished_best_metrics, phase_limit_polish_improved, phase_limit_polish_meta = apply_phase_limit_winner_polish(
-        best_preset=search_state.best_preset,
-        best_metrics=search_state.best_metrics,
-        base_data_ref=search_base_data,
-        phase_label="phase_limit winner polish",
-        goal=goal,
-        filter_key=filter_key,
-        enabled=bool(runtime.phase_limit_winner_polish_enabled),
-        offsets_hz=tuple(runtime.phase_limit_winner_polish_offsets_hz),
-        status_cb=status_cb,
-        materialize_preset_result=_materialize_preset_result,
-        cache_ready_preset=_cache_ready_preset,
-        auto_is_better_refine=_auto_is_better_refine,
-    )
+    with profiled_section("finalize.phase_limit_winner_polish"):
+        polished_best_preset, polished_best_metrics, phase_limit_polish_improved, phase_limit_polish_meta = apply_phase_limit_winner_polish(
+            best_preset=search_state.best_preset,
+            best_metrics=search_state.best_metrics,
+            base_data_ref=search_base_data,
+            phase_label="phase_limit winner polish",
+            goal=goal,
+            filter_key=filter_key,
+            enabled=bool(runtime.phase_limit_winner_polish_enabled),
+            offsets_hz=tuple(runtime.phase_limit_winner_polish_offsets_hz),
+            status_cb=status_cb,
+            materialize_preset_result=_materialize_preset_result,
+            cache_ready_preset=_cache_ready_preset,
+            auto_is_better_refine=_auto_is_better_refine,
+        )
     if bool(phase_limit_polish_improved):
         from .search_state import _auto_set_search_winner
 
@@ -606,20 +613,22 @@ def finalize_search_result(
             target_name=winner_target_name,
         )
 
-    mag_c_min_best_preset, mag_c_min_best_metrics, mag_c_min_polish_improved, mag_c_min_polish_meta = apply_mag_c_min_winner_polish(
-        best_preset=search_state.best_preset,
-        best_metrics=search_state.best_metrics,
-        base_data_ref=search_base_data,
-        phase_label="mag_c_min winner polish",
-        goal=goal,
-        enabled=bool(runtime.mag_c_min_winner_polish_enabled),
-        step_hz=float(runtime.mag_c_min_winner_polish_step_hz),
-        max_down_hz=float(runtime.mag_c_min_winner_polish_max_down_hz),
-        status_cb=status_cb,
-        materialize_preset_result=_materialize_preset_result,
-        cache_ready_preset=_cache_ready_preset,
-        auto_is_better_refine=_auto_is_better_refine,
-    )
+    with profiled_section("finalize.mag_c_min_winner_polish"):
+        mag_c_min_best_preset, mag_c_min_best_metrics, mag_c_min_polish_improved, mag_c_min_polish_meta = apply_mag_c_min_winner_polish(
+            best_preset=search_state.best_preset,
+            best_metrics=search_state.best_metrics,
+            base_data_ref=search_base_data,
+            phase_label="mag_c_min winner polish",
+            goal=goal,
+            enabled=bool(runtime.mag_c_min_winner_polish_enabled),
+            step_hz=float(runtime.mag_c_min_winner_polish_step_hz),
+            max_down_hz=float(runtime.mag_c_min_winner_polish_max_down_hz),
+            status_cb=status_cb,
+            materialize_preset_result=_materialize_preset_result,
+            cache_ready_preset=_cache_ready_preset,
+            auto_is_better_refine=_auto_is_better_refine,
+            candidate_items=list(search_state.phase2_pool or search_state.scored or []),
+        )
     if bool(mag_c_min_polish_improved):
         from .search_state import _auto_set_search_winner
 
@@ -635,12 +644,13 @@ def finalize_search_result(
 
     try:
         final_best_preset = dict(search_state.best_preset or {})
-        best_result, best_metrics_recalc, best_data = _materialize_preset_result(
-            final_best_preset,
-            include_response_arrays=True,
-            summarize=True,
-            base_data_override=search_base_data,
-        )
+        with profiled_section("finalize.materialize_best"):
+            best_result, best_metrics_recalc, best_data = _materialize_preset_result(
+                final_best_preset,
+                include_response_arrays=True,
+                summarize=True,
+                base_data_override=search_base_data,
+            )
         search_state.best_result = best_result
         search_state.best_metrics = dict(best_metrics_recalc or {})
         search_state.best_preset = dict(best_data or final_best_preset or {})

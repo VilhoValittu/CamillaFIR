@@ -39,7 +39,7 @@ def analysis_smoothing_lf_to_hf(
     return (1.0 - w) * m_low + w * m_high
 
 
-def run_preprocess(freqs, meas_mags, raw_phases, cfg, *, stereo_link_ctx=None) -> PreprocessResult:
+def run_preprocess(freqs, meas_mags, raw_phases, cfg, *, stereo_link_ctx=None, presolve_mode: bool = False) -> PreprocessResult:
     min_len = min(len(freqs), len(meas_mags), len(raw_phases))
     f_in = np.asarray(freqs[:min_len], dtype=float)
     m_in = np.asarray(meas_mags[:min_len], dtype=float)
@@ -55,14 +55,16 @@ def run_preprocess(freqs, meas_mags, raw_phases, cfg, *, stereo_link_ctx=None) -
         m_in = m_in[uniq_mask]
         p_in = p_in[uniq_mask]
 
-    n_fft = cfg.num_taps if cfg.num_taps % 2 != 0 else cfg.num_taps + 1
-    freq_axis = np.linspace(0, cfg.fs / 2.0, n_fft // 2 + 1)
+    # Preserve the requested FIR length; bumping even tap counts to n+1 creates
+    # prime-sized FFTs (for example 65536 -> 65537), which is dramatically slower.
+    n_fft = int(cfg.num_taps)
+    freq_axis = np.fft.rfftfreq(n_fft, d=1.0 / float(cfg.fs))
 
     gain_db = np.zeros_like(freq_axis, dtype=float)
     st: dict = {}
     target_mags = np.zeros_like(freq_axis, dtype=float)
 
-    is_psy = "psy" in str(cfg.plot_smoothing_level).lower()
+    is_psy = (not bool(presolve_mode)) and ("psy" in str(cfg.plot_smoothing_level).lower())
 
     m_smooth_std = analysis_smoothing_lf_to_hf(
         f_in, m_in, low_bw=1 / 48.0, high_bw=1 / 3.0, f_lo=230.0, f_hi=400.0
@@ -94,11 +96,11 @@ def run_preprocess(freqs, meas_mags, raw_phases, cfg, *, stereo_link_ctx=None) -
     cmp = None
     analysis_mode = "native"
     try:
-        if bool(getattr(cfg, "comparison_mode", False)):
+        if (not bool(presolve_mode)) and bool(getattr(cfg, "comparison_mode", False)):
             ref_fs = int(getattr(cfg, "comparison_ref_fs", 44100) or 44100)
             ref_taps = int(getattr(cfg, "comparison_ref_taps", 65536) or 65536)
-            ref_nfft = ref_taps if (ref_taps % 2 != 0) else (ref_taps + 1)
-            freq_cmp_full = np.linspace(0, ref_fs / 2.0, ref_nfft // 2 + 1)
+            ref_nfft = int(ref_taps)
+            freq_cmp_full = np.fft.rfftfreq(ref_nfft, d=1.0 / float(ref_fs))
 
             fmax = float(freq_axis[-1]) if freq_axis.size else 0.0
             if fmax > 0:

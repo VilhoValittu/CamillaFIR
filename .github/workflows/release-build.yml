@@ -35,6 +35,33 @@ jobs:
           pip install -r requirements-linux.txt
           pip install pytest
 
+      - name: Smoke test source entrypoint
+        shell: bash
+        run: |
+          python - << 'PY'
+          import os
+          import runpy
+          import sys
+
+          repo = os.path.abspath(".")
+          script = os.path.join(repo, "src", "camillafir", "__main__.py")
+          script_dir = os.path.dirname(script)
+          if script_dir not in sys.path:
+              sys.path.insert(0, script_dir)
+
+          from nicegui import ui
+
+          called = {}
+
+          def fake_run(*args, **kwargs):
+              called["kwargs"] = dict(kwargs)
+
+          ui.run = fake_run
+          runpy.run_path(script, run_name="__main__")
+
+          assert called.get("kwargs", {}).get("title") == "CamillaFIR"
+          PY
+
       - name: Run tests
         shell: bash
         run: |

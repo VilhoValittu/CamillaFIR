@@ -2,9 +2,11 @@ from types import SimpleNamespace
 
 import numpy as np
 
+import camillafir.dsp.camillafir_leveling as leveling_module
 from camillafir.config.models import FilterConfig
 from camillafir.dsp.camillafir_dsp import generate_filter, generate_filter_pair
 from camillafir.dsp.camillafir_leveling import (
+    StereoLinkContext,
     compute_leveling,
     find_shared_stereo_level_window,
     find_stable_level_window,
@@ -209,6 +211,78 @@ def test_find_shared_stereo_level_window_prefers_common_compromise():
     assert 1200.0 < shared_window[1] < 1700.0
 
 
+def test_find_stable_level_window_reuses_exact_cache(monkeypatch):
+    leveling_module._clear_level_window_cache()
+    freq = np.linspace(500.0, 2000.0, 2001, dtype=float)
+    mags = np.zeros_like(freq)
+    target = np.zeros_like(freq)
+    calls = {"count": 0}
+
+    def fake_impl(*_args, **_kwargs):
+        calls["count"] += 1
+        return 640.0, 1280.0
+
+    monkeypatch.setattr(leveling_module, "find_stable_level_window_impl", fake_impl)
+
+    first = find_stable_level_window(freq, mags, target, 500.0, 2000.0)
+    second = find_stable_level_window(freq, mags, target, 500.0, 2000.0)
+
+    assert calls["count"] == 1
+    assert first == (640.0, 1280.0)
+    assert second == first
+
+    leveling_module._clear_level_window_cache()
+
+
+def test_find_stable_level_window_cache_ignores_irrelevant_params(monkeypatch):
+    leveling_module._clear_level_window_cache()
+    freq = np.linspace(500.0, 2000.0, 2001, dtype=float)
+    mags = np.zeros_like(freq)
+    target = np.zeros_like(freq)
+    calls = {"count": 0}
+
+    def fake_impl(*_args, **_kwargs):
+        calls["count"] += 1
+        return 720.0, 1440.0
+
+    monkeypatch.setattr(leveling_module, "find_stable_level_window_impl", fake_impl)
+
+    first = find_stable_level_window(
+        freq,
+        mags,
+        target,
+        500.0,
+        2000.0,
+        tilt_comp=False,
+        tilt_max_db_per_oct=2.0,
+        perceptual_weighting=False,
+        perceptual_strength=0.18,
+        perceptual_min_hz=250.0,
+        perceptual_max_hz=4000.0,
+        perceptual_tie_only=True,
+    )
+    second = find_stable_level_window(
+        freq,
+        mags,
+        target,
+        500.0,
+        2000.0,
+        tilt_comp=False,
+        tilt_max_db_per_oct=24.0,
+        perceptual_weighting=False,
+        perceptual_strength=0.85,
+        perceptual_min_hz=900.0,
+        perceptual_max_hz=1800.0,
+        perceptual_tie_only=False,
+    )
+
+    assert calls["count"] == 1
+    assert first == (720.0, 1440.0)
+    assert second == first
+
+    leveling_module._clear_level_window_cache()
+
+
 def test_stereo_link_shared_anchors_to_quieter_channel_without_boost():
     freq = np.linspace(20.0, 20000.0, 2048, dtype=float)
     phase = np.zeros_like(freq)
@@ -240,3 +314,140 @@ def test_stereo_link_shared_anchors_to_quieter_channel_without_boost():
     assert np.any(mask)
     assert abs(float(np.median(filt_left[mask]))) < 0.5
     assert float(np.median(filt_right[mask])) < -4.5
+
+
+def test_stereo_link_shared_auto_gain_matches_independent_channel_peaks():
+    freq = np.linspace(20.0, 20000.0, 2048, dtype=float)
+    phase = np.zeros_like(freq)
+    left = np.zeros_like(freq)
+    right = np.full_like(freq, 6.0)
+
+    single_cfg = FilterConfig(
+        fs=44100,
+        num_taps=65536,
+        filter_type_str="Linear Phase",
+        stereo_link=False,
+        mag_c_min=20.0,
+        mag_c_max=20000.0,
+    )
+    stereo_cfg = FilterConfig(
+        fs=44100,
+        num_taps=65536,
+        filter_type_str="Linear Phase",
+        stereo_link=True,
+        stereo_link_strategy="shared",
+        mag_c_min=20.0,
+        mag_c_max=20000.0,
+    )
+
+    _, left_single = generate_filter(freq, left, phase, single_cfg)
+    _, right_single = generate_filter(freq, right, phase, single_cfg)
+    _, left_linked, _, right_linked = generate_filter_pair(freq, left, phase, freq, right, phase, stereo_cfg)
+
+    expected_shared = min(
+        float(left_single.get("auto_global_gain_db", 0.0) or 0.0),
+        float(right_single.get("auto_global_gain_db", 0.0) or 0.0),
+    )
+
+    assert float(left_linked.get("stereo_link_shared_auto_gain_db", 0.0) or 0.0) == expected_shared
+    assert float(right_linked.get("stereo_link_shared_auto_gain_db", 0.0) or 0.0) == expected_shared
+
+
+def test_compute_leveling_reuses_exact_auto_leveling_cache(monkeypatch):
+    leveling_module._clear_leveling_cache()
+    cfg = SimpleNamespace(
+        lvl_manual_db=0.0,
+        lvl_min=500.0,
+        lvl_max=2000.0,
+        lvl_mode="Auto",
+        lvl_tilt_comp=True,
+        lvl_tilt_max_db_per_oct=2.0,
+        lvl_perceptual_weighting=False,
+        lvl_perceptual_strength=0.12,
+        lvl_perceptual_min_hz=250.0,
+        lvl_perceptual_max_hz=4000.0,
+        lvl_perceptual_tie_only=True,
+        stereo_link=False,
+        lvl_force_window=None,
+        lvl_force_offset_db=None,
+        hpf_settings=None,
+    )
+    freq = np.linspace(20.0, 20000.0, 2048, dtype=float)
+    target = np.zeros_like(freq)
+    measured = 1.5 * np.log2(np.clip(freq, 20.0, None) / 1000.0)
+    calls = {"count": 0}
+
+    def fake_find_stable_level_window(*_args, **_kwargs):
+        calls["count"] += 1
+        return 700.0, 1400.0
+
+    monkeypatch.setattr(leveling_module, "find_stable_level_window", fake_find_stable_level_window)
+
+    first = compute_leveling(cfg, freq, measured, target)
+    first_slope = getattr(cfg, "_lvl_tilt_slope_db_per_oct", None)
+    first_debug = dict(getattr(cfg, "_lvl_window_debug", {}))
+
+    cfg._lvl_last_error = "stale"
+    cfg._lvl_tilt_slope_db_per_oct = 999.0
+    cfg._lvl_window_debug = {"ss_min": -1.0, "ss_max": -1.0}
+
+    second = compute_leveling(cfg, freq, measured, target)
+
+    assert calls["count"] == 1
+    assert second == first
+    assert getattr(cfg, "_lvl_last_error", None) is None
+    assert getattr(cfg, "_lvl_tilt_slope_db_per_oct", None) == first_slope
+    assert getattr(cfg, "_lvl_window_debug", None) == first_debug
+
+    leveling_module._clear_leveling_cache()
+
+
+def test_compute_leveling_cache_key_includes_shared_target_level(monkeypatch):
+    leveling_module._clear_leveling_cache()
+    cfg = SimpleNamespace(
+        lvl_manual_db=0.0,
+        lvl_min=500.0,
+        lvl_max=2000.0,
+        lvl_mode="Auto",
+        lvl_tilt_comp=False,
+        lvl_tilt_max_db_per_oct=2.0,
+        lvl_perceptual_weighting=False,
+        lvl_perceptual_strength=0.12,
+        lvl_perceptual_min_hz=250.0,
+        lvl_perceptual_max_hz=4000.0,
+        lvl_perceptual_tie_only=True,
+        stereo_link=True,
+        lvl_force_window=None,
+        lvl_force_offset_db=None,
+        hpf_settings=None,
+    )
+    freq = np.linspace(20.0, 20000.0, 2048, dtype=float)
+    measured = np.zeros_like(freq)
+    target = np.zeros_like(freq)
+    calls = {"count": 0}
+
+    def fake_find_stable_level_window(*_args, **_kwargs):
+        calls["count"] += 1
+        return 800.0, 1600.0
+
+    monkeypatch.setattr(leveling_module, "find_stable_level_window", fake_find_stable_level_window)
+
+    out_low = compute_leveling(
+        cfg,
+        freq,
+        measured,
+        target,
+        stereo_link_ctx=StereoLinkContext(shared_target_level_db=0.0),
+    )
+    out_high = compute_leveling(
+        cfg,
+        freq,
+        measured,
+        target,
+        stereo_link_ctx=StereoLinkContext(shared_target_level_db=6.0),
+    )
+
+    assert calls["count"] == 2
+    assert out_low[0] != out_high[0]
+
+    leveling_module._clear_leveling_cache()

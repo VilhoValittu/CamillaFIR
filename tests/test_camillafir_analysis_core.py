@@ -3,6 +3,8 @@ import numpy as np
 from camillafir.common.result_postprocess import (
     _avg_confidence_pct,
     _ensure_scoring_keys,
+    _gd_abs_spread_ms,
+    _inject_filter_gd_stats,
     _inject_filter_mags_for_ui,
 )
 from camillafir.workflow.process_support import resolve_ui_stats_fs as _resolve_ui_stats_fs
@@ -70,6 +72,32 @@ def test_inject_filter_mags_accepts_numpy_freq_axis():
 
     assert "filter_mags" in st
     assert len(st["filter_mags"]) == 4
+
+
+def test_gd_abs_spread_ignores_linear_phase_sign_flip():
+    neg = -743.0 + np.linspace(0.0, 0.4, 32, dtype=float)
+    pos = 742.6 + np.linspace(0.0, 0.4, 32, dtype=float)
+
+    spread = _gd_abs_spread_ms(np.concatenate([neg, pos]))
+
+    assert spread is not None
+    assert spread < 2.0
+
+
+def test_inject_filter_gd_stats_tracks_abs_gd_spread():
+    n_taps = 2048
+    fs = 44100
+    m = np.arange(n_taps, dtype=float) - (n_taps - 1) / 2.0
+    ir = 2.0 * 120.0 / fs * np.sinc(2.0 * 120.0 / fs * m)
+    ir *= np.hamming(n_taps)
+    ir /= np.sum(ir)
+    st = {}
+
+    _inject_filter_gd_stats(st, ir, fs)
+
+    assert "gd_abs_max_20_500_ms" in st
+    assert np.isfinite(float(st["gd_abs_max_20_500_ms"]))
+    assert float(st["gd_abs_max_20_500_ms"]) < 30.0
 
 
 def test_avg_confidence_pct_accepts_numpy_mask():
