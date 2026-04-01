@@ -43,6 +43,7 @@ _TARGET_PREVIEW_REFRESH_TOKEN = 0
 _TARGET_PREVIEW_DRAG_BASE_POINTS: list[tuple[float, float]] = []
 _TARGET_PREVIEW_TILT_HANDLE_POINTS: list[tuple[float, float]] = []
 _TARGET_PREVIEW_DRAG_ACTIVE = False
+_TARGET_PREVIEW_PLOT = None
 
 
 def _step_manual_target(delta_db: float) -> None:
@@ -68,8 +69,16 @@ def _step_manual_target_tilt(delta_db_per_oct: float) -> None:
 
 
 def build_target_tab(*, t: Callable, get_val: Callable) -> None:
+    global _TARGET_PREVIEW_DRAG_ACTIVE, _TARGET_PREVIEW_DRAG_BASE_POINTS, _TARGET_PREVIEW_TILT_HANDLE_POINTS
+    global _TARGET_PREVIEW_PLOT
+
     from nicegui import ui
     from ..application.house_curve_service import _normalize_hc_mode_key  # noqa: PLC0415
+
+    _TARGET_PREVIEW_DRAG_ACTIVE = False
+    _TARGET_PREVIEW_DRAG_BASE_POINTS = []
+    _TARGET_PREVIEW_TILT_HANDLE_POINTS = []
+    _TARGET_PREVIEW_PLOT = None
 
     ui.markdown(f"#### {t('tab_target')}")
     ui.separator()
@@ -257,6 +266,7 @@ def refresh_target_preview() -> None:
     Reads values from ng_controls instead of PyWebIO pin.
     """
     global _TARGET_PREVIEW_DRAG_ACTIVE, _TARGET_PREVIEW_DRAG_BASE_POINTS, _TARGET_PREVIEW_TILT_HANDLE_POINTS
+    global _TARGET_PREVIEW_PLOT
 
     preview_col = ctrl.get_container("target_preview_scope")
     if preview_col is None:
@@ -265,14 +275,30 @@ def refresh_target_preview() -> None:
     fig, drag_base_points, tilt_handle_points = _build_target_preview_fig()
     _TARGET_PREVIEW_DRAG_BASE_POINTS = drag_base_points
     _TARGET_PREVIEW_TILT_HANDLE_POINTS = tilt_handle_points
-    preview_col.clear()
-    if fig is not None:
-        from nicegui import ui  # noqa: PLC0415
+    if fig is None:
+        preview_col.clear()
+        _TARGET_PREVIEW_PLOT = None
+        _TARGET_PREVIEW_DRAG_ACTIVE = False
+        return
 
-        with preview_col:
-            plot = ui.plotly(fig).classes("w-full")
-            plot.on("plotly_relayout", _on_target_preview_relayout)
+    if _TARGET_PREVIEW_PLOT is None:
+        _TARGET_PREVIEW_PLOT = _mount_target_preview_plot(preview_col, fig)
+    else:
+        try:
+            _TARGET_PREVIEW_PLOT.update_figure(fig)
+        except Exception:
+            _TARGET_PREVIEW_PLOT = _mount_target_preview_plot(preview_col, fig)
     _TARGET_PREVIEW_DRAG_ACTIVE = False
+
+
+def _mount_target_preview_plot(preview_col, fig):
+    from nicegui import ui  # noqa: PLC0415
+
+    preview_col.clear()
+    with preview_col:
+        plot = ui.plotly(fig).classes("w-full")
+        plot.on("plotly_relayout", _on_target_preview_relayout)
+    return plot
 
 
 def _schedule_target_preview_refresh(delay_s: float = 0.10) -> None:
