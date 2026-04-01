@@ -12,7 +12,7 @@ from camillafir.camillafir import PROGRAM_NAME, configure_main_app
 
 
 def main():
-    os.environ.setdefault("CAMILLAFIR_AUTO_PROFILE", "1")
+    os.environ.setdefault("CAMILLAFIR_AUTO_PROFILE", "0")
     configure_main_app()
     ui.run(
         port=8080,

@@ -19,6 +19,11 @@ from .plot_common import (
     smooth_complex,
 )
 
+_MPL_LIGHT_BG = "#ffffff"
+_MPL_LIGHT_TEXT = "#1f2937"
+_MPL_LIGHT_GRID = "#cbd5e1"
+_MPL_LIGHT_SPINE = "#94a3b8"
+
 
 def plotly_fig_to_png(fig, *, scale=2, width=None, height=None):
     try:
@@ -61,7 +66,7 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
             max_span=120.0,
             include_zero=True,
         )
-        fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(12, 18))
+        fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(12, 18), facecolor=_MPL_LIGHT_BG)
         ax1.semilogx(orig_freqs, orig_mags + offset, "b:", alpha=0.3)
         ax1.semilogx(f_lin, psychoacoustic_smoothing(f_lin, 20 * np.log10(np.abs(total_spec) + 1e-12)), "orange", linewidth=2)
         if target_stats:
@@ -71,7 +76,9 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
             f_min, f_max = target_stats["smart_scan_range"]
             ax1.axvline(f_min, color="red", linestyle="--", alpha=0.6, label=f"Final Min: {f_min:.0f}Hz")
             ax1.axvline(f_max, color="green", linestyle="--", alpha=0.6, label=f"Final Max: {f_max:.0f}Hz")
-            ax1.legend(loc="upper right", fontsize="small")
+            legend = ax1.legend(loc="upper right", fontsize="small")
+            legend.get_frame().set_facecolor(_MPL_LIGHT_BG)
+            legend.get_frame().set_edgecolor(_MPL_LIGHT_SPINE)
 
         ax1.set_ylim(avg_t - 15, avg_t + 15)
         ax2.semilogx(f_lin, filt_phase_deg, "orange", linewidth=0.9)
@@ -82,12 +89,18 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
         ax4.semilogx(f_lin, filt_db, "r", linewidth=0.9)
 
         for ax in [ax1, ax2, ax3, ax4]:
+            ax.set_facecolor(_MPL_LIGHT_BG)
             ax.set_xscale("log")
             ax.set_xlim(20, 20000)
-            ax.grid(True, which="both", alpha=0.3)
+            ax.grid(True, which="both", color=_MPL_LIGHT_GRID, alpha=0.5)
+            ax.tick_params(colors=_MPL_LIGHT_TEXT)
+            ax.xaxis.label.set_color(_MPL_LIGHT_TEXT)
+            ax.yaxis.label.set_color(_MPL_LIGHT_TEXT)
+            for spine in ax.spines.values():
+                spine.set_color(_MPL_LIGHT_SPINE)
         plt.tight_layout()
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=120)
+        fig.savefig(buf, format="png", dpi=120, facecolor=fig.get_facecolor(), edgecolor="none")
         plt.close(fig)
         buf.seek(0)
         return buf.getvalue()

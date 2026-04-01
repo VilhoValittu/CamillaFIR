@@ -545,7 +545,7 @@ def _build_target_preview_fig():
                 y=[lvl_manual_db, lvl_manual_db],
                 mode="lines",
                 name=f"Manual level ({lvl_manual_db:+.1f} dB)",
-                line=dict(color="rgba(255,255,255,0.70)", width=1.2, dash="dot"),
+                line=dict(color="rgba(15,23,42,0.55)", width=1.2, dash="dot"),
                 hoverinfo="skip",
                 visible="legendonly",
             ))
@@ -572,13 +572,29 @@ def _build_target_preview_fig():
             avg = np.mean(np.vstack([speaker_interp[k] for k in sorted(speaker_interp)]), axis=0)
             fig.add_trace(go.Scatter(
                 x=freq_axis, y=avg, mode="lines",
-                name="Speaker avg", line=dict(color="#ffd166", width=2.0),
+                name="Speaker avg", line=dict(color="#dc2626", width=2.0),
             ))
-        fig.update_xaxes(type="log", title_text="Hz",
-                         range=[math.log10(10.0), math.log10(20000.0)], fixedrange=True)
-        fig.update_yaxes(title_text="dB", range=[-10.0, 20.0], fixedrange=True)
+        fig.update_xaxes(
+            type="log",
+            title_text="Hz",
+            range=[math.log10(10.0), math.log10(20000.0)],
+            fixedrange=True,
+            gridcolor="rgba(15,23,42,0.10)",
+            linecolor="rgba(15,23,42,0.22)",
+            zerolinecolor="rgba(15,23,42,0.10)",
+        )
+        fig.update_yaxes(
+            title_text="dB",
+            range=[-10.0, 20.0],
+            fixedrange=True,
+            gridcolor="rgba(15,23,42,0.10)",
+            linecolor="rgba(15,23,42,0.22)",
+            zerolinecolor="rgba(15,23,42,0.10)",
+        )
         fig.update_layout(height=320, margin=dict(l=40, r=20, t=30, b=35),
-                          showlegend=True, template="plotly_dark",
+                          showlegend=True, template="plotly_white",
+                          paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+                          font=dict(color="#1f2937"),
                           uirevision="target_preview_lock")
         if is_manual_level and target_curve_path:
             drag_shape = build_draggable_target_shape(freq_axis, target_curve_display)

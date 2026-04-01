@@ -21,6 +21,16 @@ from .plot_common import (
     smooth_complex,
 )
 
+_PLOT_LIGHT_BG = "#ffffff"
+_PLOT_LIGHT_FONT = "#1f2937"
+_PLOT_LIGHT_GRID = "rgba(15,23,42,0.10)"
+_PLOT_LIGHT_AXIS = "rgba(15,23,42,0.22)"
+_PLOT_LIGHT_PANEL_BG = "rgba(255,255,255,0.96)"
+_PLOT_LIGHT_PANEL_BORDER = "rgba(15,23,42,0.16)"
+_PLOT_LIGHT_MUTED_LINE = "rgba(15,23,42,0.40)"
+_PLOT_LIGHT_ACTIVE_BTN_FILL = "#dbeafe"
+_PLOT_LIGHT_ACTIVE_BTN_STROKE = "#2563eb"
+
 
 def generate_prediction_plot(
     orig_freqs,
@@ -196,7 +206,7 @@ def generate_prediction_plot(
                 x1=fs / 2.0,
                 y0=ref_level,
                 y1=ref_level,
-                line=dict(color="rgba(255,255,255,0.40)", width=1, dash="dot"),
+                line=dict(color=_PLOT_LIGHT_MUTED_LINE, width=1, dash="dot"),
                 row=1,
                 col=1,
             )
@@ -207,7 +217,7 @@ def generate_prediction_plot(
                     y=[None],
                     mode="lines",
                     name=f"Level reference ({win_label})",
-                    line=dict(color="rgba(255,255,255,0.40)", width=1, dash="dot"),
+                    line=dict(color=_PLOT_LIGHT_MUTED_LINE, width=1, dash="dot"),
                     hoverinfo="skip",
                     showlegend=True,
                 ),
@@ -385,9 +395,9 @@ def generate_prediction_plot(
                         text=f"Auto gain: {ag_txt:+.2f} dB | Headroom: {ah_txt:+.2f} dB | Filter delay removed: {filt_delay_ms:.2f} ms",
                         showarrow=False,
                         align="left",
-                        font=dict(size=12, color="#f3f4f6"),
-                        bgcolor="rgba(0,0,0,0.88)",
-                        bordercolor="rgba(255,255,255,0.16)",
+                        font=dict(size=12, color=_PLOT_LIGHT_FONT),
+                        bgcolor=_PLOT_LIGHT_PANEL_BG,
+                        bordercolor=_PLOT_LIGHT_PANEL_BORDER,
                         borderwidth=1,
                     )
         except Exception:
@@ -425,10 +435,10 @@ def generate_prediction_plot(
                         xanchor="left",
                         yanchor="top",
                         showactive=True,
-                        bgcolor="rgba(0,0,0,0.92)",
-                        bordercolor="rgba(255,255,255,0.15)",
+                        bgcolor=_PLOT_LIGHT_PANEL_BG,
+                        bordercolor=_PLOT_LIGHT_PANEL_BORDER,
                         borderwidth=1,
-                        font=dict(size=12, color="#5f6061"),
+                        font=dict(size=12, color=_PLOT_LIGHT_FONT),
                         pad=dict(t=4, r=6, b=4, l=6),
                         buttons=[
                             dict(
@@ -462,8 +472,8 @@ def generate_prediction_plot(
                     xanchor="center",
                     x=0.5,
                     font=dict(size=11),
-                    bgcolor="rgba(0,0,0,0.78)",
-                    bordercolor="rgba(255,255,255,0.12)",
+                    bgcolor=_PLOT_LIGHT_PANEL_BG,
+                    bordercolor=_PLOT_LIGHT_PANEL_BORDER,
                     borderwidth=1,
                 )
             )
@@ -548,9 +558,9 @@ def generate_prediction_plot(
                 x=0.5,
                 y=0.5,
                 showarrow=False,
-                font=dict(color="#f3f4f6"),
-                bgcolor="rgba(0,0,0,0.78)",
-                bordercolor="rgba(255,255,255,0.12)",
+                font=dict(color=_PLOT_LIGHT_FONT),
+                bgcolor=_PLOT_LIGHT_PANEL_BG,
+                bordercolor=_PLOT_LIGHT_PANEL_BORDER,
                 borderwidth=1,
                 row=5,
                 col=1,
@@ -585,23 +595,23 @@ def generate_prediction_plot(
         fig.update_layout(
             height=fig_height,
             width=fig_width,
-            template="plotly_dark",
-            paper_bgcolor="#000000",
-            plot_bgcolor="#000000",
-            font=dict(color="#f3f4f6"),
+            template="plotly_white",
+            paper_bgcolor=_PLOT_LIGHT_BG,
+            plot_bgcolor=_PLOT_LIGHT_BG,
+            font=dict(color=_PLOT_LIGHT_FONT),
             title_text=f"{title} Analysis",
             uirevision="keep",
         )
 
         fig.update_xaxes(
-            gridcolor="rgba(255,255,255,0.10)",
-            linecolor="rgba(255,255,255,0.18)",
-            zerolinecolor="rgba(255,255,255,0.10)",
+            gridcolor=_PLOT_LIGHT_GRID,
+            linecolor=_PLOT_LIGHT_AXIS,
+            zerolinecolor=_PLOT_LIGHT_GRID,
         )
         fig.update_yaxes(
-            gridcolor="rgba(255,255,255,0.10)",
-            linecolor="rgba(255,255,255,0.18)",
-            zerolinecolor="rgba(255,255,255,0.10)",
+            gridcolor=_PLOT_LIGHT_GRID,
+            linecolor=_PLOT_LIGHT_AXIS,
+            zerolinecolor=_PLOT_LIGHT_GRID,
         )
 
         if create_full_html:
@@ -645,9 +655,9 @@ def generate_prediction_plot(
           fill === 'white' || fill === '#fff' || fill === '#ffffff'
         );
         if (isLight) {
-          r.setAttribute('fill', '#1e3a5f');
-          r.style.fill = '#1e3a5f';
-          r.setAttribute('stroke', '#38bdf8');
+          r.setAttribute('fill', '__ACTIVE_FILL__');
+          r.style.fill = '__ACTIVE_FILL__';
+          r.setAttribute('stroke', '__ACTIVE_STROKE__');
         }
       }
     });
@@ -673,7 +683,10 @@ def generate_prediction_plot(
     setTimeout(_attach, 300);
   }
 })();
-</script>"""
+</script>""".replace("__ACTIVE_FILL__", _PLOT_LIGHT_ACTIVE_BTN_FILL).replace(
+            "__ACTIVE_STROKE__",
+            _PLOT_LIGHT_ACTIVE_BTN_STROKE,
+        )
         if "</body>" in html:
             html = html.replace("</body>", _active_btn_js + "\n</body>", 1)
         else:

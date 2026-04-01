@@ -19,6 +19,8 @@ _LAST_BASE_MANUAL_TILT = 0.0
 
 _TILT_HANDLE_CENTER_FREQ_HZ = 16000.0
 _TILT_HANDLE_SPAN_FACTOR = 1.18
+_PREVIEW_LEVEL_WINDOW_FILL = "rgba(148,163,184,0.18)"
+_PREVIEW_MARKER_LINE = "rgba(15,23,42,0.35)"
 
 
 def round_manual_target_tilt_db_per_oct(value: float) -> float:
@@ -118,8 +120,8 @@ def build_level_window_trace(
         "x": [x0, x0, x1, x1],
         "y": [float(y_min), float(y_max), float(y_max), float(y_min)],
         "fill": "toself",
-        "fillcolor": "rgba(180,180,180,0.16)",
-        "line": {"color": "rgba(180,180,180,0.0)", "width": 0},
+        "fillcolor": _PREVIEW_LEVEL_WINDOW_FILL,
+        "line": {"color": "rgba(148,163,184,0.0)", "width": 0},
         "hoverinfo": "skip",
         "hovertemplate": None,
         "showlegend": False,
@@ -139,7 +141,7 @@ def build_vertical_marker_trace(
         "mode": "lines",
         "x": [x, x],
         "y": [float(y_min), float(y_max)],
-        "line": {"color": "rgba(255,255,255,0.35)", "width": 1},
+        "line": {"color": _PREVIEW_MARKER_LINE, "width": 1},
         "hoverinfo": "skip",
         "hovertemplate": None,
         "showlegend": False,
