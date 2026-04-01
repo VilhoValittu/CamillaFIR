@@ -12,6 +12,10 @@ from . import ng_controls as ctrl
 from ..ui_i18n import LAYOUT_MONO, LAYOUT_OPTION_LABEL_KEYS, normalize_layout_value, tr_options
 
 
+def _normalize_layout_value(value: Any, t: Callable[[str], str] | None = None) -> str:
+    return normalize_layout_value(value, t)
+
+
 def _guess_upload_format(file_data: dict[str, Any] | None) -> str:
     if not isinstance(file_data, dict):
         return "Unknown"
