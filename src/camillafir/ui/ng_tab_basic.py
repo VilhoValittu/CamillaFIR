@@ -73,32 +73,36 @@ def build_basic_tab(*, t: Callable, get_val: Callable, max_safe_boost: float) ->
     ui.separator()
 
     # AUTO-mode options
-    ctrl.register(
-        "auto_goal",
-        ui.select(
-            options={
-                "balanced":   t("auto_goal_balanced"),
-                "room-safe":  t("auto_goal_room_safe"),
-                "subwoofers": t("auto_goal_subwoofers"),
-                "low-ripple": t("auto_goal_low_ripple"),
-                "flat":       t("auto_goal_flat"),
-            },
-            value=auto_goal_value,
-            label=t("auto_goal_label"),
-        ).props("dense outlined").classes("w-full"),
-    )
-    ctrl.register(
-        "auto_target_mode",
-        ui.select(
-            options={
-                "auto":     t("auto_target_mode_auto"),
-                "adaptive": t("auto_target_mode_adaptive"),
-                "selected": t("auto_target_mode_selected"),
-            },
-            value=auto_target_mode_value,
-            label=t("auto_target_mode_label"),
-        ).props("dense outlined").classes("w-full"),
-    )
+    auto_mode_col = ui.column().classes("w-full gap-4")
+    ctrl.register_container("auto_mode_scope", auto_mode_col)
+    with auto_mode_col:
+        ctrl.register(
+            "auto_goal",
+            ui.select(
+                options={
+                    "balanced":   t("auto_goal_balanced"),
+                    "room-safe":  t("auto_goal_room_safe"),
+                    "subwoofers": t("auto_goal_subwoofers"),
+                    "low-ripple": t("auto_goal_low_ripple"),
+                    "flat":       t("auto_goal_flat"),
+                },
+                value=auto_goal_value,
+                label=t("auto_goal_label"),
+            ).props("dense outlined").classes("w-full"),
+        )
+        ctrl.register(
+            "auto_target_mode",
+            ui.select(
+                options={
+                    "auto":     t("auto_target_mode_auto"),
+                    "adaptive": t("auto_target_mode_adaptive"),
+                    "selected": t("auto_target_mode_selected"),
+                },
+                value=auto_target_mode_value,
+                label=t("auto_target_mode_label"),
+            ).props("dense outlined").classes("w-full"),
+        )
+    auto_mode_col.set_visibility(mode_value == "AUTO")
 
     ui.separator()
     ui.markdown(f"#### 🧱 {t('ui_fir_engine')}")
@@ -153,7 +157,7 @@ def build_basic_tab(*, t: Callable, get_val: Callable, max_safe_boost: float) ->
             ctrl.register(
                 "mixed_freq",
                 ui.number(
-                    label="Mixed split Hz",
+                    label=t("mixed_split_hz_label"),
                     value=get_val("mixed_freq", 200.0),
                     format="%.1f",
                 ).props("dense outlined").classes("w-full"),

@@ -7,6 +7,16 @@ import numpy as np
 
 from ..auto_mode.filter_priors import get_auto_mode_filter_auto_defaults
 from ..config.mode_policy import MODE_DEFAULTS
+from ..ui_i18n import (
+    LAYOUT_MONO,
+    LVL_ALGO_MEDIAN,
+    LVL_MODE_AUTO,
+    lvl_algo_legacy_name,
+    lvl_mode_legacy_name,
+    normalize_layout_value,
+    normalize_lvl_algo_value,
+    normalize_lvl_mode_value,
+)
 
 logger = logging.getLogger("CamillaFIR")
 
@@ -79,8 +89,8 @@ def _apply_auto_mode_managed_settings(data: Dict[str, Any]) -> None:
         "auto_mode_workers": 0,
         "mag_correct": True,
         "gain": 0.0,
-        "lvl_mode": "Auto",
-        "lvl_algo": "Median",
+        "lvl_mode": LVL_MODE_AUTO,
+        "lvl_algo": LVL_ALGO_MEDIAN,
         "lvl_manual_db": 0.0,
         "manual_target_tilt_db_per_oct": 0.0,
         "normalize_opt": False,
@@ -98,6 +108,9 @@ def _apply_auto_mode_managed_settings(data: Dict[str, Any]) -> None:
     for cfg_key, ui_key in _AUTO_MODE_DEFAULT_CFG_TO_UI.items():
         if cfg_key in merged_defaults:
             forced[ui_key] = merged_defaults[cfg_key]
+
+    forced["lvl_mode"] = normalize_lvl_mode_value(forced.get("lvl_mode", LVL_MODE_AUTO))
+    forced["lvl_algo"] = normalize_lvl_algo_value(forced.get("lvl_algo", LVL_ALGO_MEDIAN))
 
     for key, value in forced.items():
         data[key] = value
@@ -196,12 +209,15 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     else:
         atm = "auto"
     data["auto_target_mode"] = str(atm)
+    data["layout"] = normalize_layout_value(data.get("layout", LAYOUT_MONO))
+    data["lvl_mode"] = normalize_lvl_mode_value(data.get("lvl_mode", LVL_MODE_AUTO))
+    data["lvl_algo"] = normalize_lvl_algo_value(data.get("lvl_algo", LVL_ALGO_MEDIAN))
 
     if is_auto_mode:
         _apply_auto_mode_managed_settings(data)
 
     if mode_u in ("BASIC", "AUTO"):
-        data["lvl_mode"] = "Auto"
+        data["lvl_mode"] = LVL_MODE_AUTO
         data["unsafe_raw_dsp"] = False
 
     try:
@@ -674,9 +690,10 @@ def build_filter_config(
         12,
     )
     comparison_mode = bool(data.get("comparison_mode", True))
-    lvl_mode = str(data.get("lvl_mode", "Auto") or "Auto")
+    lvl_mode = lvl_mode_legacy_name(data.get("lvl_mode", LVL_MODE_AUTO))
     if mode_u in ("BASIC", "AUTO"):
-        lvl_mode = "Auto"
+        lvl_mode = lvl_mode_legacy_name(LVL_MODE_AUTO)
+    lvl_algo = lvl_algo_legacy_name(data.get("lvl_algo", LVL_ALGO_MEDIAN))
     sls = str(data.get("stereo_link_strategy", "auto") or "").strip().lower()
     if sls not in ("shared", "hybrid", "auto"):
         sls = "auto"
@@ -721,7 +738,7 @@ def build_filter_config(
         manual_target_tilt_db_per_oct=data["manual_target_tilt_db_per_oct"],
         lvl_min=data["lvl_min"],
         lvl_max=data["lvl_max"],
-        lvl_algo=data["lvl_algo"],
+        lvl_algo=lvl_algo,
         stereo_link=bool(data.get("stereo_link", False)),
         stereo_link_strategy=str(sls),
         crossovers=xos,

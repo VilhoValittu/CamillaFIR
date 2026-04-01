@@ -8,16 +8,15 @@ can call it without changes to workflow code.
 from __future__ import annotations
 
 import html
-import time
 import logging
+import time
 from typing import Any
 
 from ..resources.i8n.camillafir_i18n import t
-from . import ui_state
 from . import camillafir_plot as plots
+from . import ui_state
 from .results_formatters import (
     anchor_label,
-    auto_choice_text,
     boost_diag,
     fmt_ai_match,
     fmt_ai_score,
@@ -33,26 +32,26 @@ from .results_formatters import (
     phase_clamp_label,
     plot_smoothing_label,
     safe_float,
-    safe_int,
     shared_window_label,
     stereo_link_mode_label,
-    xo_fc_gd_badge,
     xo_fc_gd_label,
 )
 
 logger = logging.getLogger("CamillaFIR")
 
 
-# ---------------------------------------------------------------------------
-# Public entry point (same signature as _render_results in camillafir_ui.py)
-# ---------------------------------------------------------------------------
-
 def render_results(
     data,
-    f_l, m_l, p_l,
-    f_r, m_r, p_r,
-    l_imp_f, r_imp_f,
-    l_st_f, r_st_f,
+    f_l,
+    m_l,
+    p_l,
+    f_r,
+    m_r,
+    p_r,
+    l_imp_f,
+    r_imp_f,
+    l_st_f,
+    r_st_f,
     fname,
     zip_buffer,
     *,
@@ -66,7 +65,7 @@ def render_results(
     optuna_storage_path=None,
 ) -> None:
     from nicegui import ui
-    from .ng_run_section import get_results_container, get_progress_element  # noqa: PLC0415
+    from .ng_run_section import get_progress_element, get_results_container  # noqa: PLC0415
 
     if run_started_at is not None:
         try:
@@ -93,7 +92,7 @@ def render_results(
 
     with container:
         if l_st_f is None or r_st_f is None:
-            ui.label("Error: No results captured.").classes("text-red-500 font-bold")
+            ui.label(t("results_error_no_results")).classes("text-red-500 font-bold")
             return
 
         psl_str = plot_smoothing_label(data.get("plot_smoothing_level", "Psychoacoustic"))
@@ -103,10 +102,16 @@ def render_results(
         _render_dsp_quality(data=data, l_st_f=l_st_f, r_st_f=r_st_f, psl_str=psl_str)
         _render_plots_and_export(
             data=data,
-            f_l=f_l, m_l=m_l, p_l=p_l,
-            f_r=f_r, m_r=m_r, p_r=p_r,
-            l_imp_f=l_imp_f, r_imp_f=r_imp_f,
-            l_st_f=l_st_f, r_st_f=r_st_f,
+            f_l=f_l,
+            m_l=m_l,
+            p_l=p_l,
+            f_r=f_r,
+            m_r=m_r,
+            p_r=p_r,
+            l_imp_f=l_imp_f,
+            r_imp_f=r_imp_f,
+            l_st_f=l_st_f,
+            r_st_f=r_st_f,
             fname=fname,
             zip_buffer=zip_buffer,
             dash_html_l=dash_html_l,
@@ -116,7 +121,6 @@ def render_results(
             optuna_storage_path=optuna_storage_path,
         )
 
-    # Final status
     done_msg = t("done_msg")
     done_status = t("stat_done")
     if saved_filters_dir:
@@ -144,7 +148,6 @@ def render_results(
         except Exception:
             pass
 
-    # Store summary metrics for the header info panel
     if l_st_f is not None and r_st_f is not None:
         try:
             l_ai = plots.calc_ai_summary_from_stats(l_st_f)
@@ -155,18 +158,20 @@ def render_results(
             r_match = r_ai.get("match")
             l_conf = float(l_st_f.get("avg_confidence") or 0.0)
             r_conf = float(r_st_f.get("avg_confidence") or 0.0)
-            ui_state.set_last_run_info({
-                "score": (float(l_score) + float(r_score)) / 2.0 if (l_score is not None and r_score is not None) else None,
-                "match": (float(l_match) + float(r_match)) / 2.0 if (l_match is not None and r_match is not None) else None,
-                "conf": (l_conf + r_conf) / 2.0,
-            })
+            ui_state.set_last_run_info(
+                {
+                    "score": (float(l_score) + float(r_score)) / 2.0
+                    if (l_score is not None and r_score is not None)
+                    else None,
+                    "match": (float(l_match) + float(r_match)) / 2.0
+                    if (l_match is not None and r_match is not None)
+                    else None,
+                    "conf": (l_conf + r_conf) / 2.0,
+                }
+            )
         except Exception:
             logger.debug("set_last_run_info failed", exc_info=True)
 
-
-# ---------------------------------------------------------------------------
-# Rendering helpers
-# ---------------------------------------------------------------------------
 
 def _esc(v: Any) -> str:
     return html.escape(str(v) if v is not None else "-")
@@ -191,8 +196,8 @@ def _metric_table_html(rows: list[dict]) -> str:
         parts.append(
             "<table style='width:100%;border-collapse:collapse;font-size:12px;'>"
             "<thead><tr>"
-            "<th style='text-align:left;padding:4px 8px;background:rgba(255,255,255,0.06);'>Metric</th>"
-            "<th style='text-align:left;padding:4px 8px;background:rgba(255,255,255,0.06);'>Value</th>"
+            f"<th style='text-align:left;padding:4px 8px;background:rgba(255,255,255,0.06);'>{_esc(t('results_table_metric'))}</th>"
+            f"<th style='text-align:left;padding:4px 8px;background:rgba(255,255,255,0.06);'>{_esc(t('results_table_value'))}</th>"
             "</tr></thead><tbody>"
             + "".join(
                 f"<tr><td style='padding:3px 8px;border-top:1px solid rgba(255,255,255,0.06);'>{_esc(lbl)}</td>"
@@ -205,9 +210,9 @@ def _metric_table_html(rows: list[dict]) -> str:
         parts.append(
             "<table style='width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;'>"
             "<thead><tr>"
-            "<th style='text-align:left;padding:4px 8px;background:rgba(255,255,255,0.06);'>Metric</th>"
-            "<th style='text-align:left;padding:4px 8px;background:rgba(255,255,255,0.06);'>L</th>"
-            "<th style='text-align:left;padding:4px 8px;background:rgba(255,255,255,0.06);'>R</th>"
+            f"<th style='text-align:left;padding:4px 8px;background:rgba(255,255,255,0.06);'>{_esc(t('results_table_metric'))}</th>"
+            f"<th style='text-align:left;padding:4px 8px;background:rgba(255,255,255,0.06);'>{_esc(t('results_table_left_short'))}</th>"
+            f"<th style='text-align:left;padding:4px 8px;background:rgba(255,255,255,0.06);'>{_esc(t('results_table_right_short'))}</th>"
             "</tr></thead><tbody>"
             + "".join(
                 f"<tr><td style='padding:3px 8px;border-top:1px solid rgba(255,255,255,0.06);'>{_esc(lbl)}</td>"
@@ -233,10 +238,6 @@ def _section(title: str, rows: list[dict], summary_lines: list[str] | None = Non
             ui.html(table_html)
 
 
-# ---------------------------------------------------------------------------
-# Section renderers
-# ---------------------------------------------------------------------------
-
 def _render_run_overview(*, data: dict, l_st_f: dict, r_st_f: dict) -> None:
     l_ai = plots.calc_ai_summary_from_stats(l_st_f)
     r_ai = plots.calc_ai_summary_from_stats(r_st_f)
@@ -253,40 +254,103 @@ def _render_run_overview(*, data: dict, l_st_f: dict, r_st_f: dict) -> None:
 
     acoustic_summary = []
     if l_ai.get("score") is not None and r_ai.get("score") is not None:
-        acoustic_summary.append(f"**Average acoustic score:** {avg_pred:.3f}/100")
+        acoustic_summary.append(t("results_summary_avg_acoustic_score").format(score=avg_pred))
     if l_match is not None and r_match is not None:
-        acoustic_summary.append(f"**Average target match:** {avg_match:.1f}%")
+        acoustic_summary.append(t("results_summary_avg_target_match").format(match=avg_match))
 
     l_boost_pre, _, l_net_boost = boost_diag(l_st_f)
     r_boost_pre, _, r_net_boost = boost_diag(r_st_f)
 
-    _section(" Acoustic summary", [
-        metric_row("Stereo Leveling", stereo_link_mode_label(l_st_f, stereo_link_enabled=stereo_link_enabled), stereo_link_mode_label(r_st_f, stereo_link_enabled=stereo_link_enabled)),
-        metric_row("Target Level", f"{l_st_f.get('eff_target_db', 0):.1f} dB", f"{r_st_f.get('eff_target_db', 0):.1f} dB"),
-        metric_row("Window Used for Leveling", fmt_freq_window(l_window_used), fmt_freq_window(r_window_used)),
-        metric_row("Shared Leveling Window", shared_window_label(l_st_f), shared_window_label(r_st_f)),
-        metric_row("Leveling Tilt", fmt_tilt(l_st_f), fmt_tilt(r_st_f),
-                   left_compare=safe_float(l_st_f.get("tilt_slope_db_per_oct", float("nan")), float("nan")),
-                   right_compare=safe_float(r_st_f.get("tilt_slope_db_per_oct", float("nan")), float("nan"))),
-        metric_row("Offset to Meas.", f"{l_st_f.get('offset_db', 0):.1f} dB", f"{r_st_f.get('offset_db', 0):.1f} dB"),
-        metric_row("Stereo Anchor", anchor_label(l_st_f, stereo_link_enabled=stereo_link_enabled), anchor_label(r_st_f, stereo_link_enabled=stereo_link_enabled)),
-        {"label": "Target Match", "left": fmt_ai_match(l_ai), "right": fmt_ai_match(r_ai)},
-        metric_row("Acoustic Confidence", f"{l_st_f.get('avg_confidence', 0):.1f}%", f"{r_st_f.get('avg_confidence', 0):.1f}%"),
-        {"label": "Acoustic Score", "left": fmt_ai_score(l_ai), "right": fmt_ai_score(r_ai)},
-        metric_row("Estimated RT60", f"{l_st_f.get('rt60_val', 0):.2f} s", f"{r_st_f.get('rt60_val', 0):.2f} s"),
-    ], summary_lines=acoustic_summary)
+    _section(
+        t("results_section_acoustic_summary"),
+        [
+            metric_row(
+                t("results_metric_stereo_leveling"),
+                stereo_link_mode_label(l_st_f, stereo_link_enabled=stereo_link_enabled),
+                stereo_link_mode_label(r_st_f, stereo_link_enabled=stereo_link_enabled),
+            ),
+            metric_row(
+                t("results_metric_target_level"),
+                f"{l_st_f.get('eff_target_db', 0):.1f} dB",
+                f"{r_st_f.get('eff_target_db', 0):.1f} dB",
+            ),
+            metric_row(
+                t("results_metric_window_used_for_leveling"),
+                fmt_freq_window(l_window_used),
+                fmt_freq_window(r_window_used),
+            ),
+            metric_row(
+                t("results_metric_shared_leveling_window"),
+                shared_window_label(l_st_f),
+                shared_window_label(r_st_f),
+            ),
+            metric_row(
+                t("results_metric_leveling_tilt"),
+                fmt_tilt(l_st_f),
+                fmt_tilt(r_st_f),
+                left_compare=safe_float(l_st_f.get("tilt_slope_db_per_oct", float("nan")), float("nan")),
+                right_compare=safe_float(r_st_f.get("tilt_slope_db_per_oct", float("nan")), float("nan")),
+            ),
+            metric_row(
+                t("results_metric_offset_to_meas"),
+                f"{l_st_f.get('offset_db', 0):.1f} dB",
+                f"{r_st_f.get('offset_db', 0):.1f} dB",
+            ),
+            metric_row(
+                t("results_metric_stereo_anchor"),
+                anchor_label(l_st_f, stereo_link_enabled=stereo_link_enabled),
+                anchor_label(r_st_f, stereo_link_enabled=stereo_link_enabled),
+            ),
+            {"label": t("results_metric_target_match"), "left": fmt_ai_match(l_ai), "right": fmt_ai_match(r_ai)},
+            metric_row(
+                t("results_metric_acoustic_confidence"),
+                f"{l_st_f.get('avg_confidence', 0):.1f}%",
+                f"{r_st_f.get('avg_confidence', 0):.1f}%",
+            ),
+            {"label": t("results_metric_acoustic_score"), "left": fmt_ai_score(l_ai), "right": fmt_ai_score(r_ai)},
+            metric_row(
+                t("results_metric_estimated_rt60"),
+                f"{l_st_f.get('rt60_val', 0):.2f} s",
+                f"{r_st_f.get('rt60_val', 0):.2f} s",
+            ),
+        ],
+        summary_lines=acoustic_summary,
+    )
 
     tdc_text = (
-        f"ON ({float(data.get('tdc_strength', 0)):.0f}%, -{float(data.get('tdc_max_reduction_db', 0)):.1f} dB)"
-        if bool(data.get("enable_tdc", False)) else "OFF"
+        t("results_value_tdc_on").format(
+            strength=float(data.get("tdc_strength", 0)),
+            max_reduction=float(data.get("tdc_max_reduction_db", 0)),
+        )
+        if bool(data.get("enable_tdc", False))
+        else t("results_value_off")
     )
-    _section(" Gain and headroom", [
-        metric_row("TDC", tdc_text, tdc_text),
-        metric_row("Auto Gain Margin", f"{float(l_st_f.get('gain_margin_db', 0) or 0):.2f} dB", f"{float(r_st_f.get('gain_margin_db', 0) or 0):.2f} dB"),
-        metric_row("Applied Auto Gain", f"{float(l_st_f.get('auto_global_gain_db', 0) or 0):.2f} dB", f"{float(r_st_f.get('auto_global_gain_db', 0) or 0):.2f} dB"),
-        metric_row("Net Boost (pre → net)", f"{l_boost_pre:.2f} dB → {l_net_boost:.2f} dB", f"{r_boost_pre:.2f} dB → {r_net_boost:.2f} dB"),
-        metric_row("Final Max (post gain)", f"{float(l_st_f.get('final_max_db', 0) or 0):.2f} dB", f"{float(r_st_f.get('final_max_db', 0) or 0):.2f} dB"),
-    ])
+    _section(
+        t("results_section_gain_headroom"),
+        [
+            metric_row(t("results_metric_tdc"), tdc_text, tdc_text),
+            metric_row(
+                t("results_metric_auto_gain_margin"),
+                f"{float(l_st_f.get('gain_margin_db', 0) or 0):.2f} dB",
+                f"{float(r_st_f.get('gain_margin_db', 0) or 0):.2f} dB",
+            ),
+            metric_row(
+                t("results_metric_applied_auto_gain"),
+                f"{float(l_st_f.get('auto_global_gain_db', 0) or 0):.2f} dB",
+                f"{float(r_st_f.get('auto_global_gain_db', 0) or 0):.2f} dB",
+            ),
+            metric_row(
+                t("results_metric_net_boost_pre_to_net"),
+                f"{l_boost_pre:.2f} dB -> {l_net_boost:.2f} dB",
+                f"{r_boost_pre:.2f} dB -> {r_net_boost:.2f} dB",
+            ),
+            metric_row(
+                t("results_metric_final_max_post_gain"),
+                f"{float(l_st_f.get('final_max_db', 0) or 0):.2f} dB",
+                f"{float(r_st_f.get('final_max_db', 0) or 0):.2f} dB",
+            ),
+        ],
+    )
 
 
 def _render_auto_diagnostics(*, data: dict) -> None:
@@ -311,40 +375,83 @@ def _render_auto_diagnostics(*, data: dict) -> None:
     trials_ok = int(auto_meta.get("trials_ok", 0) or 0)
     trials_total = int(auto_meta.get("trials_total", 0) or 0)
 
-    with ui.expansion("🤖 Auto mode diagnostics").classes("w-full"):
-        ui.markdown(f"**Winner:** {tc_selected} | rank score: {rank_sc:.3f} | avg score: {avg_sc:.3f} | boost: {boost_db:.2f} dB | trials: {trials_ok}/{trials_total}")
+    with ui.expansion(t("results_auto_diag_title")).classes("w-full"):
+        ui.markdown(
+            t("results_auto_diag_summary").format(
+                target=tc_selected,
+                rank=rank_sc,
+                avg=avg_sc,
+                boost=boost_db,
+                ok=trials_ok,
+                total=trials_total,
+            )
+        )
 
 
 def _render_dsp_quality(*, data: dict, l_st_f: dict, r_st_f: dict, psl_str: str) -> None:
-    _section("🔍 Filter & IR setup", [
-        metric_row("Filter Type", str(data.get("filter_type", "") or ""), str(data.get("filter_type", "") or "")),
-        metric_row("IR Window", format_ir_window(l_st_f), format_ir_window(r_st_f)),
-        metric_row("Correction Range", f"{data.get('mag_c_min', 0):.0f}–{data.get('mag_c_max', 0):.0f} Hz",
-                   f"{data.get('mag_c_min', 0):.0f}–{data.get('mag_c_max', 0):.0f} Hz"),
-        metric_row("Plot Smoothing", psl_str, psl_str),
-    ])
-    _section("📐 Phase & group delay", [
-        metric_row("XO Phase Model", xo_fc_gd_label(l_st_f), xo_fc_gd_label(r_st_f)),
-        metric_row("Phase Clamp", phase_clamp_label(l_st_f), phase_clamp_label(r_st_f)),
-        metric_row("GD Limiter", gd_limiter_label(l_st_f), gd_limiter_label(r_st_f)),
-        metric_row("GD Gradient Max", gd_grad_max_label(l_st_f), gd_grad_max_label(r_st_f)),
-        metric_row("HPF Model", hpf_model_label(l_st_f), hpf_model_label(r_st_f)),
-        metric_row("HPF Diff Raw", hpf_diff_raw_label(l_st_f), hpf_diff_raw_label(r_st_f)),
-        metric_row("Mixed Blend Split", mixed_blend_label(l_st_f, "mixed_blend_split_hz"), mixed_blend_label(r_st_f, "mixed_blend_split_hz")),
-        metric_row("Mixed Blend Transition", mixed_blend_label(l_st_f, "mixed_blend_transition_hz"), mixed_blend_label(r_st_f, "mixed_blend_transition_hz")),
-    ])
+    _section(
+        t("results_section_filter_ir"),
+        [
+            metric_row(
+                t("results_metric_filter_type"),
+                str(data.get("filter_type", "") or ""),
+                str(data.get("filter_type", "") or ""),
+            ),
+            metric_row(t("results_metric_ir_window"), format_ir_window(l_st_f), format_ir_window(r_st_f)),
+            metric_row(
+                t("results_metric_correction_range"),
+                f"{data.get('mag_c_min', 0):.0f}-{data.get('mag_c_max', 0):.0f} Hz",
+                f"{data.get('mag_c_min', 0):.0f}-{data.get('mag_c_max', 0):.0f} Hz",
+            ),
+            metric_row(t("results_metric_plot_smoothing"), psl_str, psl_str),
+        ],
+    )
+    _section(
+        t("results_section_phase_gd"),
+        [
+            metric_row(t("results_metric_xo_phase_model"), xo_fc_gd_label(l_st_f), xo_fc_gd_label(r_st_f)),
+            metric_row(t("results_metric_phase_clamp"), phase_clamp_label(l_st_f), phase_clamp_label(r_st_f)),
+            metric_row(t("results_metric_gd_limiter"), gd_limiter_label(l_st_f), gd_limiter_label(r_st_f)),
+            metric_row(t("results_metric_gd_gradient_max"), gd_grad_max_label(l_st_f), gd_grad_max_label(r_st_f)),
+            metric_row(t("results_metric_hpf_model"), hpf_model_label(l_st_f), hpf_model_label(r_st_f)),
+            metric_row(t("results_metric_hpf_diff_raw"), hpf_diff_raw_label(l_st_f), hpf_diff_raw_label(r_st_f)),
+            metric_row(
+                t("results_metric_mixed_blend_split"),
+                mixed_blend_label(l_st_f, "mixed_blend_split_hz"),
+                mixed_blend_label(r_st_f, "mixed_blend_split_hz"),
+            ),
+            metric_row(
+                t("results_metric_mixed_blend_transition"),
+                mixed_blend_label(l_st_f, "mixed_blend_transition_hz"),
+                mixed_blend_label(r_st_f, "mixed_blend_transition_hz"),
+            ),
+        ],
+    )
 
 
 def _render_plots_and_export(
-    *, data, f_l, m_l, p_l, f_r, m_r, p_r,
-    l_imp_f, r_imp_f, l_st_f, r_st_f,
-    fname, zip_buffer,
-    dash_html_l=None, dash_html_r=None,
-    saved_filters_dir=None, auto_cache_path=None, optuna_storage_path=None,
+    *,
+    data,
+    f_l,
+    m_l,
+    p_l,
+    f_r,
+    m_r,
+    p_r,
+    l_imp_f,
+    r_imp_f,
+    l_st_f,
+    r_st_f,
+    fname,
+    zip_buffer,
+    dash_html_l=None,
+    dash_html_r=None,
+    saved_filters_dir=None,
+    auto_cache_path=None,
+    optuna_storage_path=None,
 ) -> None:
     from nicegui import ui  # noqa: PLC0415
 
-    # Plotly plots — always render via ui.plotly(fig) to avoid JS path issues
     psl = data.get("plot_smoothing_level", "Psychoacoustic")
     mixed_freq = data.get("mixed_freq", 200.0)
     fs_v = int(data.get("fs", 48000) or 48000)
@@ -370,20 +477,20 @@ def _render_plots_and_export(
             if fig is not None:
                 ui.plotly(fig).classes("w-full")
             else:
-                ui.label("Plot unavailable").classes("text-gray-400")
+                ui.label(t("results_plot_unavailable")).classes("text-gray-400")
         except Exception:
             logger.debug("Plot generation failed", exc_info=True)
-            ui.label("Plot unavailable").classes("text-gray-400")
+            ui.label(t("results_plot_unavailable")).classes("text-gray-400")
 
     with ui.card().classes("w-full"):
         with ui.tabs().classes("w-full") as plot_tabs:
-            tab_left = ui.tab("Left Channel")
-            tab_right = ui.tab("Right Channel")
+            tab_left = ui.tab(t("results_left_channel"))
+            tab_right = ui.tab(t("results_right_channel"))
 
         with ui.tab_panels(plot_tabs, value=tab_left).classes("w-full"):
             with ui.tab_panel(tab_left).classes("w-full"):
                 _render_channel_plot(
-                    title="Left Channel",
+                    title=t("results_left_channel"),
                     f_ch=f_l,
                     m_ch=m_l,
                     p_ch=p_l,
@@ -393,7 +500,7 @@ def _render_plots_and_export(
 
             with ui.tab_panel(tab_right).classes("w-full"):
                 _render_channel_plot(
-                    title="Right Channel",
+                    title=t("results_right_channel"),
                     f_ch=f_r,
                     m_ch=m_r,
                     p_ch=p_r,
@@ -401,60 +508,16 @@ def _render_plots_and_export(
                     st_f=r_st_f,
                 )
 
-    # Download ZIP
     with ui.row().classes("w-full items-center gap-4 mt-2"):
         if zip_buffer is not None and fname:
             try:
                 zip_bytes = zip_buffer.getvalue()
                 ui.button(
-                    f"DOWNLOAD FILTER ZIP ({fname})",
-                    on_click=lambda: ui.download(zip_bytes, filename=fname),
-                ).props('color=\"primary\" unelevated').classes("font-bold")
-            except Exception:
-                logger.debug("ZIP download button failed", exc_info=True)
-
-        if saved_filters_dir:
-            ui.label(f"Saved to: {saved_filters_dir}").classes("text-sm text-gray-400")
-
-    return
-
-    """
-    with ui.card().classes("w-full"):
-        pass
-                ui.label(f"Channel {ch}").classes("text-sm font-semibold")
-                try:
-                    result = plots.generate_prediction_plot(
-                        f_ch, m_ch, p_ch, imp_f, fs_v,
-                        f"Channel {ch}",
-                        None,       # orig_mags_r
-                        st_f,       # target_stats → draws target curve
-                        mixed_freq,
-                        "low",
-                        False,      # create_full_html
-                        True,       # return_fig
-                        psl,
-                    )
-                    fig = result[1] if isinstance(result, tuple) else None
-                    if fig is not None:
-                        ui.plotly(fig).classes("w-full")
-                    else:
-                        ui.label("Plot unavailable").classes("text-gray-400")
-                except Exception:
-                    logger.debug("Plot generation failed", exc_info=True)
-                    ui.label("Plot unavailable").classes("text-gray-400")
-
-    # Download ZIP
-    with ui.row().classes("w-full items-center gap-4 mt-2"):
-        if zip_buffer is not None and fname:
-            try:
-                zip_bytes = zip_buffer.getvalue()
-                ui.button(
-                    f"⬇️ DOWNLOAD FILTER ZIP  ({fname})",
+                    t("results_download_zip").format(fname=fname),
                     on_click=lambda: ui.download(zip_bytes, filename=fname),
                 ).props('color="primary" unelevated').classes("font-bold")
             except Exception:
                 logger.debug("ZIP download button failed", exc_info=True)
 
         if saved_filters_dir:
-            ui.label(f"Saved to: {saved_filters_dir}").classes("text-sm text-gray-400")
-    """
+            ui.label(t("results_saved_to").format(path=saved_filters_dir)).classes("text-sm text-gray-400")

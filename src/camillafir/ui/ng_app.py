@@ -140,10 +140,13 @@ def register_main_page() -> None:
         d = load_config()
         get_val = lambda k, def_v: d.get(k, def_v)
 
-        # Keep the full top block visible while the user scrolls long tab content.
-        with ui.column().classes("w-full gap-0 cf-top-shell"):
-            _build_header(version=VERSION)
+        with ui.column().classes("w-full gap-0 cf-brand-shell"):
+            _build_brand_header(version=VERSION)
 
+        with ui.column().classes("w-full gap-0 cf-tabs-shell"):
+            from .ng_run_section import build_global_progress_bar  # noqa: PLC0415
+
+            build_global_progress_bar()
             with ui.tabs().classes("w-full") as tabs:
                 tab_files = ui.tab(t("tab_files"))
                 tab_basic = ui.tab(t("tab_basic"))
@@ -214,7 +217,7 @@ def _on_start_click() -> None:
 # Header rendering
 # ---------------------------------------------------------------------------
 
-def _build_header(*, version: str) -> None:
+def _build_brand_header(*, version: str) -> None:
     from nicegui import ui
 
     ui.add_head_html(_external_link_head_html())
@@ -242,12 +245,6 @@ def _build_header(*, version: str) -> None:
         build_info_panel()
 
     ui.separator()
-
-    # Progress bar and status area (hidden until a run starts)
-    from .ng_run_section import build_global_progress_bar  # noqa: PLC0415
-
-    build_global_progress_bar()
-
     # About / guide (collapsed by default)
     with ui.expansion(t("about_title")).classes("w-full"):
         ui.markdown(t("about_body"))

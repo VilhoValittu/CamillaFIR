@@ -5,7 +5,7 @@ Replaces PyWebIO build_run_section() + the status-area rendering in app.py.
 Status updates
 --------------
 Instead of using run_js() DOM patches, this module polls ui_state every
-500 ms via a NiceGUI timer.  This is simpler and avoids all threading/session
+500 ms via a NiceGUI timer. This is simpler and avoids all threading/session
 concerns.
 
 External access
@@ -16,9 +16,9 @@ it should render results into.
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
-import logging
 
 from . import ui_state
 from ..resources.i8n.camillafir_i18n import t
@@ -70,7 +70,6 @@ def build_global_progress_bar() -> None:
     from nicegui import ui
     from . import ng_bridge
 
-    # Progress bar
     progress = ui.linear_progress(value=0.0, size="24px", show_value=False).classes("w-full")
     with progress:
         with ui.row().classes("absolute-full items-center no-wrap px-3 gap-3"):
@@ -85,16 +84,14 @@ def build_global_progress_bar() -> None:
     progress.visible = False
     _progress_ref = progress
 
-    # Wire progress into ng_bridge
     ng_bridge.set_progress_element_getter(get_progress_element)
 
-    # Status area (polled via timer)
     with ui.column().classes("w-full gap-1"):
         info_box = ui.label("").classes("cf-status-info")
         info_box.visible = False
         auto_bar = ui.label("").classes("cf-auto-bar")
         auto_bar.visible = False
-        with ui.expansion("Automatic mode details").classes("w-full text-xs") as auto_details_exp:
+        with ui.expansion(t("run_auto_details_title")).classes("w-full text-xs") as auto_details_exp:
             auto_details_exp.visible = False
             auto_details_label = ui.label("").classes("whitespace-pre text-xs")
 
@@ -155,17 +152,17 @@ def build_info_panel() -> None:
             return "\u2014"
 
     def _refresh_info() -> None:
-        mode     = ng_controls.value("mode") or "\u2014"
-        fs_raw   = ng_controls.value("fs")
+        mode = ng_controls.value("mode") or "\u2014"
+        fs_raw = ng_controls.value("fs")
         taps_raw = ng_controls.value("taps")
-        ftype    = ng_controls.value("filter_type") or "\u2014"
-        hc_mode  = ng_controls.value("hc_mode") or ""
+        ftype = ng_controls.value("filter_type") or "\u2014"
+        hc_mode = ng_controls.value("hc_mode") or ""
 
-        mode_str  = str(mode).strip().upper()
+        mode_str = str(mode).strip().upper()
         ftype_str = str(ftype).strip()
-        taps_str  = str(int(taps_raw)) if taps_raw is not None else "\u2014"
-        lat_str   = _fmt_latency(taps_raw, fs_raw, ftype_str)
-        hc_str    = str(hc_mode).strip() if hc_mode else "\u2014"
+        taps_str = str(int(taps_raw)) if taps_raw is not None else "\u2014"
+        lat_str = _fmt_latency(taps_raw, fs_raw, ftype_str)
+        hc_str = str(hc_mode).strip() if hc_mode else "\u2014"
         line1.set_text(f"{mode_str} \u00b7 {_fmt_fs(fs_raw)} \u00b7 {taps_str} taps")
         line2.set_text(f"{ftype_str} \u00b7 {lat_str} \u00b7 {hc_str}")
 
@@ -173,12 +170,20 @@ def build_info_panel() -> None:
         if info:
             score = info.get("score")
             match = info.get("match")
-            conf  = info.get("conf")
+            conf = info.get("conf")
             parts = []
-            parts.append(f"Score {score:.0f}" if score is not None else "Score \u2014")
-            parts.append(f"{match:.0f}% match" if match is not None else "\u2014% match")
+            parts.append(
+                t("run_info_score").format(score=score)
+                if score is not None else
+                t("run_info_score_missing")
+            )
+            parts.append(
+                t("run_info_match").format(match=match)
+                if match is not None else
+                t("run_info_match_missing")
+            )
             if conf is not None:
-                parts.append(f"{conf:.0f}% conf")
+                parts.append(t("run_info_conf").format(conf=conf))
             line3.set_text(" \u00b7 ".join(parts))
             line3.classes(add="cf-info-line-score", remove="cf-info-line-dim")
             line3.set_visibility(True)
@@ -189,22 +194,19 @@ def build_info_panel() -> None:
 
 
 def build_run_section(*, on_start_click) -> None:
-    """Build the Run tab content.  Must be called inside a ui.tab_panel context."""
+    """Build the Run tab content. Must be called inside a ui.tab_panel context."""
     global _results_container_ref
 
     from nicegui import ui
 
     with ui.column().classes("w-full gap-3"):
-
-        # START button
         start_btn = ui.button(
-            "▶ START",
+            t("run_start_button"),
             on_click=lambda: _handle_start(on_start_click, start_btn, _run_clock),
         ).classes("w-full text-2xl font-bold tracking-widest py-4").props(
             'color="positive" unelevated'
         )
 
-        # Results container – cleared + rebuilt after each run
         _results_container_ref = ui.column().classes("w-full gap-2")
 
 
@@ -249,7 +251,6 @@ def _handle_start(on_start_click, start_btn, run_clock) -> None:
             except Exception:
                 pass
             run_clock["active"] = False
-            # Re-enable button on main thread
             try:
                 start_btn.enable()
             except Exception:

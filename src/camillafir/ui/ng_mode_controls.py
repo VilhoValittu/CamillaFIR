@@ -12,6 +12,7 @@ from typing import Callable
 
 from . import ng_controls as ctrl
 from .camillafir_utils import scale_taps_with_fs
+from ..ui_i18n import LVL_MODE_AUTO, LVL_MODE_MANUAL, LVL_MODE_OPTION_LABEL_KEYS, normalize_lvl_mode_value, tr_options
 
 logger = logging.getLogger("CamillaFIR")
 
@@ -34,13 +35,10 @@ def on_mode_change(*, mode: str, t: Callable) -> None:
 
     # lvl_mode options
     if is_advanced:
-        ctrl.set_options("lvl_mode", {
-            "Auto":   t("lvl_mode_auto"),
-            "Manual": t("lvl_mode_manual"),
-        })
+        ctrl.set_options("lvl_mode", tr_options(t, LVL_MODE_OPTION_LABEL_KEYS))
     else:
-        ctrl.set_options("lvl_mode", {"Auto": t("lvl_mode_auto")})
-        ctrl.set_value("lvl_mode", "Auto")
+        ctrl.set_options("lvl_mode", {LVL_MODE_AUTO: t("lvl_mode_auto")})
+        ctrl.set_value("lvl_mode", LVL_MODE_AUTO)
 
     # Mode description label
     key_map = {"AUTO": "mode_auto_desc", "ADVANCED": "mode_advanced_desc"}
@@ -79,8 +77,8 @@ def on_mode_change(*, mode: str, t: Callable) -> None:
 
 def update_lvl_ui(*, t: Callable) -> None:
     """Show/hide manual dB input depending on lvl_mode value."""
-    lvl = str(ctrl.value("lvl_mode", "Auto") or "Auto").strip()
-    is_manual = lvl.lower() == "manual"
+    lvl = normalize_lvl_mode_value(ctrl.value("lvl_mode", LVL_MODE_AUTO), t)
+    is_manual = lvl == LVL_MODE_MANUAL
     ctrl.set_visibility("lvl_manual_scope", is_manual)
 
 
@@ -159,12 +157,12 @@ def update_mixed_freq_ui(*, t: Callable) -> None:
 
 def update_tdc_controls_ui(*, t: Callable) -> None:
     enabled = bool(ctrl.value("enable_tdc", False))
-    ctrl.set_visibility("tdc_section_scope", enabled)
+    ctrl.set_visibility("tdc_details_scope", enabled)
 
 
 def update_afdw_cycles_ui(*, t: Callable) -> None:
     enabled = bool(ctrl.value("enable_afdw", False))
-    ctrl.set_visibility("afdw_section_scope", enabled)
+    ctrl.set_visibility("afdw_details_scope", enabled)
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +273,7 @@ def _update_auto_mode_fields_state(*, is_auto: bool, t: Callable) -> None:
         ctrl.set_enabled(name, not is_auto)
     for name in _AUTO_ONLY_FIELDS:
         ctrl.set_enabled(name, is_auto)
+    ctrl.set_visibility("auto_mode_scope", is_auto)
 
     auto_target_mode = str(ctrl.value("auto_target_mode", "auto") or "auto").lower()
     hc_locked = is_auto and auto_target_mode in ("auto", "adaptive")

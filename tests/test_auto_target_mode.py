@@ -27,6 +27,28 @@ def test_collect_ui_data_accepts_selected_aliases_for_auto_target_mode():
     assert str(data.get("auto_target_mode")) == "selected"
 
 
+def test_collect_ui_data_normalizes_layout_from_stable_ui_keys():
+    data = collect_ui_data({"layout": "stereo"})
+    assert str(data.get("layout")) == "stereo"
+
+    data = collect_ui_data({"layout": "mono"})
+    assert str(data.get("layout")) == "mono"
+
+
+def test_collect_ui_data_normalizes_legacy_layout_labels_to_stable_keys():
+    data = collect_ui_data({"layout": "Stereo"})
+    assert str(data.get("layout")) == "stereo"
+
+    data = collect_ui_data({"layout": "Mono"})
+    assert str(data.get("layout")) == "mono"
+
+
+def test_collect_ui_data_normalizes_level_mode_and_algo_to_stable_keys():
+    data = collect_ui_data({"mode": "ADVANCED", "lvl_mode": "Manual", "lvl_algo": "Average"})
+    assert str(data.get("lvl_mode")) == "manual"
+    assert str(data.get("lvl_algo")) == "average"
+
+
 def test_collect_ui_data_auto_mode_preserves_allowed_inputs_but_forces_managed_settings(monkeypatch):
     monkeypatch.setattr(
         "camillafir.config.camillafir_pipeline.get_auto_mode_filter_auto_defaults",

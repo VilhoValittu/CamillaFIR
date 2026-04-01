@@ -9,22 +9,35 @@ from __future__ import annotations
 from typing import Callable
 
 from . import ng_controls as ctrl
+from ..ui_i18n import (
+    AFDW_PRESET_BALANCED,
+    AFDW_PRESET_LABEL_KEYS,
+    AFDW_PRESET_MINIMAL,
+    AFDW_PRESET_SAFE,
+    AFDW_PRESET_TIGHT,
+    TDC_PRESET_AGGRESSIVE,
+    TDC_PRESET_LABEL_KEYS,
+    TDC_PRESET_NORMAL,
+    TDC_PRESET_SAFE,
+    normalize_afdw_preset_key,
+    normalize_tdc_preset_key,
+)
 
 
 def build_window_tab(*, t: Callable, get_val: Callable) -> None:
     from nicegui import ui
 
-    ui.label(f"🪟 {t('tab_window_tdc')}").classes("text-lg font-semibold")
+    ui.label(f"{t('tab_window_tdc')}").classes("text-lg font-semibold")
     ui.separator()
 
     # ---- IR Export Window ----
-    ui.label("🪟 IR Export Window").classes("text-sm font-semibold")
+    ui.label(t("ui_ir_export_window_title")).classes("text-sm font-semibold")
 
     ctrl.register(
         "ir_export_window_mode",
         ui.select(
             options={
-                "auto":    t("ir_export_window_auto"),
+                "auto": t("ir_export_window_auto"),
                 "rew_asym": t("ir_export_window_asym"),
             },
             value=str(get_val("ir_export_window_mode", "auto") or "auto").strip().lower(),
@@ -38,7 +51,7 @@ def build_window_tab(*, t: Callable, get_val: Callable) -> None:
             "ir_export_window_shape",
             ui.select(
                 options={
-                    "hann":  t("ir_export_window_shape_hann"),
+                    "hann": t("ir_export_window_shape_hann"),
                     "tukey": t("ir_export_window_shape_tukey"),
                 },
                 value=str(get_val("ir_export_window_shape", "hann") or "hann").strip().lower(),
@@ -96,7 +109,7 @@ def build_window_tab(*, t: Callable, get_val: Callable) -> None:
     ui.separator()
 
     # ---- A-FDW ----
-    ui.label("⏳ Temporal Processing").classes("text-sm font-semibold")
+    ui.label(t("ui_temporal_processing_title")).classes("text-sm font-semibold")
 
     afdw_col = ui.column().classes("w-full gap-1")
     ctrl.register_container("afdw_section_scope", afdw_col)
@@ -104,34 +117,35 @@ def build_window_tab(*, t: Callable, get_val: Callable) -> None:
         ctrl.register(
             "enable_afdw",
             ui.checkbox(
-                "⏳ Adaptive Frequency-Domain Windowing (A-FDW)",
+                t("enable_afdw"),
                 value=bool(get_val("enable_afdw", True)),
             ),
         )
+        afdw_details_col = ui.column().classes("w-full gap-1")
+        ctrl.register_container("afdw_details_scope", afdw_details_col)
+        with afdw_details_col:
+            with ui.row().classes("gap-2 flex-wrap") as afdw_presets_row:
+                ctrl.register_container("afdw_presets_row", afdw_presets_row)
+                for preset_key in (
+                    AFDW_PRESET_TIGHT,
+                    AFDW_PRESET_BALANCED,
+                    AFDW_PRESET_SAFE,
+                    AFDW_PRESET_MINIMAL,
+                ):
+                    ui.button(
+                        t(AFDW_PRESET_LABEL_KEYS[preset_key]),
+                        on_click=lambda key=preset_key: _apply_afdw_preset(key, t=t),
+                    ).props('size="sm" outline')
 
-        # Preset buttons
-        with ui.row().classes("gap-2 flex-wrap") as afdw_presets_row:
-            ctrl.register_container("afdw_presets_row", afdw_presets_row)
-            for preset_key, preset_name in [
-                ("afdw_preset_tight", "Tight"),
-                ("afdw_preset_balanced", "Balanced"),
-                ("afdw_preset_safe", "Safe"),
-                ("afdw_preset_minimal", "Minimal"),
-            ]:
-                label = t(preset_key)
-                ui.button(
-                    label,
-                    on_click=lambda n=preset_name: _apply_afdw_preset(n),
-                ).props('size="sm" outline')
-
-        ctrl.register(
-            "fdw_cycles",
-            ui.number(
-                label=t("fdw"),
-                value=float(get_val("fdw_cycles", 10.0) or 10.0),
-                format="%.1f",
-            ).props("dense outlined").classes("w-full"),
-        )
+            ctrl.register(
+                "fdw_cycles",
+                ui.number(
+                    label=t("fdw"),
+                    value=float(get_val("fdw_cycles", 10.0) or 10.0),
+                    format="%.1f",
+                ).props("dense outlined").classes("w-full"),
+            )
+        afdw_details_col.set_visibility(bool(get_val("enable_afdw", True)))
 
     ui.separator()
 
@@ -142,89 +156,112 @@ def build_window_tab(*, t: Callable, get_val: Callable) -> None:
         ctrl.register(
             "enable_tdc",
             ui.checkbox(
-                "⏳ Temporal Decay Control (TDC)",
+                t("enable_tdc"),
                 value=bool(get_val("enable_tdc", True)),
             ),
         )
+        tdc_details_col = ui.column().classes("w-full gap-1")
+        ctrl.register_container("tdc_details_scope", tdc_details_col)
+        with tdc_details_col:
+            with ui.row().classes("gap-2 flex-wrap"):
+                for preset_key in (
+                    TDC_PRESET_SAFE,
+                    TDC_PRESET_NORMAL,
+                    TDC_PRESET_AGGRESSIVE,
+                ):
+                    ui.button(
+                        t(TDC_PRESET_LABEL_KEYS[preset_key]),
+                        on_click=lambda key=preset_key: _apply_tdc_preset(key, t=t),
+                    ).props('size="sm" outline')
 
-        # Preset buttons
-        with ui.row().classes("gap-2 flex-wrap"):
-            for preset_key, preset_name in [
-                ("tdc_preset_safe", "Safe"),
-                ("tdc_preset_normal", "Normal"),
-                ("tdc_preset_aggressive", "Aggressive"),
-            ]:
-                label = t(preset_key)
-                ui.button(
-                    label,
-                    on_click=lambda n=preset_name: _apply_tdc_preset(n),
-                ).props('size="sm" outline')
-
-        with ui.row().classes("w-full gap-4"):
-            ctrl.register(
-                "tdc_strength",
-                ui.number(
-                    label=t("tdc_strength"),
-                    value=float(get_val("tdc_strength", 50.0) or 50.0),
-                    format="%.1f",
-                ).props("dense outlined").classes("flex-1"),
-            )
-            ctrl.register(
-                "tdc_max_reduction_db",
-                ui.number(
-                    label=t("tdc_max_reduction_db"),
-                    value=float(get_val("tdc_max_reduction_db", 9.0) or 9.0),
-                    format="%.1f",
-                ).props("dense outlined").classes("flex-1"),
-            )
-            ctrl.register(
-                "tdc_slope_db_per_oct",
-                ui.number(
-                    label=t("tdc_slope_db_per_oct"),
-                    value=float(get_val("tdc_slope_db_per_oct", 6.0) or 6.0),
-                    format="%.1f",
-                ).props("dense outlined").classes("flex-1"),
-            )
+            with ui.row().classes("w-full gap-4"):
+                ctrl.register(
+                    "tdc_strength",
+                    ui.number(
+                        label=t("tdc_strength"),
+                        value=float(get_val("tdc_strength", 50.0) or 50.0),
+                        format="%.1f",
+                    ).props("dense outlined").classes("flex-1"),
+                )
+                ctrl.register(
+                    "tdc_max_reduction_db",
+                    ui.number(
+                        label=t("tdc_max_reduction_db"),
+                        value=float(get_val("tdc_max_reduction_db", 9.0) or 9.0),
+                        format="%.1f",
+                    ).props("dense outlined").classes("flex-1"),
+                )
+                ctrl.register(
+                    "tdc_slope_db_per_oct",
+                    ui.number(
+                        label=t("tdc_slope_db_per_oct"),
+                        value=float(get_val("tdc_slope_db_per_oct", 6.0) or 6.0),
+                        format="%.1f",
+                    ).props("dense outlined").classes("flex-1"),
+                )
+        tdc_details_col.set_visibility(bool(get_val("enable_tdc", True)))
 
 
-def _apply_tdc_preset(name: str) -> None:
+def _apply_tdc_preset(preset_key: str, t: Callable | None = None) -> None:
     from .ng_health import show_toast  # noqa: PLC0415
+    from ..resources.i8n.camillafir_i18n import t as _t  # noqa: PLC0415
 
-    _PRESETS = {
-        "Safe":       {"enable": True, "strength": 35.0, "max_red": 6.0,  "slope": 3.0},
-        "Normal":     {"enable": True, "strength": 50.0, "max_red": 9.0,  "slope": 6.0},
-        "Aggressive": {"enable": True, "strength": 70.0, "max_red": 12.0, "slope": 0.0},
+    if t is None:
+        t = _t
+
+    preset_key = normalize_tdc_preset_key(preset_key, t=t)
+    presets = {
+        TDC_PRESET_SAFE: {"enable": True, "strength": 35.0, "max_red": 6.0, "slope": 3.0},
+        TDC_PRESET_NORMAL: {"enable": True, "strength": 50.0, "max_red": 9.0, "slope": 6.0},
+        TDC_PRESET_AGGRESSIVE: {"enable": True, "strength": 70.0, "max_red": 12.0, "slope": 0.0},
     }
-    p = _PRESETS.get(name)
-    if p is None:
+    preset = presets.get(preset_key or "")
+    if preset is None or preset_key is None:
         return
+
     mode = str(ctrl.value("mode", "BASIC") or "BASIC").upper()
     if mode == "AUTO":
-        show_toast("TDC preset locked in AUTO mode", color="info", duration=1.8)
+        show_toast(t("toast_tdc_preset_locked_auto"), color="info", duration=1.8)
         return
-    ctrl.set_value("enable_tdc", p["enable"])
-    ctrl.set_value("tdc_strength", p["strength"])
-    ctrl.set_value("tdc_max_reduction_db", p["max_red"])
-    ctrl.set_value("tdc_slope_db_per_oct", p["slope"])
-    show_toast(f"TDC preset applied: {name}", color="success", duration=1.5)
+
+    ctrl.set_value("enable_tdc", preset["enable"])
+    ctrl.set_value("tdc_strength", preset["strength"])
+    ctrl.set_value("tdc_max_reduction_db", preset["max_red"])
+    ctrl.set_value("tdc_slope_db_per_oct", preset["slope"])
+    show_toast(
+        t("toast_tdc_preset_applied").format(name=t(TDC_PRESET_LABEL_KEYS[preset_key])),
+        color="success",
+        duration=1.5,
+    )
 
 
-def _apply_afdw_preset(name: str) -> None:
+def _apply_afdw_preset(preset_key: str, t: Callable | None = None) -> None:
     from .ng_health import show_toast  # noqa: PLC0415
+    from ..resources.i8n.camillafir_i18n import t as _t  # noqa: PLC0415
 
-    _PRESETS = {
-        "Tight":    {"enable": True, "cycles": 4.0},
-        "Balanced": {"enable": True, "cycles": 10.0},
-        "Safe":     {"enable": True, "cycles": 18.0},
-        "Minimal":  {"enable": True, "cycles": 30.0},
+    if t is None:
+        t = _t
+
+    preset_key = normalize_afdw_preset_key(preset_key, t=t)
+    presets = {
+        AFDW_PRESET_TIGHT: {"enable": True, "cycles": 4.0},
+        AFDW_PRESET_BALANCED: {"enable": True, "cycles": 10.0},
+        AFDW_PRESET_SAFE: {"enable": True, "cycles": 18.0},
+        AFDW_PRESET_MINIMAL: {"enable": True, "cycles": 30.0},
     }
-    p = _PRESETS.get(name)
-    if p is None:
+    preset = presets.get(preset_key or "")
+    if preset is None or preset_key is None:
         return
+
     mode = str(ctrl.value("mode", "BASIC") or "BASIC").upper()
     if mode == "AUTO":
-        show_toast("A-FDW preset locked in AUTO mode", color="info", duration=1.8)
+        show_toast(t("toast_afdw_preset_locked_auto"), color="info", duration=1.8)
         return
-    ctrl.set_value("enable_afdw", p["enable"])
-    ctrl.set_value("fdw_cycles", p["cycles"])
-    show_toast(f"A-FDW preset applied: {name}", color="success", duration=1.5)
+
+    ctrl.set_value("enable_afdw", preset["enable"])
+    ctrl.set_value("fdw_cycles", preset["cycles"])
+    show_toast(
+        t("toast_afdw_preset_applied").format(name=t(AFDW_PRESET_LABEL_KEYS[preset_key])),
+        color="success",
+        duration=1.5,
+    )

@@ -116,3 +116,19 @@ def test_build_export_zip_writes_single_stereo_wav_when_requested():
         cfg_text = zf.read("Config_Asymmetric_48000Hz_auto.cfg").decode("utf-8")
         assert cfg_text.count("Stereo_Asymmetric_48000Hz_target_1200_290326_auto.wav") == 2
         assert "\n0\n0.0\n0.0\nStereo_Asymmetric_48000Hz_target_1200_290326_auto.wav\n1\n1.0\n1.0" in cfg_text
+
+
+def test_build_export_zip_accepts_stable_layout_key():
+    result = _make_result()
+    zip_buffer, _, _ = build_export_zip(
+        data=_base_data("stereo"),
+        results=[result],
+        ft_short="Asymmetric",
+        file_ts="1200_290326",
+        irw_tag="auto",
+        write_dashboards=False,
+    )
+
+    with zipfile.ZipFile(zip_buffer) as zf:
+        names = set(zf.namelist())
+        assert "Stereo_Asymmetric_48000Hz_target_1200_290326_auto.wav" in names

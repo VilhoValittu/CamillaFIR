@@ -1,6 +1,15 @@
 import json
 import os
 
+from ..ui_i18n import (
+    LAYOUT_MONO,
+    LVL_ALGO_MEDIAN,
+    LVL_MODE_AUTO,
+    normalize_layout_value,
+    normalize_lvl_algo_value,
+    normalize_lvl_mode_value,
+)
+
 CONFIG_FILE = "config.json"
 
 
@@ -25,7 +34,7 @@ def _normalize_filter_type(value) -> str:
 def load_config() -> dict:
     default_conf = {
         "fmt": "WAV",
-        "layout": "Mono",
+        "layout": LAYOUT_MONO,
         "fs": 44100,
         "taps": 65536,
         "mode": "AUTO",
@@ -66,8 +75,8 @@ def load_config() -> dict:
         "mag_c_min": 10.0,
         "mag_c_max": 200.0,
         "max_boost": 5.0,
-        "lvl_mode": "Auto",
-        "lvl_algo": "Median",
+        "lvl_mode": LVL_MODE_AUTO,
+        "lvl_algo": LVL_ALGO_MEDIAN,
         "lvl_manual_db": 0.0,
         "manual_target_tilt_db_per_oct": 0.0,
         "lvl_min": 300.0,
@@ -187,6 +196,10 @@ def load_config() -> dict:
             except Exception:
                 saved["filter_type"] = str(default_conf.get("filter_type", "Asymmetric"))
 
+            saved["layout"] = normalize_layout_value(saved.get("layout", default_conf.get("layout")))
+            saved["lvl_mode"] = normalize_lvl_mode_value(saved.get("lvl_mode", default_conf.get("lvl_mode")))
+            saved["lvl_algo"] = normalize_lvl_algo_value(saved.get("lvl_algo", default_conf.get("lvl_algo")))
+
             default_conf.update(saved)
         except Exception:
             pass
@@ -208,6 +221,9 @@ def load_config() -> dict:
 
     default_conf["mode"] = mode_u
     default_conf["camillafir_automatic_mode"] = bool(mode_u == "AUTO")
+    default_conf["layout"] = normalize_layout_value(default_conf.get("layout", LAYOUT_MONO))
+    default_conf["lvl_mode"] = normalize_lvl_mode_value(default_conf.get("lvl_mode", LVL_MODE_AUTO))
+    default_conf["lvl_algo"] = normalize_lvl_algo_value(default_conf.get("lvl_algo", LVL_ALGO_MEDIAN))
 
     return default_conf
 
@@ -225,6 +241,9 @@ def save_config(data: dict) -> None:
         clean_data["filter_type"] = _normalize_filter_type(
             clean_data.get("filter_type", "Asymmetric")
         )
+        clean_data["layout"] = normalize_layout_value(clean_data.get("layout", LAYOUT_MONO))
+        clean_data["lvl_mode"] = normalize_lvl_mode_value(clean_data.get("lvl_mode", LVL_MODE_AUTO))
+        clean_data["lvl_algo"] = normalize_lvl_algo_value(clean_data.get("lvl_algo", LVL_ALGO_MEDIAN))
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(clean_data, f, indent=4)
     except Exception:

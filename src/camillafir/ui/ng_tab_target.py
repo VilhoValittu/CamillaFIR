@@ -19,6 +19,16 @@ from .target_preview_interaction import (
     extract_vertical_shift_from_shape_relayout,
     parse_svg_path_points,
 )
+from ..ui_i18n import (
+    LVL_ALGO_MEDIAN,
+    LVL_ALGO_OPTION_LABEL_KEYS,
+    LVL_MODE_AUTO,
+    LVL_MODE_MANUAL,
+    LVL_MODE_OPTION_LABEL_KEYS,
+    normalize_lvl_algo_value,
+    normalize_lvl_mode_value,
+    tr_options,
+)
 
 _HC_OPTS = {
     "Harman6":   "Harman 6 dB",
@@ -83,6 +93,7 @@ def build_target_tab(*, t: Callable, get_val: Callable) -> None:
     ui.markdown(f"#### {t('tab_target')}")
     ui.separator()
     ui.markdown(f"#### {t('ui_target_preview')}")
+    ui.label(t("target_preview_legend_hint")).classes("text-xs text-gray-400")
 
     # Target preview container
     preview_col = ui.column().classes("w-full")
@@ -131,8 +142,8 @@ def build_target_tab(*, t: Callable, get_val: Callable) -> None:
         ctrl.register(
             "lvl_algo",
             ui.select(
-                ["Median", "Average"],
-                value=get_val("lvl_algo", "Median"),
+                tr_options(t, LVL_ALGO_OPTION_LABEL_KEYS),
+                value=normalize_lvl_algo_value(get_val("lvl_algo", LVL_ALGO_MEDIAN), t),
                 label=t("lvl_algo"),
             ).props("dense outlined").classes("flex-1"),
         )
@@ -167,15 +178,12 @@ def build_target_tab(*, t: Callable, get_val: Callable) -> None:
         ctrl.register(
             "lvl_mode",
             ui.select(
-                options={
-                    "Auto":   t("lvl_mode_auto"),
-                    "Manual": t("lvl_mode_manual"),
-                },
-                value=get_val("lvl_mode", "Auto"),
+                options=tr_options(t, LVL_MODE_OPTION_LABEL_KEYS),
+                value=normalize_lvl_mode_value(get_val("lvl_mode", LVL_MODE_AUTO), t),
                 label=t("lvl_mode"),
             ).props("dense outlined").classes("flex-1"),
         )
-        # Manual dB scope (shown only when lvl_mode=Manual)
+        # Manual dB scope (shown only when lvl_mode=manual)
         lvl_manual_col = ui.column().classes("flex-1 gap-1")
         ctrl.register_container("lvl_manual_scope", lvl_manual_col)
         with lvl_manual_col:
@@ -331,8 +339,8 @@ def _on_target_preview_relayout(e) -> None:
     global _TARGET_PREVIEW_DRAG_ACTIVE
 
     app_mode = str(ctrl.value("mode", "BASIC") or "BASIC").upper()
-    lvl_mode = str(ctrl.value("lvl_mode", "Auto") or "Auto").strip().lower()
-    if app_mode in ("BASIC", "AUTO") or lvl_mode != "manual":
+    lvl_mode = normalize_lvl_mode_value(ctrl.value("lvl_mode", LVL_MODE_AUTO))
+    if app_mode in ("BASIC", "AUTO") or lvl_mode != LVL_MODE_MANUAL:
         return
 
     payload = getattr(e, "args", None)
@@ -372,18 +380,14 @@ def _build_target_preview_fig():
         import plotly.graph_objects as go  # noqa: PLC0415
         from ..auto_mode.shared import _auto_goal_forced_level_window  # noqa: PLC0415
         from ..dsp.smoothing import psychoacoustic_smoothing as _psycho_smooth  # noqa: PLC0415
-        from ..io.measurements_txt import (  # noqa: PLC0415
-            parse_measurements_from_bytes as _parse_txt_bytes,
-            parse_measurements_from_path as _parse_txt_path,
-        )
-        from ..io.measurements_wav import (  # noqa: PLC0415
-            parse_measurements_from_wav_bytes as _parse_wav_bytes,
-            parse_measurements_from_wav_path as _parse_wav_path,
-        )
         from ..application.house_curve_service import (  # noqa: PLC0415
             _normalize_hc_mode_key,
             load_house_curve,
             load_target_curve,
+        )
+        from .target_preview_cache import (  # noqa: PLC0415
+            load_path_measurement_curve,
+            load_upload_measurement_curve,
         )
 
         global _TARGET_PREVIEW_DRAG_ACTIVE
@@ -399,21 +403,6 @@ def _build_target_preview_fig():
             except Exception:
                 pass
             return float(default)
-
-        def _normalize_curve(freqs, mags):
-            try:
-                ff = np.asarray(freqs, dtype=float)
-                mm = np.asarray(mags, dtype=float)
-                if ff.size < 8 or mm.size != ff.size:
-                    return None, None
-                mask = np.isfinite(ff) & np.isfinite(mm) & (ff > 0)
-                ff, mm = ff[mask], mm[mask]
-                order = np.argsort(ff)
-                ff, mm = ff[order], mm[order]
-                uniq, idx = np.unique(ff, return_index=True)
-                return uniq if uniq.size >= 8 else None, mm[idx] if uniq.size >= 8 else None
-            except Exception:
-                return None, None
 
         def _smooth_for_preview(freq_axis, m):
             try:
@@ -431,10 +420,10 @@ def _build_target_preview_fig():
         mag_c_max = _to_float(_cv("mag_c_max", 200.0), 200.0)
         auto_goal = str(_cv("auto_goal", "balanced") or "balanced")
         app_mode = str(_cv("mode", "BASIC") or "BASIC").upper()
-        lvl_mode = str(_cv("lvl_mode", "Auto") or "Auto")
+        lvl_mode = normalize_lvl_mode_value(_cv("lvl_mode", LVL_MODE_AUTO))
         if app_mode in ("BASIC", "AUTO"):
-            lvl_mode = "Auto"
-        is_manual_level = "manual" in lvl_mode.strip().lower()
+            lvl_mode = LVL_MODE_AUTO
+        is_manual_level = lvl_mode == LVL_MODE_MANUAL
         lvl_manual_db = _to_float(_cv("lvl_manual_db", 0.0), 0.0)
         manual_target_tilt_db_per_oct = _to_float(_cv("manual_target_tilt_db_per_oct", 0.0), 0.0)
         preview_level_shift_db = lvl_manual_db if is_manual_level else 0.0
@@ -478,38 +467,6 @@ def _build_target_preview_fig():
                 lvl_min, lvl_max = float(forced[0]), float(forced[1])
 
         # --- speaker measurements ---
-        def _parse_upload(up):
-            if not isinstance(up, dict) or not up.get("content"):
-                return None, None
-            content = up["content"]
-            name = str(up.get("filename", "") or "").lower()
-            try:
-                is_wav = name.endswith(".wav") or (
-                    isinstance(content, (bytes, bytearray)) and len(content) >= 4 and content[:4] == b"RIFF"
-                )
-                if is_wav:
-                    ff, mm, _ = _parse_wav_bytes(content, pre_ms=pre_ms, post_ms=post_ms,
-                                                  smoothing_level=smoothing_level, logger=None)
-                else:
-                    ff, mm, _ = _parse_txt_bytes(content)
-                return _normalize_curve(ff, mm)
-            except Exception:
-                return None, None
-
-        def _parse_path(path_raw):
-            path = str(path_raw or "").strip().strip('"').strip("'")
-            if not path:
-                return None, None
-            try:
-                if path.lower().endswith(".wav"):
-                    ff, mm, _ = _parse_wav_path(path, pre_ms=pre_ms, post_ms=post_ms,
-                                                  smoothing_level=smoothing_level, logger=None)
-                else:
-                    ff, mm, _ = _parse_txt_path(path, logger=None)
-                return _normalize_curve(ff, mm)
-            except Exception:
-                return None, None
-
         def _align(m_curve, t_curve, fa, fmin, fmax):
             try:
                 mask = (fa >= fmin) & (fa <= fmax)
@@ -522,9 +479,19 @@ def _build_target_preview_fig():
 
         speaker_interp = {}
         for ch, up_key, path_key in (("L", "file_l", "local_path_l"), ("R", "file_r", "local_path_r")):
-            ff, mm = _parse_upload(_cv(up_key, None))
+            ff, mm = load_upload_measurement_curve(
+                _cv(up_key, None),
+                pre_ms=pre_ms,
+                post_ms=post_ms,
+                smoothing_level=smoothing_level,
+            )
             if ff is None:
-                ff, mm = _parse_path(_cv(path_key, ""))
+                ff, mm = load_path_measurement_curve(
+                    _cv(path_key, ""),
+                    pre_ms=pre_ms,
+                    post_ms=post_ms,
+                    smoothing_level=smoothing_level,
+                )
             if ff is not None and mm is not None:
                 m_interp = np.interp(freq_axis, ff, mm, left=mm[0], right=mm[-1])
                 m_aligned = _align(m_interp, target_curve, freq_axis, lvl_min, lvl_max)

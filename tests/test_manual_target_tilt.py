@@ -60,6 +60,17 @@ def test_collect_ui_data_normalizes_manual_target_tilt_db_per_oct():
     assert float(data.get("manual_target_tilt_db_per_oct", 0.0)) == 1.25
 
 
+def test_collect_ui_data_keeps_manual_mode_as_stable_key():
+    data = collect_ui_data(
+        {
+            "mode": "ADVANCED",
+            "lvl_mode": "Manual",
+        }
+    )
+
+    assert str(data.get("lvl_mode")) == "manual"
+
+
 def test_build_filter_config_keeps_manual_target_tilt_db_per_oct():
     data = load_config()
     data.update(
@@ -124,3 +135,25 @@ def test_format_summary_content_reports_manual_target_tilt():
 
     assert "Manual target level: +1.5 dB" in summary
     assert "Manual target tilt: +0.8 dB/oct @ 1 kHz" in summary
+
+
+def test_format_summary_content_accepts_stable_manual_mode_key():
+    stats = {
+        "rt60_val": 0.30,
+        "cmp_avg_confidence": 80.0,
+        "avg_confidence": 80.0,
+        "reflections": [],
+    }
+
+    summary = format_summary_content(
+        {
+            "lvl_mode": "manual",
+            "lvl_manual_db": 1.5,
+            "manual_target_tilt_db_per_oct": 0.8,
+        },
+        stats,
+        stats,
+    )
+
+    assert "Level match mode: Manual" in summary
+    assert "Manual target level: +1.5 dB" in summary

@@ -1,6 +1,6 @@
 # CamillaFIR by Vilho Valittu
 
-## v4.0.2
+## v4.0.3
 
 Stable release - feedback welcome: camillafir.py@gmail.com
 
@@ -9,6 +9,14 @@ CamillaFIR generates high-resolution FIR room-correction filters from REW export
 
 CamillaFIR is a recommended filter creation tool for CamillaDSP and is listed in the official CamillaDSP README under
 [Measurement and filter generation tools](https://github.com/HEnquist/camilladsp?tab=readme-ov-file#measurement-and-filter-generation-tools).
+
+## v4.0.3 Highlights - Guided Advanced workflow
+
+- **Guided Advanced presets:** the Advanced tab now includes dedicated **Safe / Normal / Aggressive** preset buttons for shaping, bass safety, and confidence-pull tuning, with live summaries of the effective settings.
+- **Cleaner advanced workflow:** detailed controls are still available, but now sit behind clearer fine-tune sections so the main Advanced view is easier to scan and use.
+- **More robust UI compatibility:** layout, level mode, level algorithm, and related preset choices now normalize consistently across stable keys, legacy labels, and translated UI labels.
+- **Faster preview refreshes:** target preview measurement loading now reuses cached TXT/WAV parsing for unchanged uploads and local file paths instead of reparsing the same inputs repeatedly.
+- **Clearer file handling:** the Files and Target tabs now show upload/path status more clearly, including preview source hints and file metadata.
 
 ## v4.0.2 Highlights - Manual target preview interaction
 

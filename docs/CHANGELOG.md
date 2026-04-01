@@ -4,6 +4,27 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [4.0.3] - 2026-04-01
+
+### Advanced UI / Workflow
+- Added guided preset buttons for Advanced-tab shaping, bass safety, and confidence-pull tuning, with live summaries so the effective settings are visible without opening every fine-tune control.
+- Kept the detailed Advanced controls behind collapsible fine-tune sections and blocked guided preset changes while AUTO mode is managing those settings.
+- Improved the Files and Target tabs with clearer upload/local-path status cards, preview-source indicators, a target-preview legend hint, and more robust bundled manual/external-link behavior in the NiceGUI app.
+
+### Config / Compatibility
+- Introduced shared UI-choice normalization helpers so layout, level mode, level algorithm, and related preset selections accept stable keys, legacy English labels, and translated labels consistently.
+- Normalized those stable values through UI collection and pipeline handling while still emitting legacy names where runtime config, summary text, and export diagnostics expect them.
+- Kept run/results/status text, manual-target summary output, and export diagnostics aligned with the normalized layout and leveling metadata.
+
+### Preview / Performance
+- Added cached TXT/WAV measurement parsing for target-preview uploads and local file paths so repeated preview refreshes do not keep reparsing unchanged inputs.
+
+### Docs & Tests
+- Added regression coverage for Advanced guided presets, target-preview caching, file/path status metadata, translation-safe option normalization, and related manual-target/reporting paths.
+- Updated README/version references for `4.0.3`.
+
+---
+
 ## [4.0.2] - 2026-03-31
 
 ### Target preview / Manual mode

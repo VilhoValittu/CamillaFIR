@@ -4,8 +4,10 @@ from camillafir.ui import ng_controls as ctrl
 from camillafir.ui.ng_mode_controls import (
     _build_taps_auto_info_markdown,
     _update_auto_mode_fields_state,
+    update_afdw_cycles_ui,
     update_mixed_freq_ui,
     update_lvl_ui,
+    update_tdc_controls_ui,
 )
 
 
@@ -88,6 +90,52 @@ def test_auto_mode_keeps_filter_type_enabled():
     assert ctrl.get("filter_type").enabled is True
     assert ctrl.get("mag_correct").enabled is False
     assert ctrl.get("auto_goal").enabled is True
+
+
+def test_auto_mode_scope_visibility_tracks_current_mode():
+    ctrl.reset()
+    ctrl.register("filter_type", _DummyControl("Asymmetric"))
+    ctrl.register("mag_correct", _DummyControl(True))
+    ctrl.register("auto_goal", _DummyControl("balanced"))
+    ctrl.register("auto_target_mode", _DummyControl("auto"))
+    ctrl.register("hc_mode", _DummyControl("Harman6"))
+    ctrl.register("hc_custom_file", _DummyControl(None))
+    auto_scope = _DummyContainer()
+    ctrl.register_container("auto_mode_scope", auto_scope)
+
+    _update_auto_mode_fields_state(is_auto=False, t=_t)
+    assert auto_scope.visible is False
+
+    _update_auto_mode_fields_state(is_auto=True, t=_t)
+    assert auto_scope.visible is True
+
+
+def test_update_tdc_controls_ui_toggles_only_details_scope():
+    ctrl.reset()
+    ctrl.register("enable_tdc", _DummyControl(False))
+    section_scope = _DummyContainer()
+    details_scope = _DummyContainer()
+    ctrl.register_container("tdc_section_scope", section_scope)
+    ctrl.register_container("tdc_details_scope", details_scope)
+
+    update_tdc_controls_ui(t=_t)
+
+    assert details_scope.visible is False
+    assert section_scope.visible is None
+
+
+def test_update_afdw_cycles_ui_toggles_only_details_scope():
+    ctrl.reset()
+    ctrl.register("enable_afdw", _DummyControl(False))
+    section_scope = _DummyContainer()
+    details_scope = _DummyContainer()
+    ctrl.register_container("afdw_section_scope", section_scope)
+    ctrl.register_container("afdw_details_scope", details_scope)
+
+    update_afdw_cycles_ui(t=_t)
+
+    assert details_scope.visible is False
+    assert section_scope.visible is None
 
 
 def test_mixed_split_hidden_in_auto_mode_even_with_mixed_filter():

@@ -15,6 +15,7 @@ from ..common.result_postprocess import _irwin_tag
 from ..config.camillafir_convolver_configs import generate_hlc_config, generate_raspberry_yaml
 from ..config.results import FilterResult
 from ..auto_mode.rank_score import attach_official_rank_score, official_rank_score
+from ..ui_i18n import layout_legacy_name
 
 logger = logging.getLogger("CamillaFIR")
 
@@ -87,7 +88,7 @@ def _build_diagnostics_dict(data, fs_v, l_st, r_st):
             "fs_hz": int(fs_v),
             "taps": int(float(data.get("taps", 0) or 0)),
             "filter_type": str(data.get("filter_type", "") or ""),
-            "layout": str(data.get("layout", "Mono") or "Mono"),
+            "layout": layout_legacy_name(data.get("layout", "mono")),
             "multi_rate": bool(data.get("multi_rate_opt", False)),
             "ir_export_window_mode": str(data.get("ir_export_window_mode", "") or ""),
             "ir_export_window_tag": str(_irwin_tag(data.get("ir_export_window_mode"))),

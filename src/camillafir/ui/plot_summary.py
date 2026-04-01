@@ -6,6 +6,7 @@ from ..common.comparison_stats import _make_comparison_stats
 from ..dsp.phase_ir_metrics import format_pre_energy_status
 from ..dsp.quality_metrics import _mag_error_db, _rms
 from ..dsp.target_match import target_match_from_stats as _target_match_from_stats_ssot
+from ..ui_i18n import LVL_MODE_AUTO, lvl_mode_legacy_name
 
 def format_band_rt60_summary(bands, *, picks=None):
     if not bands:
@@ -861,9 +862,9 @@ def _format_summary_content_legacy(settings, l_stats, r_stats):
         if k in settings:
             lines.append(f"{k}: {settings.get(k)}")
     try:
-        lvl_mode_value = str(settings.get("lvl_mode", "Auto") or "Auto").strip()
+        lvl_mode_value = lvl_mode_legacy_name(settings.get("lvl_mode", LVL_MODE_AUTO))
     except Exception:
-        lvl_mode_value = "Auto"
+        lvl_mode_value = lvl_mode_legacy_name(LVL_MODE_AUTO)
     lines.append(f"Level match mode: {lvl_mode_value}")
     if lvl_mode_value.lower() == "manual":
         lines.append(f"Manual target level: {_safe_float(settings.get('lvl_manual_db', 0.0), 0.0):+.1f} dB")

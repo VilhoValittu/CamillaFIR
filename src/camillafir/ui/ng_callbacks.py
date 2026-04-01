@@ -21,6 +21,7 @@ def register_callbacks(*, t: Callable, get_val: Callable, max_safe_boost: float)
     _register_lvl_callbacks(t=t)
     _register_ir_window_callbacks(t=t)
     _register_bass_callbacks(t=t)
+    _register_advanced_guidance_callbacks(t=t)
     _register_tdc_afdw_callbacks(t=t)
     _register_stereo_callbacks(t=t)
     _register_metric_callbacks(t=t)
@@ -141,6 +142,25 @@ def _register_bass_callbacks(*, t: Callable) -> None:
     ctrl.on_change("bass_first_ai", _on_bass_first)
 
 
+def _register_advanced_guidance_callbacks(*, t: Callable) -> None:
+    """Refresh guided Advanced-tab summaries when dependent fields change."""
+    from .ng_advanced_presets import (  # noqa: PLC0415
+        BASS_SAFETY_SUMMARY_FIELDS,
+        CONF_PULL_SUMMARY_FIELDS,
+        SHAPING_SUMMARY_FIELDS,
+        render_bass_safety_summary,
+        render_conf_pull_summary,
+        render_shaping_summary,
+    )
+
+    for field in SHAPING_SUMMARY_FIELDS:
+        ctrl.on_change(field, lambda v, render=render_shaping_summary: render(t=t))
+    for field in BASS_SAFETY_SUMMARY_FIELDS:
+        ctrl.on_change(field, lambda v, render=render_bass_safety_summary: render(t=t))
+    for field in CONF_PULL_SUMMARY_FIELDS:
+        ctrl.on_change(field, lambda v, render=render_conf_pull_summary: render(t=t))
+
+
 def _register_tdc_afdw_callbacks(*, t: Callable) -> None:
     """enable_tdc, enable_afdw -> show/hide sub-controls + clamp hints."""
 
@@ -188,18 +208,28 @@ def _initial_state_sync(*, t: Callable, get_val: Callable) -> None:
     try:
         from .ng_mode_controls import (  # noqa: PLC0415
             on_mode_change,
+            update_afdw_cycles_ui,
+            update_bass_first_ui,
             update_ir_window_controls,
             update_lvl_ui,
+            update_low_bass_cut_ui,
             update_mixed_freq_ui,
+            update_tdc_controls_ui,
             update_taps_auto_info,
         )
+        from .ng_advanced_presets import update_advanced_guidance_ui  # noqa: PLC0415
 
         mode = str(ctrl.value("mode", get_val("mode", "BASIC")) or "BASIC").upper()
         on_mode_change(mode=mode, t=t)
         update_lvl_ui(t=t)
         update_ir_window_controls(t=t)
         update_mixed_freq_ui(t=t)
+        update_low_bass_cut_ui()
+        update_bass_first_ui()
+        update_tdc_controls_ui(t=t)
+        update_afdw_cycles_ui(t=t)
         update_taps_auto_info(t=t)
+        update_advanced_guidance_ui(t=t)
         _update_target_preview()
     except Exception:
         logger.debug("_initial_state_sync failed", exc_info=True)
