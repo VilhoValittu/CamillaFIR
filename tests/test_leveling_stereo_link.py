@@ -451,3 +451,65 @@ def test_compute_leveling_cache_key_includes_shared_target_level(monkeypatch):
     assert out_low[0] != out_high[0]
 
     leveling_module._clear_leveling_cache()
+
+
+def test_tilt_fit_piecewise_lf_improves_subwoofer_offset():
+    freq = np.geomspace(20.0, 200.0, 240, dtype=float)
+    log_f = np.log2(freq)
+    log_f0 = float(np.median(log_f))
+    true_offset_db = 1.8
+
+    diff = true_offset_db + np.where(
+        log_f <= log_f0,
+        -0.2 * (log_f - log_f0),
+        1.4 * (log_f - log_f0),
+    )
+    diff -= 5.0 * np.exp(-0.5 * (np.log2(freq / 58.0) / 0.05) ** 2)
+
+    linear_off, linear_slope = leveling_module._tilt_fit_offset_and_slope_db_per_oct(
+        freq,
+        diff,
+        max_db_per_oct=2.0,
+        prefer_lf_piecewise_tilt=False,
+    )
+    piecewise_off, piecewise_slope = leveling_module._tilt_fit_offset_and_slope_db_per_oct(
+        freq,
+        diff,
+        max_db_per_oct=2.0,
+        prefer_lf_piecewise_tilt=True,
+    )
+
+    assert abs(piecewise_off - true_offset_db) < abs(linear_off - true_offset_db)
+    assert abs(piecewise_off - true_offset_db) < 0.2
+    assert abs(linear_slope) <= 2.0
+    assert abs(piecewise_slope) <= 2.0
+
+
+def test_leveling_cache_key_includes_auto_goal():
+    freq = np.geomspace(20.0, 200.0, 240, dtype=float)
+    m = np.zeros_like(freq)
+    t = np.zeros_like(freq)
+    cfg_a = SimpleNamespace(
+        auto_goal="balanced",
+        lvl_manual_db=0.0,
+        lvl_min=20.0,
+        lvl_max=200.0,
+        lvl_mode="Auto",
+        lvl_tilt_comp=True,
+        lvl_tilt_max_db_per_oct=2.0,
+        lvl_perceptual_weighting=False,
+        lvl_perceptual_strength=0.12,
+        lvl_perceptual_min_hz=250.0,
+        lvl_perceptual_max_hz=4000.0,
+        lvl_perceptual_tie_only=True,
+        lvl_force_window=None,
+        lvl_force_offset_db=None,
+        hpf_settings=None,
+    )
+    cfg_b = SimpleNamespace(**vars(cfg_a))
+    cfg_b.auto_goal = "subwoofers"
+
+    key_a = leveling_module._leveling_cache_key(cfg_a, freq, m, t)
+    key_b = leveling_module._leveling_cache_key(cfg_b, freq, m, t)
+
+    assert key_a != key_b

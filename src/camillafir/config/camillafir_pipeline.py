@@ -703,6 +703,7 @@ def build_filter_config(
         num_taps=int(taps_v),
         df_smoothing=bool(df_smoothing),
         **({"comparison_mode": bool(comparison_mode)} if hasattr(FilterConfig_cls, "comparison_mode") else {}),
+        **({"auto_goal": str(data.get("auto_goal", "balanced") or "balanced")} if hasattr(FilterConfig_cls, "auto_goal") else {}),
         filter_type_str=data["filter_type"],
         mixed_split_freq=data["mixed_freq"],
         global_gain_db=0.0,

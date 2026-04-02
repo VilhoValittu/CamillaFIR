@@ -38,6 +38,11 @@ def compute_leveling_impl(
     is_manual = "Manual" in mode
     tilt_comp = bool(getattr(cfg, "lvl_tilt_comp", True))
     tilt_max_db_per_oct = to_float_fn(getattr(cfg, "lvl_tilt_max_db_per_oct", 2.0), 2.0)
+    try:
+        auto_goal = str(getattr(cfg, "auto_goal", "") or "").strip().lower()
+    except (AttributeError, TypeError, ValueError):
+        auto_goal = ""
+    subwoofer_goal = auto_goal in ("subwoofer", "subwoofers", "subs")
     lvl_perceptual_weighting = to_bool_fn(getattr(cfg, "lvl_perceptual_weighting", False), False)
     lvl_perceptual_strength = max(0.0, to_float_fn(getattr(cfg, "lvl_perceptual_strength", 0.12), 0.12))
     lvl_perceptual_min_hz = to_float_fn(getattr(cfg, "lvl_perceptual_min_hz", 250.0), 250.0)
@@ -75,6 +80,15 @@ def compute_leveling_impl(
                 "perceptual_error_rms": perceptual_value,
                 "perceptual_enabled": bool(lvl_perceptual_weighting),
             },
+        )
+
+    def _tilt_fit_for_window(freq_values, diff_values, *, window_hi_hz: float):
+        prefer_lf_piecewise_tilt = bool(subwoofer_goal and np.isfinite(float(window_hi_hz)) and float(window_hi_hz) <= 220.0)
+        return tilt_fit_offset_and_slope_db_per_oct_fn(
+            freq_values,
+            diff_values,
+            max_db_per_oct=float(tilt_max_db_per_oct),
+            prefer_lf_piecewise_tilt=bool(prefer_lf_piecewise_tilt),
         )
 
     try:
@@ -126,10 +140,10 @@ def compute_leveling_impl(
                 offset_method = "ForcedOffset"
                 try:
                     if tilt_comp and np.any(mask):
-                        _off_tmp, slope = tilt_fit_offset_and_slope_db_per_oct_fn(
+                        _off_tmp, slope = _tilt_fit_for_window(
                             freq_axis[mask],
                             (m_anal[mask] - target_mags[mask]),
-                            max_db_per_oct=float(tilt_max_db_per_oct),
+                            window_hi_hz=float(ss_max),
                         )
                         safe_setattr_fn(cfg, "_lvl_tilt_slope_db_per_oct", float(slope))
                 except (TypeError, ValueError, FloatingPointError, IndexError):
@@ -138,10 +152,10 @@ def compute_leveling_impl(
                 if np.any(mask):
                     diff = m_anal[mask] - target_mags[mask]
                     if tilt_comp:
-                        calc_offset_db, tilt_slope = tilt_fit_offset_and_slope_db_per_oct_fn(
+                        calc_offset_db, tilt_slope = _tilt_fit_for_window(
                             freq_axis[mask],
                             diff,
-                            max_db_per_oct=float(tilt_max_db_per_oct),
+                            window_hi_hz=float(ss_max),
                         )
                         safe_setattr_fn(cfg, "_lvl_tilt_slope_db_per_oct", float(tilt_slope))
                         offset_method = "ForcedWindowTiltMedian"
@@ -278,10 +292,10 @@ def compute_leveling_impl(
         target_level_db_window = log_median_fn(freq_axis[mask], target_mags[mask])
         diff = m_anal[mask] - target_mags[mask]
         if tilt_comp:
-            calc_offset_db, tilt_slope = tilt_fit_offset_and_slope_db_per_oct_fn(
+            calc_offset_db, tilt_slope = _tilt_fit_for_window(
                 freq_axis[mask],
                 diff,
-                max_db_per_oct=float(tilt_max_db_per_oct),
+                window_hi_hz=float(ss_max),
             )
             safe_setattr_fn(cfg, "_lvl_tilt_slope_db_per_oct", float(tilt_slope))
             offset_method = "SmartScanTiltMedian"

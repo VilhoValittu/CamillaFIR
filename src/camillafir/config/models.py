@@ -48,6 +48,7 @@ class FilterConfig:
     comparison_mode: bool = True
     comparison_ref_fs: int = 44100
     comparison_ref_taps: int = 65536
+    auto_goal: str = "balanced"
 
     enable_tdc: bool = True
     tdc_strength: float = 50.0

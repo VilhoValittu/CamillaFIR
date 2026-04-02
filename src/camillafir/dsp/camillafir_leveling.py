@@ -227,6 +227,7 @@ def _leveling_cache_key(
     _hash_leveling_array(h, m_anal)
     _hash_leveling_array(h, target_mags)
     payload = (
+        str(getattr(cfg, "auto_goal", "balanced") or "balanced").strip().lower(),
         _normalize_optional_float(getattr(cfg, "lvl_manual_db", 0.0)),
         _normalize_optional_float(getattr(cfg, "lvl_min", 500.0)),
         _normalize_optional_float(getattr(cfg, "lvl_max", 2000.0)),
@@ -388,6 +389,159 @@ def _centered_rms(values: np.ndarray) -> float:
         return float("inf")
 
 
+def _tilt_fit_linear_log_axis(
+    log_freq: np.ndarray,
+    diff_db: np.ndarray,
+    *,
+    max_db_per_oct: float = 2.0,
+) -> tuple[float, float]:
+    try:
+        x = np.asarray(log_freq, dtype=float).reshape(-1)
+        y = np.asarray(diff_db, dtype=float).reshape(-1)
+        if x.size != y.size or x.size < 20:
+            off = float(np.median(y)) if y.size else 0.0
+            return off, 0.0
+
+        x0 = float(np.median(x))
+        xc = x - x0
+
+        y_med = float(np.median(y))
+        dev = np.abs(y - y_med)
+        if dev.size >= 30:
+            thr = float(np.quantile(dev, 0.90))
+            keep = dev <= thr
+            if np.count_nonzero(keep) >= 20:
+                xc = xc[keep]
+                y = y[keep]
+
+        denom = float(np.dot(xc, xc))
+        if denom <= 1e-12:
+            off = float(np.median(y))
+            return off, 0.0
+
+        slope = float(np.dot(xc, (y - float(np.median(y)))) / denom)
+        max_db_per_oct = float(max_db_per_oct)
+        if not np.isfinite(max_db_per_oct) or max_db_per_oct <= 0.0:
+            max_db_per_oct = 2.0
+        slope = float(np.clip(slope, -max_db_per_oct, +max_db_per_oct))
+
+        off = float(np.median(y - slope * xc))
+        if not np.isfinite(off):
+            off = float(np.median(y))
+        return float(off), float(slope)
+    except (TypeError, ValueError, FloatingPointError):
+        try:
+            return float(np.median(diff_db)), 0.0
+        except (TypeError, ValueError, FloatingPointError):
+            return 0.0, 0.0
+
+
+def _smooth_tilt_fit_series(y: np.ndarray, *, sigma_bins: float) -> np.ndarray:
+    try:
+        arr = np.asarray(y, dtype=float).reshape(-1)
+        if arr.size < 8:
+            return arr.copy()
+        sigma = float(sigma_bins)
+        if not np.isfinite(sigma) or sigma <= 0.0:
+            return arr.copy()
+        sigma = float(max(1.0, sigma))
+        half = int(np.ceil(3.0 * sigma))
+        if half < 1:
+            return arr.copy()
+        xx = np.arange(-half, half + 1, dtype=float)
+        kk = np.exp(-0.5 * (xx / sigma) ** 2)
+        k_sum = float(np.sum(kk))
+        if (not np.isfinite(k_sum)) or k_sum <= 1e-12:
+            return arr.copy()
+        kk /= k_sum
+        arr_pad = np.pad(arr, (half, half), mode="edge")
+        return np.convolve(arr_pad, kk, mode="valid")
+    except (TypeError, ValueError, FloatingPointError):
+        try:
+            return np.asarray(y, dtype=float).copy()
+        except (TypeError, ValueError):
+            return np.asarray([], dtype=float)
+
+
+def _tilt_fit_lf_piecewise_log_axis(
+    log_freq: np.ndarray,
+    diff_db: np.ndarray,
+    *,
+    linear_offset: float,
+    linear_slope: float,
+    max_db_per_oct: float = 2.0,
+) -> tuple[float, float] | None:
+    try:
+        x = np.asarray(log_freq, dtype=float).reshape(-1)
+        y_raw = np.asarray(diff_db, dtype=float).reshape(-1)
+        if x.size != y_raw.size or x.size < 24:
+            return None
+
+        x_span = float(x[-1] - x[0])
+        if (not np.isfinite(x_span)) or x_span < 0.85:
+            return None
+
+        x0 = float(np.median(x))
+        xl = np.minimum(x - x0, 0.0)
+        xr = np.maximum(x - x0, 0.0)
+        if np.count_nonzero(xl < 0.0) < 10 or np.count_nonzero(xr > 0.0) < 10:
+            return None
+
+        y_med = float(np.median(y_raw))
+        y_fit = y_raw.copy()
+        if y_fit.size >= 30:
+            thr = float(np.quantile(np.abs(y_fit - y_med), 0.90))
+            if np.isfinite(thr) and thr > 1e-9:
+                y_fit = np.clip(y_fit, y_med - thr, y_med + thr)
+
+        step = float(np.median(np.diff(x)))
+        if (not np.isfinite(step)) or step <= 0.0:
+            return None
+        y_smooth = _smooth_tilt_fit_series(y_fit, sigma_bins=0.55 / max(step, 1e-6))
+        if y_smooth.size != x.size:
+            return None
+
+        design = np.column_stack([np.ones_like(x), xl, xr])
+        try:
+            coeffs = np.linalg.lstsq(design, y_smooth, rcond=None)[0]
+        except np.linalg.LinAlgError:
+            return None
+        if np.asarray(coeffs).size != 3 or not np.all(np.isfinite(coeffs)):
+            return None
+
+        max_db_per_oct = float(max_db_per_oct)
+        if not np.isfinite(max_db_per_oct) or max_db_per_oct <= 0.0:
+            max_db_per_oct = 2.0
+        slope_lo = float(np.clip(float(coeffs[1]), -max_db_per_oct, +max_db_per_oct))
+        slope_hi = float(np.clip(float(coeffs[2]), -max_db_per_oct, +max_db_per_oct))
+        if abs(slope_hi - slope_lo) < 0.35:
+            return None
+
+        basis_piecewise = (slope_lo * xl) + (slope_hi * xr)
+        off_piecewise = float(np.median(y_raw - basis_piecewise))
+        if not np.isfinite(off_piecewise):
+            return None
+
+        linear_pred = float(linear_offset) + (float(linear_slope) * (x - x0))
+        piecewise_pred = off_piecewise + basis_piecewise
+        linear_rms = _centered_rms(y_smooth - linear_pred)
+        piecewise_rms = _centered_rms(y_smooth - piecewise_pred)
+        if (not np.isfinite(piecewise_rms)) or (not np.isfinite(linear_rms)):
+            return None
+        if piecewise_rms > max(linear_rms * 0.88, linear_rms - 0.08):
+            return None
+        if abs(off_piecewise - float(linear_offset)) > 1.5:
+            return None
+
+        span_lo = max(float(x0 - x[0]), 1e-9)
+        span_hi = max(float(x[-1] - x0), 1e-9)
+        slope_eq = ((slope_lo * span_lo) + (slope_hi * span_hi)) / (span_lo + span_hi)
+        slope_eq = float(np.clip(slope_eq, -max_db_per_oct, +max_db_per_oct))
+        return float(off_piecewise), float(slope_eq)
+    except (TypeError, ValueError, FloatingPointError, IndexError):
+        return None
+
+
 def _window_offset_consistency_score(
     freq_axis: np.ndarray,
     measured_db: np.ndarray,
@@ -531,6 +685,7 @@ def _tilt_fit_offset_and_slope_db_per_oct(
     diff_db: np.ndarray,
     *,
     max_db_per_oct: float = 2.0,
+    prefer_lf_piecewise_tilt: bool = False,
 ):
     """Sisainen apufunktio: tilt fit offset and slope db per oct."""
     try:
@@ -540,33 +695,17 @@ def _tilt_fit_offset_and_slope_db_per_oct(
             return off, 0.0
 
         x = np.log2(f)
-        x0 = float(np.median(x))
-        xc = x - x0
-
-        y_med = float(np.median(y))
-        dev = np.abs(y - y_med)
-        if dev.size >= 30:
-            thr = float(np.quantile(dev, 0.90))
-            keep = dev <= thr
-            if np.count_nonzero(keep) >= 20:
-                xc = xc[keep]
-                y = y[keep]
-
-        denom = float(np.dot(xc, xc))
-        if denom <= 1e-12:
-            off = float(np.median(y))
-            return off, 0.0
-
-        slope = float(np.dot(xc, (y - y_med)) / denom)
-        max_db_per_oct = float(max_db_per_oct)
-        if not np.isfinite(max_db_per_oct) or max_db_per_oct <= 0:
-            max_db_per_oct = 2.0
-        slope = float(np.clip(slope, -max_db_per_oct, +max_db_per_oct))
-
-        off = float(np.median(y - slope * xc))
-        if not np.isfinite(off):
-            off = float(np.median(y))
-
+        off, slope = _tilt_fit_linear_log_axis(x, y, max_db_per_oct=float(max_db_per_oct))
+        if bool(prefer_lf_piecewise_tilt) and float(f[-1]) <= 220.0:
+            piecewise = _tilt_fit_lf_piecewise_log_axis(
+                x,
+                y,
+                linear_offset=float(off),
+                linear_slope=float(slope),
+                max_db_per_oct=float(max_db_per_oct),
+            )
+            if piecewise is not None:
+                return piecewise
         return off, slope
     except (TypeError, ValueError, FloatingPointError):
         try:
