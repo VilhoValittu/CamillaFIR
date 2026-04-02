@@ -234,6 +234,32 @@ def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
         mask_c,
     )
 
+    _pcmf = float(getattr(cfg, "phase_clamp_mag_feedback", 0.5)) # vanha käytös 0.0
+    if _pcmf > 0.0 and np.any(mask_c):
+        try:
+            _excess_approx = np.abs(p_rad_interp - theo_xo)
+            try:
+                _lim_max_deg = float(getattr(cfg, "mixed_phase_budget_lf_deg", 45.0) or 45.0)
+            except (AttributeError, TypeError, ValueError):
+                _lim_max_deg = 45.0
+            _lim_rad = float(np.deg2rad(_lim_max_deg))
+            _pred_frac = np.where(
+                _excess_approx > _lim_rad,
+                np.clip(1.0 - _lim_rad / np.maximum(_excess_approx, 1e-9), 0.0, 1.0),
+                0.0,
+            )
+            _boost_mask = mask_c & (gain_db > 0.0)
+            if np.any(_boost_mask):
+                _strength = float(np.clip(_pcmf, 0.0, 1.0))
+                gain_db[_boost_mask] -= _strength * _pred_frac[_boost_mask] * gain_db[_boost_mask]
+                _softened = int(np.sum(_pred_frac[_boost_mask] > 0.05))
+                logger.info(
+                    f"PhaseClampMagFeedback: gain softened at {_softened} bins "
+                    f"(strength={_strength:.2f}, phase_limit≈{_lim_max_deg:.1f} deg)"
+                )
+        except (TypeError, ValueError, FloatingPointError, AttributeError, IndexError):
+            pass
+
     gain_db_before_autogain = gain_db.copy()
     gain_db_for_autogain = gain_db.copy()
     ag = compute_auto_gain_and_headroom(

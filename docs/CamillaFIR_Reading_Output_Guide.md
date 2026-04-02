@@ -1,6 +1,6 @@
 # Reading CamillaFIR Output (Current Behavior)
 
-This guide reflects the current code path in CamillaFIR (v3.5.5 line).
+This guide reflects the current code path in CamillaFIR (v4.0.x line).
 
 ## 1. What you get after a run
 
@@ -79,6 +79,10 @@ Includes:
   - target-selection trial grid (`top-N x trials`)
   - cached or searched best preset summary
   - excursion protection seed -> final frequency when auto-tuned
+  - winner-polish results for `phase_limit` and `mag_c_min`:
+    - `Phase-limit winner polish: applied (X -> Y Hz, rank A -> B, tested [...] Hz)` when the post-search polish improved the winner
+    - `Phase-limit winner polish: not applied` when the original winner was already optimal
+    - `Mag-c-min winner polish: tested, no change (kept X Hz, tested [...] Hz)` when no improvement was found
 
 ### 3.3 Guards and control blocks
 
@@ -106,7 +110,6 @@ Includes:
   - `BOOST/CUT DIAGNOSTICS`
   - `CLAMP DIAGNOSTICS`
   - `STAGE CHECKPOINTS`
-  - `BASS-FIRST AI`
   - `AUTO-ALIGN`
   - `ACOUSTIC EVENTS` (when detected)
 

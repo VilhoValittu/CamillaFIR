@@ -87,68 +87,88 @@ Selection is based on **Best rank score**, which evaluates:
 - acoustic events
 - stereo consistency (L/R delta)
 
-## Reference automatic-mode snapshot (v3.6.1)
+## Reference automatic-mode snapshot (v4.0.3)
 
-The benchmark below is based on four **v3.6.1** summary exports generated
-from the **same measurement set** and the same target curve (**Harman8**).
+The benchmark below is based on four **v4.0.3** summary exports generated
+from the **same measurement set**.
 
 Common conditions in these comparison runs:
 
 - **AUTO** mode
 - **44.1 kHz / 65536 taps**
 - **HPF OFF**
+- **Bass-First AI enabled** (AUTO seed)
+- **Comparison mode ON**
 
-All four runs also reported the same dominant room issue:
+Unlike the older v3.6.1 benchmark which forced **Harman8** for all filter types,
+these runs used AUTO-mode target selection — each filter type selected its own
+best-fit target curve from the top-3 × 10 trial grid. Asymmetric and Mixed
+selected **Harman12**; Linear and Minimum selected **Harman8**.
+The scores are therefore not directly comparable across filter types, but they
+reflect realistic AUTO-mode output for each type.
 
-- **Left:** resonance at **113 Hz**
+All four runs reported the same dominant room issue:
+
+- **Left:** resonance at **114 Hz**
 - **Right:** resonance at **108 Hz**
 
-This is not meant to claim that one phase type always wins in every room.
-It shows what the current optimiser does on one real-world dataset with identical
-conditions.
+### Reference v4.0.3 results
 
-### Reference v3.6.1 results
+| Rank | Filter type | Selected target | Best rank score | Avg acoustic score | Run ranking score | Target match (L / R) | Ripple RMS | GD grad max |
+|---|---|---|---:|---:|---:|---|---|---|
+| 1 | **Linear** | Harman8 | **91.904** | 84.710 | 69.141 | 91.2% / 95.1% | 0.57 / 0.62 dB | 7.38 / 9.68 ms/oct |
+| 2 | **Asymmetric** | Harman12 | 91.667 | 84.468 | 68.935 | 90.9% / 94.5% | **0.31 / 0.31 dB** | 7.38 / 9.68 ms/oct |
+| 3 | **Minimum** | Harman8 | 91.307 | **84.631** | **69.037** | 91.0% / **95.1%** | 0.31 / 0.32 dB | 8.89 / 11.09 ms/oct |
+| 4 | Mixed | Harman12 | 90.754 | 83.409 | 67.526 | 87.7% / 93.9% | 0.62 / 0.62 dB | **1.18 / 1.34 ms/oct** |
 
-| Rank | Filter type | Best rank score | Avg acoustic score | Run ranking score | Target match (L / R) | Notes |
-|---|---|---:|---:|---:|---|---|
-| 1 | **Asymmetric** | **91.264** | **84.582** | **69.505** | **94.4% / 95.1%** | Best overall balance in this test; top score with zero net boost penalty and very low ripple. |
-| 2 | **Minimum** | **91.226** | **84.581** | 68.980 | **94.4% / 95.1%** | Much stronger than older README numbers suggested; nearly tied with Asymmetric on this dataset. |
-| 3 | Linear | 91.114 | 84.432 | 69.350 | 94.1% / 94.8% | Still very competitive, but slightly lower target match and slightly higher ripple in this comparison. |
-| 4 | Mixed | 91.065 | 84.515 | 69.327 | 94.3% / 94.9% | Excellent GD-gradient control and explicit pre-ringing reporting, but slightly higher DSP penalty overall here. |
-
-- Based on one real-life **v3.6.1** measurement set with identical room data and target curve.
-- The score spread is small, which means all four phase modes can produce good results in the current automatic mode.
+- Mixed Phase also reports pre-ringing: L −43.8 dB / R −44.4 dB and GD max ~139 ms (expected for mixed-phase behaviour).
+- Phase-limit winner polish was applied for Asymmetric and Linear (202.1 → 212.1 Hz); not applicable for Minimum and Mixed.
+- The score spread is small — all four modes produce good results on this dataset.
 
 ### Recommendation
 
 **Most users should still choose: Asymmetric**
 
-It remains the best default because it delivered the highest overall score in
-this comparison while keeping the usual CamillaFIR strengths:
+Despite ranking second by best rank score in this snapshot, Asymmetric remains
+the recommended default:
 
-- near-linear correction behaviour
-- excellent target matching
-- low ripple
-- practical latency
+- lowest ripple (0.31 dB) among the top three
+- near-linear correction behaviour with practical latency
+- phase-limit winner polish consistently active
+- strong and consistent results across different rooms and target curves
+
+Linear phase led this particular snapshot mainly due to a better-fitting target
+curve selection, not a fundamental DSP quality difference.
 
 ### Alternative choices
 
-**Minimum phase**
-
-A very strong option in the current version. On this dataset it was nearly tied
-with Asymmetric, so it should no longer be described as a distant last-place
-fallback.
-
 **Linear phase**
 
-Use if maximum linear-phase behaviour is required and latency is not an issue.
-It remains close to the top on the current benchmark.
+Highest best rank score in this snapshot. Use when maximum linear-phase
+behaviour is required and latency is not a concern. Ripple is slightly higher
+than Asymmetric and Minimum.
+
+**Minimum phase**
+
+Very competitive in this version. Nearly tied run ranking score with Asymmetric,
+lowest GD gradient of the non-mixed types not applicable. No phase-limit polish
+(not applicable for minimum phase).
 
 **Mixed phase**
 
 Use when you specifically want mixed-phase behaviour with very smooth
-GD-gradient handling and visible pre-ringing metrics. It scored slightly lower
-overall here, but the difference is small.
+GD-gradient control (1.18 / 1.34 ms/oct vs 7–11 ms/oct for others) and
+explicit pre-ringing metrics. Scored lower overall and left-channel target match
+was weaker on this dataset, but the GD-gradient behaviour is genuinely different.
+
+### Historical reference (v3.6.1, forced Harman8 for all)
+
+| Rank | Filter type | Best rank score | Avg acoustic score | Run ranking score | Target match (L / R) |
+|---|---|---:|---:|---:|---|
+| 1 | Asymmetric | 91.264 | 84.582 | 69.505 | 94.4% / 95.1% |
+| 2 | Minimum | 91.226 | 84.581 | 68.980 | 94.4% / 95.1% |
+| 3 | Linear | 91.114 | 84.432 | 69.350 | 94.1% / 94.8% |
+| 4 | Mixed | 91.065 | 84.515 | 69.327 | 94.3% / 94.9% |
 
 ## Why Asymmetric Filters Exist
 

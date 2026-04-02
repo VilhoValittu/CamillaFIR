@@ -225,6 +225,14 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
         before_rad = float(np.max(np.abs(extra_phase)))
         extra_phase = np.clip(extra_phase, -limit_rad_arr, limit_rad_arr)
         after_rad = float(np.max(np.abs(extra_phase)))
+        try:
+            _cut_rad = np.maximum(np.abs(extra_phase_before) - np.abs(extra_phase), 0.0)
+            _cut_frac = _cut_rad / np.maximum(np.abs(extra_phase_before), 1e-9)
+            _cut_frac = np.clip(_cut_frac, 0.0, 1.0)
+            if isinstance(st, dict):
+                st["phase_corr_clamp_cut_frac"] = _cut_frac.tolist()
+        except (TypeError, ValueError, FloatingPointError):
+            pass
 
         before_deg = float(np.rad2deg(before_rad))
         after_deg = float(np.rad2deg(after_rad))

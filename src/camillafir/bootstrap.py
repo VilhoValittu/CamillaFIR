@@ -9,7 +9,10 @@ def _auto_thread_budget() -> tuple[int, int]:
     except Exception:
         cores = 1
     cores = max(1, int(cores))
-    use = max(1, int((cores * 2) // 4))
+    if sys.platform == "win32":
+        use = 1
+    else:
+        use = max(1, int((cores * 2) // 4))
     return int(use), int(cores)
 
 
@@ -54,10 +57,11 @@ def initialize_logging():
     logger.setLevel(console_log_level)
 
     try:
+        _win_note = " (Windows: BLAS=1 to reduce scheduling overhead)" if sys.platform == "win32" else ""
         logger.info(
             "CPU thread budget: "
             f"{int(auto_threads_use)}/{int(auto_threads_cores)} cores "
-            "(auto 90% for DSP/NumPy backends)"
+            f"(auto for DSP/NumPy backends{_win_note})"
         )
         if auto_threads_env_applied:
             logger.info(
