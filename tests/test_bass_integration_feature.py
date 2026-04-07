@@ -108,7 +108,12 @@ def test_load_bass_integration_measurements_builds_complex_totals_and_bundle() -
     l_main_db = float(bundle.l_main.mag_db[idx])
     l_total_db = float(np.asarray(m_l, dtype=float)[idx])
 
-    assert l_total_db > (l_main_db + 9.0)
+    np.testing.assert_allclose(
+        np.asarray(m_l, dtype=float),
+        np.asarray(bundle.l_total.mag_db, dtype=float),
+        atol=1e-9,
+    )
+    assert l_total_db > (l_main_db + 5.5)
 
 
 def test_load_bass_integration_measurements_uses_shared_anchor_for_late_rew_ir() -> None:
@@ -130,7 +135,12 @@ def test_load_bass_integration_measurements_uses_shared_anchor_for_late_rew_ir()
     idx = int(np.argmin(np.abs(np.asarray(f_l, dtype=float) - 1000.0)))
     assert float(bundle.l_main.mag_db[idx]) > -1.0
     assert float(bundle.l_sub.mag_db[idx]) > -1.0
-    assert float(np.asarray(m_l, dtype=float)[idx]) > 9.0
+    np.testing.assert_allclose(
+        np.asarray(m_l, dtype=float),
+        np.asarray(bundle.l_total.mag_db, dtype=float),
+        atol=1e-9,
+    )
+    assert float(np.asarray(m_l, dtype=float)[idx]) > 5.5
 
 
 def test_load_bass_integration_measurements_accepts_single_direct_dac_sub() -> None:

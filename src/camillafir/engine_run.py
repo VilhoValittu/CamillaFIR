@@ -481,10 +481,15 @@ def run_pipeline(
                 bundle = measurements.get("bass_integration_bundle", None)
                 if bundle is not None:
                     try:
+                        sub_total_transfer = sum_complex_responses(
+                            bundle.l_sub,
+                            bundle.r_sub,
+                            label="Direct-DAC sub total",
+                        )
                         _inject_direct_dac_summed_prediction_for_plot(
                             st=l_st,
                             main_transfer=bundle.l_main,
-                            sub_transfer=bundle.l_sub,
+                            sub_transfer=sub_total_transfer,
                             main_ir=np.asarray(l_imp, dtype=float),
                             sub_ir=np.asarray(sub_ir, dtype=float),
                             sub_st=sub_st,
@@ -493,7 +498,7 @@ def run_pipeline(
                         _inject_direct_dac_summed_prediction_for_plot(
                             st=r_st,
                             main_transfer=bundle.r_main,
-                            sub_transfer=bundle.r_sub,
+                            sub_transfer=sub_total_transfer,
                             main_ir=np.asarray(r_imp, dtype=float),
                             sub_ir=np.asarray(sub_ir, dtype=float),
                             sub_st=sub_st,
