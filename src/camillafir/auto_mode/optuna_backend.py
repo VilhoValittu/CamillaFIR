@@ -34,6 +34,8 @@ from .api import (
     AUTO_MODE_OPTUNA_TELEMETRY,
     AUTO_MODE_OPTUNA_TELEMETRY_LOG_SUMMARY,
     AUTO_MODE_OPTUNA_USER_ATTR_OUT,
+    AUTO_MODE_PHASE_LIMIT_MAX_HZ,
+    AUTO_MODE_PHASE_LIMIT_MIN_HZ,
     AutoModeConfig,
     _auto_compat_version,
     _auto_goal,

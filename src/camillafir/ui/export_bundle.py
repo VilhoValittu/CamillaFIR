@@ -82,6 +82,12 @@ def build_export_zip(
                 zf.writestr(str(spec["bundle_names"][0]), wav_l.getvalue())
                 zf.writestr(str(spec["bundle_names"][1]), wav_r.getvalue())
 
+            if getattr(result, "sub_ir", None) is not None and result.sub_ir.size > 0:
+                wav_sub = io.BytesIO()
+                scipy.io.wavfile.write(wav_sub, fs_v, result.sub_ir.astype("float32"))
+                sub_name = f"Sub_{ft_short}_{fs_v}Hz_{file_ts}_{irw_tag}.wav"
+                zf.writestr(sub_name, wav_sub.getvalue())
+
             write_dash = bool(
                 write_dashboards
                 and ((not multi_rate_on) or (dash_fs is not None and int(fs_v) == int(dash_fs)))

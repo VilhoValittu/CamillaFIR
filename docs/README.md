@@ -1,573 +1,141 @@
-# CamillaFIR by Vilho Valittu
+# CamillaFIR
 
-## v4.0.3
+## v4.1.0
 
-Stable release - feedback welcome: camillafir.py@gmail.com
+CamillaFIR is an automatic FIR filter generator and room-correction tool for REW measurements and WAV/IR captures.
+It is designed for CamillaDSP and other FIR-capable playback systems.
 
-CamillaFIR generates high-resolution FIR room-correction filters from REW exports
-(magnitude + phase) and WAV/IR measurements.
+CamillaFIR is also listed in the official CamillaDSP README under **Measurement and filter generation tools**.
 
-CamillaFIR is a recommended filter creation tool for CamillaDSP and is listed in the official CamillaDSP README under
-[Measurement and filter generation tools](https://github.com/HEnquist/camilladsp?tab=readme-ov-file#measurement-and-filter-generation-tools).
+## Quick links
 
-## v4.0.3 Highlights - Guided Advanced workflow
+- [Download latest release](https://github.com/VilhoValittu/CamillaFIR/releases/latest)
+- [Quick Start Guide](docs/Quick_Start_Guide.md)
+- [User Manual](docs/Official_Manual.md)
+- [Installation Guide](docs/Installation.md)
+- [Changelog](docs/CHANGELOG.md)
+- [All documentation](docs/)
+- [CamillaDSP reference](https://github.com/HEnquist/camilladsp?tab=readme-ov-file#measurement-and-filter-generation-tools)
 
-- **Guided Advanced presets:** the Advanced tab now includes dedicated **Safe / Normal / Aggressive** preset buttons for shaping, bass safety, and confidence-pull tuning, with live summaries of the effective settings.
-- **Cleaner advanced workflow:** detailed controls are still available, but now sit behind clearer fine-tune sections so the main Advanced view is easier to scan and use.
-- **More robust UI compatibility:** layout, level mode, level algorithm, and related preset choices now normalize consistently across stable keys, legacy labels, and translated UI labels.
-- **Faster preview refreshes:** target preview measurement loading now reuses cached TXT/WAV parsing for unchanged uploads and local file paths instead of reparsing the same inputs repeatedly.
-- **Clearer file handling:** the Files and Target tabs now show upload/path status more clearly, including preview source hints and file metadata.
+## What CamillaFIR does
 
-## v4.0.2 Highlights - Manual target preview interaction
+- Generates FIR room-correction filters from REW exports and WAV/IR measurements
+- Supports **Automatic**, **Basic**, and **Advanced** workflows
+- Exports ready-to-use FIR filters for CamillaDSP and other FIR-capable DSP systems
+- Supports **Asymmetric**, **Linear**, **Minimum**, and **Mixed Phase** filter types
+- Includes automatic target selection, room-safe optimization, and summary exports
+- Supports multi-rate export up to 192 kHz
 
-- **Direct Manual target dragging:** in Target tab Manual mode, the target curve can now be dragged vertically in the preview to adjust manual target level directly.
-- **Manual target tilt control:** Manual mode now includes a dedicated target tilt control around a fixed **1 kHz pivot**, so target shape can be tilted intentionally instead of only shifted up/down.
-- **Mouse-adjustable tilt handle:** the preview now exposes a dedicated right-side tilt handle and legend readouts for both **Manual level** and **Manual tilt**, making manual target shaping much easier to inspect.
+## Why use CamillaFIR
 
-## v4.0.1 Highlights - AUTO mode speed-up
+CamillaFIR is built for practical loudspeaker and room correction, not just static EQ matching.
+It combines target matching, phase handling, correction safety, and export workflow into one tool.
 
-- **Faster AUTO mode:** target, refine, and finalize stages have been streamlined to reduce overhead in automatic runs.
-- **Better diagnostics for tuning:** lightweight AUTO-mode profiling and Optuna telemetry helpers were added to support performance work and troubleshooting.
-- **Cleaner internal boundaries:** health checks, house-curve loading, and run-request assembly now live behind dedicated application services instead of being spread across UI callbacks.
+Key strengths:
 
-## v4.0.0 Highlights - NiceGUI UI rewrite
+- strong automatic mode for final-use filters
+- practical low-frequency and room-mode handling
+- multiple FIR filter strategies for different latency/phase goals
+- browser-based graphical UI
+- direct export workflow for real playback systems
 
-- **NiceGUI replaces PyWebIO:** CamillaFIR now uses a new `NiceGUI` browser frontend instead of the legacy `PyWebIO` UI.
-- **Cleaner module boundaries:** UI tabs, run orchestration, export/report generation, and engine/config assembly have been split into smaller modules to make further development safer.
-- **Built-in manual:** the application now ships with a dedicated `User Manual` document that matches the new UI flow.
-- **More regression coverage:** targeted tests were added for NiceGUI tabs, controls, run flow, export layout, and packaging.
+## Quick start
 
----
-
-## Automatic mode notes
-
-### Deterministic optimisation
-
-From **v3.5.0**, automatic mode uses deterministic seeding derived from the
-input measurements and key optimisation settings.  
-
-This means:
-
-- Running the optimisation again with the **same data and settings** will typically produce the **same result**.
-- Changing key parameters (goal, filter type, boost limit, etc.) produces a different optimisation sequence.
-
-This makes results easier to reproduce and compare.
-
-## Automatic mode goals explained
-
-Automatic mode can optimise the filter using different **goals** depending
-on the listening preference and room characteristics.
-
-| Goal | Description | Typical use |
-|-----|-----|-----|
-| **flat** | Prioritises the flattest possible frequency response. | Measurements, neutral monitoring, analysis. |
-| **room-safe** | Conservative variant that prioritises stability and avoids aggressive boosts in difficult room regions. | Difficult rooms where safety/stability is the priority. |
-| **low-ripple** | Minimises ripple around dominant room modes and keeps the LF region smoother. | Rooms with strong bass resonances. |
-| **balanced** | Compromise between flat response, ripple control and boost limits. | Recommended default for most rooms. |
-| **subwoofers** | Subwoofer-focused AUTO goal that forces Smart Scan to `20-200 Hz` while otherwise using the normal automatic-mode optimisation flow. | Sub-only measurements, bass integration work, low-frequency optimisation. |
-
-Automatic mode internally evaluates multiple candidate filters and selects
-the one that best matches the chosen goal while respecting stability and
-boost constraints.
-
-In difficult rooms the optimiser may slightly sacrifice perfect flatness in
-order to achieve a **more stable and natural sounding result**, especially in
-the low-frequency region.
-
-## Which filter type should I use?
-
-CamillaFIR automatic mode was tested with identical measurements and target curve
-using four filter types.
-
-Selection is based on **Best rank score**, which evaluates:
-
-- target match
-- DSP artifacts (ripple, GD gradient, phase limits)
-- headroom / boost safety
-- acoustic events
-- stereo consistency (L/R delta)
-
-## Reference automatic-mode snapshot (v4.0.3)
-
-The benchmark below is based on four **v4.0.3** summary exports generated
-from the **same measurement set**.
-
-Common conditions in these comparison runs:
-
-- **AUTO** mode
-- **44.1 kHz / 65536 taps**
-- **HPF OFF**
-- **Bass-First AI enabled** (AUTO seed)
-- **Comparison mode ON**
-
-Unlike the older v3.6.1 benchmark which forced **Harman8** for all filter types,
-these runs used AUTO-mode target selection — each filter type selected its own
-best-fit target curve from the top-3 × 10 trial grid. Asymmetric and Mixed
-selected **Harman12**; Linear and Minimum selected **Harman8**.
-The scores are therefore not directly comparable across filter types, but they
-reflect realistic AUTO-mode output for each type.
-
-All four runs reported the same dominant room issue:
-
-- **Left:** resonance at **114 Hz**
-- **Right:** resonance at **108 Hz**
-
-### Reference v4.0.3 results
-
-| Rank | Filter type | Selected target | Best rank score | Avg acoustic score | Run ranking score | Target match (L / R) | Ripple RMS | GD grad max |
-|---|---|---|---:|---:|---:|---|---|---|
-| 1 | **Linear** | Harman8 | **91.904** | 84.710 | 69.141 | 91.2% / 95.1% | 0.57 / 0.62 dB | 7.38 / 9.68 ms/oct |
-| 2 | **Asymmetric** | Harman12 | 91.667 | 84.468 | 68.935 | 90.9% / 94.5% | **0.31 / 0.31 dB** | 7.38 / 9.68 ms/oct |
-| 3 | **Minimum** | Harman8 | 91.307 | **84.631** | **69.037** | 91.0% / **95.1%** | 0.31 / 0.32 dB | 8.89 / 11.09 ms/oct |
-| 4 | Mixed | Harman12 | 90.754 | 83.409 | 67.526 | 87.7% / 93.9% | 0.62 / 0.62 dB | **1.18 / 1.34 ms/oct** |
-
-- Mixed Phase also reports pre-ringing: L −43.8 dB / R −44.4 dB and GD max ~139 ms (expected for mixed-phase behaviour).
-- Phase-limit winner polish was applied for Asymmetric and Linear (202.1 → 212.1 Hz); not applicable for Minimum and Mixed.
-- The score spread is small — all four modes produce good results on this dataset.
-
-### Recommendation
-
-**Most users should still choose: Asymmetric**
-
-Despite ranking second by best rank score in this snapshot, Asymmetric remains
-the recommended default:
-
-- lowest ripple (0.31 dB) among the top three
-- near-linear correction behaviour with practical latency
-- phase-limit winner polish consistently active
-- strong and consistent results across different rooms and target curves
-
-Linear phase led this particular snapshot mainly due to a better-fitting target
-curve selection, not a fundamental DSP quality difference.
-
-### Alternative choices
-
-**Linear phase**
-
-Highest best rank score in this snapshot. Use when maximum linear-phase
-behaviour is required and latency is not a concern. Ripple is slightly higher
-than Asymmetric and Minimum.
-
-**Minimum phase**
-
-Very competitive in this version. Nearly tied run ranking score with Asymmetric,
-lowest GD gradient of the non-mixed types not applicable. No phase-limit polish
-(not applicable for minimum phase).
-
-**Mixed phase**
-
-Use when you specifically want mixed-phase behaviour with very smooth
-GD-gradient control (1.18 / 1.34 ms/oct vs 7–11 ms/oct for others) and
-explicit pre-ringing metrics. Scored lower overall and left-channel target match
-was weaker on this dataset, but the GD-gradient behaviour is genuinely different.
-
-### Historical reference (v3.6.1, forced Harman8 for all)
-
-| Rank | Filter type | Best rank score | Avg acoustic score | Run ranking score | Target match (L / R) |
-|---|---|---:|---:|---:|---|
-| 1 | Asymmetric | 91.264 | 84.582 | 69.505 | 94.4% / 95.1% |
-| 2 | Minimum | 91.226 | 84.581 | 68.980 | 94.4% / 95.1% |
-| 3 | Linear | 91.114 | 84.432 | 69.350 | 94.1% / 94.8% |
-| 4 | Mixed | 91.065 | 84.515 | 69.327 | 94.3% / 94.9% |
-
-## Why Asymmetric Filters Exist
-
-Traditional FIR room-correction filters typically fall into two categories:
-
-| Type | Strength | Limitation |
-|---|---|---|
-| **Linear phase** | Perfect phase symmetry and very accurate correction | Very high latency |
-| **Minimum / Mixed phase** | Low latency and practical for real-time use | Limited phase correction |
-
-In real listening systems this creates an unavoidable trade-off:
-
-- **Linear phase filters** can achieve extremely accurate correction, but often introduce **hundreds of milliseconds of latency**.
-- **Minimum or mixed-phase filters** are practical for playback but cannot fully correct phase behaviour.
-
-### The idea behind asymmetric filters
-
-CamillaFIR introduces **asymmetric FIR filters** to bridge this gap.
-
-Instead of forcing the impulse response to be perfectly symmetric (linear phase) or fully causal (minimum phase), the filter is designed so that **most of the energy occurs after the main impulse while allowing controlled asymmetry**.
-
-This enables:
-
-- near-linear correction accuracy
-- practical latency
-- reduced pre-ringing artifacts
-- stable stereo alignment
-
-### Impulse response comparison
-
-```text
-Linear phase (symmetric)
-<------ pre ------|------ post ------>
-                  ^
-                main impulse
-
-
-Mixed / minimum phase
-                  ^
-                main impulse
-                  |------------>
-
-
-Asymmetric (CamillaFIR)
-               ^
-             main impulse
-               |---------------------->
-```
-
-**Linear phase** filters distribute energy symmetrically around the impulse, which increases latency.
-
-**Mixed/minimum phase** filters place all energy after the impulse, reducing latency but limiting correction accuracy.
-
-**Asymmetric filters** intentionally place **most energy after the impulse while keeping controlled asymmetry**, allowing strong correction with significantly lower latency than fully linear filters.
-
----
-
-## When to use asymmetric filters
-
-For most systems, **asymmetric filters are the recommended default** because they provide the best balance between:
-
-- correction accuracy
-- DSP stability
-- latency
-
-Other filter types still have their place:
-
-| Filter type | Recommended when |
-|---|---|
-| **Asymmetric** | Best overall balance (recommended default) |
-| **Linear phase** | Maximum phase accuracy and latency is irrelevant |
-| **Mixed phase** | Low-latency playback with very smooth GD-gradient behaviour |
-| **Minimum phase** | Low-latency causal correction; now also a competitive auto-mode option |
-
-### In short
-
-Asymmetric filters exist because **room correction should not require choosing between accuracy and usability**.
-
-They allow CamillaFIR to deliver **high-quality correction while remaining practical for real listening systems**.
-
----
-
-### Auto-mode cache
-
-Automatic mode stores its best results in a small cache file under platform app-data.
-
-Default locations:
-
-- Windows: `%APPDATA%\CamillaFIR\camillafir_auto_mode_cache.json`
-- macOS: `~/Library/Application Support/CamillaFIR/camillafir_auto_mode_cache.json`
-- Linux: `$XDG_DATA_HOME/CamillaFIR/camillafir_auto_mode_cache.json` (fallback: `~/.local/share/CamillaFIR/camillafir_auto_mode_cache.json`)
-
-Legacy `~/.camillafir/camillafir_auto_mode_cache.json` is still supported as a fallback and migrated automatically when possible.
-
-The cache helps the optimiser start closer to a good solution on future runs.
-
-Starting from **v3.5.0**:
-
-- Cache entries are **filter-type specific** (`linear`, `mixed`, `minimum`, `asym`)
-- Cache entries are tied to the **program version**
-- If the version does not match, the cache entry is automatically ignored
-
-### When to clear the auto-mode cache
-
-In most cases the cache improves optimisation speed and consistency and
-does **not** need to be touched.
-
-However, clearing the cache can be useful if:
-
-- You changed the **measurement method** significantly (different mic positions, averaging method, etc.)
-- The **speaker or room setup** changed
-- You want to force the optimiser to explore the **full search space again**
-
-To reset the cache, delete the active cache file shown in Results (`Paths -> Automatic mode cache`), or remove it from the platform location listed above.
-
-The next automatic-mode run will recreate it automatically.
-
-### Automatic mode workflow (quick start)
-
-1. Select filter type.
-2. Select sample rate, taps, and optional HPF settings.
-3. Select target curve if you want to use your own. CamillaFIR will automatically select the best match for your room if none is chosen.
-4. Press `START`.
-
-CamillaFIR runs automatic preset search and exports filters using the best found settings.
-
-### Automatic mode performance note (Windows)
-
-On some systems, **AUTO** mode can run noticeably faster on Linux than on
-Windows even when both are used on the same machine.
-
-This usually does **not** mean that the DSP result is different. The most common
-reason is that AUTO mode uses parallel trial evaluation while NumPy/BLAS may
-also use its own internal threading. On Windows, this combination can cause
-higher scheduling overhead than on Linux.
-
-Typical symptoms:
-
-- Manual or single-run processing feels normal, but **AUTO** mode is much slower on Windows
-- CPU usage looks very high, but total wall-clock time is still worse than on Linux
-- Reducing worker count improves speed instead of making it worse
-
-Recommended fixes on Windows:
-
-- Set `auto_mode_workers` to a small fixed value such as `2`, `3`, or `4` instead of `0`
-- Limit BLAS/OpenMP threading to `1` when testing AUTO mode speed
-- If you use the packaged Windows release, start it from PowerShell with:
-
-```powershell
-$env:CAMILLAFIR_AUTO_MODE_WORKERS="4"
-$env:OMP_NUM_THREADS="1"
-$env:OPENBLAS_NUM_THREADS="1"
-$env:MKL_NUM_THREADS="1"
-.\CamillaFIR.exe
-```
-
-- If `4` workers is not optimal on your machine, test `2` and `3` as well
-- If Microsoft Defender is heavily scanning `%APPDATA%` or the extracted release
-  folder, performance can also degrade during cache/journal file access
-
-If you prefer a persistent setting, edit `config.json` and set:
-
-```json
-"auto_mode_workers": 4
-```
-
-This issue mainly affects **AUTO** mode because it evaluates many candidate
-trials in parallel. It is usually much less visible in non-AUTO runs.
-
----
-
-## Download
-
-- Windows: https://github.com/VilhoValittu/CamillaFIR/releases/latest
-- macOS (Intel + Apple Silicon): https://github.com/VilhoValittu/CamillaFIR/releases/latest
-- macOS builds are community-supported. Limited direct testing.
-- Linux: https://github.com/VilhoValittu/CamillaFIR/releases/latest
-- All releases: https://github.com/VilhoValittu/CamillaFIR/releases
-
----
-
-## Run From Release Package (Recommended)
-
-### Windows
-
-1. Download `CamillaFIR_<version>_windows.zip` from Releases.
-2. Extract the ZIP.
-3. Run `CamillaFIR.exe`.
-4. If SmartScreen appears, choose `More info` -> `Run anyway`.
-5. Open `http://127.0.0.1:8080` if browser does not open automatically.
-
-### Ubuntu / Debian Linux
-
-1. Download `CamillaFIR_<version>_linux.tar.gz` from Releases.
-2. Extract the archive.
-3. Open Terminal in the extracted folder and run:
-
-```bash
-./run.sh
-```
-
-4. Open `http://127.0.0.1:8080` if browser does not open automatically.
-
-### macOS (Intel + Apple Silicon)
-
-1. Download `CamillaFIR_<version>_macos.tar.gz` from Releases.
-2. Extract the archive.
-3. Open Terminal in the extracted folder and run:
-
-```bash
-chmod +x CamillaFIR
-./CamillaFIR
-```
-
-4. If macOS blocks first launch, open `System Settings -> Privacy & Security -> Open Anyway`.
-5. Open `http://127.0.0.1:8080` if browser does not open automatically.
-
-## Run From Source (Detailed)
-
-### Install Git
-
-#### Windows
-
-```powershell
-winget install --id Git.Git -e --source winget
-```
-
-If `winget` is unavailable, install from: https://git-scm.com/download/win
-
-#### Ubuntu / Debian
-
-```bash
-sudo apt update
-sudo apt install -y git
-```
-
-#### macOS
-
-```bash
-xcode-select --install
-```
-
-Alternative (Homebrew):
-
-```bash
-brew install git
-```
----
-
-### Windows (PowerShell)
-
-```powershell
-git clone https://github.com/VilhoValittu/CamillaFIR.git
-cd CamillaFIR
-python -m venv venv
-.\venv\Scripts\activate
-pip install -r requirements.txt
-python src/camillafir/__main__.py
-```
-
-### Ubuntu (from source)
-
-```bash
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip chromium-browser
-git clone https://github.com/VilhoValittu/CamillaFIR.git
-cd CamillaFIR
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements-linux.txt
-python3 src/camillafir/__main__.py
-```
-
-### macOS (from source)
-
-```bash
-git clone https://github.com/VilhoValittu/CamillaFIR.git
-cd CamillaFIR
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python3 src/camillafir/__main__.py
-```
-
-Current source entrypoint is `src/camillafir/__main__.py`.
-
-UI opens in browser at `http://127.0.0.1:8080`.
-
----
-
-### Update CamillaFIR With Git
-
-If you have no local changes:
-
-```bash
-cd CamillaFIR
-git pull
-```
-
-If you have local changes and want to keep them:
-
-```bash
-cd CamillaFIR
-git stash
-git pull
-git stash pop
-```
-
-After updating, activate your virtual environment and refresh dependencies:
-
-```bash
-# Windows (PowerShell)
-.\venv\Scripts\activate
-pip install -r requirements.txt
-
-# macOS
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Ubuntu/Linux
-source venv/bin/activate
-pip install -r requirements-linux.txt
-```
-
----
-
-## What You Get
-
-- FIR filters exported as WAV (32-bit float)
-- Optional CamillaDSP YAML
-- Summary report (`Summary.txt`) with effective settings and automatic-mode runtime metadata
-- Multi-rate export (44.1/48/88.2/96/176.4/192 kHz)
-
-Output ZIP files are saved by default to `Documents/CamillaFIR/filters/<version>/`.
-If that path is not writable, CamillaFIR falls back to a safe writable directory and reports the final path in Results.
-
-## Browser And PNG Notes
-
-- CamillaFIR UI is browser-based.
-- Interactive graphs can be saved from the graph download button in UI.
-- ZIP export is focused on filter artifacts and summary data; dashboard image inclusion can be disabled in perf mode.
-
-## Known Issue (Windows, Vivaldi)
-
-In some Windows setups, using Vivaldi can trigger NumPy `MemoryError` under browser memory pressure.
-
-Workarounds:
-
-- Use Chrome, Edge, or Firefox
-- Close extra Vivaldi tabs/extensions
-- Re-run process in another browser if needed
-
-## Inspiration
-
-This program was inspired by OCA (https://www.youtube.com/@ocaudiophile).
-Originally, it was just a small phase-correction code snippet I wrote during the COVID-19 lockdowns.
-OCA's videos motivated me to develop the program further.
+1. Download the latest release from the [Releases page](https://github.com/VilhoValittu/CamillaFIR/releases/latest).
+2. Open the [Quick Start Guide](docs/Quick_Start_Guide.md).
+3. For full usage instructions, open the [User Manual](docs/Official_Manual.md).
+4. If you need release-package or source installation steps, use the [Installation Guide](docs/Installation.md).
+5. Load your measurements, choose a workflow, and generate filters.
 
 ## Documentation
 
-- User and technical manual: `docs/Official_Manual.md`
-- Modes: `docs/Modes.md`
-- Why this works: `docs/Why_CamillaFIR_Works.md`
-- Academic DSP rationale: `docs/Academic_DSP_Explanation.md`
-- Stability and reproducibility: `docs/Stability_and_Reproducibility.md`
-- Comparison vs conventional EQ: `docs/Comparison_vs_EQ.md`
+### Start here
 
-## UI Overview
+- [Quick Start Guide](docs/Quick_Start_Guide.md)
+- [User Manual](docs/Official_Manual.md)
+- [Installation Guide](docs/Installation.md)
 
-### 1. Files
+### Core documentation
+
+- [Modes](docs/Modes.md)
+- [Why CamillaFIR Works](docs/Why_CamillaFIR_Works.md)
+- [Comparison vs EQ](docs/Comparison_vs_EQ.md)
+- [Stability and Reproducibility](docs/Stability_and_Reproducibility.md)
+- [Academic DSP Explanation](docs/Academic_DSP_Explanation.md)
+- [Reading Output Guide](docs/CamillaFIR_Reading_Output_Guide.md)
+- [IR Export Windowing](docs/IR_Export_Windowing.md)
+- [DSP Guards](docs/CamillaFIR_dsp_guards.md)
+- [FAQ](docs/faq.md)
+
+### Reference material
+
+- [Changelog](docs/CHANGELOG.md)
+- [Case Study PDF](docs/CamillaFIR_Full_Case_Study_v3.pdf)
+- [Extended Output Guide PDF](docs/CamillaFIR_Reading_Output_Guide_Extended.pdf)
+
+## Download
+
+- [Latest release](https://github.com/VilhoValittu/CamillaFIR/releases/latest)
+- [All releases](https://github.com/VilhoValittu/CamillaFIR/releases)
+
+For platform-specific setup instructions, see the [Installation Guide](docs/Installation.md).
+
+## Typical workflow
+
+1. Measure your system with REW or export coherent WAV/IR data.
+2. Load the measurements into CamillaFIR.
+3. Choose **Automatic**, **Basic**, or **Advanced** mode.
+4. Select the filter type that fits your use case.
+5. Generate filters and review the summary.
+6. Export WAV filters and optional CamillaDSP configuration assets.
+
+## Output
+
+CamillaFIR can export:
+
+- FIR filters as WAV
+- optional CamillaDSP YAML/config assets
+- summary report files such as `Summary.txt`
+- multi-rate filter sets
+
+## Filter types
+
+- **Asymmetric**: recommended default for most users; strong correction with practical latency
+- **Linear**: use when maximum linear-phase behavior matters more than latency
+- **Minimum**: practical low-latency causal correction
+- **Mixed Phase**: useful when mixed-phase behavior and smoother GD shaping are preferred
+
+## UI overview
+
+### Files
 ![Files view](pics/ui_1.png)
 
-### 2. Basic
+### Basic
 ![Basic mode](pics/ui_2.png)
 
-### 3. Target
+### Target
 ![Target settings](pics/ui_3.png)
 
-### 4. Advanced
+### Advanced
 ![Advanced settings](pics/ui_4.png)
 
-### 5. Windowing and TDC
-![Windowing and TDC](pics/ui_5.png)
-
-### 6. XO
+### XO
 ![Crossover (XO)](pics/ui_6.png)
 
-### Results 1
+### Results
 ![Results 1](pics/ui_7.png)
 
-### Results 2
-![Results 2](pics/ui_8.png)
+## Notes
 
----
+- CamillaFIR uses a browser-based UI.
+- Interactive graphs can be saved directly from the UI.
+- PNG/dashboard export behavior may depend on host browser support.
+- For known setup issues and platform-specific notes, see the [Installation Guide](docs/Installation.md).
 
-### TDC
-![Effect of Temporal Decay Control](pics/tdc_impulse_example.png)
+## Contact
 
----
+Feedback: camillafir.py@gmail.com
 
-### Disclaimer
-AI was used to translate this document from Finnish to English.
+## License
+
+GPL-3.0

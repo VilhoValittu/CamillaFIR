@@ -6,16 +6,21 @@ import math
 import numpy as np
 
 from ..auto_mode.filter_priors import get_auto_mode_filter_auto_defaults
+from ..auto_mode.shared import _auto_bass_integration_profile_norm
 from ..config.mode_policy import MODE_DEFAULTS
 from ..ui_i18n import (
     LAYOUT_MONO,
     LVL_ALGO_MEDIAN,
     LVL_MODE_AUTO,
+    LVL_MODE_MANUAL,
+    OUTPUT_TILT_SOURCE_MANUAL_TARGET_TILT,
+    OUTPUT_TILT_SOURCE_OFF,
     lvl_algo_legacy_name,
     lvl_mode_legacy_name,
     normalize_layout_value,
     normalize_lvl_algo_value,
     normalize_lvl_mode_value,
+    normalize_output_tilt_source_value,
 )
 
 logger = logging.getLogger("CamillaFIR")
@@ -47,6 +52,7 @@ _AUTO_MODE_DEFAULT_CFG_TO_UI = {
     "max_slope_cut_db_per_oct": "max_slope_cut_db_per_oct",
     "lvl_manual_db": "lvl_manual_db",
     "manual_target_tilt_db_per_oct": "manual_target_tilt_db_per_oct",
+    "output_tilt_db_per_oct": "output_tilt_db_per_oct",
     "lvl_min": "lvl_min",
     "lvl_max": "lvl_max",
     "conf_pull_floor": "conf_pull_floor",
@@ -73,6 +79,36 @@ _AUTO_MODE_DEFAULT_CFG_TO_UI = {
 }
 
 
+def _finite_float_or_default(value: Any, default: float = 0.0) -> float:
+    try:
+        parsed = float(value)
+        if math.isfinite(parsed):
+            return float(parsed)
+    except Exception:
+        pass
+    return float(default)
+
+
+def _resolve_output_tilt_db_per_oct(data: Dict[str, Any]) -> float:
+    try:
+        mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
+    except Exception:
+        mode_u = "BASIC"
+
+    lvl_mode = normalize_lvl_mode_value(data.get("lvl_mode", LVL_MODE_AUTO))
+    output_tilt_source = normalize_output_tilt_source_value(
+        data.get("output_tilt_source", OUTPUT_TILT_SOURCE_OFF)
+    )
+
+    if (
+        mode_u == "ADVANCED"
+        and lvl_mode == LVL_MODE_MANUAL
+        and output_tilt_source == OUTPUT_TILT_SOURCE_MANUAL_TARGET_TILT
+    ):
+        return _finite_float_or_default(data.get("manual_target_tilt_db_per_oct", 0.0), 0.0)
+    return 0.0
+
+
 def _apply_auto_mode_managed_settings(data: Dict[str, Any]) -> None:
     """Force AUTO mode to use program-managed settings except allowed user choices."""
     try:
@@ -93,6 +129,8 @@ def _apply_auto_mode_managed_settings(data: Dict[str, Any]) -> None:
         "lvl_algo": LVL_ALGO_MEDIAN,
         "lvl_manual_db": 0.0,
         "manual_target_tilt_db_per_oct": 0.0,
+        "output_tilt_source": OUTPUT_TILT_SOURCE_OFF,
+        "output_tilt_db_per_oct": 0.0,
         "normalize_opt": False,
         "align_opt": True,
         "unsafe_raw_dsp": False,
@@ -119,6 +157,8 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     """Funktio: collect ui data."""
     p_keys = [
         "mode", "auto_goal", "auto_target_mode", "auto_mode_workers", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
+        "bass_integration_enable", "bass_integration_mode", "bass_integration_profile", "avr_crossover_hz",
+        "sub_crossover_hz", "sub_crossover_slope", "sub_crossover_manual_override", "sub_hpf_freq", "sub_hpf_slope",
         "mag_c_min", "mag_c_max", "max_boost", "max_cut_db", "max_slope_db_per_oct",
         "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "mag_correct",
         "excess_phase_strength", "low_freq_full_correction_hz", "high_freq_no_correction_hz",
@@ -129,8 +169,10 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "stereo_link", "stereo_link_strategy", "exc_prot", "exc_freq", "low_bass_cut_hz", "low_bass_cut_enable", "hpf_enable", "hpf_freq",
         "hpf_slope", "multi_rate_opt", "ir_window", "ir_window_left", "ir_window_right", "ir_export_window_mode", "ir_window_mode",
         "ir_export_window_shape", "ir_export_tukey_alpha",
-        "local_path_l", "local_path_r", "fmt", "layout", "lvl_manual_db",
-        "manual_target_tilt_db_per_oct",
+        "local_path_l", "local_path_r",
+        "local_path_l_main", "local_path_r_main", "local_path_l_sub", "local_path_r_sub",
+        "fmt", "layout", "lvl_manual_db",
+        "manual_target_tilt_db_per_oct", "output_tilt_source", "output_tilt_db_per_oct",
         "lvl_min", "lvl_max", "lvl_algo", "fdw_cycles",
         "trans_width", "smoothing_level", "filter_smooth", "plot_smoothing_level",
         "bass_smooth_adaptive", "bass_smooth_hz", "bass_smooth_sigma_scale", "bass_smooth_conf_floor",
@@ -148,7 +190,9 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "conf_pull_bass_boost_floor_hz", "conf_pull_bass_boost_floor_min",
         "conf_pull_bass_boost_restore",
         "low_bass_cut_strength", "hc_custom_file",
-        "file_l", "file_r", "unsafe_raw_dsp",
+        "file_l", "file_r",
+        "file_l_main", "file_r_main", "file_l_sub", "file_r_sub",
+        "unsafe_raw_dsp",
         "camillafir_automatic_mode",
     ]
 
@@ -174,6 +218,8 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "bass_boost_cap_enable",
         "bass_boost_post_restore_enable",
         "unsafe_raw_dsp",
+        "bass_integration_enable",
+        "sub_crossover_manual_override",
         "camillafir_automatic_mode",
     ]:
         if isinstance(data.get(k, None), list):
@@ -197,6 +243,12 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         mode_u = "AUTO"
         data["mode"] = "AUTO"
     data["camillafir_automatic_mode"] = bool(is_auto_mode)
+
+    if bool(data.get("bass_integration_enable", False)):
+        mode_u = "AUTO"
+        is_auto_mode = True
+        data["mode"] = "AUTO"
+        data["camillafir_automatic_mode"] = True
 
     try:
         atm = str(data.get("auto_target_mode", "auto") or "auto").strip().lower()
@@ -293,6 +345,15 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         data["manual_target_tilt_db_per_oct"] = v if math.isfinite(v) else 0.0
     except Exception:
         data["manual_target_tilt_db_per_oct"] = 0.0
+    data["output_tilt_source"] = normalize_output_tilt_source_value(
+        data.get("output_tilt_source", OUTPUT_TILT_SOURCE_OFF)
+    )
+    try:
+        v = float(data.get("output_tilt_db_per_oct", 0.0) or 0.0)
+        data["output_tilt_db_per_oct"] = v if math.isfinite(v) else 0.0
+    except Exception:
+        data["output_tilt_db_per_oct"] = 0.0
+    data["output_tilt_db_per_oct"] = _resolve_output_tilt_db_per_oct(data)
 
     try:
         data["gain"] = max(0.0, float(data.get("gain", 0.0) or 0.0))
@@ -302,6 +363,23 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         data["auto_mode_workers"] = int(float(data.get("auto_mode_workers", 0) or 0))
     except Exception:
         data["auto_mode_workers"] = 0
+    try:
+        v = float(data.get("avr_crossover_hz", 80.0) or 80.0)
+        data["avr_crossover_hz"] = v if math.isfinite(v) else 80.0
+    except Exception:
+        data["avr_crossover_hz"] = 80.0
+    try:
+        bi_mode = str(data.get("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed").strip().lower()
+    except Exception:
+        bi_mode = "avr_lfe_main_decomposed"
+    if bi_mode not in ("avr_lfe_main_decomposed", "direct_dac"):
+        bi_mode = "avr_lfe_main_decomposed"
+    data["bass_integration_mode"] = bi_mode
+    try:
+        bi_profile = str(data.get("bass_integration_profile", "safe") or "safe").strip().lower()
+    except Exception:
+        bi_profile = "safe"
+    data["bass_integration_profile"] = _auto_bass_integration_profile_norm(bi_profile)
 
     v_raw = data.get("ir_export_window_mode", None)
     if v_raw is None or (isinstance(v_raw, str) and v_raw.strip() == ""):
@@ -371,25 +449,26 @@ def log_df_smoothing_toggle(source, logger) -> bool:
 
 def build_xos_hpf(data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     xos: List[Dict[str, Any]] = []
-    for i in range(1, 6):
-        f_raw = data.get(f"xo{i}_f", None)
-        if f_raw in (None, "", 0):
-            continue
-        try:
-            f_hz = float(f_raw)
-        except Exception:
-            continue
-        if not math.isfinite(f_hz) or f_hz <= 0:
-            continue
-        s_raw = data.get(f"xo{i}_s", 12)
-        try:
-            slope_db_oct = int(round(float(s_raw)))
-        except Exception:
-            slope_db_oct = 12
-        if slope_db_oct <= 0:
-            slope_db_oct = 12
-        order = max(1, int(round(slope_db_oct / 6.0)))
-        xos.append({"freq": f_hz, "order": order, "slope": slope_db_oct, "idx": i})
+    if filter_type_supports_xo_phase_model(data.get("filter_type", "")):
+        for i in range(1, 6):
+            f_raw = data.get(f"xo{i}_f", None)
+            if f_raw in (None, "", 0):
+                continue
+            try:
+                f_hz = float(f_raw)
+            except Exception:
+                continue
+            if not math.isfinite(f_hz) or f_hz <= 0:
+                continue
+            s_raw = data.get(f"xo{i}_s", 12)
+            try:
+                slope_db_oct = int(round(float(s_raw)))
+            except Exception:
+                slope_db_oct = 12
+            if slope_db_oct <= 0:
+                slope_db_oct = 12
+            order = max(1, int(round(slope_db_oct / 6.0)))
+            xos.append({"freq": f_hz, "order": order, "slope": slope_db_oct, "idx": i})
     xos.sort(key=lambda d: float(d.get("freq", 0.0)))
 
     hpf = (
@@ -399,6 +478,23 @@ def build_xos_hpf(data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[
         if bool(data.get("hpf_enable"))
         else None
     )
+    if (
+        bool(data.get("bass_integration_enable", False))
+        and str(data.get("bass_integration_mode", "") or "").strip().lower() == "direct_dac"
+    ):
+        try:
+            direct_xo_hz = float(data.get("sub_crossover_hz", data.get("avr_crossover_hz", 80.0)) or 80.0)
+        except Exception:
+            direct_xo_hz = 80.0
+        try:
+            direct_xo_order = int(round(float(data.get("sub_crossover_slope", 24) or 24.0))) // 6
+        except Exception:
+            direct_xo_order = 4
+        hpf = {
+            "enabled": True,
+            "freq": float(direct_xo_hz if math.isfinite(direct_xo_hz) and direct_xo_hz > 0.0 else 80.0),
+            "order": max(1, int(direct_xo_order)),
+        }
     return xos, hpf
 
 
@@ -411,6 +507,18 @@ def filter_type_short(filter_type: str) -> str:
     if "Mixed" in s:
         return "Mixed"
     return "Linear"
+
+
+def filter_type_supports_xo_phase_model(filter_type: Any) -> bool:
+    """Return True when the main-speaker XO phase model is applicable."""
+    raw = str(filter_type or "").strip().lower()
+    if raw == "":
+        return True
+    if "asym" in raw or "linear" in raw:
+        return True
+    if "mixed" in raw or "minimum" in raw or raw == "min":
+        return False
+    return True
 
 
 def choose_target_rates(data: Dict[str, Any]) -> List[int]:
@@ -433,30 +541,35 @@ def choose_dash_fs(target_rates: List[int], *, multi_rate_on: bool, forced_plot_
 
 def detect_is_wav_source(data: Dict[str, Any]) -> bool:
     try:
-        lp_l_s = str(data.get("local_path_l", "") or "").lower()
-        lp_r_s = str(data.get("local_path_r", "") or "").lower()
+        local_paths = [
+            str(data.get("local_path_l", "") or "").lower(),
+            str(data.get("local_path_r", "") or "").lower(),
+            str(data.get("local_path_l_main", "") or "").lower(),
+            str(data.get("local_path_r_main", "") or "").lower(),
+            str(data.get("local_path_l_sub", "") or "").lower(),
+            str(data.get("local_path_r_sub", "") or "").lower(),
+        ]
     except (AttributeError, TypeError, ValueError):
-        lp_l_s, lp_r_s = "", ""
+        local_paths = []
 
     try:
-        up_l_s = (
-            str(data["file_l"].get("filename", "") or "").lower()
-            if isinstance(data.get("file_l"), dict)
-            else ""
-        )
-        up_r_s = (
-            str(data["file_r"].get("filename", "") or "").lower()
-            if isinstance(data.get("file_r"), dict)
-            else ""
-        )
+        upload_names = []
+        for key in (
+            "file_l",
+            "file_r",
+            "file_l_main",
+            "file_r_main",
+            "file_l_sub",
+            "file_r_sub",
+        ):
+            if isinstance(data.get(key), dict):
+                upload_names.append(str(data[key].get("filename", "") or "").lower())
     except Exception:
-        up_l_s, up_r_s = "", ""
+        upload_names = []
 
-    return (
-        lp_l_s.endswith(".wav")
-        or lp_r_s.endswith(".wav")
-        or up_l_s.endswith(".wav")
-        or up_r_s.endswith(".wav")
+    return bool(
+        any(str(path or "").endswith(".wav") for path in local_paths)
+        or any(str(name or "").endswith(".wav") for name in upload_names)
     )
 
 
@@ -595,7 +708,7 @@ def build_filter_config(
         mode_u = str(data.get("mode", "BASIC") or "BASIC").strip().upper()
     except Exception:
         mode_u = "BASIC"
-    auto_mode_locked = bool(mode_u == "AUTO" or data.get("camillafir_automatic_mode", False))
+    is_auto_mode = bool(mode_u == "AUTO" or data.get("camillafir_automatic_mode", False))
     df_smoothing = _as_bool_default(
         data.get("df_smoothing", False),
         False,
@@ -697,6 +810,30 @@ def build_filter_config(
     sls = str(data.get("stereo_link_strategy", "auto") or "").strip().lower()
     if sls not in ("shared", "hybrid", "auto"):
         sls = "auto"
+    bass_integration_kwargs = {}
+    if hasattr(FilterConfig_cls, "bass_integration_enable"):
+        bass_integration_kwargs["bass_integration_enable"] = bool(data.get("bass_integration_enable", False))
+    if hasattr(FilterConfig_cls, "bass_integration_mode"):
+        bass_integration_kwargs["bass_integration_mode"] = str(
+            data.get("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed"
+        )
+    if hasattr(FilterConfig_cls, "bass_integration_profile"):
+        bass_integration_kwargs["bass_integration_profile"] = str(
+            data.get("bass_integration_profile", "safe") or "safe"
+        )
+    if hasattr(FilterConfig_cls, "avr_crossover_hz"):
+        bass_integration_kwargs["avr_crossover_hz"] = float(_as_float_allow_zero(data.get("avr_crossover_hz", None), 80.0))
+    if hasattr(FilterConfig_cls, "bass_integration_guard_lo_ratio"):
+        bass_integration_kwargs["bass_integration_guard_lo_ratio"] = float(
+            max(0.05, _as_float_allow_zero(data.get("bass_integration_guard_lo_ratio", None), 0.60))
+        )
+    if hasattr(FilterConfig_cls, "bass_integration_guard_hi_ratio"):
+        bass_integration_kwargs["bass_integration_guard_hi_ratio"] = float(
+            max(
+                float(bass_integration_kwargs.get("bass_integration_guard_lo_ratio", 0.60)) + 0.05,
+                _as_float_allow_zero(data.get("bass_integration_guard_hi_ratio", None), 1.40),
+            )
+        )
     
     cfg = FilterConfig_cls(
         fs=int(fs_v),
@@ -737,6 +874,11 @@ def build_filter_config(
         fdw_cycles=data["fdw_cycles"],
         lvl_manual_db=data["lvl_manual_db"],
         manual_target_tilt_db_per_oct=data["manual_target_tilt_db_per_oct"],
+        **(
+            {"output_tilt_source": normalize_output_tilt_source_value(data.get("output_tilt_source", OUTPUT_TILT_SOURCE_OFF))}
+            if hasattr(FilterConfig_cls, "output_tilt_source") else {}
+        ),
+        output_tilt_db_per_oct=_resolve_output_tilt_db_per_oct(data),
         lvl_min=data["lvl_min"],
         lvl_max=data["lvl_max"],
         lvl_algo=lvl_algo,
@@ -765,6 +907,7 @@ def build_filter_config(
         **bass_smooth_kwargs,
         **bass_boost_cap_kwargs,
         **mixed_kwargs,
+        **bass_integration_kwargs,
     )
     try:
         setattr(cfg, "auto_gain_margin_db", float(max(0.0, _as_float_allow_zero(data.get("gain", None), 0.0))))
@@ -785,5 +928,30 @@ def build_filter_config(
     except (AttributeError, TypeError, ValueError):
         logger.debug("FilterConfig has no writable forced leveling fields", exc_info=True)
         pass
+
+    _is_direct_dac = (
+        bool(data.get("bass_integration_enable", False))
+        and str(data.get("bass_integration_mode", "") or "").strip() == "direct_dac"
+    )
+    if _is_direct_dac or (is_auto_mode and bool(data.get("sub_integration_enable", False))):
+        sub_xo_hz = float(data.get("sub_crossover_hz", 80.0) or 80.0)
+        sub_xo_order = max(1, int(data.get("sub_crossover_slope", 24) or 24) // 6)
+        sub_hpf_f = float(data.get("sub_hpf_freq", 20.0) or 20.0)
+        sub_hpf_ord = max(1, int(data.get("sub_hpf_slope", 12) or 12) // 6)
+
+        if _is_direct_dac:
+            main_hpf_f = float(sub_xo_hz)
+            main_hpf_order = int(sub_xo_order)
+        else:
+            existing_hpf_f = float((hpf or {}).get("freq", 0.0) or 0.0)
+            main_hpf_f = max(existing_hpf_f, sub_xo_hz)
+            main_hpf_order = sub_xo_order if main_hpf_f >= sub_xo_hz else int((hpf or {}).get("order", 2) or 2)
+        cfg.hpf_settings = {"enabled": True, "freq": float(main_hpf_f), "order": int(main_hpf_order)}
+        cfg.sub_integration_enable = True
+        cfg.sub_generate_ir = _is_direct_dac or bool(data.get("sub_generate_ir", False))
+        cfg.sub_crossover_hz = float(sub_xo_hz)
+        cfg.sub_crossover_order = int(sub_xo_order)
+        cfg.sub_hpf_freq = float(sub_hpf_f)
+        cfg.sub_hpf_order = int(sub_hpf_ord)
 
     return cfg

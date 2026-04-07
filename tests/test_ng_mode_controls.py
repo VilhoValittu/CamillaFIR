@@ -6,7 +6,9 @@ from camillafir.ui.ng_mode_controls import (
     _update_auto_mode_fields_state,
     update_afdw_cycles_ui,
     update_mixed_freq_ui,
+    update_xo_ui,
     update_lvl_ui,
+    update_target_curve_controls_ui,
     update_tdc_controls_ui,
 )
 
@@ -67,13 +69,32 @@ def test_build_taps_auto_info_markdown_uses_current_base_taps():
 
 def test_update_lvl_ui_shows_manual_target_scope_for_manual_mode():
     ctrl.reset()
+    ctrl.register("mode", _DummyControl("ADVANCED"))
     ctrl.register("lvl_mode", _DummyControl("Manual"))
     scope = _DummyContainer()
+    output_scope = _DummyContainer()
     ctrl.register_container("lvl_manual_scope", scope)
+    ctrl.register_container("output_tilt_scope", output_scope)
 
     update_lvl_ui(t=_t)
 
     assert scope.visible is True
+    assert output_scope.visible is True
+
+
+def test_update_lvl_ui_hides_output_tilt_scope_outside_advanced_manual_mode():
+    ctrl.reset()
+    ctrl.register("mode", _DummyControl("BASIC"))
+    ctrl.register("lvl_mode", _DummyControl("Manual"))
+    scope = _DummyContainer()
+    output_scope = _DummyContainer()
+    ctrl.register_container("lvl_manual_scope", scope)
+    ctrl.register_container("output_tilt_scope", output_scope)
+
+    update_lvl_ui(t=_t)
+
+    assert scope.visible is True
+    assert output_scope.visible is False
 
 
 def test_auto_mode_keeps_filter_type_enabled():
@@ -108,6 +129,33 @@ def test_auto_mode_scope_visibility_tracks_current_mode():
 
     _update_auto_mode_fields_state(is_auto=True, t=_t)
     assert auto_scope.visible is True
+
+
+def test_target_curve_selection_enabled_in_auto_mode_when_selected_target_mode_is_used():
+    ctrl.reset()
+    ctrl.register("mode", _DummyControl("AUTO"))
+    ctrl.register("auto_target_mode", _DummyControl("selected"))
+    ctrl.register("hc_mode", _DummyControl("Harman6"))
+    ctrl.register("hc_custom_file", _DummyControl(None))
+
+    update_target_curve_controls_ui()
+
+    assert ctrl.get("hc_mode").enabled is True
+    assert ctrl.get("hc_custom_file").enabled is True
+
+
+@pytest.mark.parametrize("auto_target_mode", ["auto", "adaptive"])
+def test_target_curve_selection_locked_in_auto_mode_when_target_mode_is_not_selected(auto_target_mode):
+    ctrl.reset()
+    ctrl.register("mode", _DummyControl("AUTO"))
+    ctrl.register("auto_target_mode", _DummyControl(auto_target_mode))
+    ctrl.register("hc_mode", _DummyControl("Harman6"))
+    ctrl.register("hc_custom_file", _DummyControl(None))
+
+    update_target_curve_controls_ui()
+
+    assert ctrl.get("hc_mode").enabled is False
+    assert ctrl.get("hc_custom_file").enabled is False
 
 
 def test_update_tdc_controls_ui_toggles_only_details_scope():
@@ -165,3 +213,39 @@ def test_mixed_split_visible_in_basic_or_advanced_mode_with_mixed_filter(mode):
 
     assert scope.visible is True
     assert ctrl.get("mixed_freq").enabled is True
+
+
+@pytest.mark.parametrize("filter_type", ["Linear", "Asymmetric"])
+def test_update_xo_ui_enables_xo_tab_for_supported_filter_types(filter_type):
+    ctrl.reset()
+    ctrl.register("filter_type", _DummyControl(filter_type))
+    ctrl.register("tab_xo", _DummyControl(None))
+    ctrl.register("xo1_f", _DummyControl(500.0))
+    ctrl.register("xo1_s", _DummyControl(12))
+    scope = _DummyContainer()
+    ctrl.register_container("xo_tab_content_scope", scope)
+
+    update_xo_ui()
+
+    assert ctrl.get("tab_xo").enabled is True
+    assert ctrl.get("xo1_f").enabled is True
+    assert ctrl.get("xo1_s").enabled is True
+    assert scope.visible is True
+
+
+@pytest.mark.parametrize("filter_type", ["Mixed", "Minimum"])
+def test_update_xo_ui_disables_xo_tab_for_unsupported_filter_types(filter_type):
+    ctrl.reset()
+    ctrl.register("filter_type", _DummyControl(filter_type))
+    ctrl.register("tab_xo", _DummyControl(None))
+    ctrl.register("xo1_f", _DummyControl(500.0))
+    ctrl.register("xo1_s", _DummyControl(12))
+    scope = _DummyContainer()
+    ctrl.register_container("xo_tab_content_scope", scope)
+
+    update_xo_ui()
+
+    assert ctrl.get("tab_xo").enabled is False
+    assert ctrl.get("xo1_f").enabled is False
+    assert ctrl.get("xo1_s").enabled is False
+    assert scope.visible is False

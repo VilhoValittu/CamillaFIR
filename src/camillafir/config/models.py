@@ -98,9 +98,17 @@ class FilterConfig:
     bass_first_k_mode_boost: float = 0.9
     is_wav_source: bool = False
 
+    bass_integration_enable: bool = False
+    bass_integration_mode: str = "avr_lfe_main_decomposed"
+    bass_integration_profile: str = "safe"
+    avr_crossover_hz: float = 80.0
+    bass_integration_guard_lo_ratio: float = 0.60
+    bass_integration_guard_hi_ratio: float = 1.40
+
    
 
     hpf_settings: Optional[Dict] = None
+    lpf_settings: Optional[Dict] = None
     crossovers: List[Dict] = field(default_factory=list)
     house_freqs: Optional[List[float]] = None
     house_mags: Optional[List[float]] = None
@@ -109,6 +117,8 @@ class FilterConfig:
     lvl_algo: str = "Median"
     lvl_manual_db: float = 0.0
     manual_target_tilt_db_per_oct: float = 0.0
+    output_tilt_source: str = "off"
+    output_tilt_db_per_oct: float = 0.0
     lvl_min: float = 200.0
     lvl_max: float = 3000.0
     stereo_link: bool = False
@@ -119,6 +129,13 @@ class FilterConfig:
     do_normalize: bool = False
     exc_prot: bool = False
     exc_freq: float = 40.0
+
+    sub_integration_enable: bool = False
+    sub_generate_ir: bool = False
+    sub_crossover_hz: float = 80.0
+    sub_crossover_order: int = 4
+    sub_hpf_freq: float = 20.0
+    sub_hpf_order: int = 2
     low_bass_cut_hz: float = 40.0
 
     conf_pull_floor: float = 0.15

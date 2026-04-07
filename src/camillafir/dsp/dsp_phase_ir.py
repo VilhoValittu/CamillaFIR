@@ -72,6 +72,7 @@ def run_phase_ir_stage(
     afdw_on,
     logger,
     apply_hpf_to_mags_fn,
+    apply_lpf_to_mags_fn,
     limit_gd_gradient_ms_per_oct_fn,
     cfg_float_allow_zero_fn,
 ):
@@ -96,6 +97,7 @@ def run_phase_ir_stage(
         afdw_on=afdw_on,
         logger=logger,
         apply_hpf_to_mags_fn=apply_hpf_to_mags_fn,
+        apply_lpf_to_mags_fn=apply_lpf_to_mags_fn,
         limit_gd_gradient_ms_per_oct_fn=limit_gd_gradient_ms_per_oct_fn,
         cfg_float_allow_zero_fn=cfg_float_allow_zero_fn,
     )
@@ -125,6 +127,7 @@ def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
     afdw_on = bool(inputs.afdw_on)
     logger = inputs.logger
     apply_hpf_to_mags = inputs.apply_hpf_to_mags_fn
+    apply_lpf_to_mags = inputs.apply_lpf_to_mags_fn
     _limit_gd_gradient_ms_per_oct = inputs.limit_gd_gradient_ms_per_oct_fn
     _cfg_float_allow_zero = inputs.cfg_float_allow_zero_fn
 
@@ -169,6 +172,21 @@ def _run_phase_ir_stage(inputs: PhaseIRInputs) -> PhaseIROutputs:
                     f"fc={hpf_f:.1f} Hz, "
                     f"order={hpf_order} "
                     f"({hpf_order * 6:.0f} dB/oct)"
+                )
+            except (AttributeError, TypeError, ValueError):
+                pass
+
+    ls = cfg.lpf_settings
+    if isinstance(ls, dict) and ls.get('enabled'):
+        lpf_f = float(ls.get('freq', 0.0) or 0.0)
+        lpf_order = int(ls.get('order', 0) or 0)
+        if lpf_f > 0 and lpf_order > 0:
+            lpf_db = apply_lpf_to_mags(freq_axis, np.zeros_like(freq_axis), lpf_f, lpf_order)
+            gain_db = gain_db + lpf_db
+            try:
+                logger.info(
+                    f"LPF magnitude applied to FIR: fc={lpf_f:.1f} Hz, "
+                    f"order={lpf_order} ({lpf_order * 6:.0f} dB/oct)"
                 )
             except (AttributeError, TypeError, ValueError):
                 pass

@@ -183,6 +183,9 @@ def _load_exact_cache_seed(
     compat_version = str(params.get("compat_version", "") or "")
     _cache_ready_preset = params.get("_cache_ready_preset")
     _materialize_preset_result = params.get("_materialize_preset_result")
+    optimizer_backend = str(params.get("optimizer_backend", "") or "")
+    optuna_mod = params.get("optuna_mod")
+    optuna_search_sig = str(params.get("optuna_search_sig", "") or "")
 
     exact_cached_preset = {}
     exact_cached_metrics = {}
@@ -219,7 +222,46 @@ def _load_exact_cache_seed(
             exact_cached_metrics = {}
 
     if not (isinstance(exact_cached_preset, dict) and exact_cached_preset):
-        return None
+        if not (
+            str(optimizer_backend) == "optuna"
+            and bool(getattr(cfg, "optuna_persistent_study", False))
+            and optuna_mod is not None
+            and runtime.auto_optuna_module_ready(optuna_mod)
+        ):
+            return None
+        try:
+            storage = runtime.auto_optuna_create_storage(
+                optuna_mod,
+                base_data=dict(cache_base_data or {}),
+            )
+            study_name = runtime.auto_optuna_study_name(
+                study_sig=str(optuna_search_sig),
+                scope=runtime.auto_optuna_effective_scope(
+                    cache_base_data,
+                    "phase1",
+                    phase_kind="phase1",
+                ),
+            )
+            study = optuna_mod.load_study(study_name=str(study_name), storage=storage)
+            best_trial = getattr(study, "best_trial", None)
+            exact_cached_preset = runtime.auto_optuna_trial_payload_preset(
+                dict(getattr(best_trial, "user_attrs", {}) or {})
+            )
+            if not isinstance(exact_cached_preset, dict) or not exact_cached_preset:
+                exact_cached_preset = dict(getattr(best_trial, "params", {}) or {})
+            best_out = runtime.auto_optuna_trial_out_payload(best_trial)
+            exact_cached_metrics = dict((best_out or {}).get("metrics", {}) or {})
+            if isinstance(exact_cached_preset, dict) and exact_cached_preset:
+                logger.info(
+                    "Automatic mode: Optuna phase1 study cache hit for same measurements + settings, using cached target=%s from %s and running cache refine.",
+                    str(cache_base_data.get("hc_mode", "n/a") or "n/a"),
+                    str(study_name),
+                )
+        except Exception:
+            exact_cached_preset = {}
+            exact_cached_metrics = {}
+        if not (isinstance(exact_cached_preset, dict) and exact_cached_preset):
+            return None
     try:
         cache_target_name = str(cache_base_data.get("hc_mode", "n/a") or "n/a").strip() or "n/a"
         best_preset = _cache_ready_preset(

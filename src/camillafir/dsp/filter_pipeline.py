@@ -13,6 +13,7 @@ from .dsp_ops import (
     _stage_probe as _stage_probe_impl,
     apply_confidence_weighted_target_pull as _apply_confidence_weighted_target_pull_impl,
     apply_hpf_to_mags as _apply_hpf_to_mags_impl,
+    apply_lpf_to_mags as _apply_lpf_to_mags_impl,
     interpolate_response as _interpolate_response_impl,
 )
 from .dsp_phase_ir import run_phase_ir_stage
@@ -183,6 +184,10 @@ def _stage_probe(stage_name, freq_axis, arr_db, mask_c, global_gain_db=0.0, auto
 
 def apply_hpf_to_mags(freqs, mags, cutoff, order):
     return _apply_hpf_to_mags_impl(freqs, mags, cutoff, order)
+
+
+def apply_lpf_to_mags(freqs, mags, cutoff, order):
+    return _apply_lpf_to_mags_impl(freqs, mags, cutoff, order)
 
 
 def interpolate_response(input_freqs, input_values, target_freqs):
@@ -427,6 +432,11 @@ def _run_generate_filter_pipeline(
     use_bassfirst = state["use_bassfirst"]
     afdw_on = state["afdw_on"]
 
+    _output_tilt = float(getattr(cfg, "output_tilt_db_per_oct", 0.0) or 0.0)
+    if _output_tilt != 0.0:
+        _safe_f = np.maximum(freq_axis, 1.0)
+        gain_db = gain_db + _output_tilt * np.log2(1000.0 / _safe_f)
+
     with profiled_section("generate_filter.phase_ir"):
         phase_ir = run_phase_ir_stage(
             cfg=cfg,
@@ -449,6 +459,7 @@ def _run_generate_filter_pipeline(
             afdw_on=afdw_on,
             logger=logger,
             apply_hpf_to_mags_fn=apply_hpf_to_mags,
+            apply_lpf_to_mags_fn=apply_lpf_to_mags,
             limit_gd_gradient_ms_per_oct_fn=_limit_gd_gradient_ms_per_oct,
             cfg_float_allow_zero_fn=_cfg_float_allow_zero,
         )

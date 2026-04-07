@@ -40,6 +40,9 @@ def auto_target_selection_method_text(method: typing.Any) -> str:
 
     mapping = {
         "adaptive": "adaptive (synthesized from measurements)",
+        "cache_measurement_hit": "cache hit (same measurements, no target re-evaluation)",
+        "cache_optuna_target": "Optuna target study cache seed",
+        "cache_optuna_target_hit": "cache hit (Optuna target study, no target re-evaluation)",
         "cache_signature_hit": "cache hit (same measurements + settings, no target re-evaluation)",
         "cache_measurement": "measurement cache seed",
         "cache_signature": "signature cache seed",

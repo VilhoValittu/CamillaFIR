@@ -129,6 +129,7 @@ def build_info_panel() -> None:
     with ui.element("div").classes("cf-info-panel"):
         line1 = ui.label("").classes("cf-info-line-dim")
         line2 = ui.label("").classes("cf-info-line-dim")
+        line_meas = ui.label("").classes("cf-info-line-dim")
         line3 = ui.label("")
         line3.set_visibility(False)
 
@@ -151,6 +152,11 @@ def build_info_panel() -> None:
         except (TypeError, ValueError, ZeroDivisionError):
             return "\u2014"
 
+    def _has_meas(file_key: str, path_key: str) -> bool:
+        file_val = ng_controls.value(file_key)
+        path_val = ng_controls.value(path_key) or ""
+        return bool(file_val) or bool(str(path_val).strip())
+
     def _refresh_info() -> None:
         mode = ng_controls.value("mode") or "\u2014"
         fs_raw = ng_controls.value("fs")
@@ -165,6 +171,24 @@ def build_info_panel() -> None:
         hc_str = str(hc_mode).strip() if hc_mode else "\u2014"
         line1.set_text(f"{mode_str} \u00b7 {_fmt_fs(fs_raw)} \u00b7 {taps_str} taps")
         line2.set_text(f"{ftype_str} \u00b7 {lat_str} \u00b7 {hc_str}")
+
+        bass_int = bool(ng_controls.value("bass_integration_enable"))
+        if bass_int:
+            l_ok = _has_meas("file_l_main", "local_path_l_main")
+            r_ok = _has_meas("file_r_main", "local_path_r_main")
+        else:
+            l_ok = _has_meas("file_l", "local_path_l")
+            r_ok = _has_meas("file_r", "local_path_r")
+        l_sym = "\u2713" if l_ok else "\u2013"
+        r_sym = "\u2713" if r_ok else "\u2013"
+        meas_label = t("info_panel_meas")
+        line_meas.set_text(f"{meas_label}  L {l_sym}  R {r_sym}")
+        if l_ok and r_ok:
+            line_meas.classes(add="cf-info-line-ok", remove="cf-info-line-dim cf-info-line-warn")
+        elif l_ok or r_ok:
+            line_meas.classes(add="cf-info-line-warn", remove="cf-info-line-dim cf-info-line-ok")
+        else:
+            line_meas.classes(add="cf-info-line-dim", remove="cf-info-line-ok cf-info-line-warn")
 
         info = ui_state.get_last_run_info()
         if info:

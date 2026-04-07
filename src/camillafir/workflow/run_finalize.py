@@ -93,6 +93,21 @@ def _finalize_run_outputs(ctx: dict, *, callbacks: ProcessRunCallbacks, support:
         l_st_f, r_st_f = fallback.l_st, fallback.r_st
         l_imp_f, r_imp_f = fallback.l_ir, fallback.r_ir
 
+    sub_ir_f = ctx.get("sub_ir_f")
+    sub_st_f = ctx.get("sub_st_f")
+    sub_meas_f = dict(ctx.get("sub_meas_f") or {})
+    if (sub_ir_f is None or sub_st_f is None) and results_by_fs:
+        fallback_r = results_by_fs[-1]
+        if sub_ir_f is None:
+            sub_ir_f = fallback_r.sub_ir
+        if sub_st_f is None:
+            sub_st_f = fallback_r.sub_st
+        if not sub_meas_f:
+            sub_meas_f = {k: fallback_r.measurements[k] for k in ("f_sub", "m_sub", "p_sub") if k in fallback_r.measurements}
+    bi_meta = data.get("_bass_integration_meta")
+    if isinstance(bi_meta, dict) and isinstance(sub_st_f, dict):
+        bi_meta["sub_filter_stats"] = sub_st_f
+
     logger.info(
         f"UI stats mode L/R: {l_st_f.get('analysis_mode')}/{r_st_f.get('analysis_mode')} | "
         f"len cmp f/m/t = {len(l_st_f.get('cmp_freq_axis', []))}/{len(l_st_f.get('cmp_measured_mags', []))}/{len(l_st_f.get('cmp_target_mags', []))}"
@@ -120,4 +135,7 @@ def _finalize_run_outputs(ctx: dict, *, callbacks: ProcessRunCallbacks, support:
         saved_filters_dir=saved_filters_dir,
         auto_cache_path=auto_cache_path,
         optuna_storage_path=optuna_storage_path,
+        sub_imp_f=sub_ir_f,
+        sub_meas_f=sub_meas_f,
+        sub_st_f=sub_st_f,
     )

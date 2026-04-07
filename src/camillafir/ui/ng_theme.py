@@ -117,6 +117,8 @@ body { background: var(--cf-bg) !important; color: var(--cf-text) !important; }
 }
 .cf-info-line-dim   { color: var(--cf-muted); }
 .cf-info-line-score { color: var(--cf-accent); font-weight: 600; }
+.cf-info-line-ok    { color: #3a9a5c; }
+.cf-info-line-warn  { color: #c07a30; }
 
 /* Advanced guided sections */
 .cf-adv-summary {

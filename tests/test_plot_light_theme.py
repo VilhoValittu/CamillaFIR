@@ -99,3 +99,37 @@ def test_prediction_plot_uses_light_theme():
     assert fig.layout.paper_bgcolor == "#ffffff"
     assert fig.layout.plot_bgcolor == "#ffffff"
     assert fig.layout.font.color == "#1f2937"
+
+
+def test_prediction_plot_uses_direct_dac_sum_traces_when_available():
+    freqs = np.array([20.0, 40.0, 80.0, 160.0, 320.0, 640.0, 1280.0, 2560.0], dtype=float)
+    mags = np.zeros_like(freqs)
+    phases = np.zeros_like(freqs)
+    filt_ir = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+
+    _html, fig = generate_prediction_plot(
+        freqs,
+        mags,
+        phases,
+        filt_ir,
+        48000,
+        "Test",
+        target_stats={
+            "freq_axis": freqs.tolist(),
+            "measured_mags": mags.tolist(),
+            "target_mags": np.zeros_like(freqs).tolist(),
+            "direct_dac_sum_measured_mags": [6.0, 6.0, 6.0, 3.0, 0.0, 0.0, 0.0, 0.0],
+            "direct_dac_sum_predicted_mags": [10.0, 10.0, 10.0, 7.0, 0.0, 0.0, 0.0, 0.0],
+            "direct_dac_sum_predicted_mags_comp": [9.0, 9.0, 9.0, 6.0, 0.0, 0.0, 0.0, 0.0],
+            "eff_target_db": 75.0,
+            "offset_db": 0.0,
+        },
+        create_full_html=False,
+        return_fig=True,
+    )
+
+    assert fig is not None
+    measured_trace = next(trace for trace in fig.data if trace.name == "Measured")
+    predicted_trace = next(trace for trace in fig.data if trace.name == "Predicted (exported)")
+    assert float(np.asarray(measured_trace.y, dtype=float)[0]) > 80.0
+    assert float(np.asarray(predicted_trace.y, dtype=float)[0]) > 84.0

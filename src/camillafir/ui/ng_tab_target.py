@@ -25,8 +25,11 @@ from ..ui_i18n import (
     LVL_MODE_AUTO,
     LVL_MODE_MANUAL,
     LVL_MODE_OPTION_LABEL_KEYS,
+    OUTPUT_TILT_SOURCE_OFF,
+    OUTPUT_TILT_SOURCE_OPTION_LABEL_KEYS,
     normalize_lvl_algo_value,
     normalize_lvl_mode_value,
+    normalize_output_tilt_source_value,
     tr_options,
 )
 
@@ -230,6 +233,29 @@ def build_target_tab(*, t: Callable, get_val: Callable) -> None:
 
     ui.separator()
 
+    # Output filter tilt source (ADVANCED + manual level only)
+    _initial_mode = str(get_val("mode", "BASIC") or "BASIC").upper()
+    _initial_lvl_mode = normalize_lvl_mode_value(get_val("lvl_mode", LVL_MODE_AUTO), t)
+    output_tilt_col = ui.column().classes("w-full gap-1")
+    ctrl.register_container("output_tilt_scope", output_tilt_col)
+    with output_tilt_col:
+        ui.label(t("output_tilt")).classes("text-sm font-semibold mt-1")
+        with ui.column().classes("w-full gap-1"):
+            ctrl.register(
+                "output_tilt_source",
+                ui.radio(
+                    tr_options(t, OUTPUT_TILT_SOURCE_OPTION_LABEL_KEYS),
+                    value=normalize_output_tilt_source_value(
+                        get_val("output_tilt_source", OUTPUT_TILT_SOURCE_OFF),
+                        t,
+                    ),
+                ).classes("w-full"),
+            )
+        ui.label(t("output_tilt_help")).classes("text-xs text-gray-400")
+    output_tilt_col.set_visibility(_initial_mode == "ADVANCED" and _initial_lvl_mode == LVL_MODE_MANUAL)
+
+    ui.separator()
+
     # Magnitude correction
     ctrl.register(
         "mag_correct",
@@ -379,6 +405,7 @@ def _build_target_preview_fig():
         import numpy as np  # noqa: PLC0415
         import plotly.graph_objects as go  # noqa: PLC0415
         from ..auto_mode.shared import _auto_goal_forced_level_window  # noqa: PLC0415
+        from ..dsp.bass_integration import sum_complex_responses  # noqa: PLC0415
         from ..dsp.smoothing import psychoacoustic_smoothing as _psycho_smooth  # noqa: PLC0415
         from ..application.house_curve_service import (  # noqa: PLC0415
             _normalize_hc_mode_key,
@@ -387,7 +414,9 @@ def _build_target_preview_fig():
         )
         from .target_preview_cache import (  # noqa: PLC0415
             load_path_measurement_curve,
+            load_path_measurement_transfer,
             load_upload_measurement_curve,
+            load_upload_measurement_transfer,
         )
 
         global _TARGET_PREVIEW_DRAG_ACTIVE
@@ -431,6 +460,7 @@ def _build_target_preview_fig():
         pre_ms = _to_float(_cv("ir_window_left", 85.0), 85.0)
         post_ms = _to_float(_cv("ir_window_right") or _cv("ir_window", 500.0), 500.0)
         smoothing_level = int(float(_cv("filter_smooth", _cv("smoothing_level", 0)) or 0))
+        bass_integration_enabled = bool(_cv("bass_integration_enable", False))
 
         freq_axis = np.logspace(math.log10(10.0), math.log10(20000.0), 400)
 
@@ -478,24 +508,95 @@ def _build_target_preview_fig():
                 return m_curve
 
         speaker_interp = {}
-        for ch, up_key, path_key in (("L", "file_l", "local_path_l"), ("R", "file_r", "local_path_r")):
-            ff, mm = load_upload_measurement_curve(
-                _cv(up_key, None),
-                pre_ms=pre_ms,
-                post_ms=post_ms,
-                smoothing_level=smoothing_level,
-            )
-            if ff is None:
-                ff, mm = load_path_measurement_curve(
-                    _cv(path_key, ""),
+        speaker_components = {}
+        if bass_integration_enabled:
+            def _load_transfer(up_key: str, path_key: str, label: str):
+                tr = load_upload_measurement_transfer(
+                    _cv(up_key, None),
+                    pre_ms=pre_ms,
+                    post_ms=post_ms,
+                    smoothing_level=smoothing_level,
+                    label=label,
+                )
+                if tr is None:
+                    tr = load_path_measurement_transfer(
+                        _cv(path_key, ""),
+                        pre_ms=pre_ms,
+                        post_ms=post_ms,
+                        smoothing_level=smoothing_level,
+                        label=label,
+                    )
+                return tr
+
+            bi_slots = {
+                "L_main": _load_transfer("file_l_main", "local_path_l_main", "L main only"),
+                "R_main": _load_transfer("file_r_main", "local_path_r_main", "R main only"),
+                "L_sub": _load_transfer("file_l_sub", "local_path_l_sub", "L sub only"),
+                "R_sub": _load_transfer("file_r_sub", "local_path_r_sub", "R sub only"),
+            }
+
+            def _interp_transfer(tr):
+                if tr is None:
+                    return None
+                try:
+                    ff = np.asarray(tr.freqs_hz, dtype=float)
+                    mm = np.asarray(tr.mag_db, dtype=float)
+                    if ff.size < 8 or mm.size != ff.size:
+                        return None
+                    return np.interp(freq_axis, ff, mm, left=mm[0], right=mm[-1])
+                except Exception:
+                    return None
+
+            for ch in ("L", "R"):
+                main_tr = bi_slots.get(f"{ch}_main")
+                sub_1_tr = bi_slots.get("L_sub")
+                sub_2_tr = bi_slots.get("R_sub")
+                if main_tr is None or sub_1_tr is None or sub_2_tr is None:
+                    continue
+                total_tr = sum_complex_responses(
+                    main_tr,
+                    sub_1_tr,
+                    sub_2_tr,
+                    label=f"{ch} total predicted",
+                )
+                total_curve = _interp_transfer(total_tr)
+                if total_curve is None:
+                    continue
+                total_aligned = _align(total_curve, target_curve, freq_axis, lvl_min, lvl_max)
+                speaker_interp[ch] = _smooth_for_preview(freq_axis, total_aligned)
+
+                main_curve = _interp_transfer(main_tr)
+                sub_total_tr = sum_complex_responses(
+                    sub_1_tr,
+                    sub_2_tr,
+                    label=f"{ch} combined sub",
+                )
+                sub_curve = _interp_transfer(sub_total_tr)
+                if main_curve is not None:
+                    offset_db = float(np.nanmedian(total_aligned - total_curve)) if np.isfinite(total_curve).any() else 0.0
+                    speaker_components[f"{ch}_main"] = _smooth_for_preview(freq_axis, main_curve + offset_db)
+                if sub_curve is not None:
+                    offset_db = float(np.nanmedian(total_aligned - total_curve)) if np.isfinite(total_curve).any() else 0.0
+                    speaker_components[f"{ch}_sub"] = _smooth_for_preview(freq_axis, sub_curve + offset_db)
+        else:
+            for ch, up_key, path_key in (("L", "file_l", "local_path_l"), ("R", "file_r", "local_path_r")):
+                ff, mm = load_upload_measurement_curve(
+                    _cv(up_key, None),
                     pre_ms=pre_ms,
                     post_ms=post_ms,
                     smoothing_level=smoothing_level,
                 )
-            if ff is not None and mm is not None:
-                m_interp = np.interp(freq_axis, ff, mm, left=mm[0], right=mm[-1])
-                m_aligned = _align(m_interp, target_curve, freq_axis, lvl_min, lvl_max)
-                speaker_interp[ch] = _smooth_for_preview(freq_axis, m_aligned)
+                if ff is None:
+                    ff, mm = load_path_measurement_curve(
+                        _cv(path_key, ""),
+                        pre_ms=pre_ms,
+                        post_ms=post_ms,
+                        smoothing_level=smoothing_level,
+                    )
+                if ff is not None and mm is not None:
+                    m_interp = np.interp(freq_axis, ff, mm, left=mm[0], right=mm[-1])
+                    m_aligned = _align(m_interp, target_curve, freq_axis, lvl_min, lvl_max)
+                    speaker_interp[ch] = _smooth_for_preview(freq_axis, m_aligned)
 
         target_curve_display = apply_manual_target_preview_adjustments(
             freq_axis,
@@ -554,18 +655,36 @@ def _build_target_preview_fig():
         if "L" in speaker_interp:
             fig.add_trace(go.Scatter(
                 x=freq_axis, y=speaker_interp["L"], mode="lines",
-                name="Speaker L", line=dict(color="rgba(102,187,255,0.55)", width=1.2),
+                name="Predicted L total" if bass_integration_enabled else "Speaker L",
+                line=dict(color="rgba(102,187,255,0.55)", width=1.2),
             ))
         if "R" in speaker_interp:
             fig.add_trace(go.Scatter(
                 x=freq_axis, y=speaker_interp["R"], mode="lines",
-                name="Speaker R", line=dict(color="rgba(255,167,102,0.55)", width=1.2),
+                name="Predicted R total" if bass_integration_enabled else "Speaker R",
+                line=dict(color="rgba(255,167,102,0.55)", width=1.2),
             ))
+        for comp_key, trace_name, color in (
+            ("L_main", "L main only", "rgba(102,187,255,0.35)"),
+            ("L_sub", "L sub only", "rgba(30,64,175,0.35)"),
+            ("R_main", "R main only", "rgba(255,167,102,0.35)"),
+            ("R_sub", "R sub only", "rgba(185,28,28,0.35)"),
+        ):
+            if comp_key in speaker_components:
+                fig.add_trace(go.Scatter(
+                    x=freq_axis,
+                    y=speaker_components[comp_key],
+                    mode="lines",
+                    name=trace_name,
+                    line=dict(color=color, width=1.0, dash="dot"),
+                    visible="legendonly",
+                ))
         if len(speaker_interp) > 0:
             avg = np.mean(np.vstack([speaker_interp[k] for k in sorted(speaker_interp)]), axis=0)
             fig.add_trace(go.Scatter(
                 x=freq_axis, y=avg, mode="lines",
-                name="Speaker avg", line=dict(color="#dc2626", width=2.0),
+                name="Predicted avg" if bass_integration_enabled else "Speaker avg",
+                line=dict(color="#dc2626", width=2.0),
             ))
         fig.update_xaxes(
             type="log",

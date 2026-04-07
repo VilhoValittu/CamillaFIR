@@ -12,6 +12,7 @@ from typing import Callable
 
 from . import ng_controls as ctrl
 from .camillafir_utils import scale_taps_with_fs
+from ..config.camillafir_pipeline import filter_type_supports_xo_phase_model
 from ..ui_i18n import LVL_MODE_AUTO, LVL_MODE_MANUAL, LVL_MODE_OPTION_LABEL_KEYS, normalize_lvl_mode_value, tr_options
 
 logger = logging.getLogger("CamillaFIR")
@@ -30,7 +31,6 @@ def on_mode_change(*, mode: str, t: Callable) -> None:
     """
     mode_u = str(mode or "BASIC").strip().upper()
     is_auto = mode_u == "AUTO"
-    is_basic = mode_u == "BASIC"
     is_advanced = mode_u == "ADVANCED"
 
     # lvl_mode options
@@ -61,6 +61,7 @@ def on_mode_change(*, mode: str, t: Callable) -> None:
 
     # AUTO-mode controls disable
     _update_auto_mode_fields_state(is_auto=is_auto, t=t)
+    update_target_curve_controls_ui()
 
     # Apply mode-driven IR window default
     _apply_mode_ir_window_default(mode_u=mode_u)
@@ -76,10 +77,12 @@ def on_mode_change(*, mode: str, t: Callable) -> None:
 # ---------------------------------------------------------------------------
 
 def update_lvl_ui(*, t: Callable) -> None:
-    """Show/hide manual dB input depending on lvl_mode value."""
+    """Show/hide manual level controls and derived output-tilt toggle."""
+    mode_u = str(ctrl.value("mode", "BASIC") or "BASIC").strip().upper()
     lvl = normalize_lvl_mode_value(ctrl.value("lvl_mode", LVL_MODE_AUTO), t)
     is_manual = lvl == LVL_MODE_MANUAL
     ctrl.set_visibility("lvl_manual_scope", is_manual)
+    ctrl.set_visibility("output_tilt_scope", mode_u == "ADVANCED" and is_manual)
 
 
 def update_lvl_range() -> None:
@@ -149,6 +152,17 @@ def update_mixed_freq_ui(*, t: Callable) -> None:
 
     ctrl.set_visibility("update_mixed_freq_scope", show)
     ctrl.set_enabled("mixed_freq", show)
+
+
+def update_xo_ui() -> None:
+    """Enable XO tab only for filter types that use the XO phase model."""
+    enabled = bool(filter_type_supports_xo_phase_model(ctrl.value("filter_type", "")))
+
+    ctrl.set_enabled("tab_xo", enabled)
+    ctrl.set_visibility("xo_tab_content_scope", enabled)
+    for i in range(1, 6):
+        ctrl.set_enabled(f"xo{i}_f", enabled)
+        ctrl.set_enabled(f"xo{i}_s", enabled)
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +266,7 @@ def _build_taps_auto_info_markdown(*, multi_rate: bool, base_taps: int, t: Calla
 _AUTO_LOCKED_FIELDS = [
     "comparison_mode", "gain", "lvl_algo", "lvl_min", "lvl_max",
     "lvl_mode", "lvl_manual_db", "manual_target_tilt_db_per_oct",
+    "output_tilt_source",
     "mag_correct", "mag_c_min", "mag_c_max",
     "max_boost", "bass_first_ai", "bass_first_mode_max_hz",
     "max_slope_db_per_oct", "max_slope_boost_db_per_oct",
@@ -274,6 +289,12 @@ def _update_auto_mode_fields_state(*, is_auto: bool, t: Callable) -> None:
     for name in _AUTO_ONLY_FIELDS:
         ctrl.set_enabled(name, is_auto)
     ctrl.set_visibility("auto_mode_scope", is_auto)
+
+
+def update_target_curve_controls_ui() -> None:
+    """Enable Target-page curve selection when AUTO mode uses selected target."""
+    mode_u = str(ctrl.value("mode", "BASIC") or "BASIC").strip().upper()
+    is_auto = mode_u == "AUTO"
 
     auto_target_mode = str(ctrl.value("auto_target_mode", "auto") or "auto").lower()
     hc_locked = is_auto and auto_target_mode in ("auto", "adaptive")

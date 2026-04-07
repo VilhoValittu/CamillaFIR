@@ -72,9 +72,20 @@ def generate_prediction_plot(
         except Exception:
             f_win_min, f_win_max = 500.0, 2000.0
 
+        direct_pred_export = None
+        direct_pred_comp = None
+        t_interp = None
+
         if target_stats and "measured_mags" in target_stats:
             f_stats = np.asarray(target_stats.get("freq_axis", []), dtype=float)
-            m_stats = _maybe_shift_to_abs(target_stats.get("measured_mags", []), avg_t)
+            m_stats_src = target_stats.get("measured_mags", [])
+            direct_m_stats = np.asarray(
+                target_stats.get("direct_dac_sum_measured_mags", []),
+                dtype=float,
+            ).reshape(-1)
+            if f_stats.size > 1 and direct_m_stats.size == f_stats.size:
+                m_stats_src = direct_m_stats
+            m_stats = _maybe_shift_to_abs(m_stats_src, avg_t)
             t_stats = _maybe_shift_to_abs(target_stats.get("target_mags", []), avg_t) if "target_mags" in target_stats else None
 
             m_interp = np.interp(f_lin, f_stats, m_stats)
@@ -87,6 +98,48 @@ def generate_prediction_plot(
                 m_interp,
                 plot_smoothing_level=plot_smoothing_level,
             )
+
+            pred_stats = _maybe_shift_to_abs(
+                target_stats.get("direct_dac_sum_predicted_mags", []),
+                avg_t,
+            )
+            pred_stats = np.asarray(pred_stats, dtype=float).reshape(-1)
+            if f_stats.size > 1 and pred_stats.size == f_stats.size:
+                pred_interp = np.interp(f_lin, f_stats, pred_stats)
+                if t_interp is not None:
+                    pred_interp = _align_meas_to_target_window(
+                        f_lin,
+                        pred_interp,
+                        t_interp,
+                        f_win_min,
+                        f_win_max,
+                    )
+                direct_pred_export = _view_mags_for_plot(
+                    f_lin,
+                    pred_interp,
+                    plot_smoothing_level=plot_smoothing_level,
+                )
+
+                pred_comp_stats = _maybe_shift_to_abs(
+                    target_stats.get("direct_dac_sum_predicted_mags_comp", []),
+                    avg_t,
+                )
+                pred_comp_stats = np.asarray(pred_comp_stats, dtype=float).reshape(-1)
+                if pred_comp_stats.size == f_stats.size:
+                    pred_comp_interp = np.interp(f_lin, f_stats, pred_comp_stats)
+                    if t_interp is not None:
+                        pred_comp_interp = _align_meas_to_target_window(
+                            f_lin,
+                            pred_comp_interp,
+                            t_interp,
+                            f_win_min,
+                            f_win_max,
+                        )
+                    direct_pred_comp = _view_mags_for_plot(
+                        f_lin,
+                        pred_comp_interp,
+                        plot_smoothing_level=plot_smoothing_level,
+                    )
         else:
             m_raw = np.interp(f_lin, orig_freqs, orig_mags)
             m_lin_clean = _view_mags_for_plot(
@@ -114,14 +167,23 @@ def generate_prediction_plot(
             ag_db = 0.0
             ah_db = 0.0
 
-        p_sm_export = _view_mags_for_plot(
-            f_lin,
-            20.0 * np.log10(np.abs(total_spec) + 1e-12),
-            plot_smoothing_level=plot_smoothing_level,
-        )
-        p_sm_comp = p_sm_export.copy()
-        if plot_level_comp_db != 0.0:
-            p_sm_comp = p_sm_comp + float(plot_level_comp_db)
+        if direct_pred_export is not None:
+            p_sm_export = np.asarray(direct_pred_export, dtype=float)
+            if direct_pred_comp is not None:
+                p_sm_comp = np.asarray(direct_pred_comp, dtype=float)
+            else:
+                p_sm_comp = p_sm_export.copy()
+                if plot_level_comp_db != 0.0:
+                    p_sm_comp = p_sm_comp + float(plot_level_comp_db)
+        else:
+            p_sm_export = _view_mags_for_plot(
+                f_lin,
+                20.0 * np.log10(np.abs(total_spec) + 1e-12),
+                plot_smoothing_level=plot_smoothing_level,
+            )
+            p_sm_comp = p_sm_export.copy()
+            if plot_level_comp_db != 0.0:
+                p_sm_comp = p_sm_comp + float(plot_level_comp_db)
         filt_sm_phase = smooth_complex(f_lin, h_filt_display, PHASE_SMOOTH_OCT)
         ph_sm = (np.rad2deg(np.angle(filt_sm_phase)) + 180) % 360 - 180
 

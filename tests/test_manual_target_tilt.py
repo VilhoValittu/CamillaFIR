@@ -71,6 +71,35 @@ def test_collect_ui_data_keeps_manual_mode_as_stable_key():
     assert str(data.get("lvl_mode")) == "manual"
 
 
+def test_collect_ui_data_derives_output_tilt_from_manual_target_tilt_when_enabled():
+    data = collect_ui_data(
+        {
+            "mode": "ADVANCED",
+            "lvl_mode": "Manual",
+            "manual_target_tilt_db_per_oct": "1.25",
+            "output_tilt_source": "manual_target_tilt",
+            "output_tilt_db_per_oct": "9.0",
+        }
+    )
+
+    assert str(data.get("output_tilt_source")) == "manual_target_tilt"
+    assert float(data.get("output_tilt_db_per_oct", 0.0)) == 1.25
+
+
+def test_collect_ui_data_disables_output_tilt_outside_advanced_manual_mode():
+    data = collect_ui_data(
+        {
+            "mode": "BASIC",
+            "lvl_mode": "Manual",
+            "manual_target_tilt_db_per_oct": "1.25",
+            "output_tilt_source": "manual_target_tilt",
+            "output_tilt_db_per_oct": "9.0",
+        }
+    )
+
+    assert float(data.get("output_tilt_db_per_oct", 0.0)) == 0.0
+
+
 def test_build_filter_config_keeps_manual_target_tilt_db_per_oct():
     data = load_config()
     data.update(
@@ -113,6 +142,52 @@ def test_build_filter_config_keeps_manual_target_tilt_db_per_oct():
     )
 
     assert float(getattr(cfg, "manual_target_tilt_db_per_oct", 0.0)) == 0.8
+
+
+def test_build_filter_config_derives_output_tilt_from_manual_target_tilt_source():
+    data = load_config()
+    data.update(
+        {
+            "mode": "ADVANCED",
+            "filter_type": "Linear Phase",
+            "mixed_freq": 180.0,
+            "mag_c_min": 10.0,
+            "mag_c_max": 200.0,
+            "max_boost": 5.0,
+            "phase_limit": 600.0,
+            "mag_correct": True,
+            "reg_strength": 30.0,
+            "normalize_opt": False,
+            "exc_prot": False,
+            "exc_freq": 20.0,
+            "low_bass_cut_hz": 40.0,
+            "ir_window_right": 500.0,
+            "ir_window_left": 85.0,
+            "lvl_mode": "Manual",
+            "lvl_manual_db": 0.0,
+            "manual_target_tilt_db_per_oct": 0.8,
+            "output_tilt_source": "manual_target_tilt",
+            "output_tilt_db_per_oct": 9.0,
+            "lvl_min": 200.0,
+            "lvl_max": 3000.0,
+            "lvl_algo": "Median",
+            "trans_width": 100.0,
+        }
+    )
+
+    cfg = build_filter_config(
+        FilterConfig_cls=FilterConfig,
+        fs_v=44100,
+        taps_v=65536,
+        data=data,
+        xos=[],
+        hpf=None,
+        hc_f=None,
+        hc_m=None,
+        pin=None,
+    )
+
+    assert float(getattr(cfg, "output_tilt_db_per_oct", 0.0)) == 0.8
 
 
 def test_format_summary_content_reports_manual_target_tilt():

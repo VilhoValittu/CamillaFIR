@@ -1,7 +1,10 @@
+from types import SimpleNamespace
+
 from camillafir.config.camillafir_config import load_config
 from camillafir.config.camillafir_pipeline import build_filter_config
 from camillafir.config.camillafir_pipeline import collect_ui_data
 from camillafir.config.models import FilterConfig
+from camillafir.auto_mode.cache_signature import _auto_signature
 from camillafir.io.auto_mode.orchestrator_target import _target_eval_one
 from camillafir.io.camillafir_automatic_mode import _auto_select_target_curve_with_trials
 from camillafir.io.camillafir_automatic_mode import _run_auto_mode_search
@@ -114,6 +117,8 @@ def test_collect_ui_data_auto_mode_preserves_allowed_inputs_but_forces_managed_s
     assert int(data.get("xo1_s")) == 24
     assert float(data.get("xo2_f")) == 2200.0
     assert int(data.get("xo2_s")) == 12
+    assert str(data.get("output_tilt_source")) == "off"
+    assert float(data.get("output_tilt_db_per_oct")) == 0.0
 
 
 def test_build_filter_config_auto_mode_does_not_crash_and_uses_locked_data_values():
@@ -247,9 +252,194 @@ def test_auto_target_curve_selection_uses_exact_signature_cache_without_recomput
     assert dict(result.get("best_preset", {}) or {}).get("preset_id") == "signature"
 
 
-def test_auto_mode_search_uses_exact_signature_cache_without_trials(monkeypatch):
-    from types import SimpleNamespace
+def test_auto_target_curve_selection_uses_exact_measurement_cache_without_recomputing(monkeypatch):
+    f = [20.0, 100.0, 1000.0, 10000.0]
+    m = [0.0, 0.0, 0.0, 0.0]
 
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode.get_house_curve_by_name",
+        lambda name: (f, m),
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_cache_get_target_for_measurements",
+        lambda *args, **kwargs: {
+            "best_target_curve": "Harman6",
+            "best_preset": {"preset_id": "measurement"},
+        },
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_cache_get_best_target",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_cache_get_best",
+        lambda *args, **kwargs: None,
+    )
+
+    def _unexpected_quick_preselect(*args, **kwargs):
+        raise AssertionError("quick target preselect should be skipped on measurement cache hit")
+
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_select_builtin_target_curve",
+        _unexpected_quick_preselect,
+    )
+
+    result = _auto_select_target_curve_with_trials(
+        base_data={
+            "filter_type": "Asymmetric",
+            "auto_goal": "balanced",
+            "program_version": "test-version",
+        },
+        measurements={
+            "f_l": f,
+            "m_l": m,
+            "f_r": f,
+            "m_r": m,
+        },
+        fs_v=44100,
+        taps_v=65536,
+        xos=[],
+        hpf=None,
+        pin_obj=None,
+        status_cb=None,
+    )
+
+    assert result is not None
+    assert str(result.get("selected_hc_mode")) == "Harman6"
+    assert str(result.get("selection_method")) == "cache_measurement_hit"
+    assert int(result.get("top_n", -1)) == 0
+    assert int(result.get("trials_per_curve", -1)) == 0
+    assert dict(result.get("best_preset", {}) or {}).get("preset_id") == "measurement"
+
+
+def test_auto_target_curve_selection_uses_optuna_target_study_without_recomputing(monkeypatch):
+    f = [20.0, 100.0, 1000.0, 10000.0]
+    m = [0.0, 0.0, 0.0, 0.0]
+    base_data = {
+        "filter_type": "Asymmetric",
+        "auto_goal": "balanced",
+        "program_version": "test-version",
+        "auto_mode_optuna": True,
+        "auto_mode_optuna_persistent_study": True,
+    }
+    sig_target = _auto_signature(
+        base_data=base_data,
+        measurements={
+            "f_l": f,
+            "m_l": m,
+            "f_r": f,
+            "m_r": m,
+        },
+        fs_v=44100,
+        taps_v=65536,
+        xos=[],
+        hpf=None,
+        hc_mode=None,
+        include_hc_mode=False,
+    )
+
+    fake_optuna = SimpleNamespace()
+    fake_optuna.get_all_study_summaries = lambda storage=None: [
+        SimpleNamespace(
+            study_name=(
+                "camillafir-target-harman6-phase1-0aff3be544aa-"
+                + str(sig_target)[:32]
+            ),
+            best_trial=SimpleNamespace(value=94.5),
+        )
+    ]
+    fake_optuna.load_study = lambda study_name=None, storage=None: SimpleNamespace(
+        best_trial=SimpleNamespace(
+            value=94.5,
+            params={"preset_id": "optuna-target"},
+            user_attrs={
+                "camillafir_out": {
+                    "preset": {"preset_id": "optuna-target"},
+                    "metrics": {"rank_score": 94.5},
+                }
+            },
+        )
+    )
+
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode.get_house_curve_by_name",
+        lambda name: (f, m),
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_cache_get_target_for_measurements",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_cache_get_best_target",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_cache_get_best",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_import_optuna",
+        lambda *args, **kwargs: fake_optuna,
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_optuna_module_ready",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_optuna_create_storage",
+        lambda *args, **kwargs: object(),
+    )
+
+    def _fake_run_optuna_eval_loop(
+        *,
+        n_total,
+        seed_presets=None,
+        eval_one=None,
+        consume_one=None,
+        **_kwargs,
+    ):
+        seed = dict((list(seed_presets or [])[:1] or [{}])[0] or {})
+        for idx in range(1, int(n_total) + 1):
+            out = eval_one(int(idx), dict(seed or {}))
+            consume_one(int(idx), dict(out or {}))
+        return {}
+
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_run_optuna_eval_loop",
+        _fake_run_optuna_eval_loop,
+    )
+
+    def _unexpected_quick_preselect(*args, **kwargs):
+        raise AssertionError("quick target preselect should be skipped on Optuna target study hit")
+
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_select_builtin_target_curve",
+        _unexpected_quick_preselect,
+    )
+
+    result = _auto_select_target_curve_with_trials(
+        base_data=base_data,
+        measurements={
+            "f_l": f,
+            "m_l": m,
+            "f_r": f,
+            "m_r": m,
+        },
+        fs_v=44100,
+        taps_v=65536,
+        xos=[],
+        hpf=None,
+        pin_obj=None,
+        status_cb=None,
+    )
+
+    assert result is not None
+    assert str(result.get("selected_hc_mode")) == "Harman6"
+    assert str(result.get("selection_method")) == "cache_optuna_target_hit"
+    assert dict(result.get("best_preset", {}) or {}).get("preset_id") == "optuna-target"
+
+
+def test_auto_mode_search_uses_exact_signature_cache_without_trials(monkeypatch):
     trial_counter = {"n": 0}
 
     monkeypatch.setattr(
@@ -340,9 +530,110 @@ def test_auto_mode_search_uses_exact_signature_cache_without_trials(monkeypatch)
     assert bool(result.get("phase2_plateau_hit", False)) is True
 
 
-def test_auto_mode_search_replays_exact_cache_results_into_optuna_study(monkeypatch):
-    from types import SimpleNamespace
+def test_auto_mode_search_uses_optuna_phase1_study_cache_without_phase1_trials(monkeypatch):
+    trial_counter = {"n": 0}
 
+    fake_optuna = SimpleNamespace()
+    fake_optuna.load_study = lambda study_name=None, storage=None: SimpleNamespace(
+        best_trial=SimpleNamespace(
+            value=87.5,
+            params={"preset_id": "optuna-phase1"},
+            user_attrs={
+                "camillafir_out": {
+                    "preset": {
+                        "phase_limit": 432.1,
+                        "tdc_strength": 54.5,
+                        "preset_id": "optuna-phase1",
+                        "_auto_exc_freq_hz": 31.5,
+                    },
+                    "metrics": {"rank_score": 87.5, "avg_score": 81.7},
+                }
+            },
+        )
+    )
+
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_cache_get_entry",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_cache_get_best",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_import_optuna",
+        lambda *args, **kwargs: fake_optuna,
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_optuna_module_ready",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_optuna_create_storage",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode.build_config",
+        lambda ui_data, preset=None, *, fs_v=None, taps_v=None, xos=None, hpf=None, hc_f=None, hc_m=None, filter_config_cls=None, max_safe_boost=8.0: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode.run_pipeline",
+        lambda *args, **kwargs: (
+            trial_counter.__setitem__("n", int(trial_counter["n"]) + 1)
+            or SimpleNamespace(l_st={}, r_st={}, metrics={})
+        ),
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode.summarize_run",
+        lambda result: "optuna-cache-summary",
+    )
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._auto_score_result",
+        lambda *args, **kwargs: {"rank_score": 87.5, "avg_score": 81.7},
+    )
+
+    def _unexpected_candidate_build(*args, **kwargs):
+        raise AssertionError("phase1 preset search should be skipped on Optuna phase1 study hit")
+
+    monkeypatch.setattr(
+        "camillafir.io.camillafir_automatic_mode._build_auto_mode_candidates",
+        _unexpected_candidate_build,
+    )
+
+    result = _run_auto_mode_search(
+        base_data={
+            "program_version": "test-version",
+            "hc_mode": "Harman8",
+            "filter_type": "Asymmetric",
+            "auto_goal": "balanced",
+            "auto_mode_optuna": True,
+            "auto_mode_optuna_persistent_study": True,
+        },
+        measurements={
+            "f_l": [20.0, 100.0],
+            "m_l": [0.0, 0.0],
+            "f_r": [20.0, 100.0],
+            "m_r": [0.0, 0.0],
+        },
+        fs_v=44100,
+        taps_v=65536,
+        xos=[],
+        hpf=None,
+        hc_f=[20.0, 100.0],
+        hc_m=[0.0, 0.0],
+        pin_obj=None,
+        status_cb=None,
+    )
+
+    assert result is not None
+    assert dict(result.get("best_preset", {}) or {}).get("preset_id") == "optuna-phase1"
+    assert dict(result.get("best_metrics", {}) or {}).get("rank_score") == 87.5
+    assert int(result.get("trials_phase1_total", -1)) == 0
+    assert int(result.get("trials_total", -1)) >= 0
+    assert int(trial_counter["n"]) >= 1
+
+
+def test_auto_mode_search_replays_exact_cache_results_into_optuna_study(monkeypatch):
     remembered = []
 
     monkeypatch.setattr(

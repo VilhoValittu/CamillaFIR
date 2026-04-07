@@ -17,6 +17,7 @@ logger = logging.getLogger("CamillaFIR")
 def register_callbacks(*, t: Callable, get_val: Callable, max_safe_boost: float) -> None:
     """Register all reactive callbacks on form elements."""
     _register_mode_callbacks(t=t)
+    _register_bass_integration_callbacks(t=t)
     _register_target_callbacks(t=t)
     _register_lvl_callbacks(t=t)
     _register_ir_window_callbacks(t=t)
@@ -38,7 +39,12 @@ def _register_mode_callbacks(*, t: Callable) -> None:
     def _on_mode_change(v: Any) -> None:
         from .ng_mode_controls import on_mode_change
 
-        on_mode_change(mode=str(v or "BASIC").upper(), t=t)
+        mode_u = str(v or "BASIC").strip().upper()
+        if mode_u != "AUTO" and bool(ctrl.value("bass_integration_enable", False)):
+            ctrl.set_value("bass_integration_enable", False, emit=False)
+        ctrl.set_value("camillafir_automatic_mode", mode_u == "AUTO", emit=False)
+        on_mode_change(mode=mode_u, t=t)
+        _sync_bass_integration_visibility()
         _update_target_preview()
 
     ctrl.on_change("mode", _on_mode_change)
@@ -61,12 +67,23 @@ def _register_target_callbacks(*, t: Callable) -> None:
         "hc_custom_file",
         "auto_goal",
         "auto_target_mode",
+        "bass_integration_enable",
+        "avr_crossover_hz",
+        "bass_integration_profile",
         "mag_c_min",
         "mag_c_max",
         "file_l",
         "file_r",
+        "file_l_main",
+        "file_r_main",
+        "file_l_sub",
+        "file_r_sub",
         "local_path_l",
         "local_path_r",
+        "local_path_l_main",
+        "local_path_r_main",
+        "local_path_l_sub",
+        "local_path_r_sub",
         "lvl_min",
         "lvl_max",
         "ir_window_left",
@@ -84,8 +101,34 @@ def _register_target_callbacks(*, t: Callable) -> None:
             ctrl.set_value("hc_custom_file", None)
         _update_target_preview()
 
+    def _on_auto_target_mode_change(v: Any) -> None:
+        from .ng_mode_controls import update_target_curve_controls_ui  # noqa: PLC0415
+
+        update_target_curve_controls_ui()
+        _update_target_preview()
+
     ctrl.on_change("hc_mode", _on_hc_mode_change)
+    ctrl.on_change("auto_target_mode", _on_auto_target_mode_change)
     _sync_hc_upload_visibility(ctrl.value("hc_mode", "Harman6"))
+
+
+def _register_bass_integration_callbacks(*, t: Callable) -> None:
+    """bass_integration_enable / bass_integration_mode -> switch file/XO topology."""
+
+    def _on_bass_integration_enable(v: Any) -> None:
+        if bool(v):
+            ctrl.set_value("mode", "AUTO")
+            ctrl.set_value("camillafir_automatic_mode", True, emit=False)
+        _sync_bass_integration_visibility()
+        _update_target_preview()
+
+    def _on_bass_integration_mode(v: Any) -> None:
+        _sync_bass_integration_visibility()
+        _update_target_preview()
+
+    ctrl.on_change("bass_integration_enable", _on_bass_integration_enable)
+    ctrl.on_change("bass_integration_mode", _on_bass_integration_mode)
+    ctrl.on_change("sub_crossover_manual_override", lambda v: _sync_bass_integration_visibility())
 
 
 def _register_lvl_callbacks(*, t: Callable) -> None:
@@ -114,10 +157,11 @@ def _register_ir_window_callbacks(*, t: Callable) -> None:
     """ir_export_window_mode, ir_export_window_shape -> show/hide sub-controls."""
 
     def _refresh(v: Any) -> None:
-        from .ng_mode_controls import update_ir_window_controls, update_mixed_freq_ui
+        from .ng_mode_controls import update_ir_window_controls, update_mixed_freq_ui, update_xo_ui
 
         update_ir_window_controls(t=t)
         update_mixed_freq_ui(t=t)
+        update_xo_ui()
 
     ctrl.on_change("ir_export_window_mode", _refresh)
     ctrl.on_change("ir_export_window_shape", _refresh)
@@ -216,11 +260,16 @@ def _initial_state_sync(*, t: Callable, get_val: Callable) -> None:
             update_mixed_freq_ui,
             update_tdc_controls_ui,
             update_taps_auto_info,
+            update_xo_ui,
         )
         from .ng_advanced_presets import update_advanced_guidance_ui  # noqa: PLC0415
 
         mode = str(ctrl.value("mode", get_val("mode", "BASIC")) or "BASIC").upper()
+        if bool(ctrl.value("bass_integration_enable", get_val("bass_integration_enable", False))):
+            mode = "AUTO"
+            ctrl.set_value("mode", "AUTO", emit=False)
         on_mode_change(mode=mode, t=t)
+        _sync_bass_integration_visibility()
         update_lvl_ui(t=t)
         update_ir_window_controls(t=t)
         update_mixed_freq_ui(t=t)
@@ -229,6 +278,7 @@ def _initial_state_sync(*, t: Callable, get_val: Callable) -> None:
         update_tdc_controls_ui(t=t)
         update_afdw_cycles_ui(t=t)
         update_taps_auto_info(t=t)
+        update_xo_ui()
         update_advanced_guidance_ui(t=t)
         _update_target_preview()
     except Exception:
@@ -247,3 +297,30 @@ def _update_target_preview() -> None:
         refresh_target_preview()
     except Exception:
         pass
+
+
+def _sync_bass_integration_visibility() -> None:
+    enabled = bool(ctrl.value("bass_integration_enable", False))
+    mode_u = str(ctrl.value("mode", "BASIC") or "BASIC").strip().upper()
+    bi_visible = bool(enabled and mode_u == "AUTO")
+    mode = str(ctrl.value("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed").strip()
+    is_avr = mode == "avr_lfe_main_decomposed"
+    is_direct = mode == "direct_dac"
+    for scope_name, visible in (
+        ("files_legacy_topology_scope", not bi_visible),
+        ("files_bass_integration_topology_scope", bi_visible and is_avr),
+        ("files_direct_dac_topology_scope", bi_visible and is_direct),
+        ("bass_integration_xo_info_scope", bi_visible),
+        ("bass_integration_avr_scope", bi_visible and is_avr),
+        ("bass_integration_direct_scope", bi_visible and is_direct),
+    ):
+        scope = ctrl.get_container(scope_name)
+        if scope is None:
+            continue
+        try:
+            scope.set_visibility(bool(visible))
+        except Exception:
+            logger.debug("bass integration visibility update failed: %s", scope_name, exc_info=True)
+    direct_xo_override = bool(ctrl.value("sub_crossover_manual_override", False))
+    ctrl.set_enabled("sub_crossover_hz", bool(bi_visible and is_direct and direct_xo_override))
+    ctrl.set_enabled("sub_crossover_slope", bool(bi_visible and is_direct and direct_xo_override))

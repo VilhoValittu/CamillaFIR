@@ -184,6 +184,31 @@ def _auto_measurement_signature(measurements: dict) -> str:
     h.update(_auto_hash_array(np.asarray(mL) if mL is not None else np.asarray([])).encode("ascii", "ignore"))
     h.update(_auto_hash_array(np.asarray(fR) if fR is not None else np.asarray([])).encode("ascii", "ignore"))
     h.update(_auto_hash_array(np.asarray(mR) if mR is not None else np.asarray([])).encode("ascii", "ignore"))
+    if bool(measurements.get("bass_integration_enabled", False)):
+        bundle = measurements.get("bass_integration_bundle", None)
+        for attr_name in ("l_main", "r_main", "l_sub", "r_sub"):
+            comp = getattr(bundle, attr_name, None)
+            freqs = getattr(comp, "freqs_hz", None)
+            spec = getattr(comp, "complex_spec", None)
+            h.update(
+                _auto_hash_array(np.asarray(freqs) if freqs is not None else np.asarray([])).encode("ascii", "ignore")
+            )
+            arr = np.asarray(spec, dtype=np.complex128).reshape(-1) if spec is not None else np.asarray([], dtype=np.complex128)
+            h.update(_auto_hash_array(np.real(arr)).encode("ascii", "ignore"))
+            h.update(_auto_hash_array(np.imag(arr)).encode("ascii", "ignore"))
+        try:
+            h.update(
+                json.dumps(
+                    {
+                        "avr_crossover_hz": float(_auto_safe_float(measurements.get("avr_crossover_hz", float("nan")), float("nan"))),
+                        "bass_integration_profile": str(measurements.get("bass_integration_profile", "") or ""),
+                        "bass_integration_mode": str(measurements.get("bass_integration_mode", "") or ""),
+                    },
+                    sort_keys=True,
+                ).encode("utf-8", "ignore")
+            )
+        except Exception:
+            pass
     return h.hexdigest()
 
 

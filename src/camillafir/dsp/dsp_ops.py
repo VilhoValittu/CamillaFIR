@@ -151,5 +151,17 @@ def apply_hpf_to_mags(freqs, mags, cutoff, order):
     return mags + attenuation
 
 
+def apply_lpf_to_mags(freqs, mags, cutoff, order):
+    if cutoff <= 0 or order <= 0:
+        return mags
+    f = np.asarray(freqs, dtype=float)
+    if f.size > 1 and f[0] == 0.0:
+        f = f.copy()
+        f[0] = f[1] if f[1] > 0 else 1e-6
+    with np.errstate(divide="ignore"):
+        attenuation = -10 * np.log10(1 + (f / (cutoff + 1e-12)) ** (2 * order))
+    return mags + attenuation
+
+
 def interpolate_response(input_freqs, input_values, target_freqs):
     return np.interp(target_freqs, input_freqs, input_values)

@@ -7,10 +7,14 @@ from typing import Any, Callable
 
 import numpy as np
 
+from ..dsp.bass_integration import compute_bass_integration_diagnostics, compute_xo_gd_continuity
 from .auto_mode_profile import profiled_section
 from .shared import (
+    AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO,
+    AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO,
     AUTO_MODE_EXC_MAX_HZ,
     AUTO_MODE_EXC_MIN_HZ,
+    _auto_bass_integration_profile_norm,
     _auto_phase_limit_clip,
     _auto_safe_float,
     _auto_safe_int,
@@ -189,6 +193,54 @@ def build_materialize_helpers(ctx: AutoModeMaterializeContext):
                 final_measurements,
                 include_response_arrays=bool(include_response_arrays),
             )
+        try:
+            if bool(final_measurements.get("bass_integration_enabled", False)):
+                bundle = final_measurements.get("bass_integration_bundle", None)
+                if bundle is not None:
+                    fc_hz = _auto_safe_float(
+                        final_data.get("avr_crossover_hz", final_measurements.get("avr_crossover_hz", 80.0)),
+                        80.0,
+                    )
+                    profile = _auto_bass_integration_profile_norm(
+                        final_data.get(
+                            "bass_integration_profile",
+                            final_measurements.get("bass_integration_profile", "safe"),
+                        )
+                    )
+                    diag = compute_bass_integration_diagnostics(
+                        bundle,
+                        fc_hz,
+                        profile,
+                        guard_lo_ratio=_auto_safe_float(
+                            final_data.get("bass_integration_guard_lo_ratio", AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO),
+                            AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO,
+                        ),
+                        guard_hi_ratio=_auto_safe_float(
+                            final_data.get("bass_integration_guard_hi_ratio", AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO),
+                            AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO,
+                        ),
+                    )
+                    gd_cont = compute_xo_gd_continuity(bundle, fc_hz)
+                    metrics_obj = getattr(result, "metrics", None)
+                    if isinstance(metrics_obj, dict):
+                        metrics_obj.update(
+                            {
+                                "bass_cancellation_risk": _auto_safe_float(diag.get("cancellation_risk", float("nan")), float("nan")),
+                                "bass_overlap_ripple": _auto_safe_float(diag.get("overlap_ripple_db", float("nan")), float("nan")),
+                                "bass_sub_dominance": _auto_safe_float(diag.get("sub_dominance_db", float("nan")), float("nan")),
+                                "bass_guard_lo_hz": _auto_safe_float(diag.get("guard_lo_hz", float("nan")), float("nan")),
+                                "bass_guard_hi_hz": _auto_safe_float(diag.get("guard_hi_hz", float("nan")), float("nan")),
+                                "bass_integration_profile": str(profile),
+                                "bass_integration_mode": str(final_data.get("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed"),
+                                "bass_xo_gd_mismatch_ms": _auto_safe_float(gd_cont.get("avg_gd_mismatch_ms", float("nan")), float("nan")),
+                                "bass_xo_l_gd_mismatch_ms": _auto_safe_float(gd_cont.get("l_gd_mismatch_ms", float("nan")), float("nan")),
+                                "bass_xo_r_gd_mismatch_ms": _auto_safe_float(gd_cont.get("r_gd_mismatch_ms", float("nan")), float("nan")),
+                                "bass_xo_main_gd_ms": _auto_safe_float((gd_cont.get("l_main_gd_ms", float("nan")) + gd_cont.get("r_main_gd_ms", float("nan"))) / 2.0, float("nan")),
+                                "bass_xo_sub_gd_ms": _auto_safe_float(gd_cont.get("sub_gd_ms", float("nan")), float("nan")),
+                            }
+                        )
+        except Exception as exc:
+            logger.debug("Bass integration materialize metrics failed: %s: %s", type(exc).__name__, exc)
         if bool(summarize):
             with profiled_section("materialize.summarize_run"):
                 result.metrics["summary"] = ctx.summarize_run_fn(result)
@@ -201,6 +253,12 @@ def build_materialize_helpers(ctx: AutoModeMaterializeContext):
                 ),
                 base_data=final_data,
             )
+        try:
+            metrics_obj = getattr(result, "metrics", None)
+            if isinstance(metrics_obj, dict):
+                metrics_obj.update(dict(metrics or {}))
+        except Exception as exc:
+            logger.debug("Could not write score metrics back to result: %s: %s", type(exc).__name__, exc)
         if bool(use_score_only_cache) and score_only_cache_key is not None:
             score_only_materialize_cache[str(score_only_cache_key)] = (
                 result,

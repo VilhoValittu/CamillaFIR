@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 
@@ -31,3 +31,5 @@ class FilterResult:
     # Optional payloads for export/report/plot consumers.
     measurements: dict[str, np.ndarray] = field(default_factory=dict)
     cfg: Any = None
+    sub_ir: Optional[np.ndarray] = None
+    sub_st: Optional[dict] = None

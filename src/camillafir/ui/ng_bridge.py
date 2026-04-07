@@ -24,7 +24,6 @@ class ProcessRunUiBridge:
     ensure_progress_bar: typing.Callable[[], None]
     set_progress: typing.Callable[[float], None]
     toast_health_gate_result: typing.Callable[..., bool]
-    toast_measurement_files_missing: typing.Callable[[], None]
     render_results: typing.Callable[..., None]
     build_export_zip: typing.Callable[..., tuple]
     save_export_bundle: typing.Callable[..., tuple]
@@ -103,17 +102,13 @@ def _lazy_render_results(*args: typing.Any, **kwargs: typing.Any) -> None:
 # ---------------------------------------------------------------------------
 
 def build_default_ui_bridge() -> ProcessRunUiBridge:
-    from .ng_health import (  # noqa: PLC0415
-        toast_health_gate_result,
-        toast_measurement_files_missing,
-    )
+    from .ng_health import toast_health_gate_result  # noqa: PLC0415
     from ..ui.camillafir_export import build_export_zip, save_export_bundle  # noqa: PLC0415
 
     return ProcessRunUiBridge(
         ensure_progress_bar=_default_ensure_progress_bar,
         set_progress=_default_set_progress,
         toast_health_gate_result=toast_health_gate_result,
-        toast_measurement_files_missing=toast_measurement_files_missing,
         render_results=_lazy_render_results,
         build_export_zip=build_export_zip,
         save_export_bundle=save_export_bundle,

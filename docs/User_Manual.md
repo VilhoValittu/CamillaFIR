@@ -68,7 +68,7 @@ The normal workflow inside CamillaFIR is:
 For most systems, start simple:
 
 - load measurements
-- choose `CamillaFIR automatic mode` or `Basic (recommended)`
+- choose `CamillaFIR automatic mode (recommended)` or `Basic`
 - choose `Asymmetric` or `Mixed Phase`
 - generate filters
 - listen and re-measure before making more aggressive changes
@@ -108,6 +108,25 @@ Practical guidance:
 - keep the export settings consistent between left and right
 - match the sample rate to the rate you expect to use in playback when practical
 
+### 4.3 AUTO Bass Integration WAV workflow
+
+Use this workflow when subwoofer integration should be part of an automatic run instead of a separate manual crossover step.
+
+Measurement requirements:
+
+- Bass Integration is available only in `CamillaFIR automatic mode`
+- use coherent REW IR WAV exports with the same measurement gain and the same acoustic timing reference for every main/sub capture
+- do not normalize each file separately
+- do not move each file to its own `t=0`
+
+Topology-specific inputs:
+
+- `AVR / Receiver (LFE+Main)` requires four WAV measurements: `L main`, `R main`, `L sub`, `R sub`
+- `Direct DAC / CamillaDSP sub output` requires `L main`, `R main`, and `Sub 1`
+- `Sub 2` is optional in `Direct DAC` mode and is summed automatically with `Sub 1`
+
+Playback must match the same topology and crossover arrangement that was used during measurement.
+
 ## 5. Operating Modes
 
 CamillaFIR has three main operating modes. The DSP engine is the same, but the workflow policy changes.
@@ -128,6 +147,21 @@ Best for:
 - first-pass results
 - users who want a strong starting point quickly
 - rooms where you do not want to hand-tune every parameter
+
+#### AUTO Bass Integration
+
+Automatic mode also includes an optional Bass Integration workflow for subwoofer systems.
+
+Use it when:
+
+- the subwoofer crossover should be optimized as part of the AUTO run
+- you have separate coherent main/sub WAV impulse measurements
+- you want crossover guidance and bass-overlap diagnostics in the final summary
+
+Topology options:
+
+- `AVR / Receiver (LFE+Main)` uses separate `L main`, `R main`, `L sub`, and `R sub` measurements, predicts the combined L/R totals, recommends an AVR crossover, and exports the normal L/R FIR filters
+- `Direct DAC / CamillaDSP sub output` uses `L main`, `R main`, `Sub 1`, and optional `Sub 2`, can auto-select the `Main/Sub XO`, and can export an aligned mono `Sub_...wav` FIR in addition to the main filters
 
 ### 5.2 Basic 
 
@@ -393,6 +427,8 @@ After a successful run, CamillaFIR produces a result bundle. Common output files
 
 - `L_...wav` and `R_...wav`
   Left and right FIR impulse-response files
+- `Sub_...wav`
+  Optional mono subwoofer FIR file for `Direct DAC / CamillaDSP sub output` Bass Integration runs
 - `Summary_...txt`
   Human-readable report with scoring, settings, and diagnostics
 - `camilladsp_...yml`
@@ -411,6 +447,7 @@ Useful sections include:
 - acoustic score and target match
 - confidence metrics
 - core settings used for the run
+- Bass Integration mode, recommended crossover, and bass-overlap diagnostics when Bass Integration is enabled
 - gain, headroom, and clamp behavior
 - TDC, A-FDW, bass-first, and protection status
 - alignment and stereo-related diagnostics
@@ -487,6 +524,12 @@ Check:
 - the files are valid REW exports
 - the sample-rate and mode settings are sensible
 - any `CRIT` health checks have been resolved
+
+If `Bass Integration` is enabled, also check:
+
+- all required main/sub WAV inputs are loaded for the chosen topology
+- every main/sub WAV uses the same timing reference
+- the AVR crossover or `Main/Sub XO` matches the measurement setup closely enough to be meaningful
 
 ### 16.2 The correction sounds too thin
 

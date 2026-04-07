@@ -4,11 +4,13 @@ from camillafir.ui_i18n import (
     LAYOUT_STEREO,
     LVL_ALGO_AVERAGE,
     LVL_MODE_MANUAL,
+    OUTPUT_TILT_SOURCE_MANUAL_TARGET_TILT,
     TDC_PRESET_SAFE,
     normalize_afdw_preset_key,
     normalize_layout_value,
     normalize_lvl_algo_value,
     normalize_lvl_mode_value,
+    normalize_output_tilt_source_value,
     normalize_tdc_preset_key,
     tr_options,
 )
@@ -39,6 +41,15 @@ def test_normalize_level_algo_value_accepts_legacy_and_translated_labels():
     assert normalize_lvl_algo_value("average") == LVL_ALGO_AVERAGE
     assert normalize_lvl_algo_value("Average") == LVL_ALGO_AVERAGE
     assert normalize_lvl_algo_value(TRANSLATIONS["fi"]["lvl_algo_average"]) == LVL_ALGO_AVERAGE
+
+
+def test_normalize_output_tilt_source_value_accepts_legacy_and_translated_labels():
+    assert normalize_output_tilt_source_value("manual_target_tilt") == OUTPUT_TILT_SOURCE_MANUAL_TARGET_TILT
+    assert normalize_output_tilt_source_value("Use Manual Tilt value") == OUTPUT_TILT_SOURCE_MANUAL_TARGET_TILT
+    assert (
+        normalize_output_tilt_source_value(TRANSLATIONS["fi"]["output_tilt_use_manual_target_tilt"])
+        == OUTPUT_TILT_SOURCE_MANUAL_TARGET_TILT
+    )
 
 
 def test_normalize_preset_keys_accept_legacy_and_translated_labels():

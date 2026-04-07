@@ -10,6 +10,9 @@ LAYOUT_STEREO = "stereo"
 LVL_MODE_AUTO = "auto"
 LVL_MODE_MANUAL = "manual"
 
+OUTPUT_TILT_SOURCE_OFF = "off"
+OUTPUT_TILT_SOURCE_MANUAL_TARGET_TILT = "manual_target_tilt"
+
 LVL_ALGO_MEDIAN = "median"
 LVL_ALGO_AVERAGE = "average"
 
@@ -30,6 +33,11 @@ LAYOUT_OPTION_LABEL_KEYS = {
 LVL_MODE_OPTION_LABEL_KEYS = {
     LVL_MODE_AUTO: "lvl_mode_auto",
     LVL_MODE_MANUAL: "lvl_mode_manual",
+}
+
+OUTPUT_TILT_SOURCE_OPTION_LABEL_KEYS = {
+    OUTPUT_TILT_SOURCE_OFF: "state_off",
+    OUTPUT_TILT_SOURCE_MANUAL_TARGET_TILT: "output_tilt_use_manual_target_tilt",
 }
 
 LVL_ALGO_OPTION_LABEL_KEYS = {
@@ -58,6 +66,11 @@ _LAYOUT_LEGACY_LABELS = {
 _LVL_MODE_LEGACY_LABELS = {
     LVL_MODE_AUTO: ("Auto",),
     LVL_MODE_MANUAL: ("Manual",),
+}
+
+_OUTPUT_TILT_SOURCE_LEGACY_LABELS = {
+    OUTPUT_TILT_SOURCE_OFF: ("Off",),
+    OUTPUT_TILT_SOURCE_MANUAL_TARGET_TILT: ("Use Manual Tilt value",),
 }
 
 _LVL_ALGO_LEGACY_LABELS = {
@@ -160,6 +173,18 @@ def normalize_lvl_mode_value(value: Any, t: Callable[[str], str] | None = None) 
     )
 
 
+def normalize_output_tilt_source_value(value: Any, t: Callable[[str], str] | None = None) -> str:
+    return str(
+        _normalize_choice_value(
+            value,
+            default=OUTPUT_TILT_SOURCE_OFF,
+            label_keys=OUTPUT_TILT_SOURCE_OPTION_LABEL_KEYS,
+            legacy_labels=_OUTPUT_TILT_SOURCE_LEGACY_LABELS,
+            t=t,
+        )
+    )
+
+
 def normalize_lvl_algo_value(value: Any, t: Callable[[str], str] | None = None) -> str:
     return str(
         _normalize_choice_value(
@@ -221,6 +246,9 @@ __all__ = [
     "LVL_MODE_AUTO",
     "LVL_MODE_MANUAL",
     "LVL_MODE_OPTION_LABEL_KEYS",
+    "OUTPUT_TILT_SOURCE_MANUAL_TARGET_TILT",
+    "OUTPUT_TILT_SOURCE_OFF",
+    "OUTPUT_TILT_SOURCE_OPTION_LABEL_KEYS",
     "TDC_PRESET_AGGRESSIVE",
     "TDC_PRESET_LABEL_KEYS",
     "TDC_PRESET_NORMAL",
@@ -232,6 +260,7 @@ __all__ = [
     "normalize_layout_value",
     "normalize_lvl_algo_value",
     "normalize_lvl_mode_value",
+    "normalize_output_tilt_source_value",
     "normalize_tdc_preset_key",
     "tr_options",
 ]

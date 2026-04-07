@@ -10,6 +10,7 @@ from . import ng_controls as ctrl
 
 _FS_OPTS = [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000]
 _TAPS_OPTS = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]
+_SLOPE_OPTS = [6, 12, 18, 24, 36, 48]
 
 
 def _normalize_filter_type_value(value) -> str:
@@ -32,6 +33,8 @@ def build_basic_tab(*, t: Callable, get_val: Callable, max_safe_boost: float) ->
     if mode_value not in ("BASIC", "ADVANCED", "AUTO"):
         mode_value = "AUTO"
     if bool(get_val("camillafir_automatic_mode", False)):
+        mode_value = "AUTO"
+    if bool(get_val("bass_integration_enable", False)):
         mode_value = "AUTO"
 
     auto_goal_value = str(get_val("auto_goal", "balanced") or "balanced").strip().lower()
@@ -102,6 +105,90 @@ def build_basic_tab(*, t: Callable, get_val: Callable, max_safe_boost: float) ->
                 label=t("auto_target_mode_label"),
             ).props("dense outlined").classes("w-full"),
         )
+        bi_mode_value = str(get_val("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed").strip()
+        if bi_mode_value not in ("avr_lfe_main_decomposed", "direct_dac"):
+            bi_mode_value = "avr_lfe_main_decomposed"
+        with ui.card().classes("w-full gap-2"):
+            ui.markdown(f"##### {t('bass_integration_title')}")
+            ctrl.register(
+                "bass_integration_enable",
+                ui.checkbox(
+                    t("bass_integration_enable"),
+                    value=bool(get_val("bass_integration_enable", False)),
+                ),
+            )
+            ctrl.register(
+                "bass_integration_mode",
+                ui.select(
+                    options={
+                        "avr_lfe_main_decomposed": t("bi_mode_avr"),
+                        "direct_dac": t("bi_mode_direct_dac"),
+                    },
+                    value=bi_mode_value,
+                    label=t("bi_mode_label"),
+                ).props("dense outlined").classes("w-full"),
+            )
+            with ui.column().classes("w-full gap-2") as bi_avr_scope:
+                with ui.row().classes("w-full gap-4"):
+                    ctrl.register(
+                        "avr_crossover_hz",
+                        ui.number(
+                            label=t("bass_integration_avr_crossover_hz"),
+                            value=float(get_val("avr_crossover_hz", 80.0) or 80.0),
+                            format="%.1f",
+                        ).props("dense outlined").classes("flex-1"),
+                    )
+                    ctrl.register(
+                        "bass_integration_profile",
+                        ui.select(
+                            options={
+                                "safe": t("preset_safe"),
+                                "normal": t("preset_normal"),
+                                "assertive": t("preset_aggressive"),
+                            },
+                            value=str(get_val("bass_integration_profile", "safe") or "safe").strip().lower(),
+                            label=t("bass_integration_profile"),
+                        ).props("dense outlined").classes("flex-1"),
+                    )
+                ctrl.register(
+                    "avr_crossover_hz_recommendation",
+                    ui.label("").classes("text-xs text-blue-400"),
+                )
+                ui.label(t("bass_integration_requires_wav")).classes("text-xs text-gray-400")
+                ui.label(t("bass_integration_wav_format")).classes("text-xs text-gray-400")
+                ui.label(t("bass_integration_exports_lr_only")).classes("text-xs text-gray-400")
+                ui.label(t("bass_integration_playback_match")).classes("text-xs text-gray-400")
+                ui.label(t("bass_integration_avr_vs_xo_help")).classes("text-xs text-gray-400")
+            ctrl.register_container("bass_integration_avr_scope", bi_avr_scope)
+            bi_avr_scope.set_visibility(bi_mode_value == "avr_lfe_main_decomposed")
+            with ui.column().classes("w-full gap-2") as bi_direct_scope:
+                ctrl.register(
+                    "sub_crossover_manual_override",
+                    ui.checkbox(
+                        t("sub_crossover_manual_override"),
+                        value=bool(get_val("sub_crossover_manual_override", False)),
+                    ),
+                )
+                with ui.row().classes("w-full gap-4 items-end"):
+                    ctrl.register(
+                        "sub_crossover_hz",
+                        ui.number(
+                            label=t("sub_crossover_hz"),
+                            value=get_val("sub_crossover_hz", 80.0),
+                            format="%.1f",
+                        ).props("dense outlined").classes("flex-1"),
+                    )
+                    ctrl.register(
+                        "sub_crossover_slope",
+                        ui.select(
+                            _SLOPE_OPTS,
+                            value=get_val("sub_crossover_slope", 24),
+                            label="dB/oct",
+                        ).props("dense outlined").classes("w-32"),
+                    )
+                ui.label(t("sub_crossover_auto_help")).classes("text-xs text-gray-400")
+            ctrl.register_container("bass_integration_direct_scope", bi_direct_scope)
+            bi_direct_scope.set_visibility(bi_mode_value == "direct_dac")
     auto_mode_col.set_visibility(mode_value == "AUTO")
 
     ui.separator()

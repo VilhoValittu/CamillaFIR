@@ -30,6 +30,7 @@ class PhaseIRInputs:
     afdw_on: bool
     logger: Any
     apply_hpf_to_mags_fn: Callable[..., np.ndarray]
+    apply_lpf_to_mags_fn: Callable[..., np.ndarray]
     limit_gd_gradient_ms_per_oct_fn: Callable[..., np.ndarray]
     cfg_float_allow_zero_fn: Callable[[Any, str, float], float]
 

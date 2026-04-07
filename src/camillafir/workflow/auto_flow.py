@@ -300,9 +300,17 @@ def _build_auto_selected_text(run_data: dict) -> str:
     )
     f6_txt = f"{f6_hz:.1f} Hz" if np.isfinite(f6_hz) else "n/a"
 
-    hpf_enabled = bool(run_data.get("hpf_enable", False))
-    hpf_freq = _auto_safe_float(run_data.get("hpf_freq", float("nan")), float("nan"))
-    hpf_slope = _auto_safe_float(run_data.get("hpf_slope", float("nan")), float("nan"))
+    bi_mode = str(
+        run_data.get("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed"
+    ).strip().lower()
+    is_direct_dac = bool(run_data.get("bass_integration_enable", False) and bi_mode == "direct_dac")
+
+    hpf_enabled = True if is_direct_dac else bool(run_data.get("hpf_enable", False))
+    hpf_freq_key = "sub_hpf_freq" if is_direct_dac else "hpf_freq"
+    hpf_slope_key = "sub_hpf_slope" if is_direct_dac else "hpf_slope"
+    hpf_label = "Sub HPF" if is_direct_dac else "HPF"
+    hpf_freq = _auto_safe_float(run_data.get(hpf_freq_key, float("nan")), float("nan"))
+    hpf_slope = _auto_safe_float(run_data.get(hpf_slope_key, float("nan")), float("nan"))
     if hpf_enabled and np.isfinite(hpf_freq):
         if np.isfinite(hpf_slope):
             hpf_txt = f"{hpf_freq:.1f} Hz/{int(round(hpf_slope))} dB/oct"
@@ -331,7 +339,52 @@ def _build_auto_selected_text(run_data: dict) -> str:
 
     return (
         "Chosen (Automatic mode): "
-        f"target {target_name}, HPF {hpf_txt}, -6 dB {f6_txt}{detail_txt}{rank_txt}"
+        f"target {target_name}, {hpf_label} {hpf_txt}, -6 dB {f6_txt}{detail_txt}{rank_txt}"
+    )
+
+
+def _resolve_auto_hpf_seed_source(
+    ctx: dict,
+    data: dict,
+    f_l: np.ndarray,
+    m_l: np.ndarray,
+    f_r: np.ndarray,
+    m_r: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, str, str, str, bool]:
+    bi_mode = str(
+        data.get("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed"
+    ).strip().lower()
+    is_direct_dac = bool(data.get("bass_integration_enable", False) and bi_mode == "direct_dac")
+    if is_direct_dac:
+        bundle = ctx.get("bass_integration_bundle", None)
+        try:
+            if bundle is not None:
+                sub_f_l = np.asarray(getattr(bundle.l_sub, "freqs_hz", []), dtype=float)
+                sub_m_l = np.asarray(getattr(bundle.l_sub, "mag_db", []), dtype=float)
+                sub_f_r = np.asarray(getattr(bundle.r_sub, "freqs_hz", []), dtype=float)
+                sub_m_r = np.asarray(getattr(bundle.r_sub, "mag_db", []), dtype=float)
+                if sub_f_l.size > 0 and sub_m_l.size == sub_f_l.size:
+                    return (
+                        sub_f_l,
+                        sub_m_l,
+                        sub_f_r,
+                        sub_m_r,
+                        "sub_hpf_freq",
+                        "sub_hpf_slope",
+                        "Sub HPF",
+                        True,
+                    )
+        except Exception:
+            logger.debug("Direct-DAC sub HPF seed source fallback to main data", exc_info=True)
+    return (
+        np.asarray(f_l, dtype=float),
+        np.asarray(m_l, dtype=float),
+        np.asarray(f_r, dtype=float),
+        np.asarray(m_r, dtype=float),
+        "hpf_freq",
+        "hpf_slope",
+        "HPF",
+        bool(data.get("hpf_enable", False)),
     )
 
 
@@ -390,6 +443,10 @@ def _run_auto_mode_seed_phases(
     if forced_level_window is not None:
         data["lvl_min"] = float(forced_level_window[0])
         data["lvl_max"] = float(forced_level_window[1])
+    bass_integration_active = bool(data.get("bass_integration_enable", False)) and auto_mode_preview
+    if bass_integration_active and forced_level_window is None:
+        data["lvl_min"] = 500.0
+        data["lvl_max"] = 3000.0
     auto_basis = "preset_objective_score"
     logger.info(f"Automatic mode goal: {auto_goal} (basis: {auto_basis})")
     auto_status = (
@@ -412,6 +469,11 @@ def _run_auto_mode_seed_phases(
                 "CamillaFIR automatic mode: forced Smart Scan range "
                 f"{float(forced_level_window[0]):.0f}-{float(forced_level_window[1]):.0f} Hz "
                 f"(goal {auto_goal})"
+            )
+        elif bass_integration_active:
+            auto_status(
+                "CamillaFIR automatic mode: bass integration Smart Scan range "
+                "500-3000 Hz (main), 20-200 Hz (sub)"
             )
     if auto_mode_preview:
         try:
@@ -451,14 +513,23 @@ def _run_auto_mode_seed_phases(
                 f"exc seed {float(data['exc_freq']):.1f} Hz, "
                 "final exc, mag_c_min and low_bass_cut values auto-tuned in preset search)"
             )
-            user_hpf_enabled = bool(data.get("hpf_enable", False))
+            (
+                hpf_f_l,
+                hpf_m_l,
+                hpf_f_r,
+                hpf_m_r,
+                hpf_freq_key,
+                hpf_slope_key,
+                hpf_status_label,
+                user_hpf_enabled,
+            ) = _resolve_auto_hpf_seed_source(ctx, data, f_l, m_l, f_r, m_r)
             auto_hpf = _estimate_auto_hpf_from_response(
-                f_l,
-                m_l,
-                f_r,
-                m_r,
-                default_freq_hz=_auto_safe_float(data.get("hpf_freq", 20.0), 20.0),
-                default_slope_db_oct=int(_auto_safe_float(data.get("hpf_slope", 24), 24.0)),
+                hpf_f_l,
+                hpf_m_l,
+                hpf_f_r,
+                hpf_m_r,
+                default_freq_hz=_auto_safe_float(data.get(hpf_freq_key, 20.0), 20.0),
+                default_slope_db_oct=int(_auto_safe_float(data.get(hpf_slope_key, 24), 24.0)),
             )
             if isinstance(auto_hpf, dict):
                 auto_hpf = _resolve_auto_hpf_application(
@@ -472,54 +543,55 @@ def _run_auto_mode_seed_phases(
                 data["_auto_hpf_meta"] = dict(auto_hpf)
                 if auto_hpf_apply:
                     auto_hpf_freq = _auto_safe_float(
-                        auto_hpf.get("freq", data.get("hpf_freq", 20.0)),
-                        _auto_safe_float(data.get("hpf_freq", 20.0), 20.0),
+                        auto_hpf.get("freq", data.get(hpf_freq_key, 20.0)),
+                        _auto_safe_float(data.get(hpf_freq_key, 20.0), 20.0),
                     )
                     auto_hpf_slope = int(
                         round(
                             _auto_safe_float(
-                                auto_hpf.get("slope_db_oct", data.get("hpf_slope", 24)),
-                                _auto_safe_float(data.get("hpf_slope", 24), 24.0),
+                                auto_hpf.get("slope_db_oct", data.get(hpf_slope_key, 24)),
+                                _auto_safe_float(data.get(hpf_slope_key, 24), 24.0),
                             )
                         )
                     )
-                    data["hpf_enable"] = True
-                    data["hpf_freq"] = float(round(auto_hpf_freq, 1))
-                    data["hpf_slope"] = int(max(6, auto_hpf_slope))
+                    if hpf_freq_key == "hpf_freq":
+                        data["hpf_enable"] = True
+                    data[hpf_freq_key] = float(round(auto_hpf_freq, 1))
+                    data[hpf_slope_key] = int(max(6, auto_hpf_slope))
                     auto_status(
-                        "CamillaFIR automatic mode: HPF auto-fit applied "
-                        f"{float(data['hpf_freq']):.1f} Hz/{int(data['hpf_slope'])} dB/oct "
+                        f"CamillaFIR automatic mode: {hpf_status_label} auto-fit applied "
+                        f"{float(data[hpf_freq_key]):.1f} Hz/{int(data[hpf_slope_key])} dB/oct "
                         f"(method {auto_hpf_method or 'n/a'}, confidence {auto_hpf_conf:.2f}, "
-                        f"user_hpf={'on' if bool(user_hpf_enabled) else 'off'})"
+                        f"user_{hpf_status_label.lower().replace(' ', '_')}={'on' if bool(user_hpf_enabled) else 'off'})"
                     )
                 elif auto_hpf_decision == "suggest_only":
                     auto_hpf_freq = _auto_safe_float(
-                        auto_hpf.get("freq", data.get("hpf_freq", 20.0)),
-                        _auto_safe_float(data.get("hpf_freq", 20.0), 20.0),
+                        auto_hpf.get("freq", data.get(hpf_freq_key, 20.0)),
+                        _auto_safe_float(data.get(hpf_freq_key, 20.0), 20.0),
                     )
                     auto_hpf_slope = int(
                         round(
                             _auto_safe_float(
-                                auto_hpf.get("slope_db_oct", data.get("hpf_slope", 24)),
-                                _auto_safe_float(data.get("hpf_slope", 24), 24.0),
+                                auto_hpf.get("slope_db_oct", data.get(hpf_slope_key, 24)),
+                                _auto_safe_float(data.get(hpf_slope_key, 24), 24.0),
                             )
                         )
                     )
                     auto_status(
-                        "CamillaFIR automatic mode: HPF auto-fit suggestion "
+                        f"CamillaFIR automatic mode: {hpf_status_label} auto-fit suggestion "
                         f"{float(auto_hpf_freq):.1f} Hz/{int(max(6, auto_hpf_slope))} dB/oct "
                         f"(method {auto_hpf_method or 'n/a'}, confidence {auto_hpf_conf:.2f}) -> "
                         "not auto-applied"
                     )
                 elif user_hpf_enabled:
                     auto_status(
-                        "CamillaFIR automatic mode: HPF auto-fit skipped "
+                        f"CamillaFIR automatic mode: {hpf_status_label} auto-fit skipped "
                         f"(method {auto_hpf_method or 'n/a'}, confidence {auto_hpf_conf:.2f}) -> "
-                        "keeping user HPF settings"
+                        f"keeping user {hpf_status_label.lower()} settings"
                     )
                 else:
                     auto_status(
-                        "CamillaFIR automatic mode: HPF auto-fit skipped "
+                        f"CamillaFIR automatic mode: {hpf_status_label} auto-fit skipped "
                         f"(method {auto_hpf_method or 'n/a'}, confidence {auto_hpf_conf:.2f})"
                     )
 
@@ -561,15 +633,44 @@ def _run_auto_mode_seed_phases(
                 else:
                     pre_taps = int(taps_base)
                 pre_xos, pre_hpf = build_xos_hpf(data)
-                pre_measurements = {
-                    "f_l": np.asarray(f_l, dtype=float),
-                    "m_l": np.asarray(m_l, dtype=float),
-                    "p_l": np.asarray(p_l, dtype=float),
-                    "f_r": np.asarray(f_r, dtype=float),
-                    "m_r": np.asarray(m_r, dtype=float),
-                    "p_r": np.asarray(p_r, dtype=float),
-                    "is_wav_source": bool(detect_is_wav_source(data)),
-                }
+                # For direct_dac bass integration, target preselection should score
+                # against the summed (main+sub) response, not the main-only response
+                # that ctx["f_l"]/ctx["m_l"] carry in this mode.
+                pre_f_l, pre_m_l, pre_f_r, pre_m_r = f_l, m_l, f_r, m_r
+                bi_mode_pre = str(
+                    data.get("bass_integration_mode", "avr_lfe_main_decomposed")
+                    or "avr_lfe_main_decomposed"
+                ).strip().lower()
+                if bool(data.get("bass_integration_enable", False)) and bi_mode_pre == "direct_dac":
+                    try:
+                        _bi_bundle = ctx.get("bass_integration_bundle", None)
+                        if _bi_bundle is not None:
+                            _lt = getattr(_bi_bundle, "l_total", None)
+                            _rt = getattr(_bi_bundle, "r_total", None)
+                            if _lt is not None and _rt is not None:
+                                _tfl = np.asarray(getattr(_lt, "freqs_hz", []), dtype=float)
+                                _tml = np.asarray(getattr(_lt, "mag_db", []), dtype=float)
+                                _tfr = np.asarray(getattr(_rt, "freqs_hz", []), dtype=float)
+                                _tmr = np.asarray(getattr(_rt, "mag_db", []), dtype=float)
+                                if _tfl.size >= 32 and _tml.size == _tfl.size:
+                                    pre_f_l, pre_m_l = _tfl, _tml
+                                if _tfr.size >= 32 and _tmr.size == _tfr.size:
+                                    pre_f_r, pre_m_r = _tfr, _tmr
+                    except Exception:
+                        pass
+                pre_measurements = dict(ctx.get("measurements", {}) or {})
+                pre_measurements.update(
+                    {
+                        "f_l": np.asarray(pre_f_l, dtype=float),
+                        "m_l": np.asarray(pre_m_l, dtype=float),
+                        "p_l": np.asarray(p_l, dtype=float),
+                        "f_r": np.asarray(pre_f_r, dtype=float),
+                        "m_r": np.asarray(pre_m_r, dtype=float),
+                        "p_r": np.asarray(p_r, dtype=float),
+                        "ui_data": data,
+                        "is_wav_source": bool(detect_is_wav_source(data)),
+                    }
+                )
                 auto_status(
                     "CamillaFIR automatic mode: target preselect init "
                     f"(top-{AUTO_MODE_TARGET_TOP_N}, {AUTO_MODE_TARGET_TRIALS_PER_CURVE} trials/curve, "
@@ -590,10 +691,10 @@ def _run_auto_mode_seed_phases(
                 if not isinstance(tc_pick, dict):
                     tc_pick = _auto_select_builtin_target_curve(
                         data,
-                        f_l=f_l,
-                        m_l=m_l,
-                        f_r=f_r,
-                        m_r=m_r,
+                        f_l=pre_f_l,
+                        m_l=pre_m_l,
+                        f_r=pre_f_r,
+                        m_r=pre_m_r,
                     )
                 if isinstance(tc_pick, dict):
                     chosen_hc = str(tc_pick.get("selected_hc_mode", "Harman6") or "Harman6")

@@ -285,6 +285,145 @@ def _cached_target_return(
     }
 
 
+def _cached_target_has_exact_preset(
+    *,
+    runtime,
+    cache_state: _TargetCacheState,
+) -> bool:
+    return bool(
+        str(cache_state.cached_target_source or "").strip()
+        and _cache_target_valid(runtime, cache_state.cached_target_hc)
+        and isinstance(cache_state.cached_target_preset, dict)
+        and bool(cache_state.cached_target_preset)
+    )
+
+
+def _set_cached_target_state(
+    state: _TargetCacheState,
+    *,
+    runtime,
+    cached_hc: str | None,
+    cached_preset: dict | None,
+    source: str,
+    status_label: str,
+    status_cb,
+) -> bool:
+    hc_name = _auto_builtin_target_name(cached_hc)
+    if not _cache_target_valid(runtime, hc_name):
+        return False
+    state.cached_target_hc = str(hc_name)
+    state.cached_target_preset = dict(cached_preset or {})
+    state.cached_target_source = str(source)
+    logger.info(
+        "Automatic mode target select: cache seed (%s) target=%s",
+        str(status_label),
+        str(state.cached_target_hc),
+    )
+    if callable(status_cb) and not bool(state.cached_target_preset):
+        status_cb(
+            "CamillaFIR automatic mode: target preselect cache seed "
+            f"({str(status_label)} -> {str(state.cached_target_hc)})"
+        )
+    return True
+
+
+def _cached_target_state_from_optuna_study(
+    *,
+    setup: _TargetSelectionSetup,
+    base_data: dict,
+) -> _TargetCacheState | None:
+    if not (
+        str(setup.optimizer_backend) == "optuna"
+        and bool(getattr(setup.cfg, "optuna_persistent_study", False))
+        and setup.optuna_mod is not None
+        and setup.runtime.auto_optuna_module_ready(setup.optuna_mod)
+    ):
+        return None
+    try:
+        storage = setup.runtime.auto_optuna_create_storage(
+            setup.optuna_mod,
+            base_data=dict(base_data or {}),
+        )
+    except Exception:
+        storage = None
+    if storage is None:
+        return None
+    get_summaries = getattr(setup.optuna_mod, "get_all_study_summaries", None)
+    load_study = getattr(setup.optuna_mod, "load_study", None)
+    if not callable(get_summaries) or not callable(load_study):
+        return None
+
+    sig_token = str(setup.target_study_sig or "").strip().lower()[:32]
+    if not sig_token:
+        return None
+
+    best_hc = None
+    best_study_name = None
+    best_value = float("-inf")
+    try:
+        summaries = list(get_summaries(storage=storage) or [])
+    except Exception:
+        summaries = []
+    for summary in summaries:
+        try:
+            study_name = str(getattr(summary, "study_name", "") or "").strip()
+        except Exception:
+            study_name = ""
+        if not study_name.startswith("camillafir-target-"):
+            continue
+        if not study_name.lower().endswith(sig_token):
+            continue
+        tail = study_name[len("camillafir-target-") :]
+        hc_token = str(tail.split("-", 1)[0] if tail else "").strip()
+        hc_name = _auto_builtin_target_name(hc_token)
+        if not _cache_target_valid(setup.runtime, hc_name):
+            continue
+        try:
+            trial_obj = getattr(summary, "best_trial", None)
+            score_value = float(getattr(trial_obj, "value", float("nan")))
+        except Exception:
+            score_value = float("nan")
+        if not np.isfinite(score_value) or float(score_value) < float(best_value):
+            continue
+        best_hc = str(hc_name)
+        best_study_name = str(study_name)
+        best_value = float(score_value)
+
+    if not best_hc or not best_study_name:
+        return None
+
+    best_preset = {}
+    try:
+        study = load_study(study_name=str(best_study_name), storage=storage)
+        best_trial = getattr(study, "best_trial", None)
+        best_preset = setup.runtime.auto_optuna_trial_payload_preset(
+            dict(getattr(best_trial, "user_attrs", {}) or {})
+        )
+        if not isinstance(best_preset, dict) or not best_preset:
+            best_preset = dict(getattr(best_trial, "params", {}) or {})
+    except Exception:
+        best_preset = {}
+
+    state = _TargetCacheState()
+    if not _set_cached_target_state(
+        state,
+        runtime=setup.runtime,
+        cached_hc=best_hc,
+        cached_preset=best_preset,
+        source="cache_optuna_target",
+        status_label="optuna study",
+        status_cb=None,
+    ):
+        return None
+    logger.info(
+        "Automatic mode target select: Optuna study cache seed target=%s, study=%s, value=%.3f",
+        str(state.cached_target_hc),
+        str(best_study_name),
+        float(best_value),
+    )
+    return state
+
+
 def _target_eval_one(
     *,
     runtime,
@@ -1312,27 +1451,21 @@ def _resolve_cached_target_state(
     except Exception:
         cached_target_entry = None
     if isinstance(cached_target_entry, dict):
-        cached_hc = str(
-            cached_target_entry.get(
-                "best_target_curve",
-                cached_target_entry.get("best_hc_mode", ""),
-            )
-            or ""
-        ).strip()
-        cached_hc = _auto_builtin_target_name(cached_hc)
-        if _cache_target_valid(setup.runtime, cached_hc):
-            state.cached_target_hc = str(cached_hc)
-            state.cached_target_preset = dict(cached_target_entry.get("best_preset", {}) or {})
-            state.cached_target_source = "cache_measurement"
-            logger.info(
-                "Automatic mode target select: cache seed (measurement) target=%s",
-                str(state.cached_target_hc),
-            )
-            if callable(status_cb):
-                status_cb(
-                    "CamillaFIR automatic mode: target preselect cache seed "
-                    f"(measurement -> {str(state.cached_target_hc)})"
+        _set_cached_target_state(
+            state,
+            runtime=setup.runtime,
+            cached_hc=str(
+                cached_target_entry.get(
+                    "best_target_curve",
+                    cached_target_entry.get("best_hc_mode", ""),
                 )
+                or ""
+            ).strip(),
+            cached_preset=dict(cached_target_entry.get("best_preset", {}) or {}),
+            source="cache_measurement",
+            status_label="measurement",
+            status_cb=status_cb,
+        )
     if bool(AUTO_MODE_CACHE_ENABLED):
         try:
             sig_target = _auto_signature(
@@ -1351,25 +1484,37 @@ def _resolve_cached_target_state(
                 compat_version=setup.compat_version,
             )
             cached_hc = _auto_builtin_target_name(cached_hc)
-            if _cache_target_valid(setup.runtime, cached_hc):
-                state.cached_target_hc = str(cached_hc)
-                state.cached_target_preset = setup.runtime.auto_cache_get_best(
+            cached_preset = setup.runtime.auto_cache_get_best(
                     sig_target,
                     filter_key=setup.filter_key,
                     compat_version=setup.compat_version,
                 ) or {}
-                state.cached_target_source = "cache_signature"
-                logger.info(
-                    "Automatic mode target select: cache seed (signature) target=%s",
-                    str(state.cached_target_hc),
+            if _cache_target_valid(setup.runtime, cached_hc) and (
+                bool(cached_preset) or not _cached_target_has_exact_preset(
+                    runtime=setup.runtime,
+                    cache_state=state,
                 )
-                if callable(status_cb):
-                    status_cb(
-                        "CamillaFIR automatic mode: target preselect cache seed "
-                        f"(signature -> {str(state.cached_target_hc)})"
-                    )
+            ):
+                _set_cached_target_state(
+                    state,
+                    runtime=setup.runtime,
+                    cached_hc=cached_hc,
+                    cached_preset=dict(cached_preset or {}),
+                    source="cache_signature",
+                    status_label="signature",
+                    status_cb=status_cb,
+                )
         except Exception:
             pass
+    if not _cached_target_has_exact_preset(runtime=setup.runtime, cache_state=state):
+        optuna_state = _cached_target_state_from_optuna_study(
+            setup=setup,
+            base_data=base_data,
+        )
+        if isinstance(optuna_state, _TargetCacheState) and str(
+            optuna_state.cached_target_source or ""
+        ).strip():
+            state = optuna_state
     return state
 
 
@@ -1401,18 +1546,24 @@ def _try_exact_cached_target_result(
     measurements: dict,
     status_cb,
 ) -> dict | None:
+    cached_source = str(cache_state.cached_target_source or "").strip()
     if not (
-        str(cache_state.cached_target_source) == "cache_signature"
-        and _cache_target_valid(setup.runtime, cache_state.cached_target_hc)
-        and isinstance(cache_state.cached_target_preset, dict)
-        and bool(cache_state.cached_target_preset)
+        cached_source in (
+            "cache_measurement",
+            "cache_optuna_target",
+            "cache_signature",
+        )
+        and _cached_target_has_exact_preset(
+            runtime=setup.runtime,
+            cache_state=cache_state,
+        )
     ):
         return None
     fallback = _cached_target_return(
         runtime=setup.runtime,
         cached_hc_mode=cache_state.cached_target_hc,
         cached_preset=cache_state.cached_target_preset,
-        selection_method="cache_signature_hit",
+        selection_method=f"{cached_source}_hit",
         base_data=base_data,
         measurements=measurements,
         goal=setup.goal,

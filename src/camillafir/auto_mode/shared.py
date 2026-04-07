@@ -167,6 +167,34 @@ AUTO_MODE_HPF_SEARCH_MAX_HZ = 180.0
 AUTO_MODE_HPF_SMOOTH_OCT = 1.00
 AUTO_MODE_HPF_AUTO_ENABLE_MIN_CONF = 0.45
 AUTO_MODE_HPF_ALLOWED_SLOPES_DB_OCT = (6, 12, 18, 24, 30, 36, 42, 48, 54)
+AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO = 0.60
+AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO = 1.40
+AUTO_MODE_BASS_INTEGRATION_PROFILE_WEIGHTS = {
+    "safe": {
+        "cancellation": 8.0,
+        "overlap_ripple": 1.8,
+        "anti_null_boost": 1.3,
+        "sub_dominance": 0.9,
+        "xo_gd_continuity": 0.8,
+        "main_activity": 6.0,
+    },
+    "normal": {
+        "cancellation": 5.5,
+        "overlap_ripple": 1.2,
+        "anti_null_boost": 0.9,
+        "sub_dominance": 0.6,
+        "xo_gd_continuity": 0.6,
+        "main_activity": 4.0,
+    },
+    "assertive": {
+        "cancellation": 3.5,
+        "overlap_ripple": 0.8,
+        "anti_null_boost": 0.5,
+        "sub_dominance": 0.35,
+        "xo_gd_continuity": 0.4,
+        "main_activity": 2.0,
+    },
+}
 AUTO_MODE_BUILTIN_TARGETS = (
     "Harman6",
     "Harman8",
@@ -233,6 +261,18 @@ def _auto_goal_norm(goal: str | None) -> str:
     ):
         goal_norm = AUTO_MODE_GOAL_DEFAULT
     return str(goal_norm)
+
+
+def _auto_bass_integration_profile_norm(profile: str | None) -> str:
+    value = str(profile or "safe").strip().lower()
+    if value not in ("safe", "normal", "assertive"):
+        value = "safe"
+    return str(value)
+
+
+def _auto_bass_integration_profile_weights(profile: str | None) -> dict[str, float]:
+    profile_norm = _auto_bass_integration_profile_norm(profile)
+    return dict(AUTO_MODE_BASS_INTEGRATION_PROFILE_WEIGHTS.get(profile_norm, AUTO_MODE_BASS_INTEGRATION_PROFILE_WEIGHTS["safe"]))
 
 
 def _auto_goal_forced_level_window(goal: str | None) -> tuple[float, float] | None:

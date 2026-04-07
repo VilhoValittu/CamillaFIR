@@ -94,6 +94,9 @@ def auto_choice_text(method) -> str:
         key = ""
     mapping = {
         "adaptive": "adaptive (synthesized from measurements)",
+        "cache_measurement_hit": "cache hit",
+        "cache_optuna_target": "Optuna target cache seed",
+        "cache_optuna_target_hit": "cache hit",
         "cache_signature_hit": "cache hit",
         "cache_measurement": "measurement cache seed",
         "cache_signature": "signature cache seed",

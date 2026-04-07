@@ -47,8 +47,31 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
         h_filt_display, _filt_delay_ms = remove_ir_peak_delay(f_lin, h_filt, filt_ir, fs)
         offset = target_stats.get("offset_db", 0) if target_stats else 0
         avg_t = target_stats.get("eff_target_db", 75) if target_stats else 75
-        m_lin = np.interp(f_lin, orig_freqs, orig_mags)
+        m_src_freqs = np.asarray(orig_freqs, dtype=float)
+        m_src_mags = np.asarray(orig_mags, dtype=float)
+        if target_stats:
+            try:
+                f_meas = np.asarray(target_stats.get("freq_axis", []), dtype=float)
+                m_meas = np.asarray(
+                    target_stats.get("direct_dac_sum_measured_mags", []),
+                    dtype=float,
+                )
+                if f_meas.size > 1 and m_meas.size == f_meas.size:
+                    m_src_freqs = f_meas
+                    m_src_mags = m_meas
+            except Exception:
+                pass
+        m_lin = np.interp(f_lin, m_src_freqs, m_src_mags)
         p_lin = np.interp(f_lin, orig_freqs, orig_phases)
+        direct_pred = None
+        if target_stats:
+            try:
+                f_pred = np.asarray(target_stats.get("freq_axis", []), dtype=float)
+                m_pred = np.asarray(target_stats.get("direct_dac_sum_predicted_mags", []), dtype=float)
+                if f_pred.size > 1 and m_pred.size == f_pred.size:
+                    direct_pred = np.interp(f_lin, f_pred, m_pred) + float(offset)
+            except Exception:
+                direct_pred = None
         total_spec = 10 ** ((m_lin + offset) / 20.0) * np.exp(1j * np.deg2rad(p_lin)) * h_filt
         filt_phase = smooth_complex(f_lin, h_filt_display, PHASE_SMOOTH_OCT)
         filt_phase_deg = (np.rad2deg(np.angle(filt_phase)) + 180) % 360 - 180
@@ -67,8 +90,21 @@ def generate_combined_plot_mpl(orig_freqs, orig_mags, orig_phases, filt_ir, fs, 
             include_zero=True,
         )
         fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(12, 18), facecolor=_MPL_LIGHT_BG)
-        ax1.semilogx(orig_freqs, orig_mags + offset, "b:", alpha=0.3)
-        ax1.semilogx(f_lin, psychoacoustic_smoothing(f_lin, 20 * np.log10(np.abs(total_spec) + 1e-12)), "orange", linewidth=2)
+        ax1.semilogx(m_src_freqs, m_src_mags + offset, "b:", alpha=0.3)
+        if direct_pred is not None:
+            ax1.semilogx(
+                f_lin,
+                psychoacoustic_smoothing(f_lin, np.asarray(direct_pred, dtype=float)),
+                "orange",
+                linewidth=2,
+            )
+        else:
+            ax1.semilogx(
+                f_lin,
+                psychoacoustic_smoothing(f_lin, 20 * np.log10(np.abs(total_spec) + 1e-12)),
+                "orange",
+                linewidth=2,
+            )
         if target_stats:
             ax1.semilogx(target_stats["freq_axis"], target_stats["target_mags"], "g--")
 

@@ -172,6 +172,83 @@ def _auto_excursion_penalty(st: dict | None) -> tuple[float, dict]:
     return float(max(0.0, penalty)), dbg
 
 
+def _auto_bass_integration_penalty(
+    result,
+    *,
+    base_data: dict | None = None,
+    net_boost_max_db: float = float("nan"),
+) -> tuple[float, dict]:
+    data = dict(base_data or {})
+    if not bool(data.get("bass_integration_enable", False)):
+        return 0.0, {}
+
+    result_metrics = dict(getattr(result, "metrics", {}) or {})
+    cancellation_risk = shared._auto_safe_float(
+        result_metrics.get("bass_cancellation_risk", float("nan")),
+        float("nan"),
+    )
+    overlap_ripple_db = shared._auto_safe_float(
+        result_metrics.get("bass_overlap_ripple", float("nan")),
+        float("nan"),
+    )
+    sub_dominance_db = shared._auto_safe_float(
+        result_metrics.get("bass_sub_dominance", float("nan")),
+        float("nan"),
+    )
+    weights = shared._auto_bass_integration_profile_weights(
+        data.get("bass_integration_profile", result_metrics.get("bass_integration_profile", "safe"))
+    )
+
+    l_st = dict(getattr(result, "l_st", {}) or {})
+    r_st = dict(getattr(result, "r_st", {}) or {})
+    lf_boost = max(
+        shared._auto_safe_float(l_st.get("lf_boost_max_db", 0.0), 0.0),
+        shared._auto_safe_float(r_st.get("lf_boost_max_db", 0.0), 0.0),
+    )
+    net_boost = shared._auto_safe_float(net_boost_max_db, float("nan"))
+    if not np.isfinite(net_boost):
+        net_boost = max(
+            shared._auto_safe_float(l_st.get("net_boost_peak_db", 0.0), 0.0),
+            shared._auto_safe_float(r_st.get("net_boost_peak_db", 0.0), 0.0),
+        )
+
+    pen_cancel = 0.0
+    if np.isfinite(cancellation_risk):
+        pen_cancel = float(max(0.0, cancellation_risk - 0.12) ** 1.5) * float(weights.get("cancellation", 0.0))
+
+    pen_overlap = 0.0
+    if np.isfinite(overlap_ripple_db):
+        pen_overlap = float(max(0.0, overlap_ripple_db - 3.0)) * float(weights.get("overlap_ripple", 0.0))
+
+    pen_anti_null = 0.0
+    if np.isfinite(cancellation_risk) and np.isfinite(net_boost):
+        pen_anti_null = float(max(0.0, cancellation_risk - 0.08) * max(0.0, net_boost - 3.5))
+        pen_anti_null *= float(weights.get("anti_null_boost", 0.0))
+
+    pen_sub = 0.0
+    if np.isfinite(sub_dominance_db):
+        pen_sub = float(max(0.0, sub_dominance_db - 4.0) / 6.0) * float(max(0.0, lf_boost - 1.5))
+        pen_sub *= float(weights.get("sub_dominance", 0.0))
+
+    penalty = float(np.clip(pen_cancel + pen_overlap + pen_anti_null + pen_sub, 0.0, 12.0))
+    dbg = {
+        "bass_cancellation_risk": float(cancellation_risk) if np.isfinite(cancellation_risk) else float("nan"),
+        "bass_overlap_ripple": float(overlap_ripple_db) if np.isfinite(overlap_ripple_db) else float("nan"),
+        "bass_sub_dominance": float(sub_dominance_db) if np.isfinite(sub_dominance_db) else float("nan"),
+        "lf_boost_max_db": float(lf_boost),
+        "net_boost_max_db": float(net_boost) if np.isfinite(net_boost) else float("nan"),
+        "pen_cancel": float(pen_cancel),
+        "pen_overlap": float(pen_overlap),
+        "pen_anti_null": float(pen_anti_null),
+        "pen_sub": float(pen_sub),
+        "pen_total": float(penalty),
+        "profile": shared._auto_bass_integration_profile_norm(
+            data.get("bass_integration_profile", result_metrics.get("bass_integration_profile", "safe"))
+        ),
+    }
+    return penalty, dbg
+
+
 def _auto_exc_penalty_bins_from_dbg(exc_dbg: dict | None) -> float:
     try:
         dbg = dict(exc_dbg or {})
@@ -280,6 +357,7 @@ def _auto_score_result(
 ) -> dict:
     l_st = dict(getattr(result, "l_st", {}) or {})
     r_st = dict(getattr(result, "r_st", {}) or {})
+    result_metrics = dict(getattr(result, "metrics", {}) or {})
     l_ai = calc_ai_summary_from_stats(l_st)
     r_ai = calc_ai_summary_from_stats(r_st)
 
@@ -397,6 +475,11 @@ def _auto_score_result(
     phase_limit_penalty = float(
         shared._auto_phase_limit_prior_penalty(phase_limit_used_hz, filter_key=filter_key)
     )
+    bass_integration_penalty, bass_dbg = _auto_bass_integration_penalty(
+        result,
+        base_data=base_data,
+        net_boost_max_db=net_boost_max,
+    )
 
     def _rank_scale(v: float) -> float:
         g = float(shared._auto_safe_float(shared.AUTO_MODE_RANK_SCORE_GAIN, 1.0))
@@ -410,6 +493,7 @@ def _auto_score_result(
         lr_delta_penalty=lr_pen,
         dsp_penalty=dsp_penalty,
         exc_penalty=exc_penalty,
+        bass_integration_penalty=bass_integration_penalty,
         phase_limit_penalty=phase_limit_penalty,
         gain=shared._auto_safe_float(shared.AUTO_MODE_RANK_SCORE_GAIN, 1.0),
         bias=shared._auto_safe_float(shared.AUTO_MODE_RANK_SCORE_BIAS, 0.0),
@@ -537,6 +621,7 @@ def _auto_score_result(
         lr_delta_penalty=lr_pen,
         dsp_penalty=dsp_penalty,
         exc_penalty=exc_penalty,
+        bass_integration_penalty=bass_integration_penalty,
         mode_penalty=mode_penalty,
         phase_limit_penalty=phase_limit_penalty,
         gain=shared._auto_safe_float(shared.AUTO_MODE_RANK_SCORE_GAIN, 1.0),
@@ -630,6 +715,15 @@ def _auto_score_result(
         "dsp_penalty_l": float(dsp_pen_l),
         "dsp_penalty_r": float(dsp_pen_r),
         "exc_penalty": float(exc_penalty),
+        "bass_integration_penalty": float(bass_integration_penalty),
+        "bass_cancellation_risk": float(shared._auto_safe_float(bass_dbg.get("bass_cancellation_risk", float("nan")), float("nan"))),
+        "bass_overlap_ripple": float(shared._auto_safe_float(bass_dbg.get("bass_overlap_ripple", float("nan")), float("nan"))),
+        "bass_sub_dominance": float(shared._auto_safe_float(bass_dbg.get("bass_sub_dominance", float("nan")), float("nan"))),
+        "bass_xo_gd_mismatch_ms": float(shared._auto_safe_float(result_metrics.get("bass_xo_gd_mismatch_ms", float("nan")), float("nan"))),
+        "bass_xo_main_gd_ms": float(shared._auto_safe_float(result_metrics.get("bass_xo_main_gd_ms", float("nan")), float("nan"))),
+        "bass_xo_sub_gd_ms": float(shared._auto_safe_float(result_metrics.get("bass_xo_sub_gd_ms", float("nan")), float("nan"))),
+        "bass_guard_lo_hz": float(shared._auto_safe_float(result_metrics.get("bass_guard_lo_hz", float("nan")), float("nan"))),
+        "bass_guard_hi_hz": float(shared._auto_safe_float(result_metrics.get("bass_guard_hi_hz", float("nan")), float("nan"))),
         "exc_penalty_raw": float(exc_penalty_raw),
         "exc_penalty_raw_total": float(exc_penalty_raw_total),
         "exc_penalty_bins_raw": float(exc_penalty_bins_raw),
@@ -644,6 +738,7 @@ def _auto_score_result(
         "dsp_dbg_r": dict(dsp_dbg_r),
         "exc_dbg_l": dict(exc_dbg_l),
         "exc_dbg_r": dict(exc_dbg_r),
+        "bass_dbg": dict(bass_dbg),
     }
     return attach_official_rank_score(metrics_out, components=rank_components)
 
@@ -653,6 +748,7 @@ __all__ = [
     "_auto_exc_penalty_bins_from_dbg",
     "_auto_exc_zero_penalty_freq_hz_from_stats",
     "_auto_excursion_penalty",
+    "_auto_bass_integration_penalty",
     "_auto_focus_ripple_from_stats",
     "_auto_score_result",
 ]

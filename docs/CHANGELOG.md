@@ -4,6 +4,29 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [4.1.0] - 2026-04-06
+
+### Automatic mode / Subwoofer integration
+- Added AUTO-mode Bass Integration for phase-aware subwoofer integration from separate main/sub WAV impulse measurements instead of relying on a manual external crossover workflow.
+- Added two AUTO Bass Integration paths: `AVR LFE+Main (decomposed)` for receiver bass-management measurements and `Direct DAC / CamillaDSP sub output` for separate main/sub correction.
+- In AVR mode, AUTO now builds complex predicted totals from `L/R main + L/R sub` component measurements and keeps the generated output in the normal L/R FIR workflow.
+- In Direct DAC mode, AUTO can work with one or two subwoofer measurements, recommend a Main/Sub crossover, and generate a dedicated aligned mono Sub FIR alongside the main filters.
+
+### UI / Results / Export
+- Added Basic-tab Bass Integration controls, profile selection, measurement guidance, and AUTO-only health checks for the new subwoofer workflow.
+- Added results/export reporting for the selected integration mode, recommended crossover, cancellation risk, overlap ripple, sub dominance, and crossover group-delay diagnostics.
+- Updated AUTO selected-text and summary wording so Direct DAC runs report `Main/Sub XO` and `Sub HPF` terminology instead of generic AVR crossover wording.
+
+### Measurement handling / Diagnostics
+- Added coherent WAV transfer parsing with a shared anchor so separate main/sub measurements keep their relative timing for phase-aware integration analysis.
+- Added crossover recommendation logic that avoids inactive main-speaker regions, evaluates acoustic overlap quality, and keeps AUTO cache signatures sensitive to component split changes.
+
+### Docs & Tests
+- Added regression coverage for coherent WAV parsing, Bass Integration bundle loading, health validation, crossover recommendation, Direct DAC Sub FIR generation/alignment, and summary formatting.
+- Updated README release notes and version references for `4.1.0`.
+
+---
+
 ## [4.0.3] - 2026-04-01
 
 ### Advanced UI / Workflow

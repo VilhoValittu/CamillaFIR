@@ -153,7 +153,7 @@ def register_main_page() -> None:
                 tab_target = ui.tab(t("tab_target"))
                 tab_advanced = ui.tab(t("tab_adv"))
                 tab_export = ui.tab(t("tab_window_tdc"))
-                tab_xo = ui.tab(t("tab_xo"))
+                tab_xo = ng_controls.register("tab_xo", ui.tab(t("tab_xo")))
                 tab_run = ui.tab(t("tab_run"))
 
         with ui.tab_panels(tabs, value=tab_files).classes("w-full"):
@@ -196,6 +196,11 @@ def register_main_page() -> None:
         from .ng_callbacks import register_callbacks  # noqa: PLC0415
 
         register_callbacks(t=t, get_val=get_val, max_safe_boost=float(MAX_SAFE_BOOST))
+
+        # Install the toast drain timer so background-thread toasts reach the UI.
+        from .ng_health import install_toast_timer  # noqa: PLC0415
+
+        install_toast_timer()
 
 
 # ---------------------------------------------------------------------------

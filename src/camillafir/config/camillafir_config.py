@@ -8,6 +8,7 @@ from ..ui_i18n import (
     normalize_layout_value,
     normalize_lvl_algo_value,
     normalize_lvl_mode_value,
+    normalize_output_tilt_source_value,
 )
 
 CONFIG_FILE = "config.json"
@@ -41,6 +42,10 @@ def load_config() -> dict:
         "auto_goal": "balanced",
         "auto_target_mode": "auto",
         "auto_mode_workers": 0,
+        "bass_integration_enable": False,
+        "bass_integration_mode": "avr_lfe_main_decomposed",
+        "bass_integration_profile": "safe",
+        "avr_crossover_hz": 80.0,
         "auto_mode_optuna_multivariate": True,
         "auto_mode_optuna_group": False,
         "auto_mode_optuna_constant_liar": True,
@@ -79,6 +84,8 @@ def load_config() -> dict:
         "lvl_algo": LVL_ALGO_MEDIAN,
         "lvl_manual_db": 0.0,
         "manual_target_tilt_db_per_oct": 0.0,
+        "output_tilt_source": "off",
+        "output_tilt_db_per_oct": 0.0,
         "lvl_min": 300.0,
         "lvl_max": 3000.0,
         "normalize_opt": False,
@@ -95,6 +102,10 @@ def load_config() -> dict:
         "hpf_slope": 24,
         "local_path_l": "",
         "local_path_r": "",
+        "local_path_l_main": "",
+        "local_path_r_main": "",
+        "local_path_l_sub": "",
+        "local_path_r_sub": "",
         "xo1_f": None,
         "xo1_s": 12,
         "xo2_f": None,
@@ -176,6 +187,7 @@ def load_config() -> dict:
                 "enable_ir_pre_energy_guard",
                 "phase_tail_monotonic_enable",
                 "unsafe_raw_dsp",
+                "bass_integration_enable",
                 "camillafir_automatic_mode",
             ]:
                 if k in saved and isinstance(saved[k], list):
@@ -224,6 +236,7 @@ def load_config() -> dict:
     default_conf["layout"] = normalize_layout_value(default_conf.get("layout", LAYOUT_MONO))
     default_conf["lvl_mode"] = normalize_lvl_mode_value(default_conf.get("lvl_mode", LVL_MODE_AUTO))
     default_conf["lvl_algo"] = normalize_lvl_algo_value(default_conf.get("lvl_algo", LVL_ALGO_MEDIAN))
+    default_conf["output_tilt_source"] = normalize_output_tilt_source_value(default_conf.get("output_tilt_source", "off"))
 
     return default_conf
 
@@ -244,6 +257,7 @@ def save_config(data: dict) -> None:
         clean_data["layout"] = normalize_layout_value(clean_data.get("layout", LAYOUT_MONO))
         clean_data["lvl_mode"] = normalize_lvl_mode_value(clean_data.get("lvl_mode", LVL_MODE_AUTO))
         clean_data["lvl_algo"] = normalize_lvl_algo_value(clean_data.get("lvl_algo", LVL_ALGO_MEDIAN))
+        clean_data["output_tilt_source"] = normalize_output_tilt_source_value(clean_data.get("output_tilt_source", "off"))
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(clean_data, f, indent=4)
     except Exception:

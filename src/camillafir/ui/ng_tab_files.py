@@ -96,6 +96,16 @@ def _build_upload_payload(*, filename: str, content: bytes, mime_type: str = "")
 
 def build_files_tab(*, t: Callable, get_val: Callable) -> None:
     from nicegui import ui
+    mode_value = str(get_val("mode", "BASIC") or "BASIC").strip().upper()
+    if bool(get_val("camillafir_automatic_mode", False)):
+        mode_value = "AUTO"
+    bass_integration_visible = bool(mode_value == "AUTO")
+    bass_integration_enabled = bool(get_val("bass_integration_enable", False))
+    bass_integration_active = bool(bass_integration_visible and bass_integration_enabled)
+    is_direct_dac = (
+        bass_integration_active
+        and str(get_val("bass_integration_mode", "") or "").strip() == "direct_dac"
+    )
 
     ui.markdown(f"### {t('tab_files')}")
     ui.separator()
@@ -105,10 +115,16 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
     ui.label(t("input_files_help")).classes("text-sm text-gray-400 -mt-2 mb-2")
 
     # File uploads – store as {"filename": ..., "content": bytes} in holders
-    _file_l = ctrl._ValueHolder(get_val("file_l", None))
-    _file_r = ctrl._ValueHolder(get_val("file_r", None))
-    ctrl.register("file_l", _file_l)
-    ctrl.register("file_r", _file_r)
+    file_holders = {
+        "file_l": ctrl._ValueHolder(get_val("file_l", None)),
+        "file_r": ctrl._ValueHolder(get_val("file_r", None)),
+        "file_l_main": ctrl._ValueHolder(get_val("file_l_main", None)),
+        "file_r_main": ctrl._ValueHolder(get_val("file_r_main", None)),
+        "file_l_sub": ctrl._ValueHolder(get_val("file_l_sub", None)),
+        "file_r_sub": ctrl._ValueHolder(get_val("file_r_sub", None)),
+    }
+    for key, holder in file_holders.items():
+        ctrl.register(key, holder)
 
     def _refresh_target_preview() -> None:
         try:
@@ -198,75 +214,155 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
                         ui.label(t("file_status_size")).classes("text-xs text-gray-400")
                         ui.label(t("health_not_set")).classes("text-xs")
 
-    async def _on_upload_l(e) -> None:
-        _file_l.value = _build_upload_payload(
+    async def _handle_upload(e, *, upload_key: str, channel_label: str, scope_name: str, path_key: str) -> None:
+        file_holders[upload_key].value = _build_upload_payload(
             filename=e.file.name,
             content=await e.file.read(),
             mime_type=getattr(e.file, "content_type", ""),
         )
-        _render_file_status(channel_label=t("upload_l"), holder=_file_l, scope_name="file_l_status_scope", path_key="local_path_l")
+        _render_file_status(
+            channel_label=channel_label,
+            holder=file_holders[upload_key],
+            scope_name=scope_name,
+            path_key=path_key,
+        )
         _refresh_target_preview()
 
-    async def _on_upload_r(e) -> None:
-        _file_r.value = _build_upload_payload(
-            filename=e.file.name,
-            content=await e.file.read(),
-            mime_type=getattr(e.file, "content_type", ""),
-        )
-        _render_file_status(channel_label=t("upload_r"), holder=_file_r, scope_name="file_r_status_scope", path_key="local_path_r")
-        _refresh_target_preview()
+    def _build_measurement_slot(
+        *,
+        upload_key: str,
+        path_key: str,
+        channel_label_key: str,
+        path_label_key: str,
+    ) -> None:
+        channel_label = t(channel_label_key)
+        scope_name = f"{upload_key}_status_scope"
 
-    with ui.row().classes("w-full gap-4"):
         with ui.column().classes("flex-1 gap-2"):
-            ui.label(t("upload_l")).classes("text-sm font-medium")
+            ui.label(channel_label).classes("text-sm font-medium")
+
+            async def _on_upload(
+                e,
+                *,
+                _upload_key=upload_key,
+                _channel_label=channel_label,
+                _scope_name=scope_name,
+                _path_key=path_key,
+            ) -> None:
+                await _handle_upload(
+                    e,
+                    upload_key=_upload_key,
+                    channel_label=_channel_label,
+                    scope_name=_scope_name,
+                    path_key=_path_key,
+                )
+
             ui.upload(
-                label=t("upload_l"),
-                on_upload=_on_upload_l,
+                label=channel_label,
+                on_upload=_on_upload,
                 auto_upload=True,
             ).props('accept=".txt,.wav"').classes("w-full")
-            file_l_status_scope = ui.column().classes("w-full")
-            ctrl.register_container("file_l_status_scope", file_l_status_scope)
-        with ui.column().classes("flex-1 gap-2"):
-            ui.label(t("upload_r")).classes("text-sm font-medium")
-            ui.upload(
-                label=t("upload_r"),
-                on_upload=_on_upload_r,
-                auto_upload=True,
-            ).props('accept=".txt,.wav"').classes("w-full")
-            file_r_status_scope = ui.column().classes("w-full")
-            ctrl.register_container("file_r_status_scope", file_r_status_scope)
-
-    # Local paths (collapsed)
-    with ui.expansion(t("ui_local_paths_optional")).classes("w-full"):
-        ctrl.register(
-            "local_path_l",
-            ui.input(label=t("path_l"), value=get_val("local_path_l", "")).classes("w-full"),
+            status_scope = ui.column().classes("w-full")
+            ctrl.register_container(scope_name, status_scope)
+            ctrl.register(
+                path_key,
+                ui.input(label=t(path_label_key), value=get_val(path_key, "")).classes("w-full"),
+            )
+        ctrl.on_change(
+            path_key,
+            lambda v, _label=channel_label, _holder=file_holders[upload_key], _scope_name=scope_name, _path_key=path_key: _render_file_status(
+                channel_label=_label,
+                holder=_holder,
+                scope_name=_scope_name,
+                path_key=_path_key,
+            ),
         )
-        ctrl.register(
-            "local_path_r",
-            ui.input(label=t("path_r"), value=get_val("local_path_r", "")).classes("w-full"),
+        _render_file_status(
+            channel_label=channel_label,
+            holder=file_holders[upload_key],
+            scope_name=scope_name,
+            path_key=path_key,
         )
-    ctrl.on_change(
-        "local_path_l",
-        lambda v: _render_file_status(
-            channel_label=t("upload_l"),
-            holder=_file_l,
-            scope_name="file_l_status_scope",
-            path_key="local_path_l",
-        ),
-    )
-    ctrl.on_change(
-        "local_path_r",
-        lambda v: _render_file_status(
-            channel_label=t("upload_r"),
-            holder=_file_r,
-            scope_name="file_r_status_scope",
-            path_key="local_path_r",
-        ),
-    )
 
-    _render_file_status(channel_label=t("upload_l"), holder=_file_l, scope_name="file_l_status_scope", path_key="local_path_l")
-    _render_file_status(channel_label=t("upload_r"), holder=_file_r, scope_name="file_r_status_scope", path_key="local_path_r")
+    with ui.column().classes("w-full gap-4") as legacy_scope:
+        with ui.row().classes("w-full gap-4"):
+            _build_measurement_slot(
+                upload_key="file_l",
+                path_key="local_path_l",
+                channel_label_key="upload_l",
+                path_label_key="path_l",
+            )
+            _build_measurement_slot(
+                upload_key="file_r",
+                path_key="local_path_r",
+                channel_label_key="upload_r",
+                path_label_key="path_r",
+            )
+    ctrl.register_container("files_legacy_topology_scope", legacy_scope)
+    legacy_scope.set_visibility(not bass_integration_active)
+
+    with ui.column().classes("w-full gap-4") as bi_scope:
+        ui.label(t("bass_integration_requires_wav")).classes("text-xs text-gray-400")
+        ui.label(t("bass_integration_wav_format")).classes("text-xs text-gray-400")
+        with ui.row().classes("w-full gap-4"):
+            _build_measurement_slot(
+                upload_key="file_l_main",
+                path_key="local_path_l_main",
+                channel_label_key="upload_l_main",
+                path_label_key="path_l_main",
+            )
+            _build_measurement_slot(
+                upload_key="file_r_main",
+                path_key="local_path_r_main",
+                channel_label_key="upload_r_main",
+                path_label_key="path_r_main",
+            )
+        with ui.row().classes("w-full gap-4"):
+            _build_measurement_slot(
+                upload_key="file_l_sub",
+                path_key="local_path_l_sub",
+                channel_label_key="upload_l_sub",
+                path_label_key="path_l_sub",
+            )
+            _build_measurement_slot(
+                upload_key="file_r_sub",
+                path_key="local_path_r_sub",
+                channel_label_key="upload_r_sub",
+                path_label_key="path_r_sub",
+            )
+    ctrl.register_container("files_bass_integration_topology_scope", bi_scope)
+    bi_scope.set_visibility(bass_integration_active and not is_direct_dac)
+
+    with ui.column().classes("w-full gap-4") as direct_dac_scope:
+        ui.label(t("bi_direct_sub_help")).classes("text-xs text-gray-400")
+        with ui.row().classes("w-full gap-4"):
+            _build_measurement_slot(
+                upload_key="file_l_main",
+                path_key="local_path_l_main",
+                channel_label_key="upload_l_main",
+                path_label_key="path_l_main",
+            )
+            _build_measurement_slot(
+                upload_key="file_r_main",
+                path_key="local_path_r_main",
+                channel_label_key="upload_r_main",
+                path_label_key="path_r_main",
+            )
+        with ui.row().classes("w-full gap-4"):
+            _build_measurement_slot(
+                upload_key="file_l_sub",
+                path_key="local_path_l_sub",
+                channel_label_key="upload_l_sub",
+                path_label_key="path_l_sub",
+            )
+            _build_measurement_slot(
+                upload_key="file_r_sub",
+                path_key="local_path_r_sub",
+                channel_label_key="upload_r_sub",
+                path_label_key="path_r_sub",
+            )
+    ctrl.register_container("files_direct_dac_topology_scope", direct_dac_scope)
+    direct_dac_scope.set_visibility(bool(bass_integration_active and is_direct_dac))
 
     ui.separator()
 

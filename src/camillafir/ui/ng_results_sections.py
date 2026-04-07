@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import logging
+import math
 import time
 from typing import Any
 
@@ -40,6 +41,13 @@ from .results_formatters import (
 logger = logging.getLogger("CamillaFIR")
 
 
+def _format_recommended_xo_hz(value: float) -> str:
+    hz = float(value)
+    if math.isclose(hz, round(hz), abs_tol=1e-6):
+        return f"{hz:.0f} Hz"
+    return f"{hz:.1f} Hz"
+
+
 def render_results(
     data,
     f_l,
@@ -63,6 +71,9 @@ def render_results(
     saved_filters_dir=None,
     auto_cache_path=None,
     optuna_storage_path=None,
+    sub_imp_f=None,
+    sub_meas_f=None,
+    sub_st_f=None,
 ) -> None:
     from nicegui import ui
     from .ng_run_section import get_progress_element, get_results_container  # noqa: PLC0415
@@ -99,6 +110,9 @@ def render_results(
 
         _render_run_overview(data=data, l_st_f=l_st_f, r_st_f=r_st_f)
         _render_auto_diagnostics(data=data)
+        _render_bass_integration(data=data)
+        _update_crossover_recommendation_label(data)
+        _render_ir_alignment(l_st_f=l_st_f)
         _render_dsp_quality(data=data, l_st_f=l_st_f, r_st_f=r_st_f, psl_str=psl_str)
         _render_plots_and_export(
             data=data,
@@ -119,6 +133,9 @@ def render_results(
             saved_filters_dir=saved_filters_dir,
             auto_cache_path=auto_cache_path,
             optuna_storage_path=optuna_storage_path,
+            sub_imp_f=sub_imp_f,
+            sub_meas_f=sub_meas_f,
+            sub_st_f=sub_st_f,
         )
 
     done_msg = t("done_msg")
@@ -388,6 +405,348 @@ def _render_auto_diagnostics(*, data: dict) -> None:
         )
 
 
+def _update_crossover_recommendation_label(data: dict) -> None:
+    """Update the crossover recommendation label in the input tab after a run."""
+    try:
+        from . import ng_controls as ctrl  # noqa: PLC0415
+        label_el = ctrl.get("avr_crossover_hz_recommendation")
+        if label_el is None:
+            return
+        bi_meta = dict((data or {}).get("_bass_integration_meta", {}) or {})
+        rec = bi_meta.get("recommended_crossover_hz", None)
+        if rec is not None:
+            bi_mode = str(
+                bi_meta.get("mode", (data or {}).get("bass_integration_mode", "avr_lfe_main_decomposed"))
+                or "avr_lfe_main_decomposed"
+            ).strip().lower()
+            rec_label = (
+                t("bass_integration_main_sub_crossover_recommended")
+                if bi_mode == "direct_dac"
+                else t("bass_integration_crossover_recommended")
+            )
+            label_el.set_text(f"{rec_label}: {_format_recommended_xo_hz(float(rec))}")
+        else:
+            label_el.set_text("")
+    except Exception:
+        pass
+
+
+def _render_bass_integration(*, data: dict) -> None:
+    if not bool((data or {}).get("bass_integration_enable", False)):
+        return
+
+    bi_meta = dict((data or {}).get("_bass_integration_meta", {}) or {})
+    auto_meta = dict((data or {}).get("_auto_mode_meta", {}) or {})
+    best_metrics = dict(auto_meta.get("best_metrics", {}) or {})
+    diag = dict(bi_meta.get("diagnostics", {}) or {})
+    sub_st = dict(bi_meta.get("sub_filter_stats", {}) or {})
+
+    cancellation_risk = safe_float(
+        best_metrics.get("bass_cancellation_risk", diag.get("cancellation_risk", float("nan"))),
+        float("nan"),
+    )
+    overlap_ripple = safe_float(
+        best_metrics.get("bass_overlap_ripple", diag.get("overlap_ripple_db", float("nan"))),
+        float("nan"),
+    )
+    sub_dominance = safe_float(
+        best_metrics.get("bass_sub_dominance", diag.get("sub_dominance_db", float("nan"))),
+        float("nan"),
+    )
+    xo_gd_mismatch = safe_float(
+        best_metrics.get("bass_xo_gd_mismatch_ms", float("nan")),
+        float("nan"),
+    )
+    xo_main_gd = safe_float(best_metrics.get("bass_xo_main_gd_ms", float("nan")), float("nan"))
+    xo_sub_gd = safe_float(best_metrics.get("bass_xo_sub_gd_ms", float("nan")), float("nan"))
+
+    def _fmt(v: float, unit: str = "") -> str:
+        if v != v or abs(v) == float("inf"):
+            return "n/a"
+        return f"{float(v):.3f}{unit}"
+
+    bi_mode = str(
+        bi_meta.get("mode", data.get("bass_integration_mode", "avr_lfe_main_decomposed"))
+        or "avr_lfe_main_decomposed"
+    ).strip().lower()
+    bi_mode_label = (
+        t("bi_mode_direct_dac")
+        if bi_mode == "direct_dac"
+        else t("bass_integration_mode_avr_lfe_main_decomposed")
+    )
+    xo_metric_label = (
+        t("results_metric_main_sub_crossover")
+        if bi_mode == "direct_dac"
+        else t("results_metric_avr_crossover")
+    )
+    xo_rec_metric_label = (
+        t("results_metric_main_sub_crossover_recommended")
+        if bi_mode == "direct_dac"
+        else t("results_metric_avr_crossover_recommended")
+    )
+    playback_note = (
+        t("bass_integration_direct_playback_match")
+        if bi_mode == "direct_dac"
+        else t("bass_integration_playback_match")
+    )
+
+    _section(
+        t("results_section_bass_integration"),
+        [
+            metric_row(
+                t("results_metric_bass_integration_mode"),
+                bi_mode_label,
+                bi_mode_label,
+            ),
+            metric_row(
+                xo_metric_label,
+                f"{float(bi_meta.get('avr_crossover_hz', data.get('avr_crossover_hz', 80.0)) or 80.0):.1f} Hz",
+                f"{float(bi_meta.get('avr_crossover_hz', data.get('avr_crossover_hz', 80.0)) or 80.0):.1f} Hz",
+            ),
+            *(
+                [
+                    metric_row(
+                        xo_rec_metric_label,
+                        _format_recommended_xo_hz(float(bi_meta["recommended_crossover_hz"])),
+                        _format_recommended_xo_hz(float(bi_meta["recommended_crossover_hz"])),
+                    )
+                ]
+                if bi_meta.get("recommended_crossover_hz") is not None
+                else []
+            ),
+            metric_row(
+                t("results_metric_bass_integration_profile"),
+                str(bi_meta.get("profile", data.get("bass_integration_profile", "safe")) or "safe"),
+                str(bi_meta.get("profile", data.get("bass_integration_profile", "safe")) or "safe"),
+            ),
+            metric_row(
+                t("results_metric_bass_cancellation_risk"),
+                _fmt(cancellation_risk),
+                _fmt(cancellation_risk),
+            ),
+            metric_row(
+                t("results_metric_bass_overlap_smoothness"),
+                _fmt(overlap_ripple, " dB p2p"),
+                _fmt(overlap_ripple, " dB p2p"),
+            ),
+            metric_row(
+                t("results_metric_bass_sub_dominance"),
+                _fmt(sub_dominance, " dB"),
+                _fmt(sub_dominance, " dB"),
+            ),
+            metric_row(
+                t("results_metric_bass_xo_gd_mismatch"),
+                _fmt(xo_gd_mismatch, " ms"),
+                _fmt(xo_gd_mismatch, " ms"),
+            ),
+            metric_row(
+                t("results_metric_bass_xo_main_gd"),
+                _fmt(xo_main_gd, " ms"),
+                _fmt(xo_main_gd, " ms"),
+            ),
+            metric_row(
+                t("results_metric_bass_xo_sub_gd"),
+                _fmt(xo_sub_gd, " ms"),
+                _fmt(xo_sub_gd, " ms"),
+            ),
+            *(
+                [
+                    metric_row(
+                        t("results_metric_sub_filter_boost"),
+                        _fmt(safe_float(sub_st.get("max_boost_db_effective", sub_st.get("max_boost_db", float("nan"))), float("nan")), " dB"),
+                        _fmt(safe_float(sub_st.get("max_boost_db_effective", sub_st.get("max_boost_db", float("nan"))), float("nan")), " dB"),
+                    ),
+                    metric_row(
+                        t("results_metric_sub_filter_cut"),
+                        _fmt(safe_float(sub_st.get("max_cut_db", float("nan")), float("nan")), " dB"),
+                        _fmt(safe_float(sub_st.get("max_cut_db", float("nan")), float("nan")), " dB"),
+                    ),
+                    metric_row(
+                        t("results_metric_sub_filter_gain_margin"),
+                        _fmt(safe_float(sub_st.get("gain_margin_db", float("nan")), float("nan")), " dB"),
+                        _fmt(safe_float(sub_st.get("gain_margin_db", float("nan")), float("nan")), " dB"),
+                    ),
+                    metric_row(
+                        t("results_metric_sub_filter_applied_gain"),
+                        _fmt(safe_float(sub_st.get("auto_global_gain_db", float("nan")), float("nan")), " dB"),
+                        _fmt(safe_float(sub_st.get("auto_global_gain_db", float("nan")), float("nan")), " dB"),
+                    ),
+                    metric_row(
+                        t("results_metric_sub_filter_confidence"),
+                        _fmt(safe_float(sub_st.get("avg_confidence", float("nan")), float("nan")), "%"),
+                        _fmt(safe_float(sub_st.get("avg_confidence", float("nan")), float("nan")), "%"),
+                    ),
+                ]
+                if sub_st
+                else []
+            ),
+        ],
+        summary_lines=[playback_note],
+    )
+
+
+def _render_ir_alignment(*, l_st_f: dict) -> None:
+    """Renderöi Mittausten IR-infot -osion jos ir_align- tai ir_align_sub-data löytyy."""
+    ir_align = dict(l_st_f.get("ir_align") or {})
+    ir_align_sub = dict(l_st_f.get("ir_align_sub") or {})
+    if not ir_align and not ir_align_sub:
+        return
+
+    def _fmt_ms(v) -> str:
+        try:
+            x = float(v)
+            if math.isfinite(x):
+                return f"{x:+.2f} ms"
+        except Exception:
+            pass
+        return "-"
+
+    def _fmt_db(v) -> str:
+        try:
+            x = float(v)
+            if math.isfinite(x):
+                return f"{x:+.1f} dB"
+        except Exception:
+            pass
+        return "-"
+
+    def _fmt_deg(v) -> str:
+        try:
+            x = float(v)
+            if math.isfinite(x):
+                return f"{x:+.1f}°"
+        except Exception:
+            pass
+        return "-"
+
+    def _fmt_pct(v) -> str:
+        try:
+            x = float(v)
+            if math.isfinite(x):
+                return f"{x * 100.0:.0f}%"
+        except Exception:
+            pass
+        return "-"
+
+    def _fmt_dbfs(v) -> str:
+        try:
+            x = float(v)
+            if math.isfinite(x):
+                return f"{x:.1f} dBFS"
+        except Exception:
+            pass
+        return "-"
+
+    def _polarity_str(d: dict) -> str:
+        inv = bool(d.get("ir_align_polarity_inverted", False)) or bool(d.get("ir_align_xcorr_polarity_flip", False))
+        return t("ir_align_value_inverted") if inv else t("ir_align_value_ok")
+
+    def _xo_label(d: dict) -> str:
+        xo = safe_float(d.get("ir_align_xo_hz"), None)
+        if xo is not None and math.isfinite(xo):
+            return f"{xo:.0f}"
+        return "80"
+
+    rows: list[dict] = []
+
+    if ir_align:
+        rows.append(metric_row(f"── {t('ir_align_group_lr')} ──", "", ""))
+        rows.append(metric_row(
+            t("ir_align_metric_xcorr_offset"),
+            _fmt_ms(ir_align.get("ir_align_xcorr_offset_ms")),
+            _fmt_ms(ir_align.get("ir_align_xcorr_offset_ms")),
+        ))
+        rows.append(metric_row(
+            t("ir_align_metric_xcorr_confidence"),
+            _fmt_pct(ir_align.get("ir_align_xcorr_confidence")),
+            _fmt_pct(ir_align.get("ir_align_xcorr_confidence")),
+        ))
+        rows.append(metric_row(
+            t("ir_align_metric_polarity"),
+            _polarity_str(ir_align),
+            _polarity_str(ir_align),
+        ))
+        rows.append(metric_row(
+            t("ir_align_metric_level_peak"),
+            _fmt_dbfs(ir_align.get("ir_align_level_peak_a_dbfs")),
+            _fmt_dbfs(ir_align.get("ir_align_level_peak_b_dbfs")),
+        ))
+        rows.append(metric_row(
+            t("ir_align_metric_level_diff"),
+            _fmt_db(ir_align.get("ir_align_level_rms_diff_db")),
+            _fmt_db(ir_align.get("ir_align_level_rms_diff_db")),
+        ))
+
+    if ir_align_sub:
+        xo_lbl = _xo_label(ir_align_sub)
+        rows.append(metric_row(f"── {t('ir_align_group_sub')} ──", "", ""))
+        rows.append(metric_row(
+            t("ir_align_metric_xcorr_offset"),
+            _fmt_ms(ir_align_sub.get("ir_align_xcorr_offset_ms")),
+            _fmt_ms(ir_align_sub.get("ir_align_xcorr_offset_ms")),
+        ))
+        rows.append(metric_row(
+            t("ir_align_metric_xcorr_confidence"),
+            _fmt_pct(ir_align_sub.get("ir_align_xcorr_confidence")),
+            _fmt_pct(ir_align_sub.get("ir_align_xcorr_confidence")),
+        ))
+        rows.append(metric_row(
+            t("ir_align_metric_polarity"),
+            _polarity_str(ir_align_sub),
+            _polarity_str(ir_align_sub),
+        ))
+        rows.append(metric_row(
+            t("ir_align_metric_level_peak"),
+            _fmt_dbfs(ir_align_sub.get("ir_align_level_peak_a_dbfs")),
+            _fmt_dbfs(ir_align_sub.get("ir_align_level_peak_b_dbfs")),
+        ))
+        rows.append(metric_row(
+            t("ir_align_metric_level_diff"),
+            _fmt_db(ir_align_sub.get("ir_align_level_rms_diff_db")),
+            _fmt_db(ir_align_sub.get("ir_align_level_rms_diff_db")),
+        ))
+        rows.append(metric_row(
+            t("ir_align_metric_phase_diff").format(xo=xo_lbl),
+            _fmt_deg(ir_align_sub.get("ir_align_phase_diff_deg")),
+            _fmt_deg(ir_align_sub.get("ir_align_phase_diff_deg")),
+        ))
+        rows.append(metric_row(
+            t("ir_align_metric_gd").format(xo=xo_lbl),
+            _fmt_ms(ir_align_sub.get("ir_align_gd_a_ms")),
+            _fmt_ms(ir_align_sub.get("ir_align_gd_b_ms")),
+        ))
+        rows.append(metric_row(
+            t("ir_align_metric_gd_diff"),
+            _fmt_ms(ir_align_sub.get("ir_align_gd_diff_ms")),
+            _fmt_ms(ir_align_sub.get("ir_align_gd_diff_ms")),
+        ))
+
+    # Yhteenvetorivi
+    issues: list[str] = []
+    for d in (ir_align, ir_align_sub):
+        if not d:
+            continue
+        if bool(d.get("ir_align_polarity_inverted")) or bool(d.get("ir_align_xcorr_polarity_flip")):
+            issues.append(t("ir_align_issue_polarity"))
+        off = safe_float(d.get("ir_align_xcorr_offset_ms"), None)
+        if off is not None and math.isfinite(off) and abs(off) >= 5.0:
+            issues.append(t("ir_align_issue_timing"))
+        if not bool(d.get("ir_align_phase_in_phase", True)) and d is ir_align_sub:
+            issues.append(t("ir_align_issue_phase"))
+        rms = safe_float(d.get("ir_align_level_rms_diff_db"), None)
+        if rms is not None and math.isfinite(rms) and abs(rms) >= 10.0:
+            issues.append(t("ir_align_issue_level"))
+
+    seen: set[str] = set()
+    unique_issues = [x for x in issues if not (x in seen or seen.add(x))]
+    if unique_issues:
+        summary_line = t("ir_align_summary_issues").format(issues=", ".join(unique_issues))
+    else:
+        summary_line = t("ir_align_summary_ok")
+
+    _section(t("results_section_ir_alignment"), rows, summary_lines=[summary_line])
+
+
 def _render_dsp_quality(*, data: dict, l_st_f: dict, r_st_f: dict, psl_str: str) -> None:
     _section(
         t("results_section_filter_ir"),
@@ -449,6 +808,9 @@ def _render_plots_and_export(
     saved_filters_dir=None,
     auto_cache_path=None,
     optuna_storage_path=None,
+    sub_imp_f=None,
+    sub_meas_f=None,
+    sub_st_f=None,
 ) -> None:
     from nicegui import ui  # noqa: PLC0415
 
@@ -482,10 +844,18 @@ def _render_plots_and_export(
             logger.debug("Plot generation failed", exc_info=True)
             ui.label(t("results_plot_unavailable")).classes("text-gray-400")
 
+    sub_meas = dict(sub_meas_f or {})
+    has_sub = (
+        sub_imp_f is not None
+        and sub_meas.get("f_sub") is not None
+        and len(sub_meas.get("f_sub", [])) > 0
+    )
+
     with ui.card().classes("w-full"):
         with ui.tabs().classes("w-full") as plot_tabs:
             tab_left = ui.tab(t("results_left_channel"))
             tab_right = ui.tab(t("results_right_channel"))
+            tab_sub = ui.tab(t("results_sub_channel")) if has_sub else None
 
         with ui.tab_panels(plot_tabs, value=tab_left).classes("w-full"):
             with ui.tab_panel(tab_left).classes("w-full"):
@@ -507,6 +877,17 @@ def _render_plots_and_export(
                     imp_f=r_imp_f,
                     st_f=r_st_f,
                 )
+
+            if has_sub and tab_sub is not None:
+                with ui.tab_panel(tab_sub).classes("w-full"):
+                    _render_channel_plot(
+                        title=t("results_sub_channel"),
+                        f_ch=sub_meas["f_sub"],
+                        m_ch=sub_meas["m_sub"],
+                        p_ch=sub_meas["p_sub"],
+                        imp_f=sub_imp_f,
+                        st_f=sub_st_f,
+                    )
 
     with ui.row().classes("w-full items-center gap-4 mt-2"):
         if zip_buffer is not None and fname:

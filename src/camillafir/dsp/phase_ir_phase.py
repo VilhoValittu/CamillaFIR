@@ -123,6 +123,31 @@ def _gd_grad_limiter(
     )
 
 
+def _has_active_theoretical_phase_model(cfg) -> bool:
+    try:
+        for xo in list(getattr(cfg, "crossovers", None) or []):
+            try:
+                fc = float(xo.get("freq", 0.0) or 0.0)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if np.isfinite(fc) and fc > 0.0:
+                return True
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    try:
+        hs = getattr(cfg, "hpf_settings", None)
+        if isinstance(hs, dict) and bool(hs.get("enabled", False)):
+            fc = float(hs.get("freq", 0.0) or 0.0)
+            order = int(hs.get("order", 0) or 0)
+            if np.isfinite(fc) and fc > 0.0 and order > 0:
+                return True
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    return False
+
+
 def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -> np.ndarray:
     f = np.asarray(freq_axis, dtype=float)
     is_mixed = bool(phase_components.is_mixed)
@@ -409,5 +434,10 @@ def _apply_phase_model(freq_axis, cfg, st, phase_components: _PhaseComponents) -
         final_phase = low_phase
     else:
         sm_mask = _linear_to_minphase_blend_mask(f, phase_lim_hz, cfg, st)
-        final_phase = (1.0 - sm_mask) * low_phase + sm_mask * min_p
+        # Keep XO/HPF theoretical phase in the final baseline. phase_limit should
+        # only fade out room excess-phase correction, not remove the crossover model.
+        if _has_active_theoretical_phase_model(cfg):
+            final_phase = (1.0 - sm_mask) * low_phase + sm_mask * (-theo_xo)
+        else:
+            final_phase = (1.0 - sm_mask) * low_phase + sm_mask * min_p
     return final_phase

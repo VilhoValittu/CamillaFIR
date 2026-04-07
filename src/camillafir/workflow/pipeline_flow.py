@@ -85,8 +85,14 @@ def _run_pipeline(ctx: dict, *, callbacks: ProcessRunCallbacks, support: Process
             ctx["r_st_f"] = result.r_st
             ctx["l_imp_f"] = result.l_ir
             ctx["r_imp_f"] = result.r_ir
+            ctx["sub_ir_f"] = result.sub_ir
+            ctx["sub_st_f"] = result.sub_st
+            ctx["sub_meas_f"] = {
+                k: result.measurements[k]
+                for k in ("f_sub", "m_sub", "p_sub")
+                if k in result.measurements
+            }
 
     if not results_by_fs:
-        support.ui_bridge.toast_measurement_files_missing()
         return False
     return True

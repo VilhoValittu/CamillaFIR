@@ -11,10 +11,14 @@ import numpy as np
 
 from .search_state import _AutoModePhaseState, _AutoModeSearchState, _auto_set_search_winner
 from .scoring_ranking import _auto_is_better_refine, _auto_rank_key
+from ..dsp.bass_integration import compute_bass_integration_diagnostics
 from .shared import (
+    AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO,
+    AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO,
     AUTO_MODE_REFINE_TIEBREAK_RANK_EPS,
     AUTO_MODE_REFINE_MODE_SOFT_K,
     MAX_SAFE_BOOST,
+    _auto_bass_integration_profile_norm,
     _auto_metric_text,
     _auto_phase_limit_clip,
     _auto_safe_float,
@@ -195,6 +199,48 @@ def evaluate_search_candidate(
         trial_measurements,
         include_response_arrays=False,
     )
+    try:
+        if bool(trial_measurements.get("bass_integration_enabled", False)):
+            bundle = trial_measurements.get("bass_integration_bundle", None)
+            if bundle is not None:
+                fc_hz = _auto_safe_float(
+                    trial_data.get("avr_crossover_hz", trial_measurements.get("avr_crossover_hz", 80.0)),
+                    80.0,
+                )
+                profile = _auto_bass_integration_profile_norm(
+                    trial_data.get(
+                        "bass_integration_profile",
+                        trial_measurements.get("bass_integration_profile", "safe"),
+                    )
+                )
+                diag = compute_bass_integration_diagnostics(
+                    bundle,
+                    fc_hz,
+                    profile,
+                    guard_lo_ratio=_auto_safe_float(
+                        trial_data.get("bass_integration_guard_lo_ratio", AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO),
+                        AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO,
+                    ),
+                    guard_hi_ratio=_auto_safe_float(
+                        trial_data.get("bass_integration_guard_hi_ratio", AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO),
+                        AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO,
+                    ),
+                )
+                metrics_obj = getattr(result, "metrics", None)
+                if isinstance(metrics_obj, dict):
+                    metrics_obj.update(
+                        {
+                            "bass_cancellation_risk": _auto_safe_float(diag.get("cancellation_risk", float("nan")), float("nan")),
+                            "bass_overlap_ripple": _auto_safe_float(diag.get("overlap_ripple_db", float("nan")), float("nan")),
+                            "bass_sub_dominance": _auto_safe_float(diag.get("sub_dominance_db", float("nan")), float("nan")),
+                            "bass_guard_lo_hz": _auto_safe_float(diag.get("guard_lo_hz", float("nan")), float("nan")),
+                            "bass_guard_hi_hz": _auto_safe_float(diag.get("guard_hi_hz", float("nan")), float("nan")),
+                            "bass_integration_profile": str(profile),
+                            "bass_integration_mode": str(trial_data.get("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed"),
+                        }
+                    )
+    except Exception as exc:
+        logger.debug("Bass integration trial metrics failed: %s: %s", type(exc).__name__, exc)
     metrics = ctx.runtime.auto_score_result(
         result,
         auto_exc_freq_hz=_auto_safe_float(

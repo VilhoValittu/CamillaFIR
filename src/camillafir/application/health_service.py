@@ -114,6 +114,18 @@ def _has_uploaded_file_name(v: Any) -> bool:
     return False
 
 
+def _uploaded_file_name(v: Any) -> str:
+    try:
+        if isinstance(v, dict):
+            for key in ("filename", "name", "file_name"):
+                name = str(v.get(key, "") or "").strip()
+                if name:
+                    return name
+    except Exception:
+        return ""
+    return ""
+
+
 def _has_uploaded_file(v: Any) -> bool:
     """Sisainen apufunktio: has uploaded file."""
     try:
@@ -131,6 +143,27 @@ def _has_uploaded_file(v: Any) -> bool:
     except Exception:
         return False
     return False
+
+
+def _has_wav_measurement_source(data: Dict[str, Any], *, file_key: str, path_key: str) -> bool:
+    if _has_uploaded_file(data.get(file_key, None)):
+        upload = data.get(file_key, None)
+        name = _uploaded_file_name(upload).lower()
+        content = (upload or {}).get("content", None) if isinstance(upload, dict) else None
+        riff = isinstance(content, (bytes, bytearray)) and len(content) >= 4 and content[:4] == b"RIFF"
+        return bool(name.endswith(".wav") or riff)
+    if _has_path_text(data.get(path_key, None)):
+        path = _clean_path_text(data.get(path_key, None))
+        return bool(os.path.isfile(path) and path.lower().endswith(".wav"))
+    return False
+
+
+def _has_any_measurement_source(data: Dict[str, Any], *, file_key: str, path_key: str) -> bool:
+    return bool(
+        _has_uploaded_file_name(data.get(file_key, None))
+        or _has_uploaded_file(data.get(file_key, None))
+        or _has_path_text(data.get(path_key, None))
+    )
 
 
 def _get_toast_callable():
@@ -201,25 +234,103 @@ def _health_toast_color(level: str, mode_u: str) -> Optional[str]:
 def compute_health(data: Dict[str, Any], mode: str) -> HealthResult:
     issues: List[Issue] = []
     mode_u = str(mode or "BASIC").strip().upper()
+    bass_integration_on = bool(data.get("bass_integration_enable", False))
 
-    raw_up_l = _has_uploaded_file_name(data.get("file_l", None))
-    raw_up_r = _has_uploaded_file_name(data.get("file_r", None))
-    up_l = _has_uploaded_file(data.get("file_l", None))
-    up_r = _has_uploaded_file(data.get("file_r", None))
-    raw_lp_l = _has_path_text(data.get("local_path_l", None))
-    raw_lp_r = _has_path_text(data.get("local_path_r", None))
-    lp_l = _valid_path(data.get("local_path_l", None))
-    lp_r = _valid_path(data.get("local_path_r", None))
+    if bass_integration_on:
+        bi_mode = str(
+            data.get("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed"
+        ).strip().lower()
+        is_direct_dac = bi_mode == "direct_dac"
 
-    has_upload_pair = bool(up_l and up_r)
-    has_local_pair = bool(lp_l and lp_r)
+        if mode_u != "AUTO":
+            issues.append(
+                Issue(
+                    "crit",
+                    _tr("health_bass_integration_auto_only"),
+                )
+            )
 
-    if has_upload_pair or has_local_pair:
-        issues.append(Issue("ok", _tr("health_measurements"), _tr("health_upload_source_provided")))
-    elif raw_up_l or raw_up_r or raw_lp_l or raw_lp_r:
-        issues.append(Issue("warn", _tr("health_measurements"), _tr("health_measurements_missing_pair")))
+        bi_required_slots = [
+            ("file_l_main", "local_path_l_main"),
+            ("file_r_main", "local_path_r_main"),
+            ("file_l_sub", "local_path_l_sub"),
+        ]
+        bi_optional_slots = [("file_r_sub", "local_path_r_sub")] if is_direct_dac else []
+        if not is_direct_dac:
+            bi_required_slots.append(("file_r_sub", "local_path_r_sub"))
+
+        required_all_wav = all(
+            _has_wav_measurement_source(data, file_key=file_key, path_key=path_key)
+            for file_key, path_key in bi_required_slots
+        )
+        optional_valid_or_missing = all(
+            (not _has_any_measurement_source(data, file_key=file_key, path_key=path_key))
+            or _has_wav_measurement_source(data, file_key=file_key, path_key=path_key)
+            for file_key, path_key in bi_optional_slots
+        )
+        any_source = any(
+            _has_any_measurement_source(data, file_key=file_key, path_key=path_key)
+            for file_key, path_key in [*bi_required_slots, *bi_optional_slots]
+        )
+        if required_all_wav and optional_valid_or_missing:
+            issues.append(
+                Issue(
+                    "ok",
+                    _tr("health_bass_integration_measurements"),
+                    _tr("health_upload_source_provided"),
+                )
+            )
+        elif any_source:
+            issues.append(
+                Issue(
+                    "crit",
+                    _tr("health_bass_integration_measurements"),
+                    _tr("health_bass_integration_wav_only_missing"),
+                )
+            )
+        else:
+            issues.append(
+                Issue(
+                    "crit",
+                    _tr("health_bass_integration_measurements"),
+                    _tr("health_bass_integration_missing"),
+                )
+            )
+
+        avr_fc = _as_float(data.get("avr_crossover_hz", None))
+        if avr_fc is None or avr_fc <= 0.0:
+            issues.append(Issue("crit", _tr("health_avr_crossover_invalid")))
+        elif avr_fc < 30.0 or avr_fc > 250.0:
+            issues.append(Issue("warn", _tr("health_avr_crossover_unusual"), f"{avr_fc:.1f} Hz"))
+        else:
+            issues.append(Issue("ok", _tr("health_avr_crossover"), f"{avr_fc:.1f} Hz"))
+
+        issues.append(
+            Issue(
+                "ok",
+                _tr("health_bass_integration_playback_match_title"),
+                _tr("health_bass_integration_playback_match"),
+            )
+        )
     else:
-        issues.append(Issue("warn", _tr("health_measurements"), _tr("health_measurements_missing")))
+        raw_up_l = _has_uploaded_file_name(data.get("file_l", None))
+        raw_up_r = _has_uploaded_file_name(data.get("file_r", None))
+        up_l = _has_uploaded_file(data.get("file_l", None))
+        up_r = _has_uploaded_file(data.get("file_r", None))
+        raw_lp_l = _has_path_text(data.get("local_path_l", None))
+        raw_lp_r = _has_path_text(data.get("local_path_r", None))
+        lp_l = _valid_path(data.get("local_path_l", None))
+        lp_r = _valid_path(data.get("local_path_r", None))
+
+        has_upload_pair = bool(up_l and up_r)
+        has_local_pair = bool(lp_l and lp_r)
+
+        if has_upload_pair or has_local_pair:
+            issues.append(Issue("ok", _tr("health_measurements"), _tr("health_upload_source_provided")))
+        elif raw_up_l or raw_up_r or raw_lp_l or raw_lp_r:
+            issues.append(Issue("warn", _tr("health_measurements"), _tr("health_measurements_missing_pair")))
+        else:
+            issues.append(Issue("warn", _tr("health_measurements"), _tr("health_measurements_missing")))
 
     hc_mode = str(data.get("hc_mode") or "").strip()
     if hc_mode.lower() == "upload":
@@ -365,15 +476,6 @@ def toast_health_gate_result(hr: HealthResult, mode: str) -> bool:
                 dedupe_window_s=1.0,
             )
     return False
-
-
-def toast_measurement_files_missing() -> None:
-    show_toast(
-        "Measurement files missing! Load Left/Right or give local.",
-        duration=6.0,
-        color="error",
-        dedupe_key="measurement_files_missing",
-    )
 
 
 def toast_mode_defaults_applied(mode: str) -> None:

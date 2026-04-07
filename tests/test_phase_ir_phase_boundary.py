@@ -1,10 +1,17 @@
 import numpy as np
+import pytest
 
+from camillafir.config.models import FilterConfig
+from camillafir.dsp.phase import calculate_minimum_phase, calculate_theoretical_phase
 from camillafir.dsp.phase_ir_phase import (
+    _PhaseComponents,
+    _apply_phase_model,
+    _compute_excess_phase,
     _enforce_linear_tail_decay,
     _linear_to_minphase_blend_mask,
     _linear_excess_weight,
     _smooth_linear_boundary,
+    _unwrap_phases,
 )
 
 
@@ -97,3 +104,107 @@ def test_linear_to_minphase_blend_mask_reaches_one_at_phase_limit():
     assert float(m[i450]) < 1.0
     assert float(m[i500]) == 1.0
     assert float(m[i700]) == 1.0
+
+
+class _SilentLogger:
+    def info(self, *args, **kwargs):
+        pass
+
+    def debug(self, *args, **kwargs):
+        pass
+
+
+def _identity_phase_limiter(freq_axis, phase_rad, **kwargs):
+    return np.asarray(phase_rad, dtype=float)
+
+
+def _render_final_phase(
+    *,
+    filter_type: str,
+    phase_limit: float,
+    crossovers: list[dict] | None = None,
+    hpf_settings: dict | None = None,
+    total_mag: np.ndarray | None = None,
+    p_rad_interp: np.ndarray | None = None,
+):
+    fs = 48000
+    n_fft = 32768
+    freq_axis = np.fft.rfftfreq(n_fft, d=1.0 / float(fs))
+    theo_xo = calculate_theoretical_phase(
+        freq_axis,
+        list(crossovers or []),
+        hpf_freq=float((hpf_settings or {}).get("freq", 0.0) or 0.0) if bool((hpf_settings or {}).get("enabled", False)) else None,
+        hpf_slope=float(int((hpf_settings or {}).get("order", 0) or 0) * 6) if bool((hpf_settings or {}).get("enabled", False)) else None,
+        max_phase_deg=None,
+    )
+    total_mag_arr = np.asarray(total_mag if total_mag is not None else np.ones_like(freq_axis), dtype=float)
+    p_used = np.asarray(p_rad_interp if p_rad_interp is not None else theo_xo, dtype=float)
+    min_p = calculate_minimum_phase(total_mag_arr, max_phase_deg=None)
+    raw_u, ref_u = _unwrap_phases(p_used, theo_xo)
+    excess_u = _compute_excess_phase(raw_u, ref_u)
+    cfg = FilterConfig(
+        fs=fs,
+        num_taps=n_fft,
+        filter_type_str=filter_type,
+        phase_limit=float(phase_limit),
+        crossovers=list(crossovers or []),
+        hpf_settings=dict(hpf_settings) if isinstance(hpf_settings, dict) else None,
+    )
+    final_phase = _apply_phase_model(
+        freq_axis,
+        cfg,
+        {},
+        _PhaseComponents(
+            raw_u=raw_u,
+            ref_u=ref_u,
+            excess_u=excess_u,
+            min_phase=min_p,
+            theo_xo=theo_xo,
+            conf_mask=np.ones_like(freq_axis, dtype=float),
+            total_mag=total_mag_arr,
+            n_fft=n_fft,
+            is_mixed=False,
+            mixed_split_hz=180.0,
+            mixed_transition_hz=100.0,
+            use_bassfirst=False,
+            afdw_on=False,
+            logger=_SilentLogger(),
+            limit_gd_gradient_ms_per_oct_fn=_identity_phase_limiter,
+        ),
+    )
+    return freq_axis, np.asarray(final_phase, dtype=float), np.asarray(theo_xo, dtype=float), np.asarray(min_p, dtype=float)
+
+
+@pytest.mark.parametrize("filter_type", ["Asymmetric", "Linear Phase"])
+def test_phase_limit_preserves_xo_baseline_for_asymmetric_and_linear(filter_type: str):
+    crossovers = [
+        {"freq": 500.0, "order": 4, "slope": 24, "idx": 1},
+        {"freq": 2800.0, "order": 4, "slope": 24, "idx": 2},
+    ]
+    freq_axis, final_phase, theo_xo, _min_p = _render_final_phase(
+        filter_type=filter_type,
+        phase_limit=400.0,
+        crossovers=crossovers,
+    )
+
+    for probe_hz in (500.0, 2800.0):
+        idx = int(np.argmin(np.abs(freq_axis - probe_hz)))
+        assert np.isclose(float(final_phase[idx]), float(-theo_xo[idx]), atol=1e-6)
+
+
+@pytest.mark.parametrize("filter_type", ["Asymmetric", "Linear Phase"])
+def test_phase_limit_without_theoretical_model_still_blends_to_minphase(filter_type: str):
+    fs = 48000
+    n_fft = 32768
+    freq_axis = np.fft.rfftfreq(n_fft, d=1.0 / float(fs))
+    mag_db = np.where(freq_axis < 1800.0, 0.0, -9.0)
+    total_mag = 10.0 ** (mag_db / 20.0)
+    _, final_phase, _theo_xo, min_p = _render_final_phase(
+        filter_type=filter_type,
+        phase_limit=400.0,
+        total_mag=total_mag,
+        p_rad_interp=np.zeros_like(freq_axis, dtype=float),
+    )
+
+    idx = int(np.argmin(np.abs(freq_axis - 4000.0)))
+    assert np.isclose(float(final_phase[idx]), float(min_p[idx]), atol=1e-6)

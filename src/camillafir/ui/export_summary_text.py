@@ -1,10 +1,19 @@
+import math
 import sys
 
+from ..config.camillafir_pipeline import filter_type_supports_xo_phase_model
 from ..dsp.smoothing import AFDW_BW_MAX_OCT, AFDW_BW_MIN_OCT
 from ..auto_mode.rank_score import attach_official_rank_score, official_rank_score
 from .export_scoring import _pick_metric, _safe_float
 
 _AUTO_ASYM_PHASE1_SEARCH_SPACE_EST = 1877500016615829065655090169509480
+
+
+def _format_recommended_xo_hz(value: float) -> str:
+    hz = float(value)
+    if math.isclose(hz, round(hz), abs_tol=1e-6):
+        return f"{hz:.0f} Hz"
+    return f"{hz:.1f} Hz"
 
 
 def _auto_search_space_summary(data: dict | None) -> str:
@@ -69,6 +78,162 @@ def _runtime_versions_text() -> str:
     return "Runtime: " + " | ".join(parts)
 
 
+def _append_main_speaker_xo_hpf_summary(summary_content: str, data: dict | None) -> str:
+    try:
+        ui_data = dict(data or {})
+        summary_content += "\n=== MAIN SPEAKER XO / HPF PHASE MODEL ===\n"
+        xo_parts = []
+        if filter_type_supports_xo_phase_model(ui_data.get("filter_type", "")):
+            for i in range(1, 6):
+                f_raw = ui_data.get(f"xo{i}_f", None)
+                if f_raw in (None, "", 0):
+                    continue
+                try:
+                    freq_hz = float(f_raw)
+                except Exception:
+                    continue
+                if freq_hz <= 0.0:
+                    continue
+                try:
+                    slope = int(round(float(ui_data.get(f"xo{i}_s", 12) or 12)))
+                except Exception:
+                    slope = 12
+                xo_parts.append(f"XO{i}: {freq_hz:.1f} Hz / {slope} dB/oct")
+        if xo_parts:
+            summary_content += "Crossovers: " + ", ".join(xo_parts) + "\n"
+        else:
+            summary_content += "Crossovers: OFF\n"
+
+        bi_mode = str(ui_data.get("bass_integration_mode", "") or "").strip().lower()
+        if bool(ui_data.get("bass_integration_enable", False)) and bi_mode == "direct_dac":
+            try:
+                hpf_f = float(
+                    ui_data.get(
+                        "sub_crossover_hz",
+                        ui_data.get("avr_crossover_hz", 80.0),
+                    )
+                    or 80.0
+                )
+            except Exception:
+                hpf_f = 80.0
+            try:
+                hpf_s = int(round(float(ui_data.get("sub_crossover_slope", 24) or 24)))
+            except Exception:
+                hpf_s = 24
+            summary_content += f"HPF: ON ({hpf_f:.1f} Hz / {hpf_s} dB/oct)\n"
+        elif bool(ui_data.get("hpf_enable", False)):
+            try:
+                hpf_f = float(ui_data.get("hpf_freq", 20.0) or 20.0)
+            except Exception:
+                hpf_f = 20.0
+            try:
+                hpf_s = int(round(float(ui_data.get("hpf_slope", 24) or 24)))
+            except Exception:
+                hpf_s = 24
+            summary_content += f"HPF: ON ({hpf_f:.1f} Hz / {hpf_s} dB/oct)\n"
+        else:
+            summary_content += "HPF: OFF\n"
+        summary_content += (
+            "Note: this XO / HPF section models the main speaker crossover / HPF phase chain.\n"
+        )
+    except Exception:
+        pass
+    return summary_content
+
+
+def _append_bass_integration_summary(summary_content: str, data: dict | None) -> str:
+    try:
+        ui_data = dict(data or {})
+        bi_meta = dict(ui_data.get("_bass_integration_meta", {}) or {})
+        auto_meta = dict(ui_data.get("_auto_mode_meta", {}) or {})
+        bm = attach_official_rank_score(auto_meta.get("best_metrics", {}))
+        summary_content += "\n=== BASS INTEGRATION ===\n"
+        bi_on = bool(ui_data.get("bass_integration_enable", False))
+        summary_content += f"State: {'ON' if bi_on else 'OFF'}\n"
+        if not bi_on:
+            return summary_content
+        bi_mode = str(
+            bi_meta.get(
+                "mode",
+                ui_data.get("bass_integration_mode", "avr_lfe_main_decomposed"),
+            )
+            or "avr_lfe_main_decomposed"
+        ).strip().lower()
+        if bi_mode == "avr_lfe_main_decomposed":
+            bi_mode = "AVR LFE+Main (decomposed)"
+            xo_label = "AVR crossover"
+            xo_rec_label = "Recommended AVR crossover"
+            xo_value = float(bi_meta.get("avr_crossover_hz", ui_data.get("avr_crossover_hz", 80.0)) or 80.0)
+            playback_note = "Playback settings must match the AVR bass-management settings used in measurement.\n"
+            xo_note = "AVR crossover here is separate from the main speaker XO / HPF phase model above.\n"
+        elif bi_mode == "direct_dac":
+            bi_mode = "Direct DAC / CamillaDSP sub output"
+            xo_label = "Main/Sub XO"
+            xo_rec_label = "Recommended Main/Sub XO"
+            xo_value = float(
+                bi_meta.get(
+                    "avr_crossover_hz",
+                    ui_data.get(
+                        "sub_crossover_hz",
+                        ui_data.get("avr_crossover_hz", 80.0),
+                    ),
+                )
+                or 80.0
+            )
+            playback_note = (
+                "Direct-DAC XO is the crossover between the main-speaker HPF and the subwoofer LPF.\n"
+            )
+            xo_note = "Main-speaker HPF and Sub FIR LPF must use this same crossover frequency.\n"
+        else:
+            xo_label = "AVR crossover"
+            xo_rec_label = "Recommended AVR crossover"
+            xo_value = float(bi_meta.get("avr_crossover_hz", ui_data.get("avr_crossover_hz", 80.0)) or 80.0)
+            playback_note = "Playback settings must match the AVR bass-management settings used in measurement.\n"
+            xo_note = "AVR crossover here is separate from the main speaker XO / HPF phase model above.\n"
+        summary_content += (
+            f"Mode: {bi_mode}\n"
+        )
+        summary_content += (
+            f"{xo_label}: {float(xo_value):.1f} Hz\n"
+        )
+        rec_hz = bi_meta.get("recommended_crossover_hz", None)
+        if rec_hz is not None:
+            summary_content += f"{xo_rec_label}: {_format_recommended_xo_hz(float(rec_hz))}\n"
+        summary_content += (
+            f"Profile: {str(bi_meta.get('profile', ui_data.get('bass_integration_profile', 'safe')) or 'safe')}\n"
+        )
+        inputs = dict(bi_meta.get("inputs", {}) or {})
+        summary_content += "Inputs used:\n"
+        summary_content += f"L main: {str(inputs.get('l_main', '') or 'n/a')}\n"
+        summary_content += f"R main: {str(inputs.get('r_main', '') or 'n/a')}\n"
+        summary_content += f"L sub: {str(inputs.get('l_sub', '') or 'n/a')}\n"
+        summary_content += f"R sub: {str(inputs.get('r_sub', '') or 'n/a')}\n"
+        if str(ui_data.get("bass_integration_mode", "") or "").strip().lower() == "direct_dac":
+            summary_content += (
+                "Main-speaker FIR optimized from main-only measurements. "
+                "Sub FIR optimized from sub-only measurements.\n"
+            )
+        else:
+            summary_content += (
+                "Predicted totals used for FIR optimization: "
+                "L_total_pred = L_main + L_sub, R_total_pred = R_main + R_sub (complex sum).\n"
+            )
+        summary_content += playback_note
+        summary_content += xo_note
+        cancel = _safe_float(bm.get("bass_cancellation_risk", float("nan")), float("nan"))
+        ripple = _safe_float(bm.get("bass_overlap_ripple", float("nan")), float("nan"))
+        dominance = _safe_float(bm.get("bass_sub_dominance", float("nan")), float("nan"))
+        if cancel == cancel and abs(cancel) != float("inf"):
+            summary_content += f"Predicted cancellation risk: {float(cancel):.3f}\n"
+        if ripple == ripple and abs(ripple) != float("inf"):
+            summary_content += f"Overlap ripple: {float(ripple):.3f} dB p2p\n"
+        if dominance == dominance and abs(dominance) != float("inf"):
+            summary_content += f"Sub dominance: {float(dominance):.3f} dB\n"
+    except Exception:
+        pass
+    return summary_content
+
+
 def _append_dsp_effective_params(summary_content, data, fs_v):
     try:
         enable_afdw = bool(data.get("enable_afdw", False))
@@ -92,6 +257,12 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
         summary_content += "\n=== DSP EFFECTIVE PARAMS (THIS SAMPLE RATE) ===\n"
         summary_content += f"Sample rate: {int(fs_v)} Hz\n"
         try:
+            _otilt = float(data.get("output_tilt_db_per_oct", 0.0) or 0.0)
+            if _otilt != 0.0:
+                summary_content += f"Output tilt: {_otilt:+.1f} dB/oct @ 1 kHz\n"
+        except Exception:
+            pass
+        try:
             psl = str(data.get("plot_smoothing_level", "Psychoacoustic") or "Psychoacoustic").strip()
             psl_display = "CamillaFIR Reference" if "psy" in psl.lower() else psl
             summary_content += f"Plot smoothing: {psl_display}\n"
@@ -114,6 +285,9 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
         summary_content += f"DF smoothing: {'ON' if df_on else 'OFF'}\n"
         if df_on:
             summary_content += f"DF smoothing sigma: {sigma_bins:.1f} bins -> {sigma_hz:.2f} Hz\n"
+
+        summary_content = _append_main_speaker_xo_hpf_summary(summary_content, data)
+        summary_content = _append_bass_integration_summary(summary_content, data)
 
         try:
             auto_meta = data.get("_auto_mode_meta", None)
@@ -199,11 +373,18 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
                                 f"avg_rank={float(row.get('avg_rank_score', 0.0)):.3f}, "
                                 f"ok={int(row.get('trials_ok', 0))}/{int(row.get('trials_total', 0))})\n"
                             )
+                _bass_pen = float(bm.get("bass_integration_penalty", 0.0))
+                _bass_pen_txt = (
+                    f", bass_pen={_bass_pen:.2f}"
+                    if bool(data.get("bass_integration_enable", False)) and _bass_pen > 0.0
+                    else ""
+                )
                 summary_content += (
                     f"Best rank score: {best_rank:.3f}/100 "
                     f"(avg={float(bm.get('avg_score', 0.0)):.3f}, "
                     f"dsp_pen={float(bm.get('dsp_penalty', 0.0)):.2f}, "
-                    f"exc_pen={float(bm.get('exc_penalty', 0.0)):.2f}, "
+                    f"exc_pen={float(bm.get('exc_penalty', 0.0)):.2f}"
+                    f"{_bass_pen_txt}, "
                     f"max_net_boost={float(bm.get('max_net_boost_db', 0.0)):.2f} dB, "
                     f"events={int(bm.get('events_total', 0))}, "
                     f"event_sev={float(bm.get('events_severity', 0.0)):.2f})\n"
