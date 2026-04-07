@@ -78,7 +78,7 @@ Key strengths:
 - [Latest release](https://github.com/VilhoValittu/CamillaFIR/releases/latest)
 - [All releases](https://github.com/VilhoValittu/CamillaFIR/releases)
 
-For platform-specific setup instructions, see the [Installation Guide](docs/Installation.md).
+For platform-specific setup instructions, see the [Installation Guide](Installation.md).
 
 ## Typical workflow
 
