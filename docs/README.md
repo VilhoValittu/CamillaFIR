@@ -10,10 +10,10 @@ CamillaFIR is also listed in the official CamillaDSP README under **Measurement 
 ## Quick links
 
 - [Download latest release](https://github.com/VilhoValittu/CamillaFIR/releases/latest)
-- [Quick Start Guide](docs/Quick_Start_Guide.md)
-- [User Manual](docs/Official_Manual.md)
-- [Installation Guide](docs/Installation.md)
-- [Changelog](docs/CHANGELOG.md)
+- [Quick Start Guide](Quick_Start_Guide.md)
+- [User Manual](Official_Manual.md)
+- [Installation Guide](Installation.md)
+- [Changelog](CHANGELOG.md)
 - [All documentation](docs/)
 - [CamillaDSP reference](https://github.com/HEnquist/camilladsp?tab=readme-ov-file#measurement-and-filter-generation-tools)
 
@@ -51,27 +51,27 @@ Key strengths:
 
 ### Start here
 
-- [Quick Start Guide](docs/Quick_Start_Guide.md)
-- [User Manual](docs/Official_Manual.md)
-- [Installation Guide](docs/Installation.md)
+- [Quick Start Guide](Quick_Start_Guide.md)
+- [User Manual](Official_Manual.md)
+- [Installation Guide](Installation.md)
 
 ### Core documentation
 
-- [Modes](docs/Modes.md)
-- [Why CamillaFIR Works](docs/Why_CamillaFIR_Works.md)
-- [Comparison vs EQ](docs/Comparison_vs_EQ.md)
-- [Stability and Reproducibility](docs/Stability_and_Reproducibility.md)
-- [Academic DSP Explanation](docs/Academic_DSP_Explanation.md)
-- [Reading Output Guide](docs/CamillaFIR_Reading_Output_Guide.md)
-- [IR Export Windowing](docs/IR_Export_Windowing.md)
-- [DSP Guards](docs/CamillaFIR_dsp_guards.md)
-- [FAQ](docs/faq.md)
+- [Modes](Modes.md)
+- [Why CamillaFIR Works](Why_CamillaFIR_Works.md)
+- [Comparison vs EQ](Comparison_vs_EQ.md)
+- [Stability and Reproducibility](Stability_and_Reproducibility.md)
+- [Academic DSP Explanation](Academic_DSP_Explanation.md)
+- [Reading Output Guide](CamillaFIR_Reading_Output_Guide.md)
+- [IR Export Windowing](IR_Export_Windowing.md)
+- [DSP Guards](CamillaFIR_dsp_guards.md)
+- [FAQ](faq.md)
 
 ### Reference material
 
-- [Changelog](docs/CHANGELOG.md)
-- [Case Study PDF](docs/CamillaFIR_Full_Case_Study_v3.pdf)
-- [Extended Output Guide PDF](docs/CamillaFIR_Reading_Output_Guide_Extended.pdf)
+- [Changelog](CHANGELOG.md)
+- [Case Study PDF](CamillaFIR_Full_Case_Study_v3.pdf)
+- [Extended Output Guide PDF](CamillaFIR_Reading_Output_Guide_Extended.pdf)
 
 ## Download
 
