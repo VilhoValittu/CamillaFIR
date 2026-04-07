@@ -42,9 +42,9 @@ Key strengths:
 ## Quick start
 
 1. Download the latest release from the [Releases page](https://github.com/VilhoValittu/CamillaFIR/releases/latest).
-2. Open the [Quick Start Guide](docs/Quick_Start_Guide.md).
-3. For full usage instructions, open the [User Manual](docs/Official_Manual.md).
-4. If you need release-package or source installation steps, use the [Installation Guide](docs/Installation.md).
+2. Open the [Quick Start Guide](Quick_Start_Guide.md).
+3. For full usage instructions, open the [User Manual](Official_Manual.md).
+4. If you need release-package or source installation steps, use the [Installation Guide](Installation.md).
 5. Load your measurements, choose a workflow, and generate filters.
 
 ## Documentation
