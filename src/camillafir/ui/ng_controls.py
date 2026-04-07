@@ -187,16 +187,42 @@ def reset() -> None:
 # Value holder for non-element values (e.g. uploaded file data)
 # ---------------------------------------------------------------------------
 
+class _ValueChangeEvent:
+    """Minimal event object for reactive holders."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+
 class _ValueHolder:
     """Minimal element-compatible holder for values without a UI widget.
 
-    Used for file uploads: ui.upload() triggers a callback that stores the
-    file data here; NgPinProxy reads .value like any other element.
+    Used for file uploads and logical proxy values. Supports reactive
+    callbacks so hidden state can drive preview refreshes like normal controls.
     """
-    __slots__ = ("value",)
+
+    __slots__ = ("value", "_callbacks")
 
     def __init__(self, value: Any = None) -> None:
         self.value = value
+        self._callbacks: list[Callable[[Any], None]] = []
+
+    def set_value(self, value: Any) -> None:
+        self.value = value
+        event = _ValueChangeEvent(value)
+        for callback in list(self._callbacks):
+            try:
+                callback(event)
+            except Exception:
+                logger.debug("_ValueHolder callback failed", exc_info=True)
+
+    def update(self) -> None:
+        """Compatibility no-op for controls updated via direct assignment."""
+
+    def on_value_change(self, callback: Callable[[Any], None]) -> None:
+        self._callbacks.append(callback)
 
 
 # ---------------------------------------------------------------------------

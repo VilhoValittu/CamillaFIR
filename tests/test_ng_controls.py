@@ -53,3 +53,27 @@ def test_set_value_can_suppress_registered_change_callback():
     ctrl.set_value("lvl_manual_db", 2.0)
 
     assert changes == [2.0]
+
+
+def test_value_holder_emits_change_callbacks() -> None:
+    holder = ctrl._ValueHolder("before")
+    seen: list[str] = []
+
+    holder.on_value_change(lambda e: seen.append(str(e.value)))
+    holder.set_value("after")
+
+    assert holder.value == "after"
+    assert seen == ["after"]
+
+
+def test_ctrl_set_value_uses_value_holder_callbacks() -> None:
+    ctrl.reset()
+    holder = ctrl._ValueHolder("before")
+    seen: list[str] = []
+    holder.on_value_change(lambda e: seen.append(str(e.value)))
+    ctrl.register("logical_path", holder)
+
+    ctrl.set_value("logical_path", "after")
+
+    assert ctrl.value("logical_path") == "after"
+    assert seen == ["after"]

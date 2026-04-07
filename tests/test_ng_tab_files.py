@@ -1,6 +1,8 @@
 from camillafir.ui.ng_tab_files import (
     _build_upload_payload,
     _describe_local_path,
+    _file_slot_input_name,
+    _file_slot_scope_name,
     _format_upload_size,
     _guess_upload_format,
     _normalize_local_path_value,
@@ -58,3 +60,8 @@ def test_build_upload_payload_includes_digest_and_size():
 def test_format_upload_size_uses_human_readable_units():
     assert _format_upload_size(1024) == "1.0 KB"
     assert _format_upload_size(2 * 1024 * 1024) == "2.00 MB"
+
+
+def test_bass_integration_slot_names_are_unique_per_topology():
+    assert _file_slot_scope_name("file_l_main", "bi") != _file_slot_scope_name("file_l_main", "direct")
+    assert _file_slot_input_name("local_path_l_main", "bi") != _file_slot_input_name("local_path_l_main", "direct")

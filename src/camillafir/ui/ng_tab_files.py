@@ -94,6 +94,14 @@ def _build_upload_payload(*, filename: str, content: bytes, mime_type: str = "")
     }
 
 
+def _file_slot_scope_name(upload_key: str, slot_variant: str) -> str:
+    return f"{upload_key}_status_scope__{slot_variant}"
+
+
+def _file_slot_input_name(path_key: str, slot_variant: str) -> str:
+    return f"{path_key}__{slot_variant}"
+
+
 def build_files_tab(*, t: Callable, get_val: Callable) -> None:
     from nicegui import ui
     mode_value = str(get_val("mode", "BASIC") or "BASIC").strip().upper()
@@ -125,6 +133,19 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
     }
     for key, holder in file_holders.items():
         ctrl.register(key, holder)
+    path_holders = {
+        "local_path_l": ctrl._ValueHolder(get_val("local_path_l", "")),
+        "local_path_r": ctrl._ValueHolder(get_val("local_path_r", "")),
+        "local_path_l_main": ctrl._ValueHolder(get_val("local_path_l_main", "")),
+        "local_path_r_main": ctrl._ValueHolder(get_val("local_path_r_main", "")),
+        "local_path_l_sub": ctrl._ValueHolder(get_val("local_path_l_sub", "")),
+        "local_path_r_sub": ctrl._ValueHolder(get_val("local_path_r_sub", "")),
+    }
+    for key, holder in path_holders.items():
+        ctrl.register(key, holder)
+    slot_configs: dict[str, list[dict[str, Any]]] = {key: [] for key in file_holders}
+    path_inputs: dict[str, list[Any]] = {key: [] for key in path_holders}
+    syncing_paths: set[str] = set()
 
     def _refresh_target_preview() -> None:
         try:
@@ -134,14 +155,55 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
         except Exception:
             pass
 
-    def _render_file_status(*, channel_label: str, holder, scope_name: str, path_key: str) -> None:
+    def _render_measurement_slots(upload_key: str) -> None:
+        for slot_cfg in slot_configs.get(upload_key, []):
+            _render_file_status(
+                channel_label=str(slot_cfg["channel_label"]),
+                holder=file_holders[upload_key],
+                scope_name=str(slot_cfg["scope_name"]),
+                path_holder=path_holders[str(slot_cfg["path_key"])],
+                upload_key=upload_key,
+            )
+
+    def _set_input_value(input_control: Any, value: Any) -> None:
+        try:
+            input_control.set_value(value)
+        except Exception:
+            input_control.value = value
+            input_control.update()
+
+    def _sync_path_value(*, path_key: str, upload_key: str, current_input: Any, value: Any) -> None:
+        if path_key in syncing_paths:
+            return
+        syncing_paths.add(path_key)
+        try:
+            holder = path_holders[path_key]
+            holder.set_value(value)
+            for peer in path_inputs[path_key]:
+                if peer is current_input:
+                    continue
+                if getattr(peer, "value", None) != value:
+                    _set_input_value(peer, value)
+            _render_measurement_slots(upload_key)
+        finally:
+            syncing_paths.discard(path_key)
+        _refresh_target_preview()
+
+    def _render_file_status(
+        *,
+        channel_label: str,
+        holder,
+        scope_name: str,
+        path_holder,
+        upload_key: str,
+    ) -> None:
         scope = ctrl.get_container(scope_name)
         if scope is None:
             return
 
         file_data = holder.value if isinstance(holder.value, dict) else None
         upload_loaded = bool(file_data and file_data.get("content"))
-        local_path_info = _describe_local_path(ctrl.value(path_key, ""))
+        local_path_info = _describe_local_path(path_holder.value)
         if upload_loaded:
             preview_source_text = t("file_status_preview_upload")
         elif local_path_info["entered"]:
@@ -151,8 +213,8 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
         header_loaded = bool(upload_loaded or local_path_info["exists"])
 
         def _clear_uploaded_file() -> None:
-            holder.value = None
-            _render_file_status(channel_label=channel_label, holder=holder, scope_name=scope_name, path_key=path_key)
+            holder.set_value(None)
+            _render_measurement_slots(upload_key)
             _refresh_target_preview()
 
         scope.clear()
@@ -214,29 +276,26 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
                         ui.label(t("file_status_size")).classes("text-xs text-gray-400")
                         ui.label(t("health_not_set")).classes("text-xs")
 
-    async def _handle_upload(e, *, upload_key: str, channel_label: str, scope_name: str, path_key: str) -> None:
-        file_holders[upload_key].value = _build_upload_payload(
+    async def _handle_upload(e, *, upload_key: str) -> None:
+        file_holders[upload_key].set_value(_build_upload_payload(
             filename=e.file.name,
             content=await e.file.read(),
             mime_type=getattr(e.file, "content_type", ""),
-        )
-        _render_file_status(
-            channel_label=channel_label,
-            holder=file_holders[upload_key],
-            scope_name=scope_name,
-            path_key=path_key,
-        )
+        ))
+        _render_measurement_slots(upload_key)
         _refresh_target_preview()
 
     def _build_measurement_slot(
         *,
         upload_key: str,
         path_key: str,
+        slot_variant: str,
         channel_label_key: str,
         path_label_key: str,
     ) -> None:
         channel_label = t(channel_label_key)
-        scope_name = f"{upload_key}_status_scope"
+        scope_name = _file_slot_scope_name(upload_key, slot_variant)
+        path_control_name = _file_slot_input_name(path_key, slot_variant)
 
         with ui.column().classes("flex-1 gap-2"):
             ui.label(channel_label).classes("text-sm font-medium")
@@ -245,16 +304,10 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
                 e,
                 *,
                 _upload_key=upload_key,
-                _channel_label=channel_label,
-                _scope_name=scope_name,
-                _path_key=path_key,
             ) -> None:
                 await _handle_upload(
                     e,
                     upload_key=_upload_key,
-                    channel_label=_channel_label,
-                    scope_name=_scope_name,
-                    path_key=_path_key,
                 )
 
             ui.upload(
@@ -264,37 +317,39 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
             ).props('accept=".txt,.wav"').classes("w-full")
             status_scope = ui.column().classes("w-full")
             ctrl.register_container(scope_name, status_scope)
-            ctrl.register(
-                path_key,
-                ui.input(label=t(path_label_key), value=get_val(path_key, "")).classes("w-full"),
-            )
-        ctrl.on_change(
-            path_key,
-            lambda v, _label=channel_label, _holder=file_holders[upload_key], _scope_name=scope_name, _path_key=path_key: _render_file_status(
-                channel_label=_label,
-                holder=_holder,
-                scope_name=_scope_name,
+            path_input = ui.input(label=t(path_label_key), value=path_holders[path_key].value).classes("w-full")
+            ctrl.register(path_control_name, path_input)
+        path_inputs[path_key].append(path_input)
+        slot_configs[upload_key].append(
+            {
+                "channel_label": channel_label,
+                "scope_name": scope_name,
+                "path_key": path_key,
+            }
+        )
+        path_input.on_value_change(
+            lambda e, _path_key=path_key, _upload_key=upload_key, _path_input=path_input: _sync_path_value(
                 path_key=_path_key,
-            ),
+                upload_key=_upload_key,
+                current_input=_path_input,
+                value=e.value,
+            )
         )
-        _render_file_status(
-            channel_label=channel_label,
-            holder=file_holders[upload_key],
-            scope_name=scope_name,
-            path_key=path_key,
-        )
+        _render_measurement_slots(upload_key)
 
     with ui.column().classes("w-full gap-4") as legacy_scope:
         with ui.row().classes("w-full gap-4"):
             _build_measurement_slot(
                 upload_key="file_l",
                 path_key="local_path_l",
+                slot_variant="legacy",
                 channel_label_key="upload_l",
                 path_label_key="path_l",
             )
             _build_measurement_slot(
                 upload_key="file_r",
                 path_key="local_path_r",
+                slot_variant="legacy",
                 channel_label_key="upload_r",
                 path_label_key="path_r",
             )
@@ -308,12 +363,14 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
             _build_measurement_slot(
                 upload_key="file_l_main",
                 path_key="local_path_l_main",
+                slot_variant="bi",
                 channel_label_key="upload_l_main",
                 path_label_key="path_l_main",
             )
             _build_measurement_slot(
                 upload_key="file_r_main",
                 path_key="local_path_r_main",
+                slot_variant="bi",
                 channel_label_key="upload_r_main",
                 path_label_key="path_r_main",
             )
@@ -321,12 +378,14 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
             _build_measurement_slot(
                 upload_key="file_l_sub",
                 path_key="local_path_l_sub",
+                slot_variant="bi",
                 channel_label_key="upload_l_sub",
                 path_label_key="path_l_sub",
             )
             _build_measurement_slot(
                 upload_key="file_r_sub",
                 path_key="local_path_r_sub",
+                slot_variant="bi",
                 channel_label_key="upload_r_sub",
                 path_label_key="path_r_sub",
             )
@@ -339,12 +398,14 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
             _build_measurement_slot(
                 upload_key="file_l_main",
                 path_key="local_path_l_main",
+                slot_variant="direct",
                 channel_label_key="upload_l_main",
                 path_label_key="path_l_main",
             )
             _build_measurement_slot(
                 upload_key="file_r_main",
                 path_key="local_path_r_main",
+                slot_variant="direct",
                 channel_label_key="upload_r_main",
                 path_label_key="path_r_main",
             )
@@ -352,12 +413,14 @@ def build_files_tab(*, t: Callable, get_val: Callable) -> None:
             _build_measurement_slot(
                 upload_key="file_l_sub",
                 path_key="local_path_l_sub",
+                slot_variant="direct",
                 channel_label_key="upload_l_sub",
                 path_label_key="path_l_sub",
             )
             _build_measurement_slot(
                 upload_key="file_r_sub",
                 path_key="local_path_r_sub",
+                slot_variant="direct",
                 channel_label_key="upload_r_sub",
                 path_label_key="path_r_sub",
             )

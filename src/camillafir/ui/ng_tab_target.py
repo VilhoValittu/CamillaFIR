@@ -123,11 +123,11 @@ def build_target_tab(*, t: Callable, get_val: Callable) -> None:
         ui.label(t("hc_custom")).classes("text-sm font-medium")
 
         async def _on_hc_upload(e) -> None:
-            _hc_file.value = {
+            _hc_file.set_value({
                 "filename": e.file.name,
                 "content": await e.file.read(),
                 "mime_type": getattr(e.file, "content_type", ""),
-            }
+            })
             refresh_target_preview()
 
         ui.upload(
