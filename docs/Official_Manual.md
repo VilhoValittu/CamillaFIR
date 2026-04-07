@@ -1,4 +1,4 @@
-# CamillaFIR – Official Manual (v3.5.5)
+# CamillaFIR – Official Manual (v4.1.0)
 
 ## 1. Overview
 CamillaFIR generates **FIR room-correction filters** from REW exports (magnitude + phase).
