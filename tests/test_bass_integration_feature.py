@@ -14,6 +14,7 @@ from camillafir.io.measurement_bundle import BassIntegrationBundle, TransferData
 from camillafir.io.measurements_loader import load_bass_integration_measurements
 from camillafir.io.measurements_wav import parse_coherent_transfer_from_wav_bytes
 from camillafir.ui.export_summary_text import (
+    _append_bass_integration_allpass_auto_summary,
     _append_bass_integration_summary,
     _append_main_speaker_xo_hpf_summary,
 )
@@ -173,6 +174,7 @@ def test_collect_ui_data_preserves_direct_dac_and_forces_main_hpf_from_sub_xo() 
             "mode": "AUTO",
             "bass_integration_enable": True,
             "bass_integration_mode": "direct_dac",
+            "bass_integration_allpass_auto_enable": True,
             "sub_crossover_hz": 92.0,
             "sub_crossover_slope": 24,
             "sub_crossover_manual_override": True,
@@ -193,6 +195,7 @@ def test_collect_ui_data_preserves_direct_dac_and_forces_main_hpf_from_sub_xo() 
     )
 
     assert data["bass_integration_mode"] == "direct_dac"
+    assert data["bass_integration_allpass_auto_enable"] is True
     assert data["sub_crossover_manual_override"] is True
     assert cfg.sub_integration_enable is True
     assert cfg.sub_generate_ir is True
@@ -731,6 +734,42 @@ def test_direct_dac_summary_formats_decimal_recommendation() -> None:
 
     assert "Main/Sub XO: 82.5 Hz" in summary
     assert "Recommended Main/Sub XO: 82.5 Hz" in summary
+
+
+def test_direct_dac_allpass_summary_block_reports_recommendation_state() -> None:
+    summary = _append_bass_integration_allpass_auto_summary(
+        "",
+        {
+            "bass_integration_enable": True,
+            "bass_integration_mode": "direct_dac",
+            "_bass_integration_meta": {
+                "recommended_allpass": {
+                    "enabled": True,
+                    "freq_hz": 77.5,
+                    "q": 0.9,
+                    "improvement_score": 0.321,
+                    "reason": "Applied shared mono-sub allpass.",
+                },
+                "allpass_baseline_metrics": {
+                    "cancellation_risk": 0.42,
+                    "overlap_ripple_db": 4.8,
+                    "xo_gd_mismatch_ms": 1.2,
+                },
+                "allpass_optimized_metrics": {
+                    "cancellation_risk": 0.18,
+                    "overlap_ripple_db": 3.2,
+                    "xo_gd_mismatch_ms": 0.6,
+                },
+            },
+        },
+    )
+
+    assert "=== BASS INTEGRATION ALLPASS AUTO ===" in summary
+    assert "State: ON" in summary
+    assert "Freq: 77.5 Hz" in summary
+    assert "Q: 0.900" in summary
+    assert "Improvement score: 0.321" in summary
+    assert "Applied in the exported CamillaDSP Direct DAC sub pipeline when State is ON." in summary
 
 
 def test_build_auto_selected_text_reports_sub_hpf_in_direct_dac() -> None:

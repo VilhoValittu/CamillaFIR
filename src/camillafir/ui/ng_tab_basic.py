@@ -187,6 +187,14 @@ def build_basic_tab(*, t: Callable, get_val: Callable, max_safe_boost: float) ->
                         ).props("dense outlined").classes("w-32"),
                     )
                 ui.label(t("sub_crossover_auto_help")).classes("text-xs text-gray-400")
+                ctrl.register(
+                    "bass_integration_allpass_auto_enable",
+                    ui.checkbox(
+                        t("bass_integration_allpass_auto_enable"),
+                        value=bool(get_val("bass_integration_allpass_auto_enable", False)),
+                    ),
+                )
+                ui.label(t("bass_integration_allpass_auto_help")).classes("text-xs text-gray-400")
             ctrl.register_container("bass_integration_direct_scope", bi_direct_scope)
             bi_direct_scope.set_visibility(bi_mode_value == "direct_dac")
     auto_mode_col.set_visibility(mode_value == "AUTO")

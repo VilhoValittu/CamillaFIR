@@ -324,3 +324,4 @@ def _sync_bass_integration_visibility() -> None:
     direct_xo_override = bool(ctrl.value("sub_crossover_manual_override", False))
     ctrl.set_enabled("sub_crossover_hz", bool(bi_visible and is_direct and direct_xo_override))
     ctrl.set_enabled("sub_crossover_slope", bool(bi_visible and is_direct and direct_xo_override))
+    ctrl.set_enabled("bass_integration_allpass_auto_enable", bool(bi_visible and is_direct))

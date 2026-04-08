@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 from typing import Any
 
@@ -173,6 +174,41 @@ def _extract_result_payload(result: FilterResult) -> tuple[Any, ...]:
         result.r_ir,
         result.r_st,
     )
+
+
+def _direct_dac_yaml_export_settings(data: dict | None, *, include_sub: bool) -> dict[str, Any]:
+    settings: dict[str, Any] = {
+        "include_sub": False,
+        "sub_allpass_freq_hz": None,
+        "sub_allpass_q": None,
+    }
+    if not bool(include_sub):
+        return settings
+
+    try:
+        bi_mode = str((data or {}).get("bass_integration_mode", "") or "").strip().lower()
+    except Exception:
+        bi_mode = ""
+    if bi_mode != "direct_dac":
+        return settings
+
+    settings["include_sub"] = True
+    if not bool((data or {}).get("bass_integration_allpass_auto_applied", False)):
+        return settings
+
+    try:
+        freq_hz = float((data or {}).get("bass_integration_allpass_freq_hz", 0.0) or 0.0)
+    except Exception:
+        freq_hz = float("nan")
+    try:
+        q = float((data or {}).get("bass_integration_allpass_q", 0.707) or 0.707)
+    except Exception:
+        q = float("nan")
+
+    if math.isfinite(freq_hz) and math.isfinite(q) and freq_hz > 0.0 and q > 0.0:
+        settings["sub_allpass_freq_hz"] = float(freq_hz)
+        settings["sub_allpass_q"] = float(q)
+    return settings
 
 
 def _write_fs_outputs(
@@ -369,6 +405,11 @@ def _write_fs_outputs(
     zf.writestr(f"Config_{ft_short}_{fs_v}Hz_{irw_tag}.cfg", hlc_cfg)
 
     if not bool(data.get("multi_rate_opt", False)):
+        sub_ir = getattr(result, "sub_ir", None) if result is not None else None
+        yaml_settings = _direct_dac_yaml_export_settings(
+            data,
+            include_sub=bool(sub_ir is not None and getattr(sub_ir, "size", 0) > 0),
+        )
         yaml_content = generate_raspberry_yaml(
             fs_v,
             ft_short,
@@ -379,6 +420,9 @@ def _write_fs_outputs(
             layout=data.get("layout", "Mono"),
             program_version=str(data.get("program_version", "") or "").strip(),
             winner_rank_score=_export_winner_rank_score(data),
+            include_sub=bool(yaml_settings.get("include_sub", False)),
+            sub_allpass_freq_hz=yaml_settings.get("sub_allpass_freq_hz"),
+            sub_allpass_q=yaml_settings.get("sub_allpass_q"),
         )
         zf.writestr(
             _camilladsp_yaml_name(data=data, ft_short=ft_short, irw_tag=irw_tag, fs_v=int(fs_v)),

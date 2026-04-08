@@ -234,6 +234,52 @@ def _append_bass_integration_summary(summary_content: str, data: dict | None) ->
     return summary_content
 
 
+def _append_bass_integration_allpass_auto_summary(summary_content: str, data: dict | None) -> str:
+    try:
+        ui_data = dict(data or {})
+        if not bool(ui_data.get("bass_integration_enable", False)):
+            return summary_content
+        bi_mode = str(ui_data.get("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed").strip().lower()
+        if bi_mode != "direct_dac":
+            return summary_content
+        bi_meta = dict(ui_data.get("_bass_integration_meta", {}) or {})
+        allpass_meta = dict(bi_meta.get("recommended_allpass", {}) or {})
+        baseline = dict(bi_meta.get("allpass_baseline_metrics", {}) or {})
+        optimized = dict(bi_meta.get("allpass_optimized_metrics", {}) or {})
+
+        def _fmt(v, unit: str = "") -> str:
+            x = _safe_float(v, float("nan"))
+            if x == x and abs(x) != float("inf"):
+                return f"{float(x):.3f}{unit}"
+            return "n/a"
+
+        summary_content += "\n=== BASS INTEGRATION ALLPASS AUTO ===\n"
+        summary_content += f"State: {'ON' if bool(allpass_meta.get('enabled', False)) else 'OFF'}\n"
+        summary_content += "Mode: direct_dac only\n"
+        if bool(allpass_meta.get("enabled", False)):
+            summary_content += f"Freq: {float(allpass_meta.get('freq_hz', 0.0) or 0.0):.1f} Hz\n"
+            summary_content += f"Q: {float(allpass_meta.get('q', 0.707) or 0.707):.3f}\n"
+        else:
+            summary_content += "Freq: n/a\n"
+            summary_content += "Q: n/a\n"
+        summary_content += "Baseline metrics:\n"
+        summary_content += f"- Cancellation risk: {_fmt(baseline.get('cancellation_risk', float('nan')))}\n"
+        summary_content += f"- Overlap ripple: {_fmt(baseline.get('overlap_ripple_db', float('nan')), ' dB p2p')}\n"
+        summary_content += f"- XO GD mismatch: {_fmt(baseline.get('xo_gd_mismatch_ms', float('nan')), ' ms')}\n"
+        summary_content += "Optimized metrics:\n"
+        summary_content += f"- Cancellation risk: {_fmt(optimized.get('cancellation_risk', float('nan')))}\n"
+        summary_content += f"- Overlap ripple: {_fmt(optimized.get('overlap_ripple_db', float('nan')), ' dB p2p')}\n"
+        summary_content += f"- XO GD mismatch: {_fmt(optimized.get('xo_gd_mismatch_ms', float('nan')), ' ms')}\n"
+        summary_content += f"Improvement score: {_fmt(allpass_meta.get('improvement_score', float('nan')))}\n"
+        summary_content += f"Reason: {str(allpass_meta.get('reason', ui_data.get('bass_integration_allpass_reason', '')) or '')}\n"
+        summary_content += "Does not change FIR generation.\n"
+        summary_content += "Applied in the exported CamillaDSP Direct DAC sub pipeline when State is ON.\n"
+        summary_content += "HLC config export is unchanged.\n"
+    except Exception:
+        pass
+    return summary_content
+
+
 def _append_dsp_effective_params(summary_content, data, fs_v):
     try:
         enable_afdw = bool(data.get("enable_afdw", False))
@@ -288,6 +334,7 @@ def _append_dsp_effective_params(summary_content, data, fs_v):
 
         summary_content = _append_main_speaker_xo_hpf_summary(summary_content, data)
         summary_content = _append_bass_integration_summary(summary_content, data)
+        summary_content = _append_bass_integration_allpass_auto_summary(summary_content, data)
 
         try:
             auto_meta = data.get("_auto_mode_meta", None)

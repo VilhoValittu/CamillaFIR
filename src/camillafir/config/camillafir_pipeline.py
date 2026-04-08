@@ -158,6 +158,7 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     p_keys = [
         "mode", "auto_goal", "auto_target_mode", "auto_mode_workers", "fs", "taps", "filter_type", "mixed_freq", "gain", "hc_mode",
         "bass_integration_enable", "bass_integration_mode", "bass_integration_profile", "avr_crossover_hz",
+        "bass_integration_allpass_auto_enable", "bass_integration_allpass_freq_hz", "bass_integration_allpass_q", "bass_integration_allpass_auto_applied",
         "sub_crossover_hz", "sub_crossover_slope", "sub_crossover_manual_override", "sub_hpf_freq", "sub_hpf_slope",
         "mag_c_min", "mag_c_max", "max_boost", "max_cut_db", "max_slope_db_per_oct",
         "max_slope_boost_db_per_oct", "max_slope_cut_db_per_oct", "phase_limit", "mag_correct",
@@ -219,6 +220,8 @@ def collect_ui_data(pin) -> Dict[str, Any]:
         "bass_boost_post_restore_enable",
         "unsafe_raw_dsp",
         "bass_integration_enable",
+        "bass_integration_allpass_auto_enable",
+        "bass_integration_allpass_auto_applied",
         "sub_crossover_manual_override",
         "camillafir_automatic_mode",
     ]:
@@ -380,6 +383,24 @@ def collect_ui_data(pin) -> Dict[str, Any]:
     except Exception:
         bi_profile = "safe"
     data["bass_integration_profile"] = _auto_bass_integration_profile_norm(bi_profile)
+    data["bass_integration_allpass_auto_enable"] = bool(data.get("bass_integration_allpass_auto_enable", False))
+    try:
+        v = float(data.get("bass_integration_allpass_freq_hz", 0.0) or 0.0)
+        data["bass_integration_allpass_freq_hz"] = v if math.isfinite(v) and v > 0.0 else 0.0
+    except Exception:
+        data["bass_integration_allpass_freq_hz"] = 0.0
+    try:
+        v = float(data.get("bass_integration_allpass_q", 0.707) or 0.707)
+        data["bass_integration_allpass_q"] = v if math.isfinite(v) and v > 0.0 else 0.707
+    except Exception:
+        data["bass_integration_allpass_q"] = 0.707
+    data["bass_integration_allpass_auto_applied"] = bool(data.get("bass_integration_allpass_auto_applied", False))
+    if (
+        not bool(data.get("bass_integration_enable", False))
+        or str(data.get("bass_integration_mode", "") or "").strip().lower() != "direct_dac"
+        or not bool(data.get("bass_integration_allpass_auto_enable", False))
+    ):
+        data["bass_integration_allpass_auto_applied"] = False
 
     v_raw = data.get("ir_export_window_mode", None)
     if v_raw is None or (isinstance(v_raw, str) and v_raw.strip() == ""):

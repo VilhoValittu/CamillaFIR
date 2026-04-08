@@ -11,7 +11,7 @@ import numpy as np
 
 from .search_state import _AutoModePhaseState, _AutoModeSearchState, _auto_set_search_winner
 from .scoring_ranking import _auto_is_better_refine, _auto_rank_key
-from ..dsp.bass_integration import compute_bass_integration_diagnostics
+from ..dsp.bass_integration import compute_bass_integration_metric_payload
 from .shared import (
     AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO,
     AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO,
@@ -213,10 +213,47 @@ def evaluate_search_candidate(
                         trial_measurements.get("bass_integration_profile", "safe"),
                     )
                 )
-                diag = compute_bass_integration_diagnostics(
+                bi_mode = str(
+                    trial_data.get(
+                        "bass_integration_mode",
+                        trial_measurements.get("bass_integration_mode", "avr_lfe_main_decomposed"),
+                    )
+                    or "avr_lfe_main_decomposed"
+                ).strip().lower()
+                try:
+                    xo_order = max(1, int(round(float(trial_data.get("sub_crossover_slope", 24) or 24.0))) // 6)
+                except Exception:
+                    xo_order = 4
+                try:
+                    sub_hpf_hz = float(trial_data.get("sub_hpf_freq", 20.0) or 20.0)
+                except Exception:
+                    sub_hpf_hz = 20.0
+                try:
+                    sub_hpf_order = max(1, int(round(float(trial_data.get("sub_hpf_slope", 12) or 12.0))) // 6)
+                except Exception:
+                    sub_hpf_order = 2
+                sub_allpass_freq_hz = None
+                sub_allpass_q = None
+                if bi_mode == "direct_dac" and bool(trial_data.get("bass_integration_allpass_auto_applied", False)):
+                    sub_allpass_freq_hz = _auto_safe_float(
+                        trial_data.get("bass_integration_allpass_freq_hz", 0.0),
+                        0.0,
+                    )
+                    sub_allpass_q = _auto_safe_float(
+                        trial_data.get("bass_integration_allpass_q", 0.707),
+                        0.707,
+                    )
+                metrics_update = compute_bass_integration_metric_payload(
                     bundle,
                     fc_hz,
                     profile,
+                    mode=bi_mode,
+                    main_hpf_order=int(xo_order),
+                    sub_lpf_order=int(xo_order),
+                    sub_hpf_hz=float(sub_hpf_hz),
+                    sub_hpf_order=int(sub_hpf_order),
+                    sub_allpass_freq_hz=sub_allpass_freq_hz,
+                    sub_allpass_q=sub_allpass_q,
                     guard_lo_ratio=_auto_safe_float(
                         trial_data.get("bass_integration_guard_lo_ratio", AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO),
                         AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO,
@@ -228,17 +265,7 @@ def evaluate_search_candidate(
                 )
                 metrics_obj = getattr(result, "metrics", None)
                 if isinstance(metrics_obj, dict):
-                    metrics_obj.update(
-                        {
-                            "bass_cancellation_risk": _auto_safe_float(diag.get("cancellation_risk", float("nan")), float("nan")),
-                            "bass_overlap_ripple": _auto_safe_float(diag.get("overlap_ripple_db", float("nan")), float("nan")),
-                            "bass_sub_dominance": _auto_safe_float(diag.get("sub_dominance_db", float("nan")), float("nan")),
-                            "bass_guard_lo_hz": _auto_safe_float(diag.get("guard_lo_hz", float("nan")), float("nan")),
-                            "bass_guard_hi_hz": _auto_safe_float(diag.get("guard_hi_hz", float("nan")), float("nan")),
-                            "bass_integration_profile": str(profile),
-                            "bass_integration_mode": str(trial_data.get("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed"),
-                        }
-                    )
+                    metrics_obj.update(dict(metrics_update or {}))
     except Exception as exc:
         logger.debug("Bass integration trial metrics failed: %s: %s", type(exc).__name__, exc)
     metrics = ctx.runtime.auto_score_result(

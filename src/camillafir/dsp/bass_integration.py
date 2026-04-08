@@ -14,6 +14,14 @@ from ..auto_mode.shared import (
 
 AVR_CROSSOVER_CANDIDATES: tuple[float, ...] = (40.0, 60.0, 70.0, 80.0, 90.0, 110.0, 120.0, 150.0, 180.0)
 DIRECT_DAC_CROSSOVER_STEP_HZ = 0.5
+DIRECT_DAC_ALLPASS_FREQ_MULTIPLIERS: tuple[float, ...] = (0.55, 0.70, 0.85, 1.00, 1.15, 1.35, 1.60)
+DIRECT_DAC_ALLPASS_Q_CANDIDATES: tuple[float, ...] = (0.45, 0.60, 0.80, 1.00, 1.30, 1.70, 2.20)
+DIRECT_DAC_ALLPASS_REFINE_FREQ_FACTORS: tuple[float, ...] = (0.88, 0.94, 0.98, 1.00, 1.02, 1.06, 1.12)
+DIRECT_DAC_ALLPASS_REFINE_Q_FACTORS: tuple[float, ...] = (0.78, 0.90, 0.97, 1.00, 1.03, 1.10, 1.22)
+DIRECT_DAC_ALLPASS_MIN_IMPROVEMENT_SCORE = 0.08
+DIRECT_DAC_ALLPASS_MIN_CANCEL_IMPROVEMENT = 0.010
+DIRECT_DAC_ALLPASS_MIN_RIPPLE_IMPROVEMENT_DB = 0.12
+DIRECT_DAC_ALLPASS_MIN_GD_IMPROVEMENT_MS = 0.04
 from ..io.measurement_bundle import BassIntegrationBundle, TransferData
 
 
@@ -57,6 +65,27 @@ def _normalize_candidate_frequencies(candidates: Any) -> tuple[float, ...]:
             continue
         seen.add(key)
         out.append(float(fc))
+    return tuple(out)
+
+
+def _normalize_candidate_q_values(candidates: Any) -> tuple[float, ...]:
+    if candidates is None:
+        return ()
+    out: list[float] = []
+    seen: set[float] = set()
+    try:
+        iterator = tuple(candidates)
+    except TypeError:
+        return ()
+    for candidate in iterator:
+        q = _safe_float(candidate, float("nan"))
+        if not np.isfinite(q) or q <= 0.0:
+            continue
+        key = float(round(float(q), 6))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(float(q))
     return tuple(out)
 
 
@@ -158,6 +187,37 @@ def _butterworth_complex_response(
         return np.ones(freqs.shape, dtype=np.complex128)
 
 
+def _allpass2_complex_response(freqs_hz: np.ndarray, freq_hz: float, q: float) -> np.ndarray:
+    freqs = np.asarray(freqs_hz, dtype=float)
+    fc = _safe_float(freq_hz, float("nan"))
+    q_v = _safe_float(q, float("nan"))
+    if freqs.size == 0 or (not np.isfinite(fc)) or fc <= 0.0 or (not np.isfinite(q_v)) or q_v <= 0.0:
+        return np.ones(freqs.shape, dtype=np.complex128)
+    omega = 2.0 * np.pi * freqs
+    omega_0 = 2.0 * np.pi * float(fc)
+    s = 1j * omega
+    damping = float(omega_0 / max(float(q_v), 1e-9))
+    num = (s ** 2) - damping * s + (omega_0 ** 2)
+    den = (s ** 2) + damping * s + (omega_0 ** 2)
+    den = np.where(np.abs(den) < 1e-18, 1e-18 + 0j, den)
+    return np.asarray(num / den, dtype=np.complex128)
+
+
+def _apply_allpass_to_transfer(
+    transfer: TransferData,
+    *,
+    freq_hz: float,
+    q: float,
+    label: str,
+) -> TransferData:
+    freqs = np.asarray(transfer.freqs_hz, dtype=float)
+    spec = np.asarray(transfer.complex_spec, dtype=np.complex128).copy()
+    if spec.size != freqs.size:
+        spec = _interp_complex_response(transfer, freqs)
+    spec *= _allpass2_complex_response(freqs, float(freq_hz), float(q))
+    return _build_transfer_like(transfer, spec, label=label)
+
+
 def _apply_branch_filters(
     transfer: TransferData,
     *,
@@ -196,6 +256,8 @@ def _build_direct_dac_trial_bundle(
     sub_lpf_order: int,
     sub_hpf_hz: float,
     sub_hpf_order: int,
+    sub_allpass_freq_hz: float | None = None,
+    sub_allpass_q: float | None = None,
 ) -> BassIntegrationBundle:
     fc = _safe_float(fc_hz, 80.0)
     xo_order = max(1, int(main_hpf_order))
@@ -231,6 +293,21 @@ def _build_direct_dac_trial_bundle(
         lpf_order=lpf_order,
         label="R sub + LPF/HPF trial",
     )
+    ap_freq_hz = _safe_float(sub_allpass_freq_hz, float("nan"))
+    ap_q = _safe_float(sub_allpass_q, float("nan"))
+    if np.isfinite(ap_freq_hz) and ap_freq_hz > 0.0 and np.isfinite(ap_q) and ap_q > 0.0:
+        l_sub_f = _apply_allpass_to_transfer(
+            l_sub_f,
+            freq_hz=float(ap_freq_hz),
+            q=float(ap_q),
+            label="L sub + LPF/HPF/AP trial",
+        )
+        r_sub_f = _apply_allpass_to_transfer(
+            r_sub_f,
+            freq_hz=float(ap_freq_hz),
+            q=float(ap_q),
+            label="R sub + LPF/HPF/AP trial",
+        )
 
     l_total_f = sum_complex_responses(l_main_f, l_sub_f, r_sub_f, label="L Direct-DAC trial total")
     r_total_f = sum_complex_responses(r_main_f, l_sub_f, r_sub_f, label="R Direct-DAC trial total")
@@ -247,6 +324,126 @@ def _build_direct_dac_trial_bundle(
     )
 
 
+def _direct_dac_metric_snapshot(
+    diag: dict[str, Any] | None,
+    gd_cont: dict[str, Any] | None,
+    *,
+    enabled: bool,
+    freq_hz: float,
+    q: float,
+) -> dict[str, float | bool]:
+    diag_obj = dict(diag or {})
+    gd_obj = dict(gd_cont or {})
+    return {
+        "allpass_enabled": bool(enabled),
+        "allpass_freq_hz": float(freq_hz),
+        "allpass_q": float(q),
+        "cancellation_risk": _safe_float(diag_obj.get("cancellation_risk", float("nan")), float("nan")),
+        "overlap_ripple_db": _safe_float(diag_obj.get("overlap_ripple_db", float("nan")), float("nan")),
+        "sub_dominance_db": _safe_float(diag_obj.get("sub_dominance_db", float("nan")), float("nan")),
+        "xo_gd_mismatch_ms": _safe_float(gd_obj.get("avg_gd_mismatch_ms", float("nan")), float("nan")),
+        "xo_l_gd_mismatch_ms": _safe_float(gd_obj.get("l_gd_mismatch_ms", float("nan")), float("nan")),
+        "xo_r_gd_mismatch_ms": _safe_float(gd_obj.get("r_gd_mismatch_ms", float("nan")), float("nan")),
+        "xo_main_gd_ms": _safe_float(
+            (
+                _safe_float(gd_obj.get("l_main_gd_ms", float("nan")), float("nan"))
+                + _safe_float(gd_obj.get("r_main_gd_ms", float("nan")), float("nan"))
+            )
+            / 2.0,
+            float("nan"),
+        ),
+        "xo_sub_gd_ms": _safe_float(gd_obj.get("sub_gd_ms", float("nan")), float("nan")),
+    }
+
+
+def _direct_dac_alignment_objective(
+    diag: dict[str, Any] | None,
+    gd_cont: dict[str, Any] | None,
+    *,
+    ap_freq_hz: float,
+    ap_q: float,
+    profile: str,
+) -> float:
+    weights = _auto_bass_integration_profile_weights(profile)
+    cancel = _safe_float(dict(diag or {}).get("cancellation_risk", float("nan")), float("nan"))
+    ripple = _safe_float(dict(diag or {}).get("overlap_ripple_db", float("nan")), float("nan"))
+    dominance = _safe_float(dict(diag or {}).get("sub_dominance_db", float("nan")), float("nan"))
+    gd_mm = _safe_float(dict(gd_cont or {}).get("avg_gd_mismatch_ms", float("nan")), float("nan"))
+    if not (np.isfinite(cancel) and np.isfinite(ripple) and np.isfinite(dominance) and np.isfinite(gd_mm)):
+        return float("nan")
+    q_pen = max(0.0, _safe_float(ap_q, 0.0) - 0.90) / 1.30
+    penalty = (
+        float(weights.get("cancellation", 8.0)) * float(cancel)
+        + float(weights.get("overlap_ripple", 1.8)) * (float(ripple) / 10.0)
+        + float(weights.get("xo_gd_continuity", 0.8)) * (float(gd_mm) / 3.0)
+        + float(weights.get("sub_dominance", 0.9)) * (abs(float(dominance)) / 8.0)
+        + 0.18 * float(q_pen)
+    )
+    return float(-penalty)
+
+
+def compute_direct_dac_bass_integration_analysis(
+    bundle: BassIntegrationBundle,
+    fc_hz: float,
+    profile: str,
+    *,
+    main_hpf_order: int = 4,
+    sub_lpf_order: int = 4,
+    sub_hpf_hz: float = 20.0,
+    sub_hpf_order: int = 2,
+    sub_allpass_freq_hz: float | None = None,
+    sub_allpass_q: float | None = None,
+    guard_lo_ratio: float = AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO,
+    guard_hi_ratio: float = AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO,
+) -> dict[str, Any]:
+    ap_freq_hz = _safe_float(sub_allpass_freq_hz, float("nan"))
+    ap_q = _safe_float(sub_allpass_q, float("nan"))
+    ap_enabled = bool(np.isfinite(ap_freq_hz) and ap_freq_hz > 0.0 and np.isfinite(ap_q) and ap_q > 0.0)
+    if not ap_enabled:
+        ap_freq_hz = 0.0
+        ap_q = 0.707
+    trial_bundle = _build_direct_dac_trial_bundle(
+        bundle,
+        fc_hz=float(fc_hz),
+        main_hpf_order=int(main_hpf_order),
+        sub_lpf_order=int(sub_lpf_order),
+        sub_hpf_hz=float(sub_hpf_hz),
+        sub_hpf_order=int(sub_hpf_order),
+        sub_allpass_freq_hz=(float(ap_freq_hz) if ap_enabled else None),
+        sub_allpass_q=(float(ap_q) if ap_enabled else None),
+    )
+    diag = compute_bass_integration_diagnostics(
+        trial_bundle,
+        float(fc_hz),
+        profile,
+        guard_lo_ratio=float(guard_lo_ratio),
+        guard_hi_ratio=float(guard_hi_ratio),
+    )
+    gd_cont = compute_xo_gd_continuity(trial_bundle, float(fc_hz))
+    return {
+        "trial_bundle": trial_bundle,
+        "diagnostics": dict(diag or {}),
+        "gd_continuity": dict(gd_cont or {}),
+        "objective": _direct_dac_alignment_objective(
+            diag,
+            gd_cont,
+            ap_freq_hz=float(ap_freq_hz),
+            ap_q=float(ap_q),
+            profile=profile,
+        ),
+        "allpass_enabled": bool(ap_enabled),
+        "allpass_freq_hz": float(ap_freq_hz),
+        "allpass_q": float(ap_q),
+        "snapshot": _direct_dac_metric_snapshot(
+            diag,
+            gd_cont,
+            enabled=bool(ap_enabled),
+            freq_hz=float(ap_freq_hz),
+            q=float(ap_q),
+        ),
+    }
+
+
 def compute_direct_dac_bass_integration_diagnostics(
     bundle: BassIntegrationBundle,
     fc_hz: float,
@@ -256,29 +453,33 @@ def compute_direct_dac_bass_integration_diagnostics(
     sub_lpf_order: int = 4,
     sub_hpf_hz: float = 20.0,
     sub_hpf_order: int = 2,
+    sub_allpass_freq_hz: float | None = None,
+    sub_allpass_q: float | None = None,
     guard_lo_ratio: float = AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO,
     guard_hi_ratio: float = AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO,
 ) -> dict[str, Any]:
-    trial_bundle = _build_direct_dac_trial_bundle(
+    analysis = compute_direct_dac_bass_integration_analysis(
         bundle,
-        fc_hz=float(fc_hz),
+        float(fc_hz),
+        profile,
         main_hpf_order=int(main_hpf_order),
         sub_lpf_order=int(sub_lpf_order),
         sub_hpf_hz=float(sub_hpf_hz),
         sub_hpf_order=int(sub_hpf_order),
-    )
-    out = compute_bass_integration_diagnostics(
-        trial_bundle,
-        float(fc_hz),
-        profile,
+        sub_allpass_freq_hz=sub_allpass_freq_hz,
+        sub_allpass_q=sub_allpass_q,
         guard_lo_ratio=float(guard_lo_ratio),
         guard_hi_ratio=float(guard_hi_ratio),
     )
+    out = dict(analysis.get("diagnostics", {}) or {})
     try:
         out["direct_dac_main_hpf_order"] = int(main_hpf_order)
         out["direct_dac_sub_lpf_order"] = int(sub_lpf_order)
         out["direct_dac_sub_hpf_hz"] = float(sub_hpf_hz)
         out["direct_dac_sub_hpf_order"] = int(sub_hpf_order)
+        out["direct_dac_sub_allpass_enabled"] = bool(analysis.get("allpass_enabled", False))
+        out["direct_dac_sub_allpass_freq_hz"] = float(analysis.get("allpass_freq_hz", 0.0))
+        out["direct_dac_sub_allpass_q"] = float(analysis.get("allpass_q", 0.707))
     except Exception:
         pass
     return out
@@ -563,6 +764,79 @@ def compute_xo_gd_continuity(
     }
 
 
+def compute_bass_integration_metric_payload(
+    bundle: BassIntegrationBundle,
+    fc_hz: float,
+    profile: str,
+    *,
+    mode: str = "avr_lfe_main_decomposed",
+    main_hpf_order: int = 4,
+    sub_lpf_order: int = 4,
+    sub_hpf_hz: float = 20.0,
+    sub_hpf_order: int = 2,
+    sub_allpass_freq_hz: float | None = None,
+    sub_allpass_q: float | None = None,
+    guard_lo_ratio: float = AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO,
+    guard_hi_ratio: float = AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO,
+) -> dict[str, Any]:
+    mode_norm = str(mode or "avr_lfe_main_decomposed").strip().lower()
+    if mode_norm == "direct_dac":
+        analysis = compute_direct_dac_bass_integration_analysis(
+            bundle,
+            float(fc_hz),
+            profile,
+            main_hpf_order=int(main_hpf_order),
+            sub_lpf_order=int(sub_lpf_order),
+            sub_hpf_hz=float(sub_hpf_hz),
+            sub_hpf_order=int(sub_hpf_order),
+            sub_allpass_freq_hz=sub_allpass_freq_hz,
+            sub_allpass_q=sub_allpass_q,
+            guard_lo_ratio=float(guard_lo_ratio),
+            guard_hi_ratio=float(guard_hi_ratio),
+        )
+        diag = dict(analysis.get("diagnostics", {}) or {})
+        gd_cont = dict(analysis.get("gd_continuity", {}) or {})
+        allpass_enabled = bool(analysis.get("allpass_enabled", False))
+        allpass_freq_hz = float(analysis.get("allpass_freq_hz", 0.0))
+        allpass_q = float(analysis.get("allpass_q", 0.707))
+    else:
+        diag = compute_bass_integration_diagnostics(
+            bundle,
+            float(fc_hz),
+            profile,
+            guard_lo_ratio=float(guard_lo_ratio),
+            guard_hi_ratio=float(guard_hi_ratio),
+        )
+        gd_cont = compute_xo_gd_continuity(bundle, float(fc_hz))
+        allpass_enabled = False
+        allpass_freq_hz = 0.0
+        allpass_q = 0.707
+    return {
+        "bass_cancellation_risk": _safe_float(diag.get("cancellation_risk", float("nan")), float("nan")),
+        "bass_overlap_ripple": _safe_float(diag.get("overlap_ripple_db", float("nan")), float("nan")),
+        "bass_sub_dominance": _safe_float(diag.get("sub_dominance_db", float("nan")), float("nan")),
+        "bass_guard_lo_hz": _safe_float(diag.get("guard_lo_hz", float("nan")), float("nan")),
+        "bass_guard_hi_hz": _safe_float(diag.get("guard_hi_hz", float("nan")), float("nan")),
+        "bass_integration_profile": str(_auto_bass_integration_profile_norm(profile)),
+        "bass_integration_mode": str(mode_norm),
+        "bass_xo_gd_mismatch_ms": _safe_float(gd_cont.get("avg_gd_mismatch_ms", float("nan")), float("nan")),
+        "bass_xo_l_gd_mismatch_ms": _safe_float(gd_cont.get("l_gd_mismatch_ms", float("nan")), float("nan")),
+        "bass_xo_r_gd_mismatch_ms": _safe_float(gd_cont.get("r_gd_mismatch_ms", float("nan")), float("nan")),
+        "bass_xo_main_gd_ms": _safe_float(
+            (
+                _safe_float(gd_cont.get("l_main_gd_ms", float("nan")), float("nan"))
+                + _safe_float(gd_cont.get("r_main_gd_ms", float("nan")), float("nan"))
+            )
+            / 2.0,
+            float("nan"),
+        ),
+        "bass_xo_sub_gd_ms": _safe_float(gd_cont.get("sub_gd_ms", float("nan")), float("nan")),
+        "bass_allpass_enabled": bool(allpass_enabled),
+        "bass_allpass_freq_hz": float(allpass_freq_hz),
+        "bass_allpass_q": float(allpass_q),
+    }
+
+
 def recommend_avr_crossover(
     bundle: BassIntegrationBundle,
     candidates: tuple[float, ...] = AVR_CROSSOVER_CANDIDATES,
@@ -741,4 +1015,162 @@ def recommend_direct_dac_crossover(
     return {
         "recommended_hz": best_hz,
         "scores": scores,
+    }
+
+
+def recommend_direct_dac_allpass(
+    bundle: BassIntegrationBundle,
+    *,
+    fc_hz: float,
+    profile: str,
+    main_hpf_order: int,
+    sub_lpf_order: int,
+    sub_hpf_hz: float,
+    sub_hpf_order: int,
+) -> dict[str, Any]:
+    fc = _safe_float(fc_hz, 80.0)
+    sub_hp = max(0.0, _safe_float(sub_hpf_hz, 20.0))
+    baseline_analysis = compute_direct_dac_bass_integration_analysis(
+        bundle,
+        float(fc),
+        profile,
+        main_hpf_order=int(main_hpf_order),
+        sub_lpf_order=int(sub_lpf_order),
+        sub_hpf_hz=float(sub_hp),
+        sub_hpf_order=int(sub_hpf_order),
+    )
+    baseline = dict(baseline_analysis.get("snapshot", {}) or {})
+    baseline_score = _safe_float(baseline_analysis.get("objective", float("nan")), float("nan"))
+    if (not np.isfinite(fc)) or fc <= 0.0 or fc <= (sub_hp + 1.0):
+        return {
+            "enabled": False,
+            "freq_hz": 0.0,
+            "q": 0.707,
+            "baseline": baseline,
+            "optimized": baseline,
+            "improvement_score": 0.0,
+            "reason": "No meaningful improvement found.",
+        }
+
+    def _evaluate(freq_hz: float, q: float) -> dict[str, Any] | None:
+        analysis = compute_direct_dac_bass_integration_analysis(
+            bundle,
+            float(fc),
+            profile,
+            main_hpf_order=int(main_hpf_order),
+            sub_lpf_order=int(sub_lpf_order),
+            sub_hpf_hz=float(sub_hp),
+            sub_hpf_order=int(sub_hpf_order),
+            sub_allpass_freq_hz=float(freq_hz),
+            sub_allpass_q=float(q),
+        )
+        score = _safe_float(analysis.get("objective", float("nan")), float("nan"))
+        if not np.isfinite(score):
+            return None
+        out = dict(analysis)
+        out["score"] = float(score)
+        return out
+
+    coarse_freqs = _normalize_candidate_frequencies(float(fc) * mul for mul in DIRECT_DAC_ALLPASS_FREQ_MULTIPLIERS)
+    coarse_qs = _normalize_candidate_q_values(DIRECT_DAC_ALLPASS_Q_CANDIDATES)
+    best_candidate: dict[str, Any] | None = None
+
+    def _consider_candidates(freqs: tuple[float, ...], qs: tuple[float, ...], current_best: dict[str, Any] | None) -> dict[str, Any] | None:
+        best = current_best
+        best_score = _safe_float((best or {}).get("score", float("nan")), float("nan"))
+        for freq_hz in freqs:
+            freq_v = _safe_float(freq_hz, float("nan"))
+            if (not np.isfinite(freq_v)) or freq_v <= (sub_hp + 1.0):
+                continue
+            for q in qs:
+                cand = _evaluate(freq_v, q)
+                if cand is None:
+                    continue
+                cand_score = _safe_float(cand.get("score", float("nan")), float("nan"))
+                if (best is None) or (not np.isfinite(best_score)) or cand_score > best_score:
+                    best = cand
+                    best_score = cand_score
+        return best
+
+    best_candidate = _consider_candidates(coarse_freqs, coarse_qs, None)
+    if best_candidate is None:
+        return {
+            "enabled": False,
+            "freq_hz": 0.0,
+            "q": 0.707,
+            "baseline": baseline,
+            "optimized": baseline,
+            "improvement_score": 0.0,
+            "reason": "No meaningful improvement found.",
+        }
+
+    refine_freqs = _normalize_candidate_frequencies(
+        float(best_candidate.get("allpass_freq_hz", fc)) * factor
+        for factor in DIRECT_DAC_ALLPASS_REFINE_FREQ_FACTORS
+    )
+    refine_qs = _normalize_candidate_q_values(
+        float(
+            np.clip(
+                float(best_candidate.get("allpass_q", 1.0)) * factor,
+                float(min(DIRECT_DAC_ALLPASS_Q_CANDIDATES)),
+                float(max(DIRECT_DAC_ALLPASS_Q_CANDIDATES)),
+            )
+        )
+        for factor in DIRECT_DAC_ALLPASS_REFINE_Q_FACTORS
+    )
+    best_candidate = _consider_candidates(refine_freqs, refine_qs, best_candidate)
+
+    optimized = dict((best_candidate or {}).get("snapshot", {}) or baseline)
+    best_score = _safe_float((best_candidate or {}).get("score", float("nan")), float("nan"))
+    improvement_score = (
+        float(best_score - baseline_score)
+        if np.isfinite(best_score) and np.isfinite(baseline_score)
+        else float("nan")
+    )
+    baseline_cancel = _safe_float(baseline.get("cancellation_risk", float("nan")), float("nan"))
+    optimized_cancel = _safe_float(optimized.get("cancellation_risk", float("nan")), float("nan"))
+    cancel_improvement = (
+        float(baseline_cancel - optimized_cancel)
+        if np.isfinite(baseline_cancel) and np.isfinite(optimized_cancel)
+        else float("nan")
+    )
+    ripple_improvement = (
+        float(
+            _safe_float(baseline.get("overlap_ripple_db", float("nan")), float("nan"))
+            - _safe_float(optimized.get("overlap_ripple_db", float("nan")), float("nan"))
+        )
+    )
+    gd_improvement = (
+        float(
+            _safe_float(baseline.get("xo_gd_mismatch_ms", float("nan")), float("nan"))
+            - _safe_float(optimized.get("xo_gd_mismatch_ms", float("nan")), float("nan"))
+        )
+    )
+
+    enabled = bool(
+        np.isfinite(improvement_score)
+        and improvement_score >= float(DIRECT_DAC_ALLPASS_MIN_IMPROVEMENT_SCORE)
+        and (
+            (np.isfinite(cancel_improvement) and cancel_improvement >= float(DIRECT_DAC_ALLPASS_MIN_CANCEL_IMPROVEMENT))
+            or (np.isfinite(ripple_improvement) and ripple_improvement >= float(DIRECT_DAC_ALLPASS_MIN_RIPPLE_IMPROVEMENT_DB))
+            or (np.isfinite(gd_improvement) and gd_improvement >= float(DIRECT_DAC_ALLPASS_MIN_GD_IMPROVEMENT_MS))
+        )
+        and (
+            (not np.isfinite(baseline_cancel))
+            or (not np.isfinite(optimized_cancel))
+            or optimized_cancel <= (baseline_cancel + 1e-6)
+        )
+    )
+    return {
+        "enabled": bool(enabled),
+        "freq_hz": float(best_candidate.get("allpass_freq_hz", 0.0)) if enabled else 0.0,
+        "q": float(best_candidate.get("allpass_q", 0.707)) if enabled else 0.707,
+        "baseline": baseline,
+        "optimized": optimized,
+        "improvement_score": float(improvement_score) if np.isfinite(improvement_score) else 0.0,
+        "reason": (
+            "Applied shared mono-sub allpass."
+            if enabled
+            else "No meaningful improvement found."
+        ),
     }

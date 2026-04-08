@@ -440,6 +440,11 @@ def _render_bass_integration(*, data: dict) -> None:
     best_metrics = dict(auto_meta.get("best_metrics", {}) or {})
     diag = dict(bi_meta.get("diagnostics", {}) or {})
     sub_st = dict(bi_meta.get("sub_filter_stats", {}) or {})
+    allpass_meta = dict(bi_meta.get("recommended_allpass", {}) or {})
+    allpass_baseline = dict(bi_meta.get("allpass_baseline_metrics", {}) or {})
+    allpass_optimized = dict(bi_meta.get("allpass_optimized_metrics", {}) or {})
+    allpass_auto_enabled = bool(data.get("bass_integration_allpass_auto_enable", False))
+    allpass_on = bool(allpass_meta.get("enabled", False))
 
     cancellation_risk = safe_float(
         best_metrics.get("bass_cancellation_risk", diag.get("cancellation_risk", float("nan"))),
@@ -465,6 +470,17 @@ def _render_bass_integration(*, data: dict) -> None:
             return "n/a"
         return f"{float(v):.3f}{unit}"
 
+    def _fmt_transition(before: float, after: float, unit: str = "") -> str:
+        before_ok = before == before and abs(before) != float("inf")
+        after_ok = after == after and abs(after) != float("inf")
+        if before_ok and after_ok:
+            return f"{float(before):.3f}{unit} -> {float(after):.3f}{unit}"
+        if after_ok:
+            return _fmt(after, unit)
+        if before_ok:
+            return _fmt(before, unit)
+        return "n/a"
+
     bi_mode = str(
         bi_meta.get("mode", data.get("bass_integration_mode", "avr_lfe_main_decomposed"))
         or "avr_lfe_main_decomposed"
@@ -488,6 +504,21 @@ def _render_bass_integration(*, data: dict) -> None:
         t("bass_integration_direct_playback_match")
         if bi_mode == "direct_dac"
         else t("bass_integration_playback_match")
+    )
+    baseline_cancel = safe_float(allpass_baseline.get("cancellation_risk", float("nan")), float("nan"))
+    baseline_ripple = safe_float(allpass_baseline.get("overlap_ripple_db", float("nan")), float("nan"))
+    baseline_gd = safe_float(allpass_baseline.get("xo_gd_mismatch_ms", float("nan")), float("nan"))
+    optimized_cancel = safe_float(
+        best_metrics.get("bass_cancellation_risk", allpass_optimized.get("cancellation_risk", cancellation_risk)),
+        float("nan"),
+    )
+    optimized_ripple = safe_float(
+        best_metrics.get("bass_overlap_ripple", allpass_optimized.get("overlap_ripple_db", overlap_ripple)),
+        float("nan"),
+    )
+    optimized_gd = safe_float(
+        best_metrics.get("bass_xo_gd_mismatch_ms", allpass_optimized.get("xo_gd_mismatch_ms", xo_gd_mismatch)),
+        float("nan"),
     )
 
     _section(
@@ -520,14 +551,34 @@ def _render_bass_integration(*, data: dict) -> None:
                 str(bi_meta.get("profile", data.get("bass_integration_profile", "safe")) or "safe"),
             ),
             metric_row(
+                t("results_metric_bass_allpass"),
+                t("state_on") if allpass_on else t("state_off"),
+                t("state_on") if allpass_on else t("state_off"),
+            ),
+            metric_row(
+                t("results_metric_bass_allpass_freq"),
+                f"{float(allpass_meta.get('freq_hz', 0.0) or 0.0):.1f} Hz" if allpass_on else "n/a",
+                f"{float(allpass_meta.get('freq_hz', 0.0) or 0.0):.1f} Hz" if allpass_on else "n/a",
+            ),
+            metric_row(
+                t("results_metric_bass_allpass_q"),
+                f"{float(allpass_meta.get('q', 0.707) or 0.707):.3f}" if allpass_on else "n/a",
+                f"{float(allpass_meta.get('q', 0.707) or 0.707):.3f}" if allpass_on else "n/a",
+            ),
+            metric_row(
+                t("results_metric_bass_allpass_improvement"),
+                _fmt(safe_float(allpass_meta.get("improvement_score", float("nan")), float("nan"))),
+                _fmt(safe_float(allpass_meta.get("improvement_score", float("nan")), float("nan"))),
+            ),
+            metric_row(
                 t("results_metric_bass_cancellation_risk"),
-                _fmt(cancellation_risk),
-                _fmt(cancellation_risk),
+                _fmt_transition(baseline_cancel, optimized_cancel),
+                _fmt_transition(baseline_cancel, optimized_cancel),
             ),
             metric_row(
                 t("results_metric_bass_overlap_smoothness"),
-                _fmt(overlap_ripple, " dB p2p"),
-                _fmt(overlap_ripple, " dB p2p"),
+                _fmt_transition(baseline_ripple, optimized_ripple, " dB p2p"),
+                _fmt_transition(baseline_ripple, optimized_ripple, " dB p2p"),
             ),
             metric_row(
                 t("results_metric_bass_sub_dominance"),
@@ -536,8 +587,8 @@ def _render_bass_integration(*, data: dict) -> None:
             ),
             metric_row(
                 t("results_metric_bass_xo_gd_mismatch"),
-                _fmt(xo_gd_mismatch, " ms"),
-                _fmt(xo_gd_mismatch, " ms"),
+                _fmt_transition(baseline_gd, optimized_gd, " ms"),
+                _fmt_transition(baseline_gd, optimized_gd, " ms"),
             ),
             metric_row(
                 t("results_metric_bass_xo_main_gd"),
@@ -581,7 +632,14 @@ def _render_bass_integration(*, data: dict) -> None:
                 else []
             ),
         ],
-        summary_lines=[playback_note],
+        summary_lines=[
+            playback_note,
+            *(
+                [t("bass_allpass_no_improvement")]
+                if bi_mode == "direct_dac" and allpass_auto_enabled and not allpass_on
+                else []
+            ),
+        ],
     )
 
 

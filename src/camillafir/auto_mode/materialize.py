@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 import numpy as np
 
-from ..dsp.bass_integration import compute_bass_integration_diagnostics, compute_xo_gd_continuity
+from ..dsp.bass_integration import compute_bass_integration_metric_payload
 from .auto_mode_profile import profiled_section
 from .shared import (
     AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO,
@@ -207,10 +207,47 @@ def build_materialize_helpers(ctx: AutoModeMaterializeContext):
                             final_measurements.get("bass_integration_profile", "safe"),
                         )
                     )
-                    diag = compute_bass_integration_diagnostics(
+                    bi_mode = str(
+                        final_data.get(
+                            "bass_integration_mode",
+                            final_measurements.get("bass_integration_mode", "avr_lfe_main_decomposed"),
+                        )
+                        or "avr_lfe_main_decomposed"
+                    ).strip().lower()
+                    try:
+                        xo_order = max(1, int(round(float(final_data.get("sub_crossover_slope", 24) or 24.0))) // 6)
+                    except Exception:
+                        xo_order = 4
+                    try:
+                        sub_hpf_hz = float(final_data.get("sub_hpf_freq", 20.0) or 20.0)
+                    except Exception:
+                        sub_hpf_hz = 20.0
+                    try:
+                        sub_hpf_order = max(1, int(round(float(final_data.get("sub_hpf_slope", 12) or 12.0))) // 6)
+                    except Exception:
+                        sub_hpf_order = 2
+                    sub_allpass_freq_hz = None
+                    sub_allpass_q = None
+                    if bi_mode == "direct_dac" and bool(final_data.get("bass_integration_allpass_auto_applied", False)):
+                        sub_allpass_freq_hz = _auto_safe_float(
+                            final_data.get("bass_integration_allpass_freq_hz", 0.0),
+                            0.0,
+                        )
+                        sub_allpass_q = _auto_safe_float(
+                            final_data.get("bass_integration_allpass_q", 0.707),
+                            0.707,
+                        )
+                    metrics_update = compute_bass_integration_metric_payload(
                         bundle,
                         fc_hz,
                         profile,
+                        mode=bi_mode,
+                        main_hpf_order=int(xo_order),
+                        sub_lpf_order=int(xo_order),
+                        sub_hpf_hz=float(sub_hpf_hz),
+                        sub_hpf_order=int(sub_hpf_order),
+                        sub_allpass_freq_hz=sub_allpass_freq_hz,
+                        sub_allpass_q=sub_allpass_q,
                         guard_lo_ratio=_auto_safe_float(
                             final_data.get("bass_integration_guard_lo_ratio", AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO),
                             AUTO_MODE_BASS_INTEGRATION_GUARD_LO_RATIO,
@@ -220,25 +257,9 @@ def build_materialize_helpers(ctx: AutoModeMaterializeContext):
                             AUTO_MODE_BASS_INTEGRATION_GUARD_HI_RATIO,
                         ),
                     )
-                    gd_cont = compute_xo_gd_continuity(bundle, fc_hz)
                     metrics_obj = getattr(result, "metrics", None)
                     if isinstance(metrics_obj, dict):
-                        metrics_obj.update(
-                            {
-                                "bass_cancellation_risk": _auto_safe_float(diag.get("cancellation_risk", float("nan")), float("nan")),
-                                "bass_overlap_ripple": _auto_safe_float(diag.get("overlap_ripple_db", float("nan")), float("nan")),
-                                "bass_sub_dominance": _auto_safe_float(diag.get("sub_dominance_db", float("nan")), float("nan")),
-                                "bass_guard_lo_hz": _auto_safe_float(diag.get("guard_lo_hz", float("nan")), float("nan")),
-                                "bass_guard_hi_hz": _auto_safe_float(diag.get("guard_hi_hz", float("nan")), float("nan")),
-                                "bass_integration_profile": str(profile),
-                                "bass_integration_mode": str(final_data.get("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed"),
-                                "bass_xo_gd_mismatch_ms": _auto_safe_float(gd_cont.get("avg_gd_mismatch_ms", float("nan")), float("nan")),
-                                "bass_xo_l_gd_mismatch_ms": _auto_safe_float(gd_cont.get("l_gd_mismatch_ms", float("nan")), float("nan")),
-                                "bass_xo_r_gd_mismatch_ms": _auto_safe_float(gd_cont.get("r_gd_mismatch_ms", float("nan")), float("nan")),
-                                "bass_xo_main_gd_ms": _auto_safe_float((gd_cont.get("l_main_gd_ms", float("nan")) + gd_cont.get("r_main_gd_ms", float("nan"))) / 2.0, float("nan")),
-                                "bass_xo_sub_gd_ms": _auto_safe_float(gd_cont.get("sub_gd_ms", float("nan")), float("nan")),
-                            }
-                        )
+                        metrics_obj.update(dict(metrics_update or {}))
         except Exception as exc:
             logger.debug("Bass integration materialize metrics failed: %s: %s", type(exc).__name__, exc)
         if bool(summarize):

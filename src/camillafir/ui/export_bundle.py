@@ -12,10 +12,12 @@ from ..app_paths import safe_filters_dir
 from ..config.camillafir_convolver_configs import (
     filter_wav_export_spec,
     generate_raspberry_yaml,
+    sub_filter_wav_export_spec,
 )
 from ..config.results import FilterResult
 from .export_outputs import (
     _camilladsp_yaml_name,
+    _direct_dac_yaml_export_settings,
     _export_version_tag,
     _export_winner_rank_score,
     _export_winner_rank_tag,
@@ -85,7 +87,14 @@ def build_export_zip(
             if getattr(result, "sub_ir", None) is not None and result.sub_ir.size > 0:
                 wav_sub = io.BytesIO()
                 scipy.io.wavfile.write(wav_sub, fs_v, result.sub_ir.astype("float32"))
-                sub_name = f"Sub_{ft_short}_{fs_v}Hz_{file_ts}_{irw_tag}.wav"
+                sub_name = str(
+                    sub_filter_wav_export_spec(
+                        fs_v,
+                        ft_short,
+                        file_ts,
+                        irw_tag=irw_tag,
+                    )["bundle_name"]
+                )
                 zf.writestr(sub_name, wav_sub.getvalue())
 
             write_dash = bool(
@@ -121,6 +130,11 @@ def build_export_zip(
             slot["zip_png_s"] = float(slot.get("zip_png_s", 0.0)) + dt
 
         if multi_rate_on:
+            include_sub = bool(results) and all(
+                getattr(getattr(result, "sub_ir", None), "size", 0) > 0
+                for result in list(results or [])
+            )
+            yaml_settings = _direct_dac_yaml_export_settings(data, include_sub=include_sub)
             yaml_content = generate_raspberry_yaml(
                 int(data.get("fs") or 44100),
                 ft_short,
@@ -131,6 +145,9 @@ def build_export_zip(
                 layout=data.get("layout", "Mono"),
                 program_version=str(data.get("program_version", "") or "").strip(),
                 winner_rank_score=_export_winner_rank_score(data),
+                include_sub=bool(yaml_settings.get("include_sub", False)),
+                sub_allpass_freq_hz=yaml_settings.get("sub_allpass_freq_hz"),
+                sub_allpass_q=yaml_settings.get("sub_allpass_q"),
             )
             zf.writestr(
                 _camilladsp_yaml_name(data=data, ft_short=ft_short, irw_tag=irw_tag),

@@ -23,6 +23,8 @@ from .shared import (
     logger,
 )
 
+_BASS_ALLPASS_ALGO_V = 1
+
 def _auto_cache_compat_token(compat_version: str | None = None) -> str:
     token = str(program_version_token(compat_version, default="") or "").strip()
     return str(token)
@@ -238,6 +240,15 @@ def _auto_signature(
         "_auto_mag_c_min_hz": float(_auto_safe_float(base_data.get("_auto_mag_c_min_hz", float("nan")), float("nan"))),
         "_auto_low_bass_cut_hz": float(_auto_safe_float(base_data.get("_auto_low_bass_cut_hz", float("nan")), float("nan"))),
         "_auto_exc_freq_hz": float(_auto_safe_float(base_data.get("_auto_exc_freq_hz", float("nan")), float("nan"))),
+        "_bass_allpass_algo_v": int(_BASS_ALLPASS_ALGO_V),
+        "bass_integration_allpass_auto_enable": bool(base_data.get("bass_integration_allpass_auto_enable", False)),
+        "bass_integration_allpass_auto_applied": bool(base_data.get("bass_integration_allpass_auto_applied", False)),
+        "bass_integration_allpass_freq_hz": float(
+            _auto_safe_float(base_data.get("bass_integration_allpass_freq_hz", float("nan")), float("nan"))
+        ),
+        "bass_integration_allpass_q": float(
+            _auto_safe_float(base_data.get("bass_integration_allpass_q", float("nan")), float("nan"))
+        ),
         "xos": xos if isinstance(xos, list) else [],
         "hpf": hpf if isinstance(hpf, dict) or hpf is None else str(hpf),
     }

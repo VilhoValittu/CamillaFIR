@@ -46,6 +46,10 @@ def load_config() -> dict:
         "bass_integration_mode": "avr_lfe_main_decomposed",
         "bass_integration_profile": "safe",
         "avr_crossover_hz": 80.0,
+        "bass_integration_allpass_auto_enable": False,
+        "bass_integration_allpass_freq_hz": 0.0,
+        "bass_integration_allpass_q": 0.707,
+        "bass_integration_allpass_auto_applied": False,
         "auto_mode_optuna_multivariate": True,
         "auto_mode_optuna_group": False,
         "auto_mode_optuna_constant_liar": True,
@@ -188,6 +192,8 @@ def load_config() -> dict:
                 "phase_tail_monotonic_enable",
                 "unsafe_raw_dsp",
                 "bass_integration_enable",
+                "bass_integration_allpass_auto_enable",
+                "bass_integration_allpass_auto_applied",
                 "camillafir_automatic_mode",
             ]:
                 if k in saved and isinstance(saved[k], list):

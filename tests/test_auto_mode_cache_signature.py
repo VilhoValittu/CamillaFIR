@@ -1,3 +1,5 @@
+import numpy as np
+
 from camillafir.io.auto_mode import cache_signature as cs
 
 
@@ -60,3 +62,42 @@ def test_auto_cache_save_can_refresh_program_version_metadata_without_dropping_e
 
     assert entry.get("best_preset", {}).get("preset_id") == "survives-save"
     assert str(reloaded.get("program_version", "")) == "2.0.0"
+
+
+def test_auto_signature_changes_when_bass_allpass_state_changes():
+    measurements = {
+        "f_l": np.asarray([20.0, 80.0], dtype=float),
+        "m_l": np.asarray([0.0, -3.0], dtype=float),
+        "f_r": np.asarray([20.0, 80.0], dtype=float),
+        "m_r": np.asarray([0.0, -3.0], dtype=float),
+    }
+    base_data = {
+        "filter_type": "Asymmetric",
+        "bass_integration_allpass_auto_enable": True,
+        "bass_integration_allpass_auto_applied": False,
+        "bass_integration_allpass_freq_hz": 0.0,
+        "bass_integration_allpass_q": 0.707,
+    }
+    sig_a = cs._auto_signature(
+        base_data=base_data,
+        measurements=measurements,
+        fs_v=48_000,
+        taps_v=65_536,
+        xos=[],
+        hpf=None,
+    )
+    sig_b = cs._auto_signature(
+        base_data={
+            **base_data,
+            "bass_integration_allpass_auto_applied": True,
+            "bass_integration_allpass_freq_hz": 78.0,
+            "bass_integration_allpass_q": 0.9,
+        },
+        measurements=measurements,
+        fs_v=48_000,
+        taps_v=65_536,
+        xos=[],
+        hpf=None,
+    )
+
+    assert sig_a != sig_b

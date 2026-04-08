@@ -99,6 +99,7 @@ def test_bass_integration_scopes_stay_hidden_outside_auto_mode() -> None:
     ctrl.register("sub_crossover_manual_override", _ReactiveControl(True))
     ctrl.register("sub_crossover_hz", _ToggleControl(80.0))
     ctrl.register("sub_crossover_slope", _ToggleControl(24))
+    ctrl.register("bass_integration_allpass_auto_enable", _ToggleControl(False))
 
     legacy_scope = _DummyContainer()
     avr_scope = _DummyContainer()
@@ -123,6 +124,7 @@ def test_bass_integration_scopes_stay_hidden_outside_auto_mode() -> None:
     assert basic_direct_scope.visible is False
     assert ctrl.get("sub_crossover_hz").enabled is False
     assert ctrl.get("sub_crossover_slope").enabled is False
+    assert ctrl.get("bass_integration_allpass_auto_enable").enabled is False
 
 
 def test_filter_type_callback_updates_xo_tab_state() -> None:

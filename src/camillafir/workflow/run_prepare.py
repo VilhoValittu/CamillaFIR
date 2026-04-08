@@ -84,6 +84,54 @@ def _compute_crossover_recommendation(bundle: object, data: dict) -> float | Non
     return None
 
 
+def _compute_direct_dac_allpass_recommendation(bundle: object, data: dict) -> dict:
+    try:
+        if bundle is None:
+            return {
+                "enabled": False,
+                "freq_hz": 0.0,
+                "q": 0.707,
+                "baseline": {},
+                "optimized": {},
+                "improvement_score": 0.0,
+                "reason": "No meaningful improvement found.",
+            }
+        from ..dsp.bass_integration import recommend_direct_dac_allpass  # noqa: PLC0415
+
+        profile = str(data.get("bass_integration_profile", "safe") or "safe")
+        fc_hz = float(
+            data.get(
+                "sub_crossover_hz",
+                data.get("avr_crossover_hz", 80.0),
+            )
+            or 80.0
+        )
+        xo_order, sub_hpf_hz, sub_hpf_order = _direct_dac_filter_params(data)
+        return dict(
+            recommend_direct_dac_allpass(
+                bundle,
+                fc_hz=float(fc_hz),
+                profile=profile,
+                main_hpf_order=int(xo_order),
+                sub_lpf_order=int(xo_order),
+                sub_hpf_hz=float(sub_hpf_hz),
+                sub_hpf_order=int(sub_hpf_order),
+            )
+            or {}
+        )
+    except Exception:
+        logger.debug("Direct-DAC allpass recommendation failed", exc_info=True)
+        return {
+            "enabled": False,
+            "freq_hz": 0.0,
+            "q": 0.707,
+            "baseline": {},
+            "optimized": {},
+            "improvement_score": 0.0,
+            "reason": "No meaningful improvement found.",
+        }
+
+
 def _compute_selected_bass_integration_diagnostics(bundle: object, data: dict) -> dict:
     try:
         if bundle is None:
@@ -98,6 +146,17 @@ def _compute_selected_bass_integration_diagnostics(bundle: object, data: dict) -
         if bi_mode == "direct_dac":
             from ..dsp.bass_integration import compute_direct_dac_bass_integration_diagnostics  # noqa: PLC0415
             xo_order, sub_hpf_hz, sub_hpf_order = _direct_dac_filter_params(data)
+            sub_allpass_freq_hz = None
+            sub_allpass_q = None
+            if bool(data.get("bass_integration_allpass_auto_applied", False)):
+                try:
+                    sub_allpass_freq_hz = float(data.get("bass_integration_allpass_freq_hz", 0.0) or 0.0)
+                except Exception:
+                    sub_allpass_freq_hz = 0.0
+                try:
+                    sub_allpass_q = float(data.get("bass_integration_allpass_q", 0.707) or 0.707)
+                except Exception:
+                    sub_allpass_q = 0.707
             return dict(
                 compute_direct_dac_bass_integration_diagnostics(
                     bundle,
@@ -107,6 +166,8 @@ def _compute_selected_bass_integration_diagnostics(bundle: object, data: dict) -
                     sub_lpf_order=int(xo_order),
                     sub_hpf_hz=float(sub_hpf_hz),
                     sub_hpf_order=int(sub_hpf_order),
+                    sub_allpass_freq_hz=sub_allpass_freq_hz,
+                    sub_allpass_q=sub_allpass_q,
                 )
                 or {}
             )
@@ -270,12 +331,20 @@ def _prepare_target_curve_and_run_context(
 
     bi_recommended_xo_hz = None
     bi_selected_diagnostics = {}
+    bi_allpass_recommendation = {}
     if bool(data.get("bass_integration_enable", False)):
         bundle = ctx.get("bass_integration_bundle", None)
         bi_recommended_xo_hz = _compute_crossover_recommendation(bundle, data)
         bi_mode = str(
             data.get("bass_integration_mode", "avr_lfe_main_decomposed") or "avr_lfe_main_decomposed"
         ).strip().lower()
+        data["bass_integration_allpass_auto_enable"] = bool(
+            data.get("bass_integration_allpass_auto_enable", False)
+        )
+        data["bass_integration_allpass_auto_applied"] = False
+        data["bass_integration_allpass_freq_hz"] = float(data.get("bass_integration_allpass_freq_hz", 0.0) or 0.0)
+        data["bass_integration_allpass_q"] = float(data.get("bass_integration_allpass_q", 0.707) or 0.707)
+        data["bass_integration_allpass_reason"] = ""
         if bi_mode == "direct_dac":
             manual_xo_override = bool(data.get("sub_crossover_manual_override", False))
             if manual_xo_override:
@@ -298,6 +367,33 @@ def _prepare_target_curve_and_run_context(
                     "Bass Integration Direct-DAC auto XO selected: "
                     f"{float(bi_recommended_xo_hz):.1f} Hz"
                 )
+            if bool(data.get("bass_integration_allpass_auto_enable", False)):
+                bi_allpass_recommendation = _compute_direct_dac_allpass_recommendation(bundle, data)
+                data["bass_integration_allpass_auto_applied"] = bool(bi_allpass_recommendation.get("enabled", False))
+                data["bass_integration_allpass_freq_hz"] = float(
+                    bi_allpass_recommendation.get("freq_hz", 0.0) or 0.0
+                )
+                data["bass_integration_allpass_q"] = float(
+                    bi_allpass_recommendation.get("q", 0.707) or 0.707
+                )
+                data["bass_integration_allpass_reason"] = str(
+                    bi_allpass_recommendation.get("reason", "") or ""
+                )
+                if bool(data.get("bass_integration_allpass_auto_applied", False)):
+                    logger.info(
+                        "Bass Integration Direct-DAC auto allpass applied: "
+                        f"{float(data.get('bass_integration_allpass_freq_hz', 0.0)):.1f} Hz, "
+                        f"Q {float(data.get('bass_integration_allpass_q', 0.707)):.3f}"
+                    )
+                else:
+                    logger.info(
+                        "Bass Integration Direct-DAC auto allpass kept OFF: "
+                        f"{str(data.get('bass_integration_allpass_reason', '') or 'No meaningful improvement found.')}"
+                    )
+            else:
+                data["bass_integration_allpass_reason"] = "Auto allpass optimization is OFF."
+        else:
+            data["bass_integration_allpass_reason"] = "Direct DAC only."
         bi_selected_diagnostics = _compute_selected_bass_integration_diagnostics(bundle, data)
 
     try:
@@ -395,6 +491,15 @@ def _prepare_target_curve_and_run_context(
             "diagnostics": dict(bi_selected_diagnostics or getattr(bundle, "diagnostics", {}) or {}),
             "recommended_crossover_hz": bi_recommended_xo_hz,
             "sub_crossover_manual_override": bool(data.get("sub_crossover_manual_override", False)),
+            "recommended_allpass": {
+                "enabled": bool(data.get("bass_integration_allpass_auto_applied", False)),
+                "freq_hz": float(data.get("bass_integration_allpass_freq_hz", 0.0) or 0.0),
+                "q": float(data.get("bass_integration_allpass_q", 0.707) or 0.707),
+                "improvement_score": float(bi_allpass_recommendation.get("improvement_score", 0.0) or 0.0),
+                "reason": str(data.get("bass_integration_allpass_reason", "") or ""),
+            },
+            "allpass_baseline_metrics": dict(bi_allpass_recommendation.get("baseline", {}) or {}),
+            "allpass_optimized_metrics": dict(bi_allpass_recommendation.get("optimized", {}) or {}),
         }
         measurements["bass_integration_enabled"] = True
         measurements["bass_integration_bundle"] = bundle
@@ -404,6 +509,18 @@ def _prepare_target_curve_and_run_context(
         measurements["avr_crossover_hz"] = float(data.get("avr_crossover_hz", 80.0) or 80.0)
         measurements["bass_integration_profile"] = str(
             data.get("bass_integration_profile", "safe") or "safe"
+        )
+        measurements["bass_integration_allpass_auto_enable"] = bool(
+            data.get("bass_integration_allpass_auto_enable", False)
+        )
+        measurements["bass_integration_allpass_auto_applied"] = bool(
+            data.get("bass_integration_allpass_auto_applied", False)
+        )
+        measurements["bass_integration_allpass_freq_hz"] = float(
+            data.get("bass_integration_allpass_freq_hz", 0.0) or 0.0
+        )
+        measurements["bass_integration_allpass_q"] = float(
+            data.get("bass_integration_allpass_q", 0.707) or 0.707
         )
 
     ctx.update(
