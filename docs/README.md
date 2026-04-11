@@ -130,7 +130,7 @@ CamillaFIR can export:
 - CamillaFIR uses a browser-based UI.
 - Interactive graphs can be saved directly from the UI.
 - PNG/dashboard export behavior may depend on host browser support.
-- For known setup issues and platform-specific notes, see the [Installation Guide](docs/Installation.md).
+- For known setup issues and platform-specific notes, see the [Installation Guide](Installation.md).
 
 ## Contact
 
