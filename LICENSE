@@ -1,0 +1,65 @@
+CamillaFIR Proprietary License
+Version 1.0
+
+Copyright (c) 2026 Vilho Valittu.
+All rights reserved.
+
+This software and its source code are proprietary.
+
+1. Scope
+This license applies to the CamillaFIR source code, private builds, internal tools,
+measurement workflow code, DSP logic, UI code, documentation drafts, and related
+project materials, except where a specific file clearly states that different terms
+apply.
+
+2. No Open-Source Grant
+CamillaFIR is not released under an open-source license.
+No permission is granted to copy, redistribute, publish, sublicense, sell, or use
+the source code or substantial portions of it except as expressly allowed below or
+by prior written permission from the copyright holder.
+
+3. Permitted Use
+Unless separately authorized in writing, permission is limited to:
+- private review by the copyright holder;
+- internal development by explicitly authorized collaborators;
+- internal testing of private builds;
+- private use of released binaries, if such binaries are provided separately.
+
+4. Restrictions
+You may not, without prior written permission from the copyright holder:
+- copy or redistribute the source code or substantial portions of it;
+- publish, mirror, leak, or re-host the source code;
+- create derivative works for redistribution;
+- use the source code, in whole or in part, in a commercial product or service;
+- remove, alter, or hide copyright, attribution, authorship, or provenance notices;
+- present the software or any modified version of it as your own work.
+
+5. Commercial Use
+Any commercial use of the source code or substantial implementation details requires
+prior written permission from the copyright holder.
+
+6. Collaborator Access
+Any collaborator access to the repository or source files is confidential and limited
+to the specific work authorized by the copyright holder. Access does not transfer
+ownership, relicensing rights, or redistribution rights.
+
+7. Third-Party Material
+Some parts of CamillaFIR may incorporate or be informed by third-party material used
+with permission or under separate terms. Such material remains subject to its own
+applicable copyright and license conditions where relevant.
+
+8. Termination
+Any unauthorized use terminates any permission previously granted under this license.
+
+9. No Warranty
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+PURPOSE, AND NON-INFRINGEMENT.
+
+10. Limitation of Liability
+IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN CONTRACT, TORT, OR OTHERWISE, ARISING FROM OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OF THE SOFTWARE.
+
+11. Written Exceptions
+Any exception to these terms must be granted in writing by the copyright holder.
