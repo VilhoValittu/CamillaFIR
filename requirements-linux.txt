@@ -1,9 +1,0 @@
-# Linux build pins for reproducible release artifacts.
-# kaleido is kept as an optional fallback for Plotly to_image paths.
-numpy
-scipy
-matplotlib
-nicegui>=1.4
-plotly
-kaleido
-optuna
