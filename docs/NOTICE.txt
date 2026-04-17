@@ -1,0 +1,11 @@
+CamillaFIR Notice
+
+CamillaFIR is developed by Vilho Valittu.
+
+This project is closed-source / proprietary unless a specific file states otherwise.
+
+Certain parts of the measurement-development work were informed by external discussion,
+testing feedback, and privately shared material used with permission. Where relevant,
+third-party provenance should be preserved in project records and file headers.
+
+All copyright, attribution, and provenance notices must be preserved.
