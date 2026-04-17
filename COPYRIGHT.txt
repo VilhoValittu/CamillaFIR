@@ -1,0 +1,15 @@
+CamillaFIR
+Copyright (c) 2026 Vilho Valittu
+All rights reserved.
+
+This repository contains proprietary source code and related project materials owned
+by Vilho Valittu, except where explicit third-party notices state otherwise.
+
+No part of this repository may be copied, redistributed, republished, commercially
+reused, or modified for redistribution without prior written permission.
+
+Removal or alteration of copyright notices, attribution notices, authorship markers,
+or provenance information is prohibited.
+
+Contact:
+camillafir.py@gmail.com
