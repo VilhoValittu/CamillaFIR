@@ -25,7 +25,8 @@ All releases:
 2. Extract the ZIP.
 3. Run `CamillaFIR.exe`.
 4. If SmartScreen appears, choose `More info` -> `Run anyway`.
-5. Open `http://127.0.0.1:8080` if the browser does not open automatically.
+5. Allow private firewall access if prompted. CamillaFIR runs on internal server on your computer.
+6. Open `http://127.0.0.1:8080` if the browser does not open automatically.
 
 ### Ubuntu / Debian Linux
 

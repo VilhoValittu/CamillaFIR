@@ -4,6 +4,16 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [4.2.2] - 2026-04-18
+
+### UI / Workflow
+- Added light theme.
+
+### Measurement / Diagnostics
+- Removed separate measurement audio backend pre-checks from capture/device flows so audibility-test and capture failures now surface from the actual backend or device operation that failed.
+
+---
+
 ## [4.2.1] - 2026-04-18
 
 ### Measurement / Linux
