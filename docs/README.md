@@ -1,13 +1,13 @@
 # CamillaFIR
 
-## v4.2.0
+## v4.2.1
 
 CamillaFIR is an automatic FIR filter generator and room-correction tool for REW exports, built-in sweep measurements, and WAV/IR captures.
 It is designed for CamillaDSP and other FIR-capable playback systems.
 
 CamillaFIR is also listed in the official CamillaDSP README under **Measurement and filter generation tools**.
 
-## v4.2.0 highlights
+## v4.2.1 highlights
 
 - Built-in guided measurement is now part of the normal CamillaFIR workflow, so you can capture sine sweeps, save IR WAV results, and continue directly into filter generation without a separate REW session.
 - Automatic mode now uses extracted harmonic curves (`H2` / `H3`) as a distortion-aware guard, reducing the preference for candidates that add boost in already nonlinear bands. Requires CamillaFIRs built-in measurements.

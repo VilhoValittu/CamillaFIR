@@ -1,4 +1,4 @@
-# Why CamillaFIR Works (v3.5.5)
+# Why CamillaFIR Works (v4.2.1)
 
 CamillaFIR is not "magic EQ". It is a bounded DSP workflow built for real room data.
 

@@ -1,4 +1,4 @@
-# CamillaFIR Modes: AUTO vs BASIC vs ADVANCED (v3.5.5)
+# CamillaFIR Modes: AUTO vs BASIC vs ADVANCED (v4.2.1)
 
 CamillaFIR has three operating modes:
 

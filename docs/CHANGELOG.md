@@ -4,7 +4,15 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
-## [4.2.0] - 2026-04-15
+## [4.2.1] - 2026-04-18
+
+### Docs
+- Updated README, guide, manuals, citation metadata, and visible documentation version stamps for the `4.2.1` release.
+- Refreshed current-release wording so the public docs stay aligned with the built-in measurement workflow and the current AUTO-mode description.
+
+---
+
+## [4.2.0] - 2026-04-17
 
 ### Measurement / Workflow
 - Added a built-in guided measurement workflow so CamillaFIR can now play sine sweeps, record Left/Right/Sub captures, reject bad repeats, build spatially averaged results, and save IR WAV bundles ready for the normal filter-generation path.
