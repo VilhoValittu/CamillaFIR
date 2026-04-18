@@ -156,3 +156,6 @@ shared publicly, but that does not grant permission to reuse the source code.
 
 Licensing inquiries:
 camillafir.py@gmail.com
+
+---
+
