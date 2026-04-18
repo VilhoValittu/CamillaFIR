@@ -37,7 +37,13 @@ All releases:
 ./run.sh
 ```
 
-4. Open `http://127.0.0.1:8080` if the browser does not open automatically.
+4. Built-in measurement audio requires the system PortAudio library. If measurement audio reports a PortAudio/backend error, install it first:
+
+```bash
+sudo apt install libportaudio2
+```
+
+5. Open `http://127.0.0.1:8080` if the browser does not open automatically.
 
 ### macOS (Intel + Apple Silicon)
 
@@ -79,4 +85,3 @@ Workarounds:
 - use Chrome, Edge, or Firefox
 - close extra Vivaldi tabs or extensions
 - re-run the process in another browser if needed
-

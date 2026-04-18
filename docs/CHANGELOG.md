@@ -6,6 +6,10 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ## [4.2.1] - 2026-04-18
 
+### Measurement / Linux
+- Improved built-in measurement audio diagnostics so Linux now reports PortAudio/backend failures explicitly instead of collapsing them into a generic missing-`sounddevice` message.
+- Added Linux installation guidance that the packaged app still needs the system PortAudio library at runtime for measurement audio.
+
 ### Docs
 - Updated README, guide, manuals, citation metadata, and visible documentation version stamps for the `4.2.1` release.
 - Refreshed current-release wording so the public docs stay aligned with the built-in measurement workflow and the current AUTO-mode description.
