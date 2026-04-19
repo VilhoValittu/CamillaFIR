@@ -4,6 +4,28 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [4.2.3] - 2026-04-19
+
+### Plots
+- Enhanced prediction plot with confidence-region visualization and a shaded low-frequency guard area so measurement reliability is visible at a glance.
+- Refined prediction plot axis configurations and improved error-line width for better readability.
+
+### Measurement / RT60
+- Integrated RT60 measurement handling and persistence so built-in measurement sessions can extract and carry RT60 data through to DSP and AUTO mode scoring.
+- RT60 and harmonic curve data are now propagated into the DSP pipeline and AUTO mode so room-acoustic context is available for candidate ranking.
+
+### Automatic mode
+- Added `hpf_enable` control for AUTO mode so the HPF gate can be managed explicitly during automatic runs.
+- Implemented adaptive output tilt bounds so AUTO mode tilt search range scales with measurement content.
+- Improved error handling in filter pre-correction so marginal edge cases are caught before trial scoring.
+- Enhanced logging for pruned trials in cache refine so rejected trials are traceable without adding noise.
+
+### Config / DSP
+- Updated AUTO mode and DSP processing parameters based on measurement coverage feedback.
+- Added advanced manual output tilt handling so manual tilt and auto tilt remain cleanly separated across run modes.
+
+---
+
 ## [4.2.2] - 2026-04-18
 
 ### UI / Workflow
@@ -20,9 +42,8 @@ All notable changes to **CamillaFIR** are documented in this file.
 - Improved built-in measurement audio diagnostics so Linux now reports PortAudio/backend failures explicitly instead of collapsing them into a generic missing-`sounddevice` message.
 - Added Linux installation guidance that the packaged app still needs the system PortAudio library at runtime for measurement audio.
 
-### Docs
-- Updated README, guide, manuals, citation metadata, and visible documentation version stamps for the `4.2.1` release.
-- Refreshed current-release wording so the public docs stay aligned with the built-in measurement workflow and the current AUTO-mode description.
+### MacOS
+- FIxed starting loop
 
 ---
 

@@ -1,18 +1,17 @@
 # CamillaFIR
 
-## v4.2.2
+## v4.2.3
 
 CamillaFIR is an automatic FIR filter generator and room-correction tool for REW exports, built-in sweep measurements, and WAV/IR captures.
 It is designed for CamillaDSP and other FIR-capable playback systems.
 
 CamillaFIR is also listed in the official CamillaDSP README under **Measurement and filter generation tools**.
 
-## v4.2.2 highlights
+## v4.2.3 highlights
 
-- Results view and run progress visuals were refined so the main plots stay first and completed runs read more clearly at a glance.
-- Added light theme.
-- Dark UI theme were tuned for better readability, with clearer disabled controls. 
-- Windows installation guidance now calls out the local firewall prompt because CamillaFIR runs on an internal server on your own computer.
+- Prediction plot now shows confidence-region shading and a low-frequency guard area so measurement reliability is visible directly in the output.
+- RT60 data extracted from built-in measurement sessions is now carried through to DSP and AUTO mode scoring.
+- AUTO mode gains a dedicated HPF enable control, adaptive output tilt bounds, and more consistent target selection defaults.
 
 ## Quick links
 
