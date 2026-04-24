@@ -4,6 +4,58 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [4.3.0] - 2026-04-24
+
+### Automatic mode / Stereo policy
+- Added automatic stereo policy refinement stage so AUTO mode can evaluate L/R coherence, stereo width (IACC), and per-channel improvement together and apply a final stereo-aware polish pass.
+- Added `stereo_policy_refine` module with dedicated scoring for stereo coherence, stability, and IACC penalty metrics.
+- Exposed stereo auto policy configuration through `StereoAutoPolicyConfig` model for inspectable and tunable stereo behavior.
+
+### Automatic mode / Scoring
+- Added residual peak metrics to hard-gate pooling and winner polish so candidates with excessive in-band residual peaks are filtered before final selection.
+- Added bass boost metrics and target tracking metrics to scoring ranking, with dedicated penalty columns in the winner summary.
+- Added TDC-aware scoring metrics so AUTO mode scoring accounts for temporal decay correction quality alongside magnitude and phase scoring.
+- Updated rank score calculations with improved display metrics across orchestrator, materialize, and winner polish stages.
+- Adjusted auto scoring range and penalty weights for bass integration, phase limits, and excursion penalties.
+- Best metrics from target selection are now carried into the target selection result for more consistent scoring context in refine and finalize stages.
+
+### Automatic mode / Winner polish
+- Added low bass cut winner polish so AUTO mode can fine-tune `low_bass_cut_hz` post-search when that improves the final winner rank.
+- Added HPF winner polish so the selected winner's HPF state is re-evaluated and refined as part of the finalization pass.
+- Added target tracking enrichment in winner polish so the applied winner carries richer context for export and reporting.
+
+### Automatic mode / Misc
+- Changed default `auto_target_mode` from `adaptive` to `auto`.
+- Fixed `filter_smooth` to a fixed 1/12 octave value in candidate generation and removed it from the Optuna search space to reduce unnecessary search dimensions.
+- Improved Optuna trial payload clarity by removing unused constants from trial parameters.
+- Added runtime cache clearing functions for auto mode and analysis modules so stale cached state can be reset cleanly between runs.
+
+### DSP / TDC
+- Extended TDC with telemetry support so TDC reduction metrics are available for auto mode scoring and plot summary reporting.
+- Improved TDC scoring integration in correction baseline and auto mode scoring metrics.
+
+### DSP / Bass integration
+- Refactored filtered branch caching to be bundle-scoped so per-bundle bass integration caches do not bleed across measurement bundles.
+
+### DSP / Smoothing
+- Refactored DSP smoothing to improve numerical consistency across mag shape, mag stage, and phase residual modules.
+- Improved target synthesis high-frequency break point calculation for more accurate HF slope behavior.
+
+### Measurement
+- Improved measurement session saving logic to capture room position data and session summaries alongside standard IR exports.
+- Extended per-device output in measurement session dialog for clearer diagnostics.
+
+### Config / Models
+- Added `StereoAutoPolicyConfig` model for stereo auto policy tuning parameters.
+- Added quality metrics helpers including band filter peak boost calculation.
+
+### Reporting / Export
+- Updated export summary text to include low bass cut adjustments, HPF winner polish decisions, stereo auto policy diagnostics, and TDC scoring details.
+- Enhanced plot summary to reflect TDC metrics and improved winner display fields.
+- Fixed default value for `min_worst_channel_improvement_db` in cache signature.
+
+---
+
 ## [4.2.3] - 2026-04-19
 
 ### Plots
