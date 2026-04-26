@@ -4,6 +4,38 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [4.3.1] - 2026-04-26
+
+### Automatic mode / Diagnostics
+- Added excess phase strength and residual peak polish details to export summary text and results sections so those winner polish decisions are visible after each AUTO run.
+- Enhanced diagnostics logging in auto flow for improved traceability of filter parameter decisions.
+
+### Automatic mode / Scoring
+- Enhanced residual peak metrics and scoring so candidates with excessive in-band residual peaks are filtered more aggressively before final AUTO mode selection.
+- Updated auto mode filter priors (source and phase limits) for improved search quality.
+
+### DSP / Performance
+- Added caching for preprocessing and smoothing functions with runtime cache statistics, reducing redundant FFT and smoothing passes in repeated auto mode runs.
+- Optimized slope limiting functions for improved DSP algorithm throughput.
+- Added `include_response_arrays` option to `generate_filter` and `generate_filter_pair` for callers that need response data alongside the generated filter.
+- Enhanced `apply_adaptive_fdw` with profiling support and refactored smoothing cache handling.
+
+### Config / Auto mode
+- Updated auto mode filter smoothing to a fixed 1/96-octave value across all configurations; removed from Optuna search space.
+- Disabled low bass cut as default across auto mode configurations.
+- Adjusted slope options and filter configuration parameters for improved stability.
+
+### Build / Packaging
+- Enhanced build process with 7zip compression for release archives.
+- Updated PyInstaller hidden imports and added NiceGUI hook for data file collection to improve packaged build completeness.
+
+### Tests
+- Added robust RMS helper functions with corresponding tests.
+- Extended test coverage for TDC metrics, boost limit telemetry, and auto mode caching mechanisms.
+- Added unit tests for adaptive FDW filtering functionality.
+
+---
+
 ## [4.3.0] - 2026-04-24
 
 ### Automatic mode / Stereo policy
@@ -26,7 +58,7 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ### Automatic mode / Misc
 - Changed default `auto_target_mode` from `adaptive` to `auto`.
-- Fixed `filter_smooth` to a fixed 1/12 octave value in candidate generation and removed it from the Optuna search space to reduce unnecessary search dimensions.
+- Fixed `filter_smooth` to a fixed 1/96 octave value in candidate generation and removed it from the Optuna search space to reduce unnecessary search dimensions.
 - Improved Optuna trial payload clarity by removing unused constants from trial parameters.
 - Added runtime cache clearing functions for auto mode and analysis modules so stale cached state can be reset cleanly between runs.
 

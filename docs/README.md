@@ -1,18 +1,18 @@
 # CamillaFIR
 
-## v4.3.0
+## v4.3.1
 
 CamillaFIR is an automatic FIR filter generator and room-correction tool for REW exports, built-in sweep measurements, and WAV/IR captures.
 It is designed for CamillaDSP and other FIR-capable playback systems.
 
 CamillaFIR is also listed in the official CamillaDSP README under **Measurement and filter generation tools**.
 
-## v4.3.0 highlights
+## v4.3.1 highlights
 
-- AUTO mode now includes a stereo policy refinement stage with IACC-aware stereo width scoring, per-channel coherence evaluation, and a dedicated stereo polish pass after the main search.
-- AUTO mode scoring expanded with residual peak metrics, bass boost metrics, target tracking metrics, and TDC scoring so winner selection accounts for more acoustic dimensions simultaneously.
-- AUTO mode gains low bass cut and HPF winner polish passes so the final filter is further refined after the main search completes.
-- TDC extended with telemetry support so decay correction metrics are visible in auto mode scoring and plot summaries.
+- AUTO mode diagnostics expanded: excess phase strength and residual peak polish decisions are now visible in export summary and results sections.
+- Residual peak metrics and scoring enhanced so AUTO mode filters candidates with excessive in-band residual peaks more aggressively before final selection.
+- Preprocessing and smoothing caching added with runtime statistics, reducing redundant computation in repeated or cached auto mode runs.
+- DSP slope limiting optimized and auto mode filter priors updated, including a fixed 1/96-octave filter smoothing and disabled low bass cut as default.
 
 ## Quick links
 
