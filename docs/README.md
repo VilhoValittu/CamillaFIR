@@ -1,6 +1,6 @@
 # CamillaFIR
 
-## v4.3.1
+## v4.3.2
 
 CamillaFIR is an automatic FIR filter generator and room-correction tool for REW exports, built-in sweep measurements, and WAV/IR captures.
 It is designed for CamillaDSP and other FIR-capable playback systems.

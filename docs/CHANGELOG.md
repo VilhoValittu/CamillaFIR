@@ -4,6 +4,13 @@ All notable changes to **CamillaFIR** are documented in this file.
 
 ---
 
+## [4.3.2] - 2026-05-03
+
+### Automatic mode
+- Performance upgrade with wider search range
+
+---
+
 ## [4.3.1] - 2026-04-26
 
 ### Automatic mode / Diagnostics
