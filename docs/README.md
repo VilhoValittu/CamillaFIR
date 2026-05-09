@@ -1,4 +1,4 @@
-# CamillaFIR needs a new name [Strawpoll link](https://strawpoll.com/w4nWWPe8QnA) voting ends May 10th 2026
+# CamillaFIR needs a new name [Strawpoll link](https://strawpoll.com/40Zm4LVLkga) voting ends May 10th 2026
 
 ## v4.3.2
 
