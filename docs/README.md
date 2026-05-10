@@ -1,5 +1,5 @@
 # DecayCore (formerly known as CamillaFIR)
-Programs internal name will in few days.
+Programs internal name will change in few days.
 
 ## v4.3.2
 
