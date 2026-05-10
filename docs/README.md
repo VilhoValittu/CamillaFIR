@@ -1,4 +1,5 @@
-# CamillaFIR needs a new name [Strawpoll link](https://strawpoll.com/40Zm4LVLkga) voting ends May 10th 2026
+# DecayCore (formerly known as CamillaFIR)
+Programs internal name will in few days.
 
 ## v4.3.2
 
