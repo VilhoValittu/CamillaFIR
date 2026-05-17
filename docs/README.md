@@ -8,7 +8,7 @@ DecayCore generates high-precision FIR filters for CamillaDSP and other FIR-capa
 
 The project is now maintained under the new name:
 
-➡️ [DecayCore](https://github.com/VilhoValittu/DecayCore)
+➡️ [DecayCore](https://vilhovalittu.github.io/DecayCore/)
 
 This repository is kept for historical reference and redirect purposes only.  
 No further updates will be released under the CamillaFIR name.
